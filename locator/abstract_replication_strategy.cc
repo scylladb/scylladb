@@ -49,16 +49,6 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
     }
 }
 
-void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
-                                                                  const sstring& strategy_name,
-                                                                  replication_strategy_params params,
-                                                                  const gms::feature_service& fs,
-                                                                  const topology& topology)
-{
-    auto strategy = create_replication_strategy(strategy_name, params);
-    strategy->validate_options(fs);
-}
-
 future<endpoint_set> abstract_replication_strategy::calculate_natural_ips(const token& search_token, const token_metadata& tm) const {
     const auto host_ids = co_await calculate_natural_endpoints(search_token, tm);
     co_return resolve_endpoints<endpoint_set>(host_ids, tm);
