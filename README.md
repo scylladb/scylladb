@@ -32,7 +32,7 @@ Building Scylla with the frozen toolchain `dbuild` is as easy as:
 ```bash
 $ git submodule update --init --force --recursive
 $ ./tools/toolchain/dbuild ./configure.py
-$ ./tools/toolchain/dbuild ninja build/release/scylla
+$ ./tools/toolchain/dbuild ninja -C build Dev/scylla
 ```
 
 For further information, please see:
@@ -50,7 +50,7 @@ For further information, please see:
 To start Scylla server, run:
 
 ```bash
-$ ./tools/toolchain/dbuild ./build/release/scylla --workdir tmp --smp 1 --developer-mode 1
+$ ./tools/toolchain/dbuild ./build/Dev/scylla --workdir tmp --smp 1 --developer-mode 1
 ```
 
 This will start a Scylla node with one CPU core allocated to it and data files stored in the `tmp` directory.
@@ -60,7 +60,7 @@ Please note that you need to run Scylla with `dbuild` if you built it with the f
 For more run options, run:
 
 ```bash
-$ ./tools/toolchain/dbuild ./build/release/scylla --help
+$ ./tools/toolchain/dbuild ./build/Dev/scylla --help
 ```
 
 ## Testing
