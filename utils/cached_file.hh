@@ -173,21 +173,20 @@ private:
                     auto this_size = std::min(page_size, buf.size());
                     // _cache.emplace() needs to run under allocating section even though it lives in the std space
                     // because bplus::tree operations are not reentrant, so we need to prevent memory reclamation.
-                    auto it_and_flag = _as(_region, [&] {
+                    auto [cp, missed] = _as(_region, [&] {
                         auto this_buf = buf.share();
                         this_buf.trim(this_size);
                         return _cache.emplace(idx, this, idx, std::move(this_buf));
                     });
                     buf.trim_front(this_size);
                     ++idx;
-                    cached_page &cp = *it_and_flag.first;
-                    if (it_and_flag.second) {
+                    if (missed) {
                         ++_metrics.page_populations;
-                        _metrics.cached_bytes += cp.size_in_allocator();
-                        _cached_bytes += cp.size_in_allocator();
+                        _metrics.cached_bytes += cp->size_in_allocator();
+                        _cached_bytes += cp->size_in_allocator();
                     }
                     // pages read ahead will be placed into LRU, as there's no guarantee they will be fetched later.
-                    cached_page::ptr_type ptr = cp.share();
+                    cached_page::ptr_type ptr = cp->share();
                     if (!first_page) {
                         first_page = std::move(ptr);
                     }
