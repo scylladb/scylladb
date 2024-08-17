@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include <seastar/util/closeable.hh>
+#include <seastar/core/seastar.hh>
 
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
@@ -180,8 +181,18 @@ public:
     }
 
     future<> load_sstables(unsigned iterations) {
-        _sst.push_back(_env.make_sstable(s, this->dir()));
-        return _sst.back()->load(s->get_sharder());
+        std::filesystem::path sst_dir_path{this->dir()};
+        auto dir = co_await open_directory(sst_dir_path.native());
+        auto h = dir.list_directory([&](directory_entry de) -> future<> {
+            std::filesystem::path sst_path = sst_dir_path / de.name.begin();
+            auto entry = parse_path(sst_path, s->ks_name(), s->cf_name());
+            if (entry.component == component_type::TOC) {
+                auto sst = _env.make_sstable(s, this->dir(), entry.generation, entry.version);
+                co_await sst->load(s->get_sharder());
+                _sst.push_back(sst);
+            }
+        });
+        co_await h.done();
     }
 
     using clk = std::chrono::steady_clock;
