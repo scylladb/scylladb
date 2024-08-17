@@ -53,12 +53,22 @@ future<> test_sequential_read(distributed<perf_sstable_test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::read_sequential_partitions);
 }
 
+future<> test_crawling_streaming(distributed<perf_sstable_test_env>& dt) {
+    return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::crawling_streaming);
+}
+
+future<> test_partitioned_streaming(distributed<perf_sstable_test_env>& dt) {
+    return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::partitioned_streaming);
+}
+
 enum class test_modes {
     sequential_read,
     index_read,
     write,
     index_write,
     compaction,
+    crawling_streaming,
+    partitioned_streaming,
 };
 
 static const std::unordered_map<sstring, test_modes> test_mode = {
@@ -67,6 +77,8 @@ static const std::unordered_map<sstring, test_modes> test_mode = {
     {"write", test_modes::write },
     {"index_write", test_modes::index_write },
     {"compaction", test_modes::compaction },
+    {"crawling_streaming", test_modes::crawling_streaming },
+    {"parititioned_streaming", test_modes::partitioned_streaming },
 };
 
 std::istream& operator>>(std::istream& is, test_modes& mode) {
@@ -103,7 +115,7 @@ int scylla_sstable_main(int argc, char** argv) {
         ("num_columns", bpo::value<unsigned>()->default_value(5), "number of columns per row")
         ("column_size", bpo::value<unsigned>()->default_value(64), "size in bytes for each column")
         ("sstables", bpo::value<unsigned>()->default_value(1), "number of sstables (valid only for compaction mode)")
-        ("mode", bpo::value<test_modes>()->default_value(test_modes::index_write), "one of: sequential_read, index_read, write, compaction, index_write")
+        ("mode", bpo::value<test_modes>()->default_value(test_modes::index_write), "one of: sequential_read, index_read, write, compaction, index_write, crawling_streaming, partitioned_streaming")
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables")
         ("compaction-strategy", bpo::value<sstring>()->default_value("SizeTieredCompactionStrategy"), "compaction strategy to use, one of "
              "(SizeTieredCompactionStrategy, LeveledCompactionStrategy, DateTieredCompactionStrategy, TimeWindowCompactionStrategy)")
@@ -138,6 +150,10 @@ int scylla_sstable_main(int argc, char** argv) {
             case index_read:
                 [[fallthrough]];
             case sequential_read:
+                [[fallthrough]];
+            case crawling_streaming:
+                [[fallthrough]];
+            case partitioned_streaming:
                 return test->invoke_on_all([] (perf_sstable_test_env &t) {
                     return t.load_sstables(iterations);
                 }).then_wrapped([] (future<> f) {
@@ -162,6 +178,10 @@ int scylla_sstable_main(int argc, char** argv) {
                 return test_index_read(*test).then([test] {});
             case sequential_read:
                 return test_sequential_read(*test).then([test] {});
+            case crawling_streaming:
+                return test_crawling_streaming(*test).then([test] {});
+            case partitioned_streaming:
+                return test_partitioned_streaming(*test).then([test] {});
             case index_write:
                 [[fallthrough]];
             case write:
