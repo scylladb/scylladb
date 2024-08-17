@@ -267,13 +267,12 @@ Once the patch set is ready to be reviewed, push the branch to the public remote
 
 ### Development environment and source code navigation
 
-Scylla includes a [CMake](https://cmake.org/) file, `CMakeLists.txt`, for use only with development environments (not for building) so that they can properly analyze the source code.
+Scylla uses [CMake](https://cmake.org/) and ninja as its building system. This allows for seamless
+integration with any IDE or tool that supports CMake projects or can utilize `compile_commands.json`.
 
 [CLion](https://www.jetbrains.com/clion/) is a commercial IDE offers reasonably good source code navigation and advice for code hygiene, though its C++ parser sometimes makes errors and flags false issues.
 
 Other good options that directly parse CMake files are [KDevelop](https://www.kdevelop.org/) and [QtCreator](https://wiki.qt.io/Qt_Creator).
-
-To use the `CMakeLists.txt` file with these programs, define the `FOR_IDE` CMake variable or shell environmental variable.
 
 [Eclipse](https://eclipse.org/cdt/) is another open-source option. It doesn't natively work with CMake projects, and its C++ parser has many similar issues as CLion.
 
