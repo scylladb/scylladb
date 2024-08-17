@@ -1737,6 +1737,13 @@ mutation_reader make_reader(
             value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
+/// a reader which does not support seeking to given position.
+///
+/// unlike max_sstable_mutation_reader which allows positioned read,
+/// mx_crawling_sstable_mutation_reader only supports sequential read. It is designed
+/// to be used in conditions where:
+/// - the index is not reliable, or
+/// - the consumer reads the whole sstable
 class mx_crawling_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     using DataConsumeRowsContext = data_consume_rows_context_m<mp_row_consumer_m>;
     using Consumer = mp_row_consumer_m;
