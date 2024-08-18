@@ -68,6 +68,32 @@ future<> table_helper::setup_table(cql3::query_processor& qp, service::migration
     } catch (...) {}
 }
 
+future<bool> table_helper::try_prepare(bool fallback, cql3::query_processor& qp, service::query_state& qs) {
+    // Note: `_insert_cql_fallback` is known to be engaged if `fallback` is true, see cache_table_info below.
+    auto& stmt = fallback ? _insert_cql_fallback.value() : _insert_cql;
+    try {
+        shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr = co_await qp.prepare(stmt, qs.get_client_state());
+        _prepared_stmt = std::move(msg_ptr->get_prepared());
+        shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
+        _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+        _is_fallback_stmt = fallback;
+        co_return true;
+    } catch (exceptions::invalid_request_exception& eptr) {
+        // the non-fallback statement can't be prepared, and there is no possible fallback
+        if (!fallback && !_insert_cql_fallback) {
+            throw;
+        }
+        // We're trying to prepare the fallback statement, but it can't be prepared; signal an
+        // unrecoverable error
+        if (fallback) {
+            throw;
+        }
+
+        // There's still a chance to prepare the fallback statement
+        co_return false;
+    }
+}
+
 future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs) {
     if (!_prepared_stmt) {
         // if prepared statement has been invalidated - drop cached pointers
@@ -77,28 +103,15 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         return now();
     }
 
-    return qp.prepare(_insert_cql, qs.get_client_state())
-            .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
-        _prepared_stmt = std::move(msg_ptr->get_prepared());
-        shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
-        _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
-        _is_fallback_stmt = false;
-    }).handle_exception_type([this, &qs, &qp] (exceptions::invalid_request_exception& eptr) {
-        // the non-fallback statement can't be prepared
-        if (!_insert_cql_fallback) {
-            return make_exception_future(eptr);
-        }
+    return try_prepare(false, qp, qs).then([this, &qp, &qs] (bool success) {
+        auto continuation = make_ready_future<>();
         if (_is_fallback_stmt && _prepared_stmt) {
-            // we have already prepared the fallback statement
-            return now();
+            return continuation;
         }
-        return qp.prepare(_insert_cql_fallback.value(), qs.get_client_state())
-                .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
-            _prepared_stmt = std::move(msg_ptr->get_prepared());
-            shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
-            _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
-            _is_fallback_stmt = true;
-        });
+        if (!success) {
+            continuation = try_prepare(true, qp, qs).discard_result(); // Can only return true or exception when preparing the fallback statement
+        }
+        return continuation;
     }).handle_exception([this, &qp, &mm] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.

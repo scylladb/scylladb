@@ -41,7 +41,9 @@ private:
      * Should be changed alongside every _insert_stmt reassignment
      * */
     bool _is_fallback_stmt = false;
-
+private:
+    // Returns true is prepare succeeded, false if failed and there's still a chance to recover, exception if prepare failed and it's not possible to recover
+    future<bool> try_prepare(bool fallback, cql3::query_processor& qp, service::query_state& qs);
 public:
     table_helper(std::string_view keyspace, std::string_view name, sstring create_cql, sstring insert_cql, std::optional<sstring> insert_cql_fallback = std::nullopt)
         : _keyspace(keyspace)
