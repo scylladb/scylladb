@@ -3,7 +3,7 @@ Nodetool toppartitions
 
 **toppartitions** <keyspace> <table> <duration> - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
 
-**toppartitions**  [<--ks-filters ks>] [<--cf-filters tables>] [<-d duration>]
+**toppartitions**  [<--ks-filters ks>] [<--cf-filters tables>] [<-d duration>] [<-s|--capacity capacity>] [<-a|--samplers samplers>]
 
 .. note::
 
@@ -29,6 +29,10 @@ ks-filters  List of keyspaces
 cf-filters  List of Tables (Column Families)
 ----------  -----------------------------------
 duration    The duration in milliseconds
+----------  -----------------------------------
+capacity    The capacity of the sampler; higher values increase accuracy at the cost of memory (default 256 keys).
+----------  -----------------------------------
+samplers    The samplers to use; ``WRITES``, ``READS``, or both (default).
 ==========  ===================================
 
 For example:
@@ -100,6 +104,9 @@ Write Latency  The average read latency
 =============  =============================================================================================
 
 To know which node hold the partition key use the nodetool :doc:`getendpoints </operating-scylla/nodetool-commands/getendpoints/>` command.
+
+If the margin of error column (+/-) approaches the Count column, the measurement is inaccurate. You can increase accuracy by specifying
+the ``--capacity`` option.
 
 For example:
 
