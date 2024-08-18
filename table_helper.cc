@@ -133,12 +133,14 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
 }
 
 future<> table_helper::insert(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    return cache_table_info(qp, mm, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
-        return do_with(opt_maker(), [this, &qp, &qs] (auto& opts) {
+    co_await cache_table_info(qp, mm, qs);
+    {
+        auto opts = opt_maker();
+        {
             opts.prepare(_prepared_stmt->bound_names);
-            return _insert_stmt->execute(qp, qs, opts, std::nullopt);
-        });
-    }).discard_result();
+            co_await _insert_stmt->execute(qp, qs, opts, std::nullopt);
+        }
+    }
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
