@@ -2081,11 +2081,13 @@ static future<> do_batch_write(service::storage_proxy& proxy,
 future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.batch_write_item++;
     rjson::value& request_items = request["RequestItems"];
+    auto start_time = std::chrono::steady_clock::now();
 
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
     mutation_builders.reserve(request_items.MemberCount());
-
+    uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
+        batch_size++;
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
@@ -2121,13 +2123,14 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             }
         }
     }
-
-    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
+    _stats.api_operations.batch_write_item_batch_total += batch_size;
+    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
         rjson::value ret = rjson::empty_object();
         rjson::add(ret, "UnprocessedItems", rjson::empty_object());
+        _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
 }
@@ -3331,7 +3334,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // the response size, as DynamoDB does.
     _stats.api_operations.batch_get_item++;
     rjson::value& request_items = request["RequestItems"];
-
+    auto start_time = std::chrono::steady_clock::now();
     // We need to validate all the parameters before starting any asynchronous
     // query, and fail the entire request on any parse error. So we parse all
     // the input into our own vector "requests", each element a table_requests
@@ -3380,7 +3383,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
         requests.emplace_back(std::move(rs));
     }
-
+    _stats.api_operations.batch_get_item_batch_total += requests.size();
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
     std::vector<future<std::vector<rjson::value>>> response_futures;
@@ -3470,6 +3473,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
+    _stats.api_operations.batch_get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
