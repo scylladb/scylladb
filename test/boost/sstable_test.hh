@@ -54,6 +54,10 @@ public:
     static sstables::generation_type calculate_generation_for_new_table(replica::column_family& cf) {
         return cf.calculate_generation_for_new_table();
     }
+
+    static const std::unique_ptr<replica::storage_group_manager>& get_storage_group_manager(replica::column_family& cf) {
+        return cf._sg_manager;
+    }
 };
 
 namespace sstables {
