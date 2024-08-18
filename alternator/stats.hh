@@ -26,6 +26,8 @@ public:
     struct {
         uint64_t batch_get_item = 0;
         uint64_t batch_write_item = 0;
+        uint64_t batch_get_item_batch_total = 0;
+        uint64_t batch_write_item_batch_total = 0;
         uint64_t create_backup = 0;
         uint64_t create_global_table = 0;
         uint64_t create_table = 0;
@@ -69,6 +71,8 @@ public:
         utils::timed_rate_moving_average_summary_and_histogram get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram delete_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram update_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram batch_write_item_latency;
+        utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
     } api_operations;
     // Miscellaneous event counters

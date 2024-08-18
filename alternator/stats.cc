@@ -29,6 +29,8 @@ stats::stats() : api_operations{} {
 						                        seastar::metrics::description("Latency summary of an operation via Alternator API"), [this]{return to_metrics_summary(api_operations.name.summary());})(op(CamelCaseName)).set_skip_when_empty(),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
+            OPERATION(batch_get_item_batch_total, "BatchGetItemSize")
+            OPERATION(batch_write_item_batch_total, "BatchWriteItemSize")
             OPERATION(create_backup, "CreateBackup")
             OPERATION(create_global_table, "CreateGlobalTable")
             OPERATION(create_table, "CreateTable")
@@ -67,6 +69,8 @@ stats::stats() : api_operations{} {
             OPERATION_LATENCY(get_item_latency, "GetItem")
             OPERATION_LATENCY(delete_item_latency, "DeleteItem")
             OPERATION_LATENCY(update_item_latency, "UpdateItem")
+            OPERATION_LATENCY(batch_write_item_latency, "BatchWriteItem")
+            OPERATION_LATENCY(batch_get_item_latency, "BatchGetItem")
             OPERATION(list_streams, "ListStreams")
             OPERATION(describe_stream, "DescribeStream")
             OPERATION(get_shard_iterator, "GetShardIterator")

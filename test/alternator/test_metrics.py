@@ -243,12 +243,16 @@ def check_sets_latency(metrics, operation_names):
 # Test latency metrics for PutItem, GetItem, DeleteItem, UpdateItem.
 # We can't check what exactly the latency is - just that it gets updated.
 def test_item_latency(test_table_s, metrics):
-    with check_sets_latency(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem']):
+    with check_sets_latency(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem']):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
         test_table_s.delete_item(Key={'p': p})
         test_table_s.update_item(Key={'p': p})
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
 
 # Test latency metrics for GetRecords. Other Streams-related operations -
 # ListStreams, DescribeStream, and GetShardIterator, have an operation
