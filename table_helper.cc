@@ -100,19 +100,20 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         _insert_stmt = nullptr;
     } else if (!_is_fallback_stmt) {
         // we've already prepared the non-fallback statement
-        return now();
+        co_return;
     }
 
-    return try_prepare(false, qp, qs).then([this, &qp, &qs] (bool success) {
-        auto continuation = make_ready_future<>();
+    try {
+        bool success = co_await try_prepare(false, qp, qs);
         if (_is_fallback_stmt && _prepared_stmt) {
-            return continuation;
+            co_return;
         }
         if (!success) {
-            continuation = try_prepare(true, qp, qs).discard_result(); // Can only return true or exception when preparing the fallback statement
+            co_await try_prepare(true, qp, qs); // Can only return true or exception when preparing the fallback statement
         }
-        return continuation;
-    }).handle_exception([this, &qp, &mm] (auto eptr) {
+    } catch (...) {
+        auto eptr = std::current_exception();
+
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
         (void)qp.container().invoke_on(0, [&mm = mm.container(), create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
@@ -128,7 +129,7 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
         } catch (...) {
             throw bad_column_family(_keyspace, _name);
         }
-    });
+    }
 }
 
 future<> table_helper::insert(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
