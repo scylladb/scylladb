@@ -87,7 +87,8 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 const std::map<sstring, sstring>& current_rfs = ks.metadata()->strategy_options();
                 for (const auto& [new_dc, new_rf] : _attrs->get_replication_options()) {
                     auto it = current_rfs.find(new_dc);
-                    if (it != current_rfs.end() && !validate_rf_difference(it->second, new_rf)) {
+                    sstring old_rf = it != current_rfs.end() ? it->second : "0";
+                    if (!validate_rf_difference(old_rf, new_rf)) {
                         throw exceptions::invalid_request_exception("Cannot modify replication factor of any DC by more than 1 at a time.");
                     }
                 }
