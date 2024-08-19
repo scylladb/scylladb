@@ -192,6 +192,10 @@ if [[ "${OSTYPE}" == "darwin"* ]]; then
   hard_limit=1024000
 fi
 
+if [[ -n "$interactive" || -t 0 ]]; then
+    docker_common_args+=("--tty")
+fi
+
 docker_common_args+=(
        --security-opt seccomp=unconfined \
        --security-opt label=disable \
@@ -210,7 +214,6 @@ docker_common_args+=(
        "$image" \
        "${args[@]}"
 )
-
 cleanup() {
     rm -rf "$tmpdir"
     if [ -v TMP_PASSWD ]; then
@@ -224,7 +227,7 @@ if [[ -n "$interactive" || -n "$is_podman" ]]; then
 
     # We also avoid detached mode with podman, which doesn't need it
     # (it does not proxy SIGTERM) and doesn't work well with it.
-    $tool run --tty --rm "${docker_common_args[@]}"
+    $tool run --rm "${docker_common_args[@]}"
     ret=$?
     cleanup
     exit $ret
