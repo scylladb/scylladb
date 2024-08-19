@@ -132,6 +132,7 @@ class default_random_schema_specification : public random_schema_specification {
     std::uniform_int_distribution<size_t> _regular_column_count_dist;
     std::uniform_int_distribution<size_t> _static_column_count_dist;
     type_generator _type_generator;
+    compress_sstable _compress;
 
 private:
     static unsigned generate_unique_id(std::mt19937& engine, std::unordered_set<unsigned>& used_ids) {
@@ -172,13 +173,15 @@ public:
             std::uniform_int_distribution<size_t> partition_column_count_dist,
             std::uniform_int_distribution<size_t> clustering_column_count_dist,
             std::uniform_int_distribution<size_t> regular_column_count_dist,
-            std::uniform_int_distribution<size_t> static_column_count_dist)
+            std::uniform_int_distribution<size_t> static_column_count_dist,
+            compress_sstable compress)
         : random_schema_specification(std::move(keyspace_name))
         , _partition_column_count_dist(partition_column_count_dist)
         , _clustering_column_count_dist(clustering_column_count_dist)
         , _regular_column_count_dist(regular_column_count_dist)
         , _static_column_count_dist(static_column_count_dist)
-        , _type_generator(*this) {
+        , _type_generator(*this)
+        , _compress(compress) {
         SCYLLA_ASSERT(_partition_column_count_dist.a() > 0);
     }
     virtual sstring table_name(std::mt19937& engine) override {
@@ -199,6 +202,9 @@ public:
     virtual std::vector<data_type> static_columns(std::mt19937& engine) override {
         return generate_types(engine, _static_column_count_dist, type_generator::is_multi_cell::yes, false);
     }
+    virtual compress_sstable& compress() override {
+        return _compress;
+    }
 };
 
 } // anonymous namespace
@@ -208,9 +214,10 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
         std::uniform_int_distribution<size_t> partition_column_count_dist,
         std::uniform_int_distribution<size_t> clustering_column_count_dist,
         std::uniform_int_distribution<size_t> regular_column_count_dist,
-        std::uniform_int_distribution<size_t> static_column_count_dist) {
+        std::uniform_int_distribution<size_t> static_column_count_dist,
+        random_schema_specification::compress_sstable compress) {
     return std::make_unique<default_random_schema_specification>(std::move(keyspace_name), partition_column_count_dist, clustering_column_count_dist,
-            regular_column_count_dist, static_column_count_dist);
+            regular_column_count_dist, static_column_count_dist, compress);
 }
 
 namespace {
@@ -830,6 +837,9 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
         builder.with_column(to_bytes(format("v{}", r)), std::move(regular_columns[r]), column_kind::regular_column);
     }
 
+    if (spec.compress() == random_schema_specification::compress_sstable::no) {
+        builder.set_compressor_params(compression_parameters::no_compression());
+    }
     return builder.build();
 }
 
