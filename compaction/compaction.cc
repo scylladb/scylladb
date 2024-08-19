@@ -1637,8 +1637,8 @@ public:
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
-        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
-        return make_mutation_reader<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
+        auto full_scan_reader = _compacting->make_full_scan_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
+        return make_mutation_reader<reader>(std::move(full_scan_reader), _options.operation_mode, _validation_errors);
     }
 
     uint64_t partitions_per_sstable() const override {

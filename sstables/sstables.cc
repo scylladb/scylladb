@@ -1958,7 +1958,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
-    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor, integrity_check::yes);
+    auto reader = make_full_scan_reader(_schema, permit, nullptr, monitor, integrity_check::yes);
 
     try {
         auto validator = mutation_fragment_stream_validator(*_schema);
@@ -2352,16 +2352,16 @@ sstable::make_reader(
 }
 
 mutation_reader
-sstable::make_crawling_reader(
+sstable::make_full_scan_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity) {
     if (_version >= version_types::mc) {
-        return mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
+        return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
-    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
+    return kl::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
 }
 
 static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(const std::filesystem::path& sst_path, sstring* const provided_ks, sstring* const provided_cf) {

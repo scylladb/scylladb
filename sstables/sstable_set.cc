@@ -1394,14 +1394,14 @@ sstable_set::make_local_shard_sstable_reader(
             fwd_mr);
 }
 
-mutation_reader sstable_set::make_crawling_reader(
+mutation_reader sstable_set::make_full_scan_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_ptr,
         read_monitor_generator& monitor_generator) const {
     std::vector<mutation_reader> readers;
     for_each_sstable([&] (const shared_sstable& sst) mutable {
-        readers.emplace_back(sst->make_crawling_reader(schema, permit, trace_ptr, monitor_generator(sst)));
+        readers.emplace_back(sst->make_full_scan_reader(schema, permit, trace_ptr, monitor_generator(sst)));
     });
     return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 }
