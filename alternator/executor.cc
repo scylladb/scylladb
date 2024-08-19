@@ -3925,6 +3925,19 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     tracing::trace(trace_state, "Performing a database query");
 
+    // Reverse the schema and the clustering bounds as the underlying code expects
+    // reversed queries in the native reversed format.
+    auto query_schema = table_schema;
+    const bool reversed = custom_opts.contains<query::partition_slice::option::reversed>();
+    if (reversed) {
+        query_schema = table_schema->get_reversed();
+
+        std::reverse(ck_bounds.begin(), ck_bounds.end());
+        for (auto& bound : ck_bounds) {
+            bound = query::reverse(bound);
+        }
+    }
+
     if (exclusive_start_key) {
         partition_key pk = pk_from_json(*exclusive_start_key, table_schema);
         auto pos = position_in_partition::for_partition_start();
@@ -3949,7 +3962,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(table_schema->id(), table_schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+    auto command = ::make_lw_shared<query::read_command>(query_schema->id(), query_schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
         query::tombstone_limit(proxy.get_tombstone_limit()));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
@@ -3958,7 +3971,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
-    auto p = service::pager::query_pagers::pager(proxy, table_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
+    auto p = service::pager::query_pagers::pager(proxy, query_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
     std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
     if (!p->is_exhausted()) {
