@@ -309,12 +309,17 @@ def test_alter_tablet_keyspace_rf(cql, this_dc):
         def change_dc_rf(new_rf):
             change_opt_rf(this_dc, new_rf)
 
-        change_dc_rf(2)
-        change_dc_rf(3)
+        change_dc_rf(2)  # increase RF by 1 should be OK
+        change_dc_rf(3)  # increase RF by 1 again should be OK
+        change_dc_rf(3)  # setting the same RF shouldn't cause problems
+        change_dc_rf(4)  # increase RF by 1 again should be OK
+        change_dc_rf(3)  # decrease RF by 1 should be OK
 
         with pytest.raises(InvalidRequest):
-            change_dc_rf(5)
+            change_dc_rf(5)  # increase RF by 2 should fail
         with pytest.raises(InvalidRequest):
-            change_dc_rf(1)
+            change_dc_rf(1)  # decrease RF by 2 should fail
         with pytest.raises(InvalidRequest):
-            change_dc_rf(10)
+            change_dc_rf(10)  # increase RF by 2+ should fail
+        with pytest.raises(InvalidRequest):
+            change_dc_rf(0)  # decrease RF by 2+ should fail
