@@ -299,11 +299,13 @@ def test_lwt_support_with_tablets(cql, test_keyspace, skip_without_tablets):
 # We want to ensure that we can only change the RF of any DC by at most 1 at a time
 # if we use tablets. That provides us with the guarantee that the old and the new QUORUM
 # overlap by at least one node.
-def test_alter_tablet_keyspace(cql, this_dc):
+def test_alter_tablet_keyspace_rf(cql, this_dc):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} "
                                 f"AND TABLETS = {{ 'enabled': true, 'initial': 128 }}") as keyspace:
         def change_opt_rf(rf_opt, new_rf):
-            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{rf_opt}' : {new_rf} }}")
+            cql.execute(f"ALTER KEYSPACE {keyspace} "
+                        f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{rf_opt}' : {new_rf} }}")
+
         def change_dc_rf(new_rf):
             change_opt_rf(this_dc, new_rf)
 
