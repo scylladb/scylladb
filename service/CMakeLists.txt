@@ -51,15 +51,17 @@ target_link_libraries(service
 check_headers(check-headers service
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
 
-add_library(storage_proxy.o
-  OBJECT
-    $<$<CONFIG:RelWithDebInfo,Debug>:storage_proxy.cc>)
+add_library(storage_proxy.o OBJECT EXCLUDE_FROM_ALL
+    storage_proxy.cc)
 target_include_directories(storage_proxy.o
   PRIVATE
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(storage_proxy.o
+  absl::headers
   Seastar::seastar
   xxHash::xxhash
   idl)
+add_custom_target(maybe-storage-proxy
+  DEPENDS $<$<CONFIG:RelWithDebInfo,Debug>:storage_proxy.o>)
 add_dependencies(compiler-training
-  storage_proxy.o)
+  maybe-storage-proxy)
