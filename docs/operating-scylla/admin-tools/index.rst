@@ -21,6 +21,7 @@ Admin Tools
    Reading mutation fragments </operating-scylla/admin-tools/select-from-mutation-fragments/>
    Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>
    Maintenance mode </operating-scylla/admin-tools/maintenance-mode/>
+   Task manager </operating-scylla/admin-tools/task-manager/>
 
 .. panel-box::
   :title: Admin Tools
