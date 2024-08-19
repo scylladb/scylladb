@@ -94,6 +94,53 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
     return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
 }
 
+SEASTAR_TEST_CASE(test_partition_query_is_full) {
+    return seastar::async([] {
+        auto s = make_schema();
+        BOOST_CHECK(s->full_slice().is_full());
+        // without any range
+        BOOST_CHECK(!partition_slice_builder(*s)
+                    .with_ranges({})
+                    .build()
+                    .is_full());
+        // range contains a single value
+        BOOST_CHECK(!partition_slice_builder(*s)
+                    .with_range(
+                        query::clustering_range::make_singular(
+                            clustering_key_prefix::from_single_value(*s, bytes("key"))))
+                    .build()
+                    .is_full());
+        // range contains multiple values
+        BOOST_CHECK(!partition_slice_builder(*s)
+                    .with_range(
+                        query::clustering_range::make_singular(
+                            clustering_key_prefix::from_single_value(*s, bytes("key1"))))
+                    .with_range(
+                        query::clustering_range::make_singular(
+                            clustering_key_prefix::from_single_value(*s, bytes("key2"))))
+                    .build()
+                    .is_full());
+        // a non-full range
+        BOOST_CHECK(!partition_slice_builder(*s)
+                    .with_range(
+                        query::clustering_range(
+                            {clustering_key_prefix::from_single_value(*s, bytes("key1"))},
+                            {clustering_key_prefix::from_single_value(*s, bytes("key2"))}))
+                    .build()
+                    .is_full());
+        // with a specific range
+        BOOST_CHECK(!partition_slice_builder(*s)
+                    .set_specific_ranges(
+                        query::specific_ranges(
+                            partition_key::from_single_value(*s, bytes("key")),
+                            {query::clustering_range::make_singular(
+                                    clustering_key_prefix::from_single_value(*s, bytes("ck")))}))
+                    .build()
+                    .is_full());
+
+    });
+}
+
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
     return seastar::async([] {
         auto s = make_schema();

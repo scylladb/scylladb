@@ -255,6 +255,15 @@ public:
         return options.contains<query::partition_slice::option::reversed>();
     }
 
+    bool is_full() const {
+        if (_specific_ranges) {
+            return false;
+        }
+        if (_row_ranges.empty() || _row_ranges.size() > 1) {
+            return false;
+        }
+        return _row_ranges.front().is_full();
+    }
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
