@@ -115,10 +115,10 @@ extern std::mutex boost_logger_mutex;
 
 namespace std {
 
-template <typename T>
+template <typename T, typename OutStream>
 requires (fmt::is_formattable<T>::value &&
-          !boost::has_left_shift<T, std::ostream>::value)
-std::ostream& boost_test_print_type(std::ostream& os, const T& p) {
+          !boost::has_left_shift<T, OutStream>::value)
+OutStream& boost_test_print_type(OutStream& os, const T& p) {
     fmt::print(os, "{}", p);
     return os;
 }
