@@ -306,8 +306,6 @@ def test_alter_tablet_keyspace(cql, this_dc):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{rf_opt}' : {new_rf} }}")
         def change_dc_rf(new_rf):
             change_opt_rf(this_dc, new_rf)
-        def change_default_rf(new_rf):
-            change_opt_rf("replication_factor", new_rf)
 
         change_dc_rf(2)
         change_dc_rf(3)
