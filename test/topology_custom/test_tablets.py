@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError
@@ -189,6 +189,35 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
         host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
         for k in range(4):
             await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
+
+
+# ALTER tablets KS cannot change RF of any DC by more than 1 at a time.
+# In a multi-dc environment, we can create replicas in a DC that didn't have replicas before,
+# but the above requirement should still be honoured, because we'd be changing RF from 0 to N in the new DC.
+# Reproduces https://github.com/scylladb/scylladb/issues/20039#issuecomment-2271365060
+# See also cql-pytest/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
+@pytest.mark.asyncio
+async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": "true"}
+
+    logger.info("Creating a new cluster of 1 node in 1st DC and 2 nodes in 2nd DC")
+    await manager.server_add(config=config, property_file={'dc': f'dc1', 'rack': 'myrack'})
+    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+
+    conn = manager.get_cql()
+    conn.execute("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};")
+    conn.execute("create table ks.t (pk int primary key);")  # need a table to not only change schema, but also replicas
+    with pytest.raises(InvalidRequest, match="Cannot modify replication factor of any DC by more than 1 at a time."):
+        # changing RF of dc2 from 0 to 2 should fail
+        conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 2};")
+
+    # changing RF of dc2 from 0 to 1 should succeed
+    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 1};")
+    # also check that we can safely remove all replicas by changing RF of dc2 from 1 to 0 back again
+    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 0};")
+    # we may also remove all the replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
+    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0};")
 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
