@@ -36,7 +36,7 @@ docs/* @annastuchlik @tzach
 docs/alternator @annastuchlik @tzach @nyh @nuivall @ptrsmrn @KrzaQ
 
 # GOSSIP
-gms/* @tgrabiec @asias
+gms/* @tgrabiec @asias @kbr-scylla
 
 # DOCKER
 dist/docker/*
