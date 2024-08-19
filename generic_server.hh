@@ -42,6 +42,7 @@ protected:
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
     seastar::gate _pending_requests_gate;
+    seastar::gate::holder _hold_server;
 
 public:
     connection(server& server, connected_socket&& fd);
@@ -77,10 +78,8 @@ class server {
 protected:
     sstring _server_name;
     logging::logger& _logger;
-    bool _stopping = false;
-    promise<> _all_connections_stopped;
-    uint64_t _current_connections = 0;
-    uint64_t _connections_being_accepted = 0;
+    seastar::gate _gate;
+    future<> _all_connections_stopped = make_ready_future<>();
     uint64_t _total_connections = 0;
     future<> _listeners_stopped = make_ready_future<>();
     using connections_list_t = boost::intrusive::list<connection>;
@@ -120,8 +119,6 @@ protected:
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
 
     future<> for_each_gently(noncopyable_function<future<>(connection&)>);
-
-    void maybe_stop();
 };
 
 }

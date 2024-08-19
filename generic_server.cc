@@ -21,15 +21,14 @@ connection::connection(server& server, connected_socket&& fd)
     , _fd{std::move(fd)}
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
+    , _hold_server(_server._gate)
 {
     ++_server._total_connections;
-    ++_server._current_connections;
     _server._connections_list.push_back(*this);
 }
 
 connection::~connection()
 {
-    --_server._current_connections;
     server::connections_list_t::iterator iter = _server._connections_list.iterator_to(*this);
     for (auto&& gi : _server._gentle_iterators) {
         if (gi.iter == iter) {
@@ -37,7 +36,6 @@ connection::~connection()
         }
     }
     _server._connections_list.erase(iter);
-    _server.maybe_stop();
 }
 
 future<> server::for_each_gently(noncopyable_function<future<>(connection&)> fn) {
@@ -115,15 +113,15 @@ server::~server()
 }
 
 future<> server::stop() {
-    if (!_stopping) {
+    if (!_gate.is_closed()) {
         co_await shutdown();
     }
 
-    co_await _all_connections_stopped.get_future();
+    co_await std::move(_all_connections_stopped);
 }
 
 future<> server::shutdown() {
-    _stopping = true;
+    _all_connections_stopped = _gate.close();
     size_t nr = 0;
     size_t nr_total = _listeners.size();
     _logger.debug("abort accept nr_total={}", nr_total);
@@ -175,12 +173,10 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
-        ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_connections_being_accepted;
-            if (_stopping) {
+        seastar::gate::holder holder(_gate);
+        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr, holder = std::move(holder)] (future<accept_result> f_cs_sa) mutable {
+            if (_gate.is_closed()) {
                 f_cs_sa.ignore_ready_future();
-                maybe_stop();
                 return stop_iteration::yes;
             }
             auto cs_sa = f_cs_sa.get();
@@ -229,13 +225,6 @@ server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn
 future<>
 server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
     return make_ready_future<>();
-}
-
-// Signal that all connections are stopped if the server is stopping and can be stopped.
-void server::maybe_stop() {
-    if (_stopping && !_connections_being_accepted && !_current_connections) {
-        _all_connections_stopped.set_value();
-    }
 }
 
 }
