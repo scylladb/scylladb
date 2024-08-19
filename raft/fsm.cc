@@ -116,7 +116,7 @@ const log_entry& fsm::add_entry(T command) {
         leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     }
 
-    return *_log[_log.last_idx()];
+    return *_log[_log.last_idx().value()];
 }
 
 template const log_entry& fsm::add_entry(command command);
@@ -267,7 +267,7 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
         }
     }
 
-    term_t term{_current_term + 1};
+    term_t term{_current_term + term_t{1}};
     if (!is_prevote) {
         update_current_term(term);
     }
@@ -307,7 +307,7 @@ bool fsm::has_output() const {
 
     auto diff = _log.last_idx() - _log.stable_idx();
 
-    return diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum
+    return diff > index_t{0} || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum
         || (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty()
         || _output.state_changed;
 }
@@ -329,15 +329,15 @@ fsm_output fsm::get_output() {
 
     fsm_output output = std::exchange(_output, fsm_output{});
 
-    if (diff > 0) {
-        output.log_entries.reserve(diff);
+    if (diff.value() > 0) {
+        output.log_entries.reserve(diff.value());
 
-        for (auto i = _log.stable_idx() + 1; i <= _log.last_idx(); i++) {
+        for (auto i = _log.stable_idx() + index_t{1}; i <= _log.last_idx(); i++) {
             // Copy before saving to storage to prevent races with log updates,
             // e.g. truncation of the log.
             // TODO: avoid copies by making sure log truncate is
             // copy-on-write.
-            output.log_entries.emplace_back(_log[i]);
+            output.log_entries.emplace_back(_log[i.value()]);
         }
     }
 
@@ -351,10 +351,10 @@ fsm_output fsm::get_output() {
     // to a snapshot.
     auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
     if (observed_ci < _commit_idx) {
-        output.committed.reserve(_commit_idx - observed_ci);
+        output.committed.reserve((_commit_idx - observed_ci).value());
 
-        for (auto idx = observed_ci + 1; idx <= _commit_idx; ++idx) {
-            const auto& entry = _log[idx];
+        for (auto idx = observed_ci + index_t{1}; idx <= _commit_idx; ++idx) {
+            const auto& entry = _log[idx.value()];
             output.committed.push_back(entry);
         }
     }
@@ -426,7 +426,7 @@ void fsm::maybe_commit() {
     bool committed_conf_change = _commit_idx < _log.last_conf_idx() &&
         new_commit_idx >= _log.last_conf_idx();
 
-    if (_log[new_commit_idx]->term != _current_term) {
+    if (_log[new_commit_idx.value()]->term != _current_term) {
 
         // 3.6.2 Committing entries from previous terms
         // Raft never commits log entries from previous terms by
@@ -436,7 +436,7 @@ void fsm::maybe_commit() {
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
         logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
-            _my_id, _log[new_commit_idx]->term, _current_term);
+            _my_id, _log[new_commit_idx.value()]->term, _current_term);
         return;
     }
     logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
@@ -749,7 +749,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         // Start re-sending from the non matching index, or from
         // the last index in the follower's log.
         // FIXME: make it more efficient
-        progress.next_idx = std::min(rejected.non_matching_idx, index_t(rejected.last_idx + 1));
+        progress.next_idx = std::min(rejected.non_matching_idx, rejected.last_idx + index_t{1});
 
         progress.become_probe();
 
@@ -931,7 +931,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         if (next_idx) {
             size_t size = 0;
             while (next_idx <= _log.last_idx() && size < _config.append_request_threshold) {
-                const auto& entry = _log[next_idx];
+                const auto& entry = _log[next_idx.value()];
                 req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                              _my_id, progress.id, entry->idx, entry->term);

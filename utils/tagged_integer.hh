@@ -35,7 +35,6 @@ public:
     }
 
     value_type value() const noexcept { return _value; }
-    operator value_type() const noexcept { return _value; }
 
     explicit operator bool() const { return _value != 0; }
 

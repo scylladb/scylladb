@@ -498,7 +498,7 @@ public:
     // may depend on it.
     future<> save_local_enabled_features(std::set<sstring> features, bool visible_before_cl_replay);
 
-    future<int> increment_and_get_generation();
+    future<gms::generation_type> increment_and_get_generation();
     bool bootstrap_needed() const;
     bool bootstrap_complete() const;
     bool bootstrap_in_progress() const;

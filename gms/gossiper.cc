@@ -148,7 +148,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
         auto ep = g_digest.get_endpoint();
         auto ep_state = this->get_endpoint_state_ptr(ep);
         version_type version = ep_state ? this->get_max_endpoint_state_version(*ep_state) : version_type();
-        int32_t diff_version = ::abs(version - g_digest.get_max_version());
+        int32_t diff_version = ::abs((version - g_digest.get_max_version()).value());
         diff_digests.emplace_back(gossip_digest(ep, g_digest.get_generation(), version_type(diff_version)));
     }
 
@@ -1625,7 +1625,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
     return reqd_endpoint_state;
 }
 
-generation_type::value_type gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) const {
+std::strong_ordering gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) const {
     auto ep1 = get_endpoint_state_ptr(addr1);
     auto ep2 = get_endpoint_state_ptr(addr2);
     if (!ep1 || !ep2) {
@@ -1633,7 +1633,7 @@ generation_type::value_type gossiper::compare_endpoint_startup(inet_address addr
         logger.warn("{}", err);
         throw std::runtime_error(err);
     }
-    return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
+    return ep1->get_heart_beat_state().get_generation() <=> ep2->get_heart_beat_state().get_generation();
 }
 
 sstring gossiper::get_rpc_address(const inet_address& endpoint) const {
