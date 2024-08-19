@@ -10,10 +10,12 @@
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "cdc/log.hh"
+#include "auth/service.hh"
 #include "db/config.hh"
 #include "log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
+#include "service/client_state.hh"
 #include "timestamp.hh"
 #include "types/map.hh"
 #include "schema/schema.hh"
@@ -564,12 +566,20 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     schema_ptr schema = get_table(_proxy, request);
     rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
 
-    co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::DROP,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "DROP permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
+    co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
-        if (!p.local().data_dictionary().has_schema(keyspace_name, table_name)) {
+        std::optional<data_dictionary::table> tbl = p.local().data_dictionary().try_find_table(keyspace_name, table_name);
+        if (!tbl) {
             throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
         }
 
@@ -577,6 +587,28 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy.local_db(), keyspace_name, group0_guard.write_timestamp());
 
         std::move(m2.begin(), m2.end(), std::back_inserter(m));
+
+        // When deleting a table and its views, we need to remove this role's
+        // special permissions in those tables (undoing the "auto-grant" done
+        // by CreateTable). If we didn't do this, if a second role later
+        // recreates a table with the same name, the first role would still
+        // have permissions over the new table.
+        // To make things more robust we just remove *all* permissions for
+        // the deleted table (CQL's drop_table_statement also does this).
+        // Unfortunately, there is an API mismatch between this code (which
+        // uses separate group0_guard and vector<mutation>) and the function
+        // revoke_all() which uses a combined "group0_batch" structure - so
+        // we need to do some ugly back-and-forth conversions between the pair
+        // to the group0_batch and back to the pair :-(
+        service::group0_batch mc(std::move(group0_guard));
+        mc.add_mutations(std::move(m));
+        co_await auth::revoke_all(*cs.get().get_auth_service(),
+            auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
+        for (const view_ptr& v : tbl->views()) {
+            co_await auth::revoke_all(*cs.get().get_auth_service(),
+                auth::make_data_resource(v->ks_name(), v->cf_name()), mc);
+        }
+        std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: delete {} table", table_name));
     });
@@ -834,6 +866,11 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     if (tags->Size() < 1) {
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
@@ -853,6 +890,11 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     }
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
 
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
@@ -932,7 +974,7 @@ static void validate_attribute_definitions(const rjson::value& attribute_definit
     }
 }
 
-static future<executor::request_return_type> create_table_on_shard0(tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
+static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1122,6 +1164,12 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::CREATE,
+            auth::resource(auth::resource_kind::data)))) {
+        co_return api_error::access_denied("CREATE permissions denied on ALL KEYSPACES by RBAC");
+    }
+
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -1182,6 +1230,26 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
         });
 
     }
+    // If a role is allowed to create a table, we must give it permissions to
+    // use (and eventually delete) the specific table it just created (and
+    // also the view tables). This is known as "auto-grant".
+    // Unfortunately, there is an API mismatch between this code (which uses
+    // separate group0_guard and vector<mutation>) and the function
+    // grant_applicable_permissions() which uses a combined "group0_batch"
+    // structure - so we need to do some ugly back-and-forth conversions
+    // between the pair to the group0_batch and back to the pair :-(
+    service::group0_batch mc(std::move(group0_guard));
+    mc.add_mutations(std::move(schema_mutations));
+    co_await auth::grant_applicable_permissions(
+        *client_state.get_auth_service(), *client_state.user(),
+        auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
+    for (const schema_builder& view_builder : view_builders) {
+        co_await auth::grant_applicable_permissions(
+            *client_state.get_auth_service(), *client_state.user(),
+            auth::make_data_resource(view_builder.ks_name(), view_builder.cf_name()), mc);
+    }
+    std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
+
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), format("alternator-executor: create {} table", table_name));
 
     co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
@@ -1195,9 +1263,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container()]
+    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard()]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_return co_await create_table_on_shard0(tr, std::move(request), sp.local(), mm, g.local());
+        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local());
     });
 }
 
@@ -1222,7 +1290,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), client_state_other_shard = client_state.move_to_other_shard()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
@@ -1253,6 +1321,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
 
         auto schema = builder.build();
+
+        if (!co_await client_state_other_shard.get().check_has_permission(auth::command_desc(
+            auth::permission::ALTER, auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "ALTER permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+        }
 
         auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
@@ -1811,10 +1885,18 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto op = make_shared<put_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::MODIFY,
+            auth::make_data_resource(op->schema()->ks_name(), op->schema()->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "MODIFY permissions denied on {}.{} by RBAC", op->schema()->ks_name(), op->schema()->cf_name()));
+    }
+
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        return container().invoke_on(*shard, _ssg,
+        co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -1827,7 +1909,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
@@ -1900,10 +1982,18 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::MODIFY,
+            auth::make_data_resource(op->schema()->ks_name(), op->schema()->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "MODIFY permissions denied on {}.{} by RBAC", op->schema()->ks_name(), op->schema()->cf_name()));
+    }
+
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        return container().invoke_on(*shard, _ssg,
+        co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -1916,7 +2006,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
@@ -2094,7 +2184,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
-                return make_ready_future<request_return_type>(api_error::validation(format("Invalid BatchWriteItem request: {}", request)));
+                co_return api_error::validation(format("Invalid BatchWriteItem request: {}", request));
             }
             auto r = request.MemberBegin();
             const std::string r_name = r->name.GetString();
@@ -2105,7 +2195,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                         item, schema, put_or_delete_item::put_item{}));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
-                    return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
+                    co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
@@ -2115,16 +2205,26 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
                         mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
-                    return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
+                    co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
             } else {
-                return make_ready_future<request_return_type>(api_error::validation(format("Unknown BatchWriteItem request type: {}", r_name)));
+                co_return api_error::validation(format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
     }
+
+    for (const auto& b : mutation_builders) {
+        if (!co_await client_state.check_has_permission(auth::command_desc(
+                auth::permission::MODIFY,
+                auth::make_data_resource(b.first->ks_name(), b.first->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "MODIFY permissions denied on {}.{} by RBAC", b.first->ks_name(), b.first->cf_name()));
+        }
+    }
+
     _stats.api_operations.batch_write_item_batch_total += batch_size;
-    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
+    co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
@@ -3167,10 +3267,18 @@ future<executor::request_return_type> executor::update_item(client_state& client
     auto op = make_shared<update_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::MODIFY,
+            auth::make_data_resource(op->schema()->ks_name(), op->schema()->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "MODIFY permissions denied on {}.{} by RBAC", op->schema()->ks_name(), op->schema()->cf_name()));
+    }
+
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        return container().invoke_on(*shard, _ssg,
+        co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -3183,7 +3291,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
@@ -3265,7 +3373,14 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::SELECT,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+    }
+
+    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -3383,6 +3498,16 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
         requests.emplace_back(std::move(rs));
     }
+
+    for (const table_requests& tr : requests) {
+        if (!co_await client_state.check_has_permission(auth::command_desc(
+                auth::permission::SELECT,
+                auth::make_data_resource(tr.schema->ks_name(), tr.schema->cf_name())))) {
+            co_return api_error::access_denied(format(
+                "SELECT permissions denied on {}.{} by RBAC", tr.schema->ks_name(), tr.schema->cf_name()));
+        }
+    }
+
     _stats.api_operations.batch_get_item_batch_total += requests.size();
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
@@ -3807,6 +3932,13 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
             pos = pos_from_json(*exclusive_start_key, schema);
         }
         old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+    }
+
+    if (!co_await client_state.check_has_permission(auth::command_desc(
+            auth::permission::SELECT,
+            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+        co_return api_error::access_denied(format(
+            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(

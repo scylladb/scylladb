@@ -108,7 +108,14 @@ exactly the same microsecond-resolution timestamp, the the result may be
 a mixture of both writes - some attributes from one and some from the
 other - instead of being just one or the other.
 
-## Authorization
+## Authentication and Authorization
+
+By default, Alternator does not enforce authentication or authorization,
+and any request from any connected client will be allowed. To enforce
+client authentication, and authorization of which client is allowed
+to do what, configure the following in ScyllaDB's configuration:
+
+    `alternator_enforce_authorization: true`
 
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
 as DynamoDB and the rest of AWS. Clients use, as usual, an access key ID and
@@ -116,26 +123,50 @@ a secret access key to prove their identity and the authenticity of their
 request. Alternator can then validate the authenticity and authorization of
 each request using a known list of authorized key pairs.
 
-In the current implementation, the user stores the list of allowed key pairs
-in the `system.roles` table: The access key ID is the `role` column, and
-the secret key is the `salted_hash`, i.e., the secret key can be found by
-`SELECT salted_hash from system.roles WHERE role = ID;`.
+To create a user for authentication, use the CQL "CREATE ROLE" command.
+When a client signs a request, it uses the name of this role as the access
+key ID, and the _salted hash_ of the role's password is the secret key.
+This secret key for role XYZ can be retrieved by the CQL request
+`SELECT salted_hash from system.roles WHERE role = XYZ;`.
 
-<!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 6.1 -->
+Alternator also implements authorization, or _access control_ - defining
+which authenticated user is allowed to do which operation, such as reading
+or writing to a specific table. The way this is supported in Alternator is
+currently _not_ compatible with DynamoDB's APIs (IAM or PutResourcePolicy).
+Instead, one needs to grant permissions to specific roles using CQL, with
+the "GRANT" command. For example, an Alternator table "xyz" is visible to
+CQL as `alternator_xyz.xyz`, and the following command will allow requests
+from user "myrole" to read this table (with GetItem and other read operations):
+`GRANT SELECT ON alternator_xyz.xyz TO myrole`. Refer to the CQL documentation
+on how to use GRANT and REVOKE to control permissions, and which permissions
+exist:
+<https://docs.scylladb.com/stable/operating-scylla/security/authorization.html>
 
-By default, authorization is not enforced at all. It can be turned on
-by providing an entry in Scylla configuration:
-    `alternator_enforce_authorization: true`
+The following permissions are needed to run the following API operations:
 
-Although Alternator implements DynamoDB's authentication, including the
-possibility of listing multiple allowed key pairs, there is currently no
-implementation of _access control_. All authenticated key pairs currently get
-full access to the entire database. This is in contrast with DynamoDB which
-supports fine-grain access controls via "IAM policies" - which give each
-authenticated user access to a different subset of the tables, different
-allowed operations, and even different permissions for individual items.
-All of this is not yet implemented in Alternator.
-See <https://github.com/scylladb/scylla/issues/5047>.
+ * SELECT:      GetItem, Query, Scan, BatchGetItem, GetRecords
+ * MODIFY:      PutItem, DeleteItem, UpdateItem, BatchWriteItem
+ * CREATE:      CreateTable
+ * DROP:        DeleteTable
+ * ALTER:       UpdateTable, TagResource, UntagResource, UpdateTimeToLive
+ * none needed: ListTables, DescribeTable, DescribeEndpoints,
+                ListTagsOfResource, DescribeTimeToLive,
+                DescribeContinuousBackups, ListStreams, DescribeStream,
+                GetShardIterator
+
+Note that the required permissions depend on the type of operation, not on
+what it does. For example, even though the PutItem operation can read the
+value of an item (when used with `ReturnValues=ALL_OLD`), it still requires
+the MODIFY permission, not the SELECT permission.
+
+Permissions are separate for a base table and each of its GSI/LSI and CDC
+log, so it's possible to give a role permissions to read one index and
+not the base, or vice versa, and so on. To build the GRANT command, you
+need to know the CQL name of each of these objects. For example, the CQL
+name of GSI "abc" of Alternator table "xyz" is `alternator_xyz.xyz:abc`.
+If you don't know the name of the table, you can try a forbidden operation
+and the AccessDeniedException error will contain the name of the table
+that was lacking permissions.
 
 ## Metrics
 

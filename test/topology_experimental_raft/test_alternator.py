@@ -19,8 +19,10 @@ import logging
 import time
 import boto3
 import botocore
+from botocore.exceptions import ClientError
 import requests
 import json
+from cassandra.auth import PlainTextAuthProvider
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
@@ -35,12 +37,12 @@ alternator_config = {
     'alternator_write_isolation': 'only_rmw_uses_lwt',
     'alternator_ttl_period_in_seconds': '0.5',
 }
-def get_alternator(ip):
+def get_alternator(ip, user='alternator', passwd='secret_pass'):
     url = f"http://{ip}:{alternator_config['alternator_port']}"
     return boto3.resource('dynamodb', endpoint_url=url,
         region_name='us-east-1',
-        aws_access_key_id='alternator',
-        aws_secret_access_key='secret_pass',
+        aws_access_key_id=user,
+        aws_secret_access_key=passwd,
         config=botocore.client.Config(
             retries={"max_attempts": 0},
             read_timeout=300)
@@ -297,14 +299,118 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     response = requests.get(localnodes_request)
     j = json.loads(response.content.decode('utf-8'))
     assert len(j) == 1
-    # Ending the test here will kill both servers. We don't wait for the
-    # second server to finish its long injection-caused bootstrap delay,
-    # so we don't check here that when the second server finally comes up,
-    # both nodes will finally be visible in /localnodes. This case is checked
-    # in other tests, where bootstrap finishes normally - we don't need to
-    # check this case again here.
-    task.cancel()
+
+    # We don't want to wait for the second server to finish its long
+    # injection-caused bootstrap delay, so we won't check here that when the
+    # second server finally comes up, both nodes will finally be visible in
+    # /localnodes. This case is checked in other tests, where bootstrap
+    # finishes normally, so we don't need to check this case again here.
+    # But we can't just finish here with "task" unwaited or we'll get a
+    # warning about an unwaited coroutine, and the ScyllaClusterManager's
+    # tasks_history will wait for it anyway. For the same reason we can't
+    # task.cancel() (this will cause ScyllaClusterManager's tasks_history
+    # to report the ScyllaClusterManager got BROKEN and fail the next test).
+    # Sadly even abruptly killing the servers (with manager.server_stop())
+    # (with the intention to then "await task" quickly) doesn't work,
+    # probably because of a bug in the library. So we "await task"
+    # anyway, and this test takes 2 minutes :-(
+    #for server in await manager.all_servers():
+    #    await manager.server_stop(server.server_id)
+    await task
 
 # TODO: add a more thorough test for /localnodes, creating a cluster with
 # multiple nodes in multiple data centers, and check that we can get a list
 # of nodes in each data center.
+
+# We have in test/alternator/test_cql_rbac.py many functional tests for
+# CQL-based Role Based Access Control (RBAC) and all those tests use the
+# same one-node cluster with authentication and authorization enabled.
+# Here in this file we have the opportunity to create clusters with different
+# configurations, so we can check how these configuration settings affect RBAC.
+@pytest.mark.asyncio
+async def test_alternator_enforce_authorization_false(manager: ManagerClient):
+    """A basic test for how Alternator authentication and authorization
+       work when alternator_enfore_authorization is *false* (and CQL's
+       authenticator/authorizer options are also unset):
+       1. Username and signature is not checked - a request with a bad
+          username is accepted.
+       2. Any user (or even non-existent user) has permissions to do any
+          operation.
+    """
+    servers = await manager.servers_add(1, config=alternator_config)
+    # Requests from a non-existent user with garbage password work,
+    # and can perform privildged operations like CreateTable, etc.
+    alternator = get_alternator(servers[0].ip_addr, 'nonexistent_user', 'garbage')
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    table.put_item(Item={'p': 42})
+    table.get_item(Key={'p': 42})
+    table.delete()
+
+def get_secret_key(cql, user):
+    """The secret key used for a user in Alternator is its role's salted_hash.
+       This function retrieves it from the system table.
+    """
+    # Newer Scylla places the "roles" table in the "system" keyspace, but
+    # older versions used "system_auth_v2" or "system_auth"
+    for ks in ['system', 'system_auth_v2', 'system_auth']:
+        try:
+            e = list(cql.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{user}'"))
+            if e != [] and e[0].salted_hash is not None:
+                return e[0].salted_hash
+        except:
+            pass
+    pytest.fail(f"Couldn't get secret key for user {user}")
+
+@pytest.mark.skip("flaky, needs to be fixed, see https://github.com/scylladb/scylladb/pull/20135")
+@pytest.mark.asyncio
+async def test_alternator_enforce_authorization_true(manager: ManagerClient):
+    """A basic test for how Alternator authentication and authorization
+       work when authentication and authorization is enabled in CQL, and
+       additionally alternator_enfore_authorization is *true*:
+       1. The username and signature is verified (a request with a bad
+          username or password is rejected)
+       2. A new user works, and can do things that don't need permissions
+          (such as ListTables) but can't perform operations that do need
+          permissions (e.g., CreateTable).
+    """
+    config = alternator_config | {
+        'alternator_enforce_authorization': True,
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer'
+    }
+    servers = await manager.servers_add(1, config=config,
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
+    cql = manager.get_cql()
+    # Any requests from a non-existent user with garbage password is
+    # rejected - even requests that don't need special permissions
+    alternator = get_alternator(servers[0].ip_addr, 'nonexistent_user', 'garbage')
+    with pytest.raises(ClientError, match='UnrecognizedClientException'):
+        alternator.meta.client.list_tables()
+    # We know that Scylla is set up with a "cassandra" user. If we retrieve
+    # its correct secret key, the ListTables will work.
+    alternator = get_alternator(servers[0].ip_addr, 'cassandra', get_secret_key(cql, 'cassandra'))
+    alternator.meta.client.list_tables()
+    # Privileged operations also work for the superuser account "cassandra":
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    table.put_item(Item={'p': 42})
+    table.get_item(Key={'p': 42})
+    table.delete()
+    # Create a new role "user2" and make a new connection "alternator2" with it:
+    cql.execute("CREATE ROLE user2 WITH PASSWORD = 'user2' AND LOGIN=TRUE")
+    alternator2 = get_alternator(servers[0].ip_addr, 'user2', get_secret_key(cql, 'user2'))
+    # In the new role, ListTables works, but other privileged operations
+    # don't.
+    alternator2.meta.client.list_tables()
+    with pytest.raises(ClientError, match='AccessDeniedException'):
+        alternator2.create_table(TableName=unique_table_name(),
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    # We could further test how GRANT works, but this would be unnecessary
+    # repeating of the tests in test/alternator/test_cql_rbac.py.

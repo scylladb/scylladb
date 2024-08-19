@@ -321,7 +321,7 @@ def run_scylla_cmd(pid, dir):
         '--strict-allow-filtering', 'true',
         '--strict-is-not-null-in-views', 'true',
         '--permissions-update-interval-in-ms', '100',
-        '--permissions-validity-in-ms', '100',
+        '--permissions-validity-in-ms', '5',
         '--shutdown-announce-in-ms', '0',
         '--maintenance-socket', 'workdir',
         '--service-levels-interval-ms', '500',

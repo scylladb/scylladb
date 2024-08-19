@@ -21,6 +21,12 @@ This section will guide you through the steps for setting up the cluster:
    `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key` must be inserted into
    the image, containing the SSL certificate and key to use.
 
+By default, ScyllaDB run in this way will not have authentication or
+authorization enabled, and any DynamoDB API request will be honored without
+requiring them to be signed appropriately. See the
+[Scylla Alternator for DynamoDB users](compatibility.md#authentication-and-authorization)
+document on how to configure authentication and authorization.
+
 ## Testing Scylla's DynamoDB API support:
 ### Running AWS Tic Tac Toe demo app to test the cluster:
 1. Follow the instructions on the [AWS github page](https://github.com/awsdocs/amazon-dynamodb-developer-guide/blob/master/doc_source/TicTacToe.Phase1.md)
