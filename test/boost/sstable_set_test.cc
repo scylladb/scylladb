@@ -9,10 +9,15 @@
 
 #include "test/lib/scylla_test_case.hh"
 
+#include <fmt/ranges.h>
+#include "db/config.hh"
+#include "locator/tablets.hh"
 #include "sstables/sstable_set_impl.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
+#include "sstable_test.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "readers/from_mutations_v2.hh"
@@ -166,4 +171,29 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
         auto sst_set = make_lw_shared<sstable_set>(std::make_unique<compound_sstable_set>(s, std::move(sets)));
         BOOST_REQUIRE_EQUAL(sst_set->bytes_on_disk(), ss1->bytes_on_disk() + ss2->bytes_on_disk());
     });
+}
+
+SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
+    // enable tablets, to get access to tablet_storage_group_manager
+    cql_test_config cfg;
+    cfg.db_config->enable_tablets(true);
+
+    return do_with_cql_env_thread([&](cql_test_env& env) {
+        env.execute_cql("CREATE KEYSPACE test_tablet_sstable_set_copy_ctor"
+                " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE test_tablet_sstable_set_copy_ctor.test (pk int PRIMARY KEY);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(fmt::format("INSERT INTO test_tablet_sstable_set_copy_ctor.test (pk) VALUES ({})", i)).get();
+        }
+        auto& cf = env.local_db().find_column_family("test_tablet_sstable_set_copy_ctor", "test");
+        auto& sgm = column_family_test::get_storage_group_manager(cf);
+        sgm->split_all_storage_groups().get();
+
+        auto tablet_sstable_set = replica::make_tablet_sstable_set(cf.schema(), *sgm.get(), locator::tablet_map(8));
+        auto tablet_sstable_set_copy = *tablet_sstable_set.get();
+        BOOST_REQUIRE(*tablet_sstable_set->all() == *tablet_sstable_set_copy.all());
+        BOOST_REQUIRE_EQUAL(tablet_sstable_set->size(), tablet_sstable_set_copy.size());
+        BOOST_REQUIRE_EQUAL(tablet_sstable_set->bytes_on_disk(), tablet_sstable_set_copy.bytes_on_disk());
+
+    }, std::move(cfg));
 }
