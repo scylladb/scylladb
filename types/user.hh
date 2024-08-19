@@ -32,6 +32,8 @@ public:
                     [] (const bytes& field_name) { return utf8_type->to_string(field_name); })))
             , _is_multi_cell(is_multi_cell) {
     }
+    virtual ~user_type_impl() override = default;
+
     static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name,
             std::vector<bytes> field_names, std::vector<data_type> field_types, bool multi_cell);
     data_type field_type(size_t i) const { return type(i); }
@@ -48,12 +50,12 @@ public:
     sstring get_name_as_cql_string() const;
 
     /* Returns set of user-defined types referenced by this UDT
-     * 
+     *
      * Example:
      * create type some_udt {
      *   a frozen<udt_a>,
      *   m frozen<map<udt_a, udt_b>,
-     *   t frozen<tuple<int, list<udt_c>>   
+     *   t frozen<tuple<int, list<udt_c>>
      * }
      * get_all_referenced_user_types() will return {udt_a, udt_b, udt_c}.
      */

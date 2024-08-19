@@ -18,7 +18,7 @@ class database;
 namespace data_dictionary {
 
 /**
- * `keyspace_element` is a common interface used to describe elements of keyspace. 
+ * `keyspace_element` is a common interface used to describe elements of keyspace.
  * It is used in `describe_statement`.
  *
  * Currently the elements of keyspace are:
@@ -29,6 +29,8 @@ namespace data_dictionary {
 */
 class keyspace_element {
 public:
+    virtual ~keyspace_element() = default;
+
     virtual seastar::sstring keypace_name() const = 0;
     virtual seastar::sstring element_name() const = 0;
 

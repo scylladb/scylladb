@@ -46,6 +46,7 @@ private:
 public:
     user_function(function_name name, std::vector<data_type> arg_types, std::vector<sstring> arg_names, sstring body,
             sstring language, data_type return_type, bool called_on_null_input, context ctx);
+    virtual ~user_function() override = default;
 
     const std::vector<sstring>& arg_names() const { return _arg_names; }
 

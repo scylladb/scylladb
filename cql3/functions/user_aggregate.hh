@@ -19,6 +19,8 @@ namespace functions {
 class user_aggregate : public db::functions::aggregate_function, public data_dictionary::keyspace_element {
 public:
     user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
+    virtual ~user_aggregate() override = default;
+
     bool has_finalfunc() const;
 
     virtual sstring keypace_name() const override { return name().keyspace; }

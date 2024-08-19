@@ -43,6 +43,8 @@ public:
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  user_types_metadata user_types = user_types_metadata{},
                  storage_options storage_opts = storage_options{});
+    virtual ~keyspace_metadata() override = default;
+
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
