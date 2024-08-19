@@ -16,6 +16,7 @@
 * :doc:`Reading mutation fragments</operating-scylla/admin-tools/select-from-mutation-fragments/>` - dump the underlying mutation data from tables.
 * :doc:`Maintenance socket </operating-scylla/admin-tools/maintenance-socket/>` - a Unix domain socket for full-permission CQL connection.
 * :doc:`Maintenance mode </operating-scylla/admin-tools/maintenance-mode/>` - a mode for performing maintenance tasks on an offline ScyllaDB node.
+* :doc:`Task manager </operating-scylla/admin-tools/task-manager/>` - a tool for tracking long-running background operations.
 
 
 Run each tool with ``-h``, ``--help`` for full options description.
