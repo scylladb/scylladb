@@ -1,8 +1,12 @@
 import requests
+import sys
 import time
 
-from rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper
-from task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task
+# Use the util.py library from ../cql-pytest:
+sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+from util import new_test_table, new_test_keyspace
+from rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error
+from task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task
 
 long_time = 1000000000
 
@@ -169,3 +173,45 @@ def test_module_not_exists(rest_api):
     module_name = "module_that_does_not_exist"
     resp = rest_api.send("GET", f"task_manager/list_module_tasks/{module_name}", )
     assert resp.status_code == requests.codes.bad_request, f"Invalid response status code: {resp.status_code}"
+
+def test_abort_on_unregistered_task(cql, this_dc, rest_api):
+    module_name = "repair"
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+
+                repair_injection = "repair_shard_repair_task_impl_do_repair_ranges"
+                abort_injection = "tasks_abort_children"
+                with scylla_inject_error(rest_api, repair_injection, True): # Stops running compaction.
+                    with scylla_inject_error(rest_api, abort_injection, True):  # Stops task abort.
+                        # Start repair.
+                        resp = rest_api.send("POST", f"storage_service/repair_async/{keyspace}")
+                        resp.raise_for_status()
+                        sequence_number = resp.json()
+
+                        # Get repair's id.
+                        resp = rest_api.send("GET", f"task_manager/list_module_tasks/{module_name}")
+                        resp.raise_for_status()
+                        ids = [s["task_id"] for s in resp.json() if s["sequence_number"] == sequence_number]
+                        assert len(ids) == 1, "Wrong task number"
+                        task_id = ids[0]
+
+                        # Abort repair.
+                        abort_task(rest_api, task_id)
+
+                        # Resume repair.
+                        resp = rest_api.send("POST", f"v2/error_injection/injection/{repair_injection}/message")
+                        resp.raise_for_status()
+
+                        # Wait until repair is done and unregister the task.
+                        wait_for_task(rest_api, task_id)
+
+                        # Resume abort.
+                        resp = rest_api.send("POST", f"v2/error_injection/injection/{abort_injection}/message")
+                        resp.raise_for_status()
+    drain_module_tasks(rest_api, module_name)
