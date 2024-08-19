@@ -1502,9 +1502,19 @@ static mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
-    return make_mutation_reader<sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);
+    if (range.is_full() &&
+        slice.get().is_full() && !slice.get().is_reversed() &&
+        fwd == streamed_mutation::forwarding::no &&
+        fwd_mr == mutation_reader::forwarding::no) {
+        return make_full_scan_reader(
+            std::move(sstable), std::move(schema), std::move(permit),
+            std::move(trace_state), monitor,
+            sstable::integrity_check::no);
+    } else {
+        return make_mutation_reader<sstable_mutation_reader>(
+            std::move(sstable), std::move(schema), std::move(permit), range,
+            std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);
+    }
 }
 
 
