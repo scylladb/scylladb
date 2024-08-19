@@ -29,6 +29,10 @@
 #include "types/types.hh"
 #include "auth_version.hh"
 
+namespace utils {
+    class shared_dict;
+};
+
 namespace sstables {
     struct entry_descriptor;
     class generation_type;
@@ -184,6 +188,7 @@ public:
     static constexpr auto TABLETS = "tablets";
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
+    static constexpr auto DICTS = "dicts";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -278,6 +283,7 @@ public:
     static schema_ptr tablets();
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
+    static schema_ptr dicts();
 
     // auth
     static schema_ptr roles();
@@ -650,6 +656,13 @@ public:
     
     future<mutation> make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard);
     future<std::optional<mutation>> get_service_levels_version_mutation();
+
+    // Publishes a new compression dictionary to `dicts`,
+    // with the current timestamp.
+    future<mutation> get_insert_dict_mutation(
+            bytes dict, locator::host_id self, db_clock::time_point dict_ts, api::timestamp_type write_ts) const;
+    // Queries `dicts` for the most recent compression dictionary.
+    future<utils::shared_dict> query_dict() const;
 
 private:
     static std::optional<service::topology_features> decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
