@@ -3908,7 +3908,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
 }
 
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
-        schema_ptr schema,
+        schema_ptr table_schema,
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector partition_ranges,
         std::vector<query::clustering_range> ck_bounds,
@@ -3926,30 +3926,30 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     tracing::trace(trace_state, "Performing a database query");
 
     if (exclusive_start_key) {
-        partition_key pk = pk_from_json(*exclusive_start_key, schema);
+        partition_key pk = pk_from_json(*exclusive_start_key, table_schema);
         auto pos = position_in_partition::for_partition_start();
-        if (schema->clustering_key_size() > 0) {
-            pos = pos_from_json(*exclusive_start_key, schema);
+        if (table_schema->clustering_key_size() > 0) {
+            pos = pos_from_json(*exclusive_start_key, table_schema);
         }
         old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     if (!co_await client_state.check_has_permission(auth::command_desc(
             auth::permission::SELECT,
-            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
+            auth::make_data_resource(table_schema->ks_name(), table_schema->cf_name())))) {
         co_return api_error::access_denied(format(
-            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
+            "SELECT permissions denied on {}.{} by RBAC", table_schema->ks_name(), table_schema->cf_name()));
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
-            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+            table_schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto static_columns = boost::copy_range<query::column_id_vector>(
-            schema->static_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
-    auto selection = cql3::selection::selection::wildcard(schema);
+            table_schema->static_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto selection = cql3::selection::selection::wildcard(table_schema);
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
+    auto command = ::make_lw_shared<query::read_command>(table_schema->id(), table_schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
         query::tombstone_limit(proxy.get_tombstone_limit()));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
@@ -3958,7 +3958,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
-    auto p = service::pager::query_pagers::pager(proxy, schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
+    auto p = service::pager::query_pagers::pager(proxy, table_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
     std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
     if (!p->is_exhausted()) {
@@ -3968,7 +3968,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     bool has_filter = filter;
     auto [items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
     if (paging_state) {
-        rjson::add(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
+        rjson::add(items, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
     }
     if (has_filter){
         cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
