@@ -228,7 +228,8 @@ const configuration* log::get_prev_configuration() const {
     return nullptr;
 }
 
-size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries, size_t max_trailing_bytes) {
+std::tuple<size_t, index_t> log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entries,
+                                                size_t max_trailing_bytes) {
     SCYLLA_ASSERT (snp.idx > _snapshot.idx);
 
     size_t released_memory;
@@ -274,7 +275,7 @@ size_t log::apply_snapshot(snapshot_descriptor&& snp, size_t max_trailing_entrie
 
     _snapshot = std::move(snp);
 
-    return released_memory;
+    return {released_memory, _first_idx};
 }
 
 } // end of namespace raft

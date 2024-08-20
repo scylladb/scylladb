@@ -11,20 +11,10 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator
+from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id
 
 
 logger = logging.getLogger(__name__)
-
-
-async def get_raft_log_size(cql, host) -> int:
-    query = "select count(\"index\") from system.raft"
-    return (await cql.run_async(query, host=host))[0][0]
-
-
-async def get_raft_snap_id(cql, host) -> str:
-    query = "select snapshot_id from system.raft limit 1"
-    return (await cql.run_async(query, host=host))[0].snapshot_id
 
 @pytest.mark.asyncio
 async def test_raft_snapshot_request(manager: ManagerClient):

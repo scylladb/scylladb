@@ -1019,8 +1019,11 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     // If the snapshot is local, _commit_idx is larger than snp.idx.
     // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
-    _output.snp.emplace(fsm_output::applied_snapshot{snp, local, max_trailing_entries});
-    size_t units = _log.apply_snapshot(std::move(snp), max_trailing_entries, max_trailing_bytes);
+    const auto [units, new_first_index] = _log.apply_snapshot(std::move(snp), max_trailing_entries, max_trailing_bytes);
+    _output.snp.emplace(fsm_output::applied_snapshot{
+        .snp = _log.get_snapshot(),
+        .is_local = local,
+        .preserved_log_entries = _log.get_snapshot().idx.value() + 1 - new_first_index.value()});
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
         leader_state().log_limiter_semaphore->signal(units);

@@ -335,6 +335,8 @@ private:
     }
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
 
+    future<> override_snapshot_thresholds();
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -1076,10 +1078,10 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 
     if (batch.snp) {
-        auto& [snp, is_local, max_trailing_entries] = *batch.snp;
+        const auto& [snp, is_local, preserve_log_entries] = *batch.snp;
         logger.trace("[{}] io_fiber storing snapshot {}", _id, snp.id);
         // Persist the snapshot
-        co_await _persistence->store_snapshot_descriptor(snp, max_trailing_entries);
+        co_await _persistence->store_snapshot_descriptor(snp, preserve_log_entries);
         _snapshot_desc_idx = snp.idx;
         _snapshot_desc_idx_changed.broadcast();
         _stats.store_snapshot++;
@@ -1319,8 +1321,8 @@ future<> server_impl::applier_fiber() {
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
 
-                index_t last_idx = batch.back()->idx;
-                term_t last_term = batch.back()->term;
+                const index_t last_idx = batch.back()->idx;
+                const term_t last_term = batch.back()->term;
                 SCYLLA_ASSERT(last_idx == _applied_idx + index_t{batch.size()});
 
                 boost::range::copy(
@@ -1329,7 +1331,7 @@ future<> server_impl::applier_fiber() {
                        boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                        std::back_inserter(commands));
 
-                auto size = commands.size();
+                const auto size = commands.size();
                 if (size) {
                     try {
                         co_await _state_machine->apply(std::move(commands));
@@ -1342,42 +1344,41 @@ future<> server_impl::applier_fiber() {
                     _stats.applied_entries += size;
                 }
 
-               _applied_idx = last_idx;
-               _applied_index_changed.broadcast();
-               notify_waiters(_awaited_applies, batch);
+                _applied_idx = last_idx;
+                _applied_index_changed.broadcast();
+                notify_waiters(_awaited_applies, batch);
 
-               // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
-               // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
-               // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
-               auto last_snap_idx = _fsm->log_last_snapshot_idx();
+                // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
+                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
+                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
+                const auto last_snap_idx = _fsm->log_last_snapshot_idx();
 
-               // Error injection to be set with one_shot
-               utils::get_local_injector().inject("raft_server_snapshot_reduce_threshold",
-                   [this] { _config.snapshot_threshold = 3; _config.snapshot_trailing = 1; });
+                // Use error injection to override the snapshot thresholds.
+                co_await override_snapshot_thresholds();
 
-               bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
+                const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
-               if (force_snapshot || (_applied_idx > last_snap_idx &&
-                   ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
-                   _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
-               {
-                   snapshot_descriptor snp;
-                   snp.term = last_term;
-                   snp.idx = _applied_idx;
-                   snp.config = _fsm->log_last_conf_for(_applied_idx);
-                   logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
-                   snp.id = co_await _state_machine->take_snapshot();
-                   // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
-                   // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
-                   // a later snapshot from the queue.
-                   auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
-                   auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
-                   if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
-                       logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
-                              " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                   }
-                   _stats.snapshots_taken++;
-               }
+                if (force_snapshot || (_applied_idx > last_snap_idx &&
+                    ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
+                    _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
+                {
+                    snapshot_descriptor snp;
+                    snp.term = last_term;
+                    snp.idx = _applied_idx;
+                    snp.config = _fsm->log_last_conf_for(_applied_idx);
+                    logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                    snp.id = co_await _state_machine->take_snapshot();
+                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
+                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
+                    // a later snapshot from the queue.
+                    auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
+                    auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
+                    if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
+                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
+                                " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+                    }
+                    _stats.snapshots_taken++;
+                }
             },
             [this] (snapshot_descriptor& snp) -> future<> {
                 SCYLLA_ASSERT(snp.idx >= _applied_idx);
@@ -1888,4 +1889,27 @@ std::ostream& operator<<(std::ostream& os, const server_impl& s) {
     return os;
 }
 
+future<> server_impl::override_snapshot_thresholds() {
+    return utils::get_local_injector().inject("raft_server_set_snapshot_thresholds", [this](auto& handler) -> future<> {
+        const auto set_parameter = [&handler](auto& target, const std::string_view name) -> void {
+            const auto from = handler.get(name);
+            if (from) {
+                try {
+                    target = boost::lexical_cast<std::remove_reference_t<decltype(target)>>(*from);
+                    logger.info("Applied _config.{}={}", name, *from);
+                } catch (const boost::bad_lexical_cast& e) {
+                    on_internal_error(
+                        logger, fmt::format("Could not apply a snapshot threshold param: {}, value: {}, error: {}",
+                                            name, *from, e.what()));
+                }
+            }
+        };
+
+        set_parameter(_config.snapshot_threshold, "snapshot_threshold");
+        set_parameter(_config.snapshot_threshold_log_size, "snapshot_threshold_log_size");
+        set_parameter(_config.snapshot_trailing, "snapshot_trailing");
+        set_parameter(_config.snapshot_trailing_size, "snapshot_trailing_size");
+        return make_ready_future<>();
+    });
+}
 } // end of namespace raft
