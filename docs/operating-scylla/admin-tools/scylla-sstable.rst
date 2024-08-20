@@ -654,7 +654,7 @@ shard-of
 
 Print out the shards which own the specified SSTables.
 
-The content is dumped in JSON, using the following schema:
+The content is dumped in JSON, using the following schema when ``--vnodes`` command option is specified:
 
 .. code-block:: none
     :class: hide-copy-button

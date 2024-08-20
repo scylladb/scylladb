@@ -1,6 +1,8 @@
 add_library(tools STATIC)
 target_sources(tools
   PRIVATE
+    load_system_tablets.cc
+    read_mutation.cc
     scylla-types.cc
     scylla-sstable.cc
     scylla-nodetool.cc

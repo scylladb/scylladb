@@ -71,6 +71,9 @@ std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_h
 /// If the mutation belongs to another table, no updates are done.
 void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint&, const mutation&);
 
+/// Reads the replica set from given cell value
+locator::tablet_replica_set tablet_replica_set_from_cell(const data_value&);
+
 /// Reads tablet metadata from system.tablets.
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 

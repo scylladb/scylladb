@@ -176,20 +176,24 @@ mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     return m;
 }
 
-static
-tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
+tablet_replica_set tablet_replica_set_from_cell(const data_value& v) {
     tablet_replica_set result;
-    auto v = value_cast<list_type_impl::native_type>(
-            replica_set_type->deserialize_value(raw_value));
-    result.reserve(v.size());
-    for (const data_value& replica_v : v) {
+    auto list_v = value_cast<list_type_impl::native_type>(v);
+    result.reserve(list_v.size());
+    for (const data_value& replica_v : list_v) {
         std::vector<data_value> replica_dv = value_cast<tuple_type_impl::native_type>(replica_v);
-        result.emplace_back(tablet_replica {
+        result.emplace_back(
             host_id(value_cast<utils::UUID>(replica_dv[0])),
             shard_id(value_cast<int>(replica_dv[1]))
-        });
+        );
     }
     return result;
+}
+
+static
+tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
+    return tablet_replica_set_from_cell(
+            replica_set_type->deserialize_value(raw_value));
 }
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {

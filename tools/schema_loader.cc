@@ -43,6 +43,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/local_strategy.hh"
 #include "tools/schema_loader.hh"
+#include "tools/read_mutation.hh"
 #include "view_info.hh"
 
 namespace {
@@ -379,138 +380,6 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             boost::adaptors::transformed([] (const table& t) { return t.schema; }));
 }
 
-struct sstable_manager_service {
-    db::nop_large_data_handler large_data_handler;
-    gms::feature_service feature_service;
-    cache_tracker tracker;
-    sstables::directory_semaphore dir_sem;
-    sstables::sstables_manager sst_man;
-    abort_source abort;
-
-    explicit sstable_manager_service(const db::config& dbcfg)
-        : feature_service(gms::feature_config_from_db_config(dbcfg))
-        , dir_sem(1)
-        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, abort) {
-    }
-
-    future<> stop() {
-        return sst_man.close();
-    }
-};
-
-mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_man, std::filesystem::path schema_table_data_path,
-        std::function<schema_ptr()> schema_factory, reader_permit permit, std::string_view keyspace, std::vector<std::string_view> ck_strings) {
-    if (sllog.level() == log_level::trace) {
-        auto schema = schema_factory();
-        sllog.trace("read_schema_table_mutation(): path={}, table={}.{}, pk={}, ck={}",
-                schema_table_data_path.native(),
-                schema->ks_name(),
-                schema->cf_name(),
-                keyspace,
-                ck_strings);
-    }
-
-    sharded<sstables::sstable_directory> sst_dirs;
-    sst_dirs.start(
-        sharded_parameter([&sst_man] { return std::ref(sst_man.local().sst_man); }),
-        sharded_parameter([&schema_factory] { return schema_factory(); }),
-        sharded_parameter([&] { return std::ref(schema_factory()->get_sharder()); }),
-        schema_table_data_path.native(), sstables::sstable_state::normal,
-        sharded_parameter([] { return default_io_error_handler_gen(); })).get();
-    auto stop_sst_dirs = deferred_stop(sst_dirs);
-
-    auto sstable_open_infos = sst_dirs.map_reduce0(
-            [] (sstables::sstable_directory& sst_dir) -> future<std::vector<sstables::foreign_sstable_open_info>> {
-               co_await sst_dir.process_sstable_dir(sstables::sstable_directory::process_flags{ .sort_sstables_according_to_owner = false });
-               const auto& unsorted_ssts = sst_dir.get_unsorted_sstables();
-               std::vector<sstables::foreign_sstable_open_info> open_infos;
-               open_infos.reserve(unsorted_ssts.size());
-               for (auto& sst : unsorted_ssts) {
-                   open_infos.push_back(co_await sst->get_open_info());
-               }
-               co_return open_infos;
-            },
-            std::vector<sstables::foreign_sstable_open_info>{},
-            [] (std::vector<sstables::foreign_sstable_open_info> a, std::vector<sstables::foreign_sstable_open_info> b) {
-                std::move(b.begin(), b.end(), std::back_inserter(a));
-                return a;
-            }).get();
-
-    auto schema_table_schema = schema_factory();
-
-    if (sstable_open_infos.empty()) {
-        sllog.debug("read_schema_table_mutation(): no sstables found for path={}, table={}.{}, pk={}, ck={}",
-                schema_table_data_path.native(),
-                schema_table_schema->ks_name(),
-                schema_table_schema->cf_name(),
-                keyspace,
-                ck_strings);
-        return {};
-    }
-
-    std::vector<sstables::shared_sstable> sstables;
-    sstables.reserve(sstable_open_infos.size());
-    for (auto& open_info : sstable_open_infos) {
-        sstables.push_back(sst_dirs.local().load_foreign_sstable(open_info).get());
-    }
-
-    auto pk = partition_key::from_deeply_exploded(*schema_table_schema, {data_value(keyspace)});
-    auto dk = dht::decorate_key(*schema_table_schema, pk);
-    auto pr = dht::partition_range::make_singular(dk);
-
-    std::vector<data_value> raw_ck_values;
-    raw_ck_values.reserve(ck_strings.size());
-    for (const auto& ck_str : ck_strings) {
-        raw_ck_values.push_back(data_value(ck_str));
-    }
-    auto ck = clustering_key::from_deeply_exploded(*schema_table_schema, raw_ck_values);
-    auto cr = query::clustering_range::make({ck, true}, {ck, true});
-    auto ps = partition_slice_builder(*schema_table_schema)
-            .with_range(cr)
-            .build();
-
-    sllog.trace("read_schema_table_mutation(): preparing to read {} sstables for table={}.{}, pr={} ({}), cr={} ({})\n{}",
-            sstable_open_infos.size(),
-            schema_table_schema->ks_name(),
-            schema_table_schema->cf_name(),
-            pr,
-            keyspace,
-            cr,
-            ck_strings,
-            sstables);
-
-    std::vector<mutation_reader> readers;
-    readers.reserve(sstables.size());
-    for (const auto& sst : sstables) {
-        readers.emplace_back(sst->make_reader(schema_table_schema, permit, pr, ps));
-    }
-    auto reader = make_combined_reader(schema_table_schema, permit, std::move(readers));
-    auto close_reader = deferred_close(reader);
-
-    auto mut_opt = read_mutation_from_mutation_reader(reader).get();
-
-    if (mut_opt) {
-        sllog.debug("read_schema_table_mutation(): read mutation for table={}.{}, pr={} ({}), cr={} ({})\n{}",
-                schema_table_schema->ks_name(),
-                schema_table_schema->cf_name(),
-                pr,
-                keyspace,
-                cr,
-                ck_strings,
-                *mut_opt);
-    } else {
-        sllog.debug("read_schema_table_mutation(): read empty mutation for table={}.{}, pr={} ({}), cr={} ({})",
-                schema_table_schema->ks_name(),
-                schema_table_schema->cf_name(),
-                pr,
-                keyspace,
-                cr,
-                ck_strings);
-    }
-
-    return mut_opt;
-}
-
 class single_keyspace_user_types_storage : public data_dictionary::user_types_storage {
     data_dictionary::user_types_metadata _utm;
 public:
@@ -520,50 +389,6 @@ public:
     }
 };
 
-std::unordered_map<schema_ptr, std::string> get_schema_table_directories(std::filesystem::path scylla_data_path) {
-    const std::vector<schema_ptr> schemas{
-            db::schema_tables::types(),
-            db::schema_tables::tables(),
-            db::schema_tables::views(),
-            db::schema_tables::columns(),
-            db::schema_tables::view_virtual_columns(),
-            db::schema_tables::computed_columns(),
-            db::schema_tables::indexes(),
-            db::schema_tables::dropped_columns(),
-            db::schema_tables::scylla_tables()};
-
-    std::unordered_map<schema_ptr, std::string> schema_table_table_dir;
-
-    auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
-    auto schema_tables_dir = open_directory(schema_tables_path.native()).get();
-
-    schema_tables_dir.list_directory([&] (directory_entry de) -> future<> {
-        auto dash_pos = de.name.find_last_of('-');
-        auto table_name = de.name.substr(0, dash_pos);
-
-        auto it = boost::find_if(schemas, [&] (const schema_ptr& s) {
-            return s->cf_name() == table_name;
-        });
-
-        if (it != schemas.end()) {
-            if (!de.type) {
-                throw std::runtime_error(fmt::format("failed loading schema tables from {}: keyspace directory entry {} has unrecognized type", scylla_data_path.native(), de.name));
-            } else if (*de.type != directory_entry_type::directory) {
-                throw std::runtime_error(fmt::format("failed loading schema tables from {}: keyspace directory entry {} has unrecognized type {}", scylla_data_path.native(), de.name, static_cast<int>(*de.type)));
-            }
-            auto s = *it;
-            schema_table_table_dir[s] = de.name;
-        }
-        return make_ready_future<>();
-    }).done().get();
-
-    if (schema_table_table_dir.size() != schemas.size()) {
-        throw std::runtime_error(fmt::format("failed loading schema tables from {}: couldn't find table directory for all require schema tables", scylla_data_path.native()));
-    }
-
-    return schema_table_table_dir;
-}
-
 schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table) {
     reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
@@ -572,7 +397,6 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     sst_man.start(std::ref(dbcfg)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
-    auto schema_table_table_dir = get_schema_table_directories(scylla_data_path);
     auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
 
     auto empty = [] (const mutation_opt& mopt) {
@@ -580,13 +404,14 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     };
     auto do_load = [&] (std::function<const schema_ptr()> schema_factory) {
         auto s = schema_factory();
-        return read_schema_table_mutation(
+        return read_mutation_from_table_offline(
                 sst_man,
-                schema_tables_path / schema_table_table_dir[s],
-                schema_factory,
                 rcs_sem.make_tracking_only_permit(s, "schema_mutation", db::no_timeout, {}),
+                get_table_directory(scylla_data_path, s->keypace_name(), s->cf_name()).get(),
                 keyspace,
-                {table});
+                schema_factory,
+                data_value(keyspace),
+                data_value(table));
     };
     mutation_opt tables = do_load(db::schema_tables::tables);
     mutation_opt views = do_load(db::schema_tables::views);
@@ -603,12 +428,14 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
 
     data_dictionary::user_types_metadata utm;
 
-    auto types_mut = read_schema_table_mutation(
+    auto types_schema = db::schema_tables::types();
+    auto types_mut = read_mutation_from_table_offline(
             sst_man,
-            schema_tables_path / schema_table_table_dir[db::schema_tables::types()],
-            db::schema_tables::types,
             rcs_sem.make_tracking_only_permit(db::schema_tables::types(), "types_mutation", db::no_timeout, {}),
+            get_table_directory(scylla_data_path, types_schema->keypace_name(), types_schema->cf_name()).get(),
             keyspace,
+            db::schema_tables::types,
+            data_value(keyspace),
             {});
     if (types_mut) {
         query::result_set result(*types_mut);
