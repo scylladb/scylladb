@@ -2104,7 +2104,7 @@ public:
     }
 };
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
     scrub_test_framework test;
 
     auto schema = test.schema();
@@ -2119,6 +2119,42 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
     test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
+    scrub_test_framework test;
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(
+            test.random_schema(),
+            tests::uncompactible_timestamp_generator(test.seed()),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(10, 10)).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        // Corrupt the data to cause an invalid checksum.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        const auto wbuf_align = f.memory_dma_alignment();
+        const auto wbuf_len = f.disk_write_dma_alignment();
+        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+        f.dma_write(0, wbuf.get(), wbuf_len).get();
+        f.close().get();
 
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
