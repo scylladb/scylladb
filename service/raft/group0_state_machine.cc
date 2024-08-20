@@ -54,8 +54,9 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        const raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled)
+        const raft_address_map& address_map, gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled)
     : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
+    , _state_id_handler(gossiper)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots
         // or not is technically not correct because we also use features to guard
@@ -256,6 +257,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         // apply remainder
         co_await merge_and_apply(m);
     }
+
+    co_await _state_id_handler.advertise_state_id(m.last_id());
 }
 
 future<raft::snapshot_id> group0_state_machine::take_snapshot() {

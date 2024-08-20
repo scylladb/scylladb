@@ -38,6 +38,7 @@ enum class application_state {
     IGNORE_MSB_BITS,
     CDC_GENERATION_ID,
     SNITCH_NAME,
+    GROUP0_STATE_ID,
 };
 
 } // namespace gms

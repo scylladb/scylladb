@@ -16,6 +16,7 @@
 #include "gms/inet_address.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
+#include "service/state_id.hh"
 #include "version.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>
@@ -189,6 +190,11 @@ public:
     static versioned_value cql_ready(bool value) {
         return versioned_value(to_sstring(int(value)));
     };
+
+    static versioned_value state_id(const service::state_id& state_id) {
+        return versioned_value(state_id.to_sstring());
+    }
+
 }; // class versioned_value
 
 } // namespace gms

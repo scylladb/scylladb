@@ -263,6 +263,7 @@ static bool should_count_as_msg_processing(const std::map<inet_address, endpoint
                 case application_state::LOAD:
                 case application_state::VIEW_BACKLOG:
                 case application_state::CACHE_HITRATES:
+                case application_state::GROUP0_STATE_ID:
                     return false;
                 default:
                     return true;

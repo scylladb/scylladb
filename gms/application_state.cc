@@ -59,6 +59,8 @@ static constexpr std::string_view application_state_name(application_state state
         return "CDC_GENERATION_ID";
     case application_state::SNITCH_NAME:
         return "SNITCH_NAME";
+    case application_state::GROUP0_STATE_ID:
+        return "GROUP0_STATE_ID";
 
     // cases that we don'd want to handle
     case application_state::X_11_PADDING:
