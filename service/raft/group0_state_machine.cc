@@ -54,9 +54,10 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        const raft_address_map& address_map, gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled)
+        const raft_address_map& address_map, group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
+        bool topology_change_enabled)
     : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
-    , _state_id_handler(gossiper)
+    , _state_id_handler(sp.local_db(), gossiper, address_map, server_accessor)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots
         // or not is technically not correct because we also use features to guard
@@ -75,6 +76,7 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         // node doesn't support it yet.
         _topology_change_enabled = true;
     })) {
+    _state_id_handler.start();
 }
 
 static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -358,6 +360,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 }
 
 future<> group0_state_machine::abort() {
+    _state_id_handler.stop();
     _abort_source.request_abort();
     return _gate.close();
 }

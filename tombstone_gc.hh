@@ -62,6 +62,8 @@ class tombstone_gc_state {
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_group0_gc_time() const;
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_or_create_group0_gc_time();
 
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+
 public:
     tombstone_gc_state() = delete;
     explicit tombstone_gc_state(per_table_history_maps* maps) noexcept : _reconcile_history_maps(maps) {}

@@ -65,6 +65,16 @@ seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_t
     return _reconcile_history_maps->_group0_gc_time;
 }
 
+gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) const {
+    // use the reconcile mode for group0 tables with 0 propagation delay
+    auto gc_before = gc_clock::time_point::min();
+    auto m = get_group0_gc_time();
+    if (m) {
+        gc_before = *m;
+    }
+    return check_min(s, gc_before);
+}
+
 void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
     _reconcile_history_maps->_repair_maps.erase(id);
 }
@@ -79,6 +89,13 @@ void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
 tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
     bool knows_entire_range = true;
+
+    if (s->static_props().is_group0_table) {
+        const auto gc_before = get_gc_before_for_group0(s);
+        dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), range, gc_before);
+        return {gc_before, gc_before, knows_entire_range};
+    }
+
     const auto& options = s->tombstone_gc_options();
     switch (options.mode()) {
     case tombstone_gc_mode::timeout: {
@@ -148,6 +165,12 @@ gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_
 }
 
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+    if (s->static_props().is_group0_table) {
+        const auto gc_before = get_gc_before_for_group0(s);
+        dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), dk, gc_before);
+        return gc_before;
+    }
+
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
     // if mode = immediate  // can gc tombstone immediately

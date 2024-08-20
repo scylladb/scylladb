@@ -53,7 +53,6 @@ async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="issue #15607")
 async def test_group0_tombstone_gc(manager: ManagerClient):
     """
     Regression test for #15607.
@@ -89,7 +88,10 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
         # (the alternative would be to drop the caches after the compaction or to filter the mutation fragments listing)
         '--enable-cache', '0',
     ]
-    servers = [await manager.server_add(cmdline=cmdline) for _ in range(3)]
+    cfg = {
+        'group0_tombstone_gc_refresh_interval_in_ms': 1000,  # this is 1 hour by default
+    }
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg) for _ in range(3)]
 
     cql = manager.get_cql()
     hosts = [(await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
