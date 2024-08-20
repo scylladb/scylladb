@@ -17,6 +17,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/tablets.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
@@ -3160,4 +3161,160 @@ SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_up
     };
 
     execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multitable_load_balancing) {
+    using namespace load_balancer_test;
+
+    // Silence logger because it generates a lot of output.
+    logging::logger_registry().set_logger_level("load_balancer", seastar::log_level::warn);
+
+    auto verify_overcommit = [&] (const table_balance& table, double max_shard_overcommit, double max_node_overcommit,
+                                  sstring run_name, int table_idx) {
+        if (table.shard_overcommit > max_shard_overcommit) {
+            BOOST_ERROR(format("Shard overcommit {} > {} for table{} in run {}", table.shard_overcommit,
+                               max_shard_overcommit, table_idx, run_name));
+        }
+        if (table.node_overcommit > max_node_overcommit) {
+            BOOST_ERROR(format("Node overcommit {} > {} for table{} in run {}", table.node_overcommit,
+                               max_node_overcommit, table_idx, run_name));
+        }
+    };
+
+    auto do_verify = [&] (sstring run_name, params p,
+                          double table0_max_shard_overcommit, double table0_max_node_overcommit,
+                          double table1_max_shard_overcommit, double table1_max_node_overcommit) {
+        testlog.info("[run {}] params: {}", run_name, p);
+        auto res = test_load_balancing_with_many_tables(p, true).get();
+        testlog.info("[run {}] results: {}", run_name, res.worst);
+
+        verify_overcommit(res.worst.tables[0], table0_max_shard_overcommit, table0_max_node_overcommit, run_name, 0);
+        verify_overcommit(res.worst.tables[1], table1_max_shard_overcommit, table1_max_node_overcommit, run_name, 1);
+    };
+
+    // {iterations=8, nodes=6, tablets1=1024 (21.3/sh), tablets2=256 (10.7/sh), rf1=1, rf2=2, shards=8}
+    // {table1={shard=1.094 (best=1.03), node=1.012}, table2={shard=1.094 (best=1.03), node=1.012}}
+    do_verify("1", params{
+            .iterations = 8,
+            .nodes = 6,
+            .tablets1 = 1024, .tablets2 = 256,
+            .rf1 = 1, .rf2 = 2,
+            .shards = 8,
+    }, 1.5, 1.02, 1.1, 1.02);
+
+    // {iterations=8, nodes=3, tablets1=16384 (42.7/sh), tablets2=1024 (1.3/sh), rf1=2, rf2=1, shards=256}
+    // {table1={shard=1.008 (best=1.01), node=1.000}, table2={shard=1.500 (best=1.50), node=1.002}
+    do_verify("2", params{
+            .iterations = 8,
+            .nodes = 3,
+            .tablets1 = 16384, .tablets2 = 1024,
+            .rf1 = 2, .rf2 = 1,
+            .shards = 256,
+    }, 1.01, 1.01, 1.6, 1.01);
+
+    // {iterations=8, nodes=4, tablets1=8192 (16.0/sh), tablets2=8192 (16.0/sh), rf1=1, rf2=1, shards=128}
+    // {table1={shard=1.016 (best=1.00), node=1.000}, table2={shard=1.094 (best=1.00), node=1.000}}
+    do_verify("3", params{
+            .iterations = 8,
+            .nodes = 4,
+            .tablets1 = 8192, .tablets2 = 8192,
+            .rf1 = 1, .rf2 = 1,
+            .shards = 128,
+    }, 1.02, 1.01, 1.1, 1.01);
+
+    // {iterations=8, nodes=4, tablets1=4096 (8.0/sh), tablets2=2048 (2.0/sh), rf1=2, rf2=1, shards=256}
+    // {table1={shard=1.094 (best=1.00), node=1.000}, table2={shard=1.250 (best=1.00), node=1.001}}
+    do_verify("4", params{
+            .iterations = 8,
+            .nodes = 4,
+            .tablets1 = 4096, .tablets2 = 2048,
+            .rf1 = 2, .rf2 = 1,
+            .shards = 256,
+    }, 1.1, 1.01, 1.3, 1.01);
+
+    // {iterations=8, nodes=3, tablets1=16 (5.3/sh), tablets2=8 (8.0/sh), rf1=1, rf2=3, shards=1}
+    // {table1={shard=1.125 (best=1.12), node=1.125}, table2={shard=1.000 (best=1.00), node=1.000}}
+    do_verify("5", params{
+            .iterations = 8,
+            .nodes = 3,
+            .tablets1 = 16, .tablets2 = 8,
+            .rf1 = 1, .rf2 = 3,
+            .shards = 1,
+    }, 1.2, 1.2, 1.01, 1.01);
+
+    // {iterations=8, nodes=5, tablets1=64 (38.4/sh), tablets2=8 (4.8/sh), rf1=3, rf2=3, shards=1}
+    // {table1={shard=1.016 (best=1.02), node=1.016}, table2={shard=1.250 (best=1.04), node=1.250}
+    do_verify("6", params{
+            .iterations = 8,
+            .nodes = 5,
+            .tablets1 = 64, .tablets2 = 8,
+            .rf1 = 3, .rf2 = 3,
+            .shards = 1,
+    }, 1.05, 1.05, 1.5, 1.3);
+
+    // {iterations=8, nodes=3, tablets1=4096 (10.7/sh), tablets2=8192 (21.3/sh), rf1=1, rf2=1, shards=128}
+    // {table1={shard=1.125 (best=1.03), node=1.000}, table2={shard=1.062 (best=1.03), node=1.000}}
+    do_verify("7", params{
+            .iterations = 8,
+            .nodes = 3,
+            .tablets1 = 4096, .tablets2 = 8192,
+            .rf1 = 1, .rf2 = 1,
+            .shards = 128,
+    }, 1.2, 1.01, 1.1, 1.01);
+
+    // {iterations=8, nodes=4, tablets1=512 (1.5/sh), tablets2=16384 (16.0/sh), rf1=3, rf2=1, shards=256}
+    // {table1={shard=1.667 (best=1.33), node=1.003}, table2={shard=1.094 (best=1.00), node=1.000}}
+    do_verify("8", params{
+            .iterations = 8,
+            .nodes = 4,
+            .tablets1 = 512, .tablets2 = 16384,
+            .rf1 = 3, .rf2 = 1,
+            .shards = 256,
+    }, 1.7, 1.01, 1.1, 1.01);
+
+    // {iterations=8, nodes=6, tablets1=256 (4.0/sh), tablets2=128 (2.0/sh), rf1=3, rf2=3, shards=32}
+    // {table1={shard=1.458 (best=1.00), node=1.003}, table2={shard=1.167 (best=1.00), node=1.021}}
+    do_verify("9", params{
+            .iterations = 8,
+            .nodes = 6,
+            .tablets1 = 256, .tablets2 = 128,
+            .rf1 = 3, .rf2 = 3,
+            .shards = 32,
+    }, 1.5, 1.03, 1.76, 1.03);
+
+    // {iterations=8, nodes=6, tablets1=128 (1.0/sh), tablets2=2048 (10.7/sh), rf1=3, rf2=2, shards=64}
+    // {table1={shard=2.000 (best=1.00), node=1.057}, table2={shard=1.094 (best=1.03), node=1.001}}
+    do_verify("10", params{
+            .iterations = 8,
+            .nodes = 6,
+            .tablets1 = 128, .tablets2 = 2048,
+            .rf1 = 3, .rf2 = 2,
+            .shards = 64,
+    }, 2.1, 1.08, 1.1, 1.01);
+
+    // {iterations=8, nodes=5, tablets1=32 (6.4/sh), tablets2=8 (1.6/sh), rf1=1, rf2=1, shards=1}
+    // {table1={shard=1.125 (best=1.09), node=1.125}, table2={shard=1.500 (best=1.25), node=1.500}}
+    do_verify("11", params{
+            .iterations = 8,
+            .nodes = 5,
+            .tablets1 = 32, .tablets2 = 8,
+            .rf1 = 1, .rf2 = 2,
+            .shards = 1,
+    }, 1.2, 1.2, 1.6, 1.6);
+
+    do_verify("12", params{
+            .iterations = 8,
+            .nodes = 4,
+            .tablets1 = 1024, .tablets2 = 2048,
+            .rf1 = 2, .rf2 = 3,
+            .shards = 32,
+    }, 1.1, 1.01, 1.1, 1.01);
+
+    do_verify("13", params{
+            .iterations = 8,
+            .nodes = 3,
+            .tablets1 = 1024, .tablets2 = 512,
+            .rf1 = 1, .rf2 = 3,
+            .shards = 1,
+    }, 1.01, 1.01, 1.01, 1.01);
 }

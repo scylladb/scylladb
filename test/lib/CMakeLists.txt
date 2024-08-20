@@ -17,6 +17,7 @@ target_sources(test-lib
     result_set_assertions.cc
     sstable_run_based_compaction_strategy_for_tests.cc
     sstable_utils.cc
+    tablets.cc
     data_model.cc)
 target_include_directories(test-lib
   PUBLIC
