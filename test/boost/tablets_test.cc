@@ -8,6 +8,7 @@
 
 
 
+#include "seastar/core/shard_id.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
 #include <fmt/ranges.h>
@@ -3160,4 +3161,20 @@ SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_up
     };
 
     execute_tablet_for_new_rf_test(config);
+}
+
+SEASTAR_TEST_CASE(test_tablet_count_metric) {
+    auto cfg = tablet_cql_test_config();
+    for (unsigned n = 1; n <= smp::count; n *= 2) {
+        cfg.initial_tablets = n;
+    }
+    return do_with_cql_env_thread([cfg] (cql_test_env& e) {
+        auto tid = add_table(e).get();
+        auto total = e.db().map_reduce0([&] (replica::database& db) {
+            auto count = db.find_column_family(tid).get_stats().tablet_count;
+            testlog.debug("shard table_count={}", count);
+            return count;
+        }, int64_t(0), std::plus<int64_t>()).get();
+        BOOST_REQUIRE_EQUAL(total, cfg.initial_tablets);
+    }, cfg);
 }

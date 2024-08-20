@@ -2380,20 +2380,7 @@ int64_t table::calculate_tablet_count() const {
         return 0;
     }
 
-    const auto& token_metadata = _erm->get_token_metadata();
-    const auto& tablet_map = token_metadata.tablets().get_tablet_map(_schema->id());
-    const auto this_host_id = token_metadata.get_topology().my_host_id();
-
-    int64_t new_tablet_count{0};
-    auto local_replica = locator::tablet_replica{this_host_id, this_shard_id()};
-
-    for (auto tablet_id : tablet_map.tablet_ids()) {
-        if (tablet_map.has_replica(tablet_id, local_replica)) {
-            ++new_tablet_count;
-        }
-    }
-
-    return new_tablet_count;
+    return _sg_manager->storage_groups().size();
 }
 
 partition_presence_checker
