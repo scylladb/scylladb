@@ -1395,6 +1395,11 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
         }
     }
 
+    if (static_props.is_group0_table) {
+        static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(7)).count();
+        new_raw._gc_grace_seconds = schema_gc_grace;
+    }
+
     if (_version) {
         new_raw._version = *_version;
     } else {

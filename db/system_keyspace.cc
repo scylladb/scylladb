@@ -100,6 +100,29 @@ namespace {
             props.enable_schema_commitlog();
         }
     });
+
+    const auto set_group0_table_options =
+        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+            static const std::unordered_set<sstring> tables = {
+                // scylla_local may store a replicated tombstone related to schema
+                // (see `make_group0_schema_version_mutation`), so we include it in the group0 tables list.
+                system_keyspace::SCYLLA_LOCAL,
+                system_keyspace::TOPOLOGY,
+                system_keyspace::TOPOLOGY_REQUESTS,
+                system_keyspace::CDC_GENERATIONS_V3,
+                system_keyspace::TABLETS,
+                system_keyspace::SERVICE_LEVELS_V2,
+                system_keyspace::VIEW_BUILD_STATUS_V2,
+                // auth tables
+                system_keyspace::ROLES,
+                system_keyspace::ROLE_MEMBERS,
+                system_keyspace::ROLE_ATTRIBUTES,
+                system_keyspace::ROLE_PERMISSIONS,
+            };
+            if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
+                props.is_group0_table = true;
+            }
+        });
 }
 
 static logging::logger slogger("system_keyspace");
@@ -767,9 +790,6 @@ static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::
         // comment
         "Scylla specific information about the local node"
        );
-       // scylla_local may store a replicated tombstone related to schema
-       // (see `make_group0_schema_version_mutation`), so we use nonzero gc grace.
-       builder.set_gc_grace_seconds(schema_gc_grace);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
