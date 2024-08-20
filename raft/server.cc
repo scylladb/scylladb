@@ -1321,8 +1321,8 @@ future<> server_impl::applier_fiber() {
                 std::vector<command_cref> commands;
                 commands.reserve(batch.size());
 
-                index_t last_idx = batch.back()->idx;
-                term_t last_term = batch.back()->term;
+                const index_t last_idx = batch.back()->idx;
+                const term_t last_term = batch.back()->term;
                 SCYLLA_ASSERT(last_idx == _applied_idx + index_t{batch.size()});
 
                 boost::range::copy(
@@ -1331,7 +1331,7 @@ future<> server_impl::applier_fiber() {
                        boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                        std::back_inserter(commands));
 
-                auto size = commands.size();
+                const auto size = commands.size();
                 if (size) {
                     try {
                         co_await _state_machine->apply(std::move(commands));
@@ -1351,12 +1351,12 @@ future<> server_impl::applier_fiber() {
                 // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
                 // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
                 // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
-                auto last_snap_idx = _fsm->log_last_snapshot_idx();
+                const auto last_snap_idx = _fsm->log_last_snapshot_idx();
 
                 // Use error injection to override the snapshot thresholds.
                 co_await override_snapshot_thresholds();
 
-                bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
+                const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
                 if (force_snapshot || (_applied_idx > last_snap_idx &&
                     ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
