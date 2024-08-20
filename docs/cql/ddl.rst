@@ -759,8 +759,6 @@ available:
 ========================= =============== =============================================================================
  ``sstable_compression``   LZ4Compressor   The compression algorithm to use. Available compressors are
                                            LZ4Compressor, SnappyCompressor, DeflateCompressor, and ZstdCompressor.
-                                           A custom compressor can be provided by specifying the full class
-                                           name as a “string constant”:#constants.
  ``chunk_length_in_kb``    4               On disk SSTables are compressed by block (to allow random reads). This
                                            defines the size (in KB) of the block. Bigger values may improve the
                                            compression rate, but increases the minimum size of data to be read from disk
