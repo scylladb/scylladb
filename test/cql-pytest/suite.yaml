@@ -1,5 +1,5 @@
 type: Python
-pool_size: 10
+pool_size: 4
 dirties_cluster:
   - test_native_transport
 extra_scylla_cmdline_options:
