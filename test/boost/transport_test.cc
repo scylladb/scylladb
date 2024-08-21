@@ -16,6 +16,17 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 
+namespace boost {
+
+template <typename F, typename R>
+requires fmt::is_formattable<std::ranges::range_value_t<R>>::value
+std::ostream& boost_test_print_type(std::ostream& os, const transformed_range<F, R>& rng) {
+    fmt::print(os, "{}", rng);
+    return os;
+}
+
+}
+
 namespace cql3 {
 
 bool operator==(const cql3::raw_value_view& a, const cql3::raw_value_view& b) {
