@@ -164,6 +164,12 @@ public:
      */
     static future<commitlog> create_commitlog(config);
 
+    /**
+     * Update a running instance with new config options.
+     * Note: only some options (see code part) are actually 
+     * applied once started.
+     */
+    void update_configuration(const config&);
 
     /**
      * Note: To be able to keep impl out of header file,

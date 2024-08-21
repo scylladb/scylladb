@@ -738,6 +738,15 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     }));
 }
 
+static auto add_fragmented_listeners(const gms::feature& f, db::commitlog& cl) {
+    return f.when_enabled([&cl]() mutable {
+        auto cfg = cl.active_config();
+        if (!std::exchange(cfg.allow_fragmented_entries, true)) {
+            cl.update_configuration(cfg);
+        }
+    });
+}
+
 future<>
 database::init_commitlog() {
     if (_commitlog) {
@@ -753,9 +762,12 @@ database::init_commitlog() {
     if (features().fragmented_commitlog_entries) {
         config.allow_fragmented_entries = true;
     }
-    return db::commitlog::create_commitlog(std::move(config)).then([this](db::commitlog&& log) {
+    return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
-        _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
+
+        auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
+
+        _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
             if (!_tables_metadata.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
@@ -849,8 +861,11 @@ void database::init_schema_commitlog() {
         c.allow_fragmented_entries = true;
     }
 
-    _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get());
-    _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
+    _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(c).get());
+
+    auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_schema_commitlog);
+
+    _schema_commitlog->add_flush_handler([this, reg = std::move(reg)] (db::cf_id_type id, db::replay_position pos) {
         if (!_tables_metadata.contains(id)) {
             // the CF has been removed.
             _schema_commitlog->discard_completed_segments(id);
@@ -858,7 +873,6 @@ void database::init_schema_commitlog() {
         }
         // Initiate a background flush. Waited upon in `stop()`.
         (void)_tables_metadata.get_table(id).flush(pos);
-
     }).release();
 }
 

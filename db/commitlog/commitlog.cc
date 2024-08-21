@@ -434,6 +434,8 @@ public:
         clogger.trace("Commitlog {} disposed", cfg.commit_log_location);
     }
 
+    void update_configuration(const config&);
+
     uint64_t next_id() {
         return ++_ids;
     }
@@ -1925,6 +1927,19 @@ db::commitlog::segment_manager::segment_manager(config c)
     }
 }
 
+void db::commitlog::segment_manager::update_configuration(const config& new_cfg) {
+    // For now, only update´things we can change without needing to 
+    // possibly trigger semaphores and whatnot...
+    this->cfg.allow_fragmented_entries = new_cfg.allow_fragmented_entries;
+    this->cfg.allow_going_over_size_limit = new_cfg.allow_going_over_size_limit;
+    this->cfg.warn_about_segments_left_on_disk_after_shutdown = new_cfg.warn_about_segments_left_on_disk_after_shutdown;
+    
+    // should be ok to update in runtime.
+    this->cfg.extensions = new_cfg.extensions;
+    // maybe do more later on...   
+} 
+
+
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
     return max_mutation_size + db::commitlog::segment::default_size;
 }
@@ -3144,6 +3159,10 @@ db::commitlog::commitlog(commitlog&& v) noexcept
 
 db::commitlog::~commitlog()
 {}
+
+void db::commitlog::update_configuration(const config& cfg) {
+    _segment_manager->update_configuration(cfg);
+}
 
 future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     commitlog c(std::move(cfg));
