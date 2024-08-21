@@ -271,6 +271,8 @@ if __name__ == '__main__':
                         help='skip swap setup')
     parser.add_argument('--no-rsyslog-setup', action='store_true', default=False,
                         help='skip rsyslog setup')
+    parser.add_argument('--no-nofiles-setup', action='store_true', default=False,
+                        help='skip LimitNOFILES setup')
     parser.add_argument('--rsyslog-server',
                         help='specify a remote rsyslog server to send Scylla logs to. Use ip:port format, if no port is given, Scylla-Monitoring rsyslog will be used')
     if len(sys.argv) == 1:
@@ -317,6 +319,7 @@ if __name__ == '__main__':
     memory_setup = not args.no_memory_setup
     swap_setup = not args.no_swap_setup
     rsyslog_setup = not args.no_rsyslog_setup
+    nofiles_setup = not args.no_nofiles_setup
     rsyslog_server = args.rsyslog_server
     selinux_reboot_required = False
     set_clocksource = False
@@ -550,6 +553,10 @@ if __name__ == '__main__':
                     rsyslog_server = interactive_ask_rsyslog_server()
                 if rsyslog_server:
                     run_setup_script('rsyslog', 'scylla_rsyslog_setup --remote-server ' + rsyslog_server)
+
+    nofiles_setup = interactive_ask_service('Do you want to tune LimitNOFILES run Scylla on large node?', 'Yes - tune LimitNOFILES. No - skip this setup.', nofiles_setup)
+    if nofiles_setup:
+        run_setup_script('LimitNOFILE tuneup', 'scylla_nofile_setup')
 
     print('ScyllaDB setup finished.')
 
