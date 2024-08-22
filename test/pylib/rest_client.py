@@ -327,9 +327,10 @@ class ScyllaRESTAPIClient():
     async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
         """Compact the specified or all tables in the keyspace"""
         url = f"/storage_service/keyspace_compaction/{keyspace}"
+        params = {}
         if table is not None:
-            url += "?cf={table}"
-        await self.client.post(url, host=node_ip)
+            params["cf"] = table
+        await self.client.post(url, host=node_ip, params=params)
 
     async def dump_llvm_profile(self, node_ip : str):
         """Dump llvm profile to disk that can later be used for PGO or coverage reporting.
