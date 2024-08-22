@@ -197,11 +197,11 @@ private:
     endpoint_locks_map _endpoint_locks;
 
 public:
-    const std::vector<sstring> DEAD_STATES = {
+    static constexpr std::array DEAD_STATES{
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
     };
-    const std::vector<sstring> SILENT_SHUTDOWN_STATES = {
+    static constexpr std::array SILENT_SHUTDOWN_STATES{
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
         versioned_value::STATUS_BOOTSTRAPPING,

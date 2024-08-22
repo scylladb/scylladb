@@ -40,7 +40,7 @@ enum class application_state {
     SNITCH_NAME,
 };
 
-}
+} // namespace gms
 
 template <>
 struct fmt::formatter<gms::application_state> {

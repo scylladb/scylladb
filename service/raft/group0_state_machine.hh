@@ -10,7 +10,6 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 
-#include <seastar/core/abort_source.hh>
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
@@ -104,7 +103,7 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
-    raft_address_map& _address_map;
+    const raft_address_map& _address_map;
     seastar::gate _gate;
     abort_source _abort_source;
     bool _topology_change_enabled;
@@ -114,7 +113,8 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled);
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, const raft_address_map& address_map,
+            gms::feature_service& feat, bool topology_change_enabled);
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

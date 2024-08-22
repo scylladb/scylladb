@@ -253,13 +253,23 @@ future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
 static bool should_count_as_msg_processing(const std::map<inet_address, endpoint_state>& map) {
     bool count_as_msg_processing  = false;
-    for (auto& x : map) {
-        auto& state = x.second;
+    for (const auto& x : map) {
+        const auto& state = x.second;
         for (const auto& entry : state.get_application_state_map()) {
-            auto& app_state = entry.first;
-            if (!(app_state == application_state::LOAD ||
-                  app_state == application_state::VIEW_BACKLOG ||
-                  app_state == application_state::CACHE_HITRATES)) {
+            const auto& app_state = entry.first;
+
+            auto is_critical_state = [](application_state state) {
+                switch (state) {
+                case application_state::LOAD:
+                case application_state::VIEW_BACKLOG:
+                case application_state::CACHE_HITRATES:
+                    return false;
+                default:
+                    return true;
+                }
+            };
+
+            if (is_critical_state(app_state)) {
                 count_as_msg_processing = true;
                 logger.debug("node={}, app_state={}, count_as_msg_processing={}",
                         x.first, app_state, count_as_msg_processing);
@@ -1865,41 +1875,29 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
-    auto state = get_gossip_status(eps);
-    for (auto& deadstate : DEAD_STATES) {
-        if (state == deadstate) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(DEAD_STATES, [state = get_gossip_status(eps)](const auto& deadstate) { return state == deadstate; });
 }
 
 bool gossiper::is_shutdown(const inet_address& endpoint) const {
-    return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
+    return get_gossip_status(endpoint) == versioned_value::SHUTDOWN;
 }
 
 bool gossiper::is_normal(const inet_address& endpoint) const {
-    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_NORMAL);
+    return get_gossip_status(endpoint) == versioned_value::STATUS_NORMAL;
 }
 
 bool gossiper::is_left(const inet_address& endpoint) const {
     auto status = get_gossip_status(endpoint);
-    return status == sstring(versioned_value::STATUS_LEFT) || status == sstring(versioned_value::REMOVED_TOKEN);
+    return status == versioned_value::STATUS_LEFT || status == versioned_value::REMOVED_TOKEN;
 }
 
 bool gossiper::is_normal_ring_member(const inet_address& endpoint) const {
     auto status = get_gossip_status(endpoint);
-    return status == sstring(versioned_value::STATUS_NORMAL) || status == sstring(versioned_value::SHUTDOWN);
+    return status == versioned_value::STATUS_NORMAL || status == versioned_value::SHUTDOWN;
 }
 
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
-    auto state = get_gossip_status(ep_state);
-    for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
-        if (state == deadstate) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(SILENT_SHUTDOWN_STATES, [state = get_gossip_status(ep_state)](const auto& deadstate) { return state == deadstate; });
 }
 
 future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id pid) {
@@ -2519,15 +2517,13 @@ static std::string_view do_get_gossip_status(const gms::versioned_value* app_sta
     if (!app_state) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    const auto& value = app_state->value();
-    auto pos = value.find(',');
-    if (!value.size() || !pos) {
+    const std::string_view value = app_state->value();
+    const auto pos = value.find(',');
+    if (value.empty() || !pos) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    if (pos == sstring::npos) {
-        return std::string_view(value);
-    }
-    return std::string_view(value.data(), pos);
+    // npos allowed (full value)
+    return value.substr(0, pos);
 }
 
 std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
@@ -2549,7 +2545,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
 
     int32_t total_polls = 0;
     int32_t num_okay = 0;
-    int32_t ep_size = _endpoint_state_map.size();
+    auto ep_size = _endpoint_state_map.size();
 
     auto delay = initial_delay;
 
@@ -2558,7 +2554,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
         co_await sleep_abortable(delay, _abort_source);
         delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
 
-        int32_t current_size = _endpoint_state_map.size();
+        auto current_size = _endpoint_state_map.size();
         total_polls++;
         if (current_size == ep_size && _msg_processing == 0) {
             logger.debug("Gossip looks settled");

@@ -11,7 +11,6 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include "utils/serialization.hh"
 #include "locator/host_id.hh"
 #include "version_generator.hh"
 #include "gms/inet_address.hh"
@@ -40,29 +39,27 @@ class versioned_value {
     sstring _value;
 public:
     // this must be a char that cannot be present in any token
-    static constexpr char DELIMITER = ',';
-    static constexpr const char DELIMITER_STR[] = { DELIMITER, 0 };
+    static constexpr std::string_view DELIMITER{","};
 
     // values for ApplicationState.STATUS
-    static constexpr const char* STATUS_UNKNOWN = "UNKNOWN";
-    static constexpr const char* STATUS_BOOTSTRAPPING = "BOOT";
-    static constexpr const char* STATUS_NORMAL = "NORMAL";
-    static constexpr const char* STATUS_LEFT = "LEFT";
+    static constexpr std::string_view STATUS_UNKNOWN{"UNKNOWN"};
+    static constexpr std::string_view STATUS_BOOTSTRAPPING{"BOOT"};
+    static constexpr std::string_view STATUS_NORMAL{"NORMAL"};
+    static constexpr std::string_view STATUS_LEFT{"LEFT"};
 
-    static constexpr const char* REMOVED_TOKEN = "removed";
+    static constexpr std::string_view REMOVED_TOKEN{"removed"};
 
-    static constexpr const char* SHUTDOWN = "shutdown";
+    static constexpr std::string_view SHUTDOWN{"shutdown"};
 
-    version_type version() const noexcept { return _version; };
-    const sstring& value() const noexcept { return _value; };
-public:
+    [[nodiscard]] version_type version() const noexcept { return _version; };
+    [[nodiscard]] const sstring& value() const noexcept { return _value; };
+
     bool operator==(const versioned_value& other) const noexcept {
         return _version == other._version &&
                _value   == other._value;
     }
 
-public:
-    versioned_value(const sstring& value, version_type version = version_generator::get_next_version())
+    explicit versioned_value(const sstring& value, version_type version = version_generator::get_next_version())
         : _version(version), _value(value) {
 #if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
@@ -73,7 +70,7 @@ public:
 #endif
     }
 
-    versioned_value(sstring&& value, version_type version = version_generator::get_next_version()) noexcept
+    explicit versioned_value(sstring&& value, version_type version = version_generator::get_next_version()) noexcept
         : _version(version), _value(std::move(value)) {
     }
 
@@ -82,7 +79,7 @@ public:
     }
 
     static sstring version_string(const std::initializer_list<sstring>& args) {
-        return fmt::to_string(fmt::join(args, std::string_view(versioned_value::DELIMITER_STR)));
+        return fmt::to_string(fmt::join(args, versioned_value::DELIMITER));
     }
 
     static sstring make_full_token_string(const std::unordered_set<dht::token>& tokens);
@@ -136,12 +133,11 @@ public:
     }
 
     static versioned_value removed_nonlocal(const locator::host_id& host_id, int64_t expire_time) {
-        return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) +
-            host_id.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expire_time));
+        return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER) + host_id.to_sstring() + sstring(DELIMITER) + to_sstring(expire_time));
     }
 
     static versioned_value shutdown(bool value) {
-        return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
+        return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER) + (value ? "true" : "false"));
     }
 
     static versioned_value datacenter(const sstring& dc_id) {
@@ -198,7 +194,7 @@ public:
 } // namespace gms
 
 template <> struct fmt::formatter<gms::versioned_value> : fmt::formatter<string_view> {
-    auto format(const gms::versioned_value& v, fmt::format_context& ctx) const {
+    static auto format(const gms::versioned_value& v, fmt::format_context& ctx) {
         return fmt::format_to(ctx.out(), "Value({},{})", v.value(), v.version());
     }
 };

@@ -53,26 +53,27 @@ namespace service {
 
 static logging::logger slogger("group0_raft_sm");
 
-group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled)
-        : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
-        , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
-            // Using features to decide whether to start fetching topology snapshots
-            // or not is technically not correct because we also use features to guard
-            // whether upgrade can be started, and upgrade starts by writing
-            // to the system.topology table (namely, to the `upgrade_state` column).
-            // If some node at that point didn't mark the feature as enabled
-            // locally, there is a risk that it might try to pull a snapshot
-            // and will decide not to use `raft_pull_snapshot` verb.
-            //
-            // The above issue is mitigated by requiring administrators to
-            // wait until the SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES feature
-            // is enabled on all nodes.
-            //
-            // The biggest value of using a cluster feature here is so that
-            // the node won't try to fetch a topology snapshot if the other
-            // node doesn't support it yet.
-            _topology_change_enabled = true;
-        })) {
+group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
+        const raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled)
+    : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
+    , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
+        // Using features to decide whether to start fetching topology snapshots
+        // or not is technically not correct because we also use features to guard
+        // whether upgrade can be started, and upgrade starts by writing
+        // to the system.topology table (namely, to the `upgrade_state` column).
+        // If some node at that point didn't mark the feature as enabled
+        // locally, there is a risk that it might try to pull a snapshot
+        // and will decide not to use `raft_pull_snapshot` verb.
+        //
+        // The above issue is mitigated by requiring administrators to
+        // wait until the SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES feature
+        // is enabled on all nodes.
+        //
+        // The biggest value of using a cluster feature here is so that
+        // the node won't try to fetch a topology snapshot if the other
+        // node doesn't support it yet.
+        _topology_change_enabled = true;
+    })) {
 }
 
 static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -317,7 +318,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
         tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size());
+        tables.reserve(auth_tables.size() + 1);
 
         for (const auto& schema : auth_tables) {
             tables.push_back(schema->id());
