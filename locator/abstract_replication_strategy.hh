@@ -458,21 +458,14 @@ future<global_vnode_effective_replication_map> make_global_effective_replication
 
 } // namespace locator
 
-std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type);
-std::ostream& operator<<(std::ostream& os, const locator::vnode_effective_replication_map::factory_key& key);
+template <>
+struct fmt::formatter<locator::replication_strategy_type> : fmt::formatter<string_view> {
+    auto format(locator::replication_strategy_type, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 template <>
-struct fmt::formatter<locator::vnode_effective_replication_map::factory_key> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const locator::vnode_effective_replication_map::factory_key& key, FormatContext& ctx) const {
-        std::ostringstream os;
-        os << key;
-        return fmt::format_to(ctx.out(), "{}", os.str());
-    }
+struct fmt::formatter<locator::vnode_effective_replication_map::factory_key> : fmt::formatter<string_view> {
+    auto format(const locator::vnode_effective_replication_map::factory_key&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template<>
