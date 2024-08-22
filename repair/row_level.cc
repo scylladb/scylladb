@@ -2559,6 +2559,7 @@ class row_level_repair {
     dht::token_range _range;
     inet_address_vector_replica_set _all_live_peer_nodes;
     std::vector<std::optional<shard_id>> _all_live_peer_shards;
+    tracing::trace_state_ptr _trace_state;
     bool _small_table_optimization;
 
     // Repair master and followers will propose a sync boundary. Each of them
@@ -2610,12 +2611,14 @@ public:
             table_id table_id,
             dht::token_range range,
             std::vector<gms::inet_address> all_live_peer_nodes,
+            tracing::trace_state_ptr trace_state,
             bool small_table_optimization)
         : _shard_task(shard_task)
         , _cf_name(std::move(cf_name))
         , _table_id(std::move(table_id))
         , _range(std::move(range))
         , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
+        , _trace_state(std::move(trace_state))
         , _small_table_optimization(small_table_optimization)
         , _seed(get_random_seed())
         , _start_time(gc_clock::now())
@@ -3109,10 +3112,15 @@ public:
     }
 };
 
-future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
-        sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<gms::inet_address>& all_peer_nodes, bool small_table_optimization) {
-    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization);
+future<> repair_cf_range_row_level(
+        repair::shard_repair_task_impl& shard_task,
+        sstring cf_name,
+        table_id table_id,
+        dht::token_range range,
+        const std::vector<gms::inet_address>& all_peer_nodes,
+        tracing::trace_state_ptr trace_state,
+        bool small_table_optimization) {
+    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, std::move(trace_state), small_table_optimization);
     co_return co_await repair.run();
 }
 
