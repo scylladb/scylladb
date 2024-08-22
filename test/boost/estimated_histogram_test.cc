@@ -11,6 +11,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "utils/estimated_histogram.hh"
+#include "utils/histogram.hh"
 #include "utils/histogram_metrics_helper.hh"
 
 template<uint64_t MIN, uint64_t MAX, std::vector<uint64_t>::size_type NUM_BUCKETS>
@@ -108,3 +109,35 @@ BOOST_AUTO_TEST_CASE(test_estimated_statistics) {
     hist *= 0.5;
     BOOST_CHECK_EQUAL(hist.get(1), 1);
 }
+
+BOOST_AUTO_TEST_CASE(test_summary_p95_p99) {
+    utils::summary_calculator sc;
+    std::vector<int> ms{512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560,
+        3072, 3584, 4096, 5120, 6144, 7168, 8192, 10240, 12288, 14336, 16384};
+    std::vector<std::chrono::microseconds> durations;
+    for (auto i : ms) {
+        durations.push_back(std::chrono::microseconds(i + 1));
+    }
+    for (int i = 0; i < 20; i++) {
+        const std::chrono::microseconds& d = durations[i];
+        for (int j = 0; j < 5; j++) {
+            sc.mark(d);
+        }
+    }
+    sc.update();
+    BOOST_CHECK_EQUAL(sc.summary()[0], ms[10]);
+    BOOST_CHECK_EQUAL(sc.summary()[1], ms[19]);
+    BOOST_CHECK_EQUAL(sc.summary()[2], ms[20]);
+}
+
+BOOST_AUTO_TEST_CASE(test_summary_infinite_bucket) {
+    utils::summary_calculator sc;
+    for (int i = 0; i < 20; i++) {
+        sc.mark(std::chrono::seconds(34));
+    }
+    sc.update();
+    BOOST_CHECK_EQUAL(sc.summary()[0], 33554432);
+    BOOST_CHECK_EQUAL(sc.summary()[1], 33554432);
+    BOOST_CHECK_EQUAL(sc.summary()[2], 33554432);
+}
+
