@@ -1544,7 +1544,7 @@ private:
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end);
+            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, sstable::integrity_check::no);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1751,7 +1751,7 @@ public:
              read_monitor& mon)
         : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
-        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer))
+        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, sstable::integrity_check::no))
         , _monitor(mon) {
         _monitor.on_read_started(_context->reader_position());
     }
@@ -2040,7 +2040,7 @@ future<uint64_t> validate(
         sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
-    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer);
+    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, sstable::integrity_check::no);
 
     std::optional<sstables::index_reader> idx_reader;
     idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);

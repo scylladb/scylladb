@@ -995,13 +995,13 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, sstable::integrity_check);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::integrity_check);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
