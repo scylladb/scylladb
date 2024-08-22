@@ -36,6 +36,7 @@ public:
 
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;
+    virtual tasks::is_abortable is_abortable() const noexcept override;
 };
 
 } // snapshot namespace

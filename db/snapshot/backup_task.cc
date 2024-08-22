@@ -15,6 +15,7 @@
 #include "db/snapshot/backup_task.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/sstables.hh"
+#include "utils/error_injection.hh"
 
 extern logging::logger snap_log;
 
@@ -35,6 +36,10 @@ std::string backup_task_impl::type() const {
 
 tasks::is_internal backup_task_impl::is_internal() const noexcept {
     return tasks::is_internal::no;
+}
+
+tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
+    return tasks::is_abortable::yes;
 }
 
 future<> backup_task_impl::run(sstring data_dir) {
@@ -88,12 +93,22 @@ future<> backup_task_impl::run(sstring data_dir) {
                 // Parallelizm is implicitly controlled in two ways:
                 //  - s3::client::claim_memory semaphore
                 //  - http::client::max_connections limitation
+                // FIXME -- s3::client is not abortable yet, but when it will be, need to
+                // propagate impl::_as abort requests into upload_file's fibers
                 std::ignore = _client->upload_file(component_name, destination).handle_exception([this, comp = component_name] (auto ex) {
                     snap_log.error("Error uploading {}: {}", comp.native(), ex);
                     _ex = std::move(ex);
                 }).finally([gh = std::move(gh)] {});
                 thread::maybe_yield();
                 if (_ex) {
+                    break;
+                }
+                utils::get_local_injector().inject("backup_task_pause", [] (auto& handler) {
+                    snap_log.info("backup task: waiting");
+                    return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+                }).get();
+                if (impl::_as.abort_requested()) {
+                    _ex = impl::_as.abort_requested_exception_ptr();
                     break;
                 }
             }
