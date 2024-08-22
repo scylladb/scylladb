@@ -114,14 +114,14 @@ server::~server()
 }
 
 future<> server::stop() {
-    if (!_gate.is_closed()) {
-        co_await shutdown();
-    }
-
+    co_await shutdown();
     co_await std::move(_all_connections_stopped);
 }
 
 future<> server::shutdown() {
+    if (_gate.is_closed()) {
+        return make_ready_future<>();
+    }
     _all_connections_stopped = _gate.close();
     size_t nr = 0;
     size_t nr_total = _listeners.size();
