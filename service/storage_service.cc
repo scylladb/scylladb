@@ -4635,7 +4635,10 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
         rtlogger.info("request rebuild for: {} source_dc={}", raft_server.id(), sdc_param);
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_session(session_id(guard.new_group0_state_id()));
-        auto source_dc = sdc_param.value_or("");
+        sstring source_dc = sdc_param.value_or("");
+        if (sdc_param.force() && !source_dc.empty()) {
+            source_dc += ":force";
+        }
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
@@ -5606,8 +5609,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
                                 utils::optional_param sdc_param;
+                                bool force;
+                                if ((force = source_dc.ends_with(":force"))) {
+                                    source_dc.resize(source_dc.size() - 6);
+                                }
                                 if (!source_dc.empty()) {
-                                    sdc_param.emplace(source_dc).set_user_provided();
+                                    sdc_param.emplace(source_dc).set_user_provided().set_force(force);
                                 }
                                 co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param));
                             } else {
