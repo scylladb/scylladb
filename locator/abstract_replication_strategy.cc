@@ -696,27 +696,34 @@ future<global_vnode_effective_replication_map> make_global_effective_replication
 
 } // namespace locator
 
-std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t) {
+auto fmt::formatter<locator::replication_strategy_type>::format(locator::replication_strategy_type t,
+                                                                fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    std::string_view name;
     switch (t) {
-    case locator::replication_strategy_type::simple:
-        return os << "simple";
-    case locator::replication_strategy_type::local:
-        return os << "local";
-    case locator::replication_strategy_type::network_topology:
-        return os << "network_topology";
-    case locator::replication_strategy_type::everywhere_topology:
-        return os << "everywhere_topology";
+    using enum locator::replication_strategy_type;
+    case simple:
+        name = "simple";
+        break;
+    case local:
+        name = "local";
+        break;
+    case network_topology:
+        name = "network_topology";
+        break;
+    case everywhere_topology:
+        name = "everywhere_topology";
+        break;
     };
-    std::abort();
+    return fmt::format_to(ctx.out(), "{}", name);
 }
 
-std::ostream& operator<<(std::ostream& os, const locator::vnode_effective_replication_map::factory_key& key) {
-    os << key.rs_type;
-    os << '.' << key.ring_version;
+auto fmt::formatter<locator::vnode_effective_replication_map::factory_key>::format(const locator::vnode_effective_replication_map::factory_key& key,
+                                                                                   fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = fmt::format_to(ctx.out(), "{}.{}", key.rs_type, key.ring_version);
     char sep = ':';
     for (const auto& [opt, val] : key.rs_config_options) {
-        os << sep << opt << '=' << val;
+        out = fmt::format_to(out, "{}{}={}", sep, opt, val);
         sep = ',';
     }
-    return os;
+    return out;
 }
