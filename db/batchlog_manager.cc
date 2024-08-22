@@ -58,19 +58,19 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<> db::batchlog_manager::do_batch_log_replay() {
-    return container().invoke_on(0, [] (auto& bm) -> future<> {
+future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
+    return container().invoke_on(0, [cleanup] (auto& bm) -> future<> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         if (dest == 0) {
-            co_await bm.replay_all_failed_batches();
+            co_await bm.replay_all_failed_batches(cleanup);
         } else {
-            co_await bm.container().invoke_on(dest, [] (auto& bm) {
-                return with_gate(bm._gate, [&bm] {
-                    return bm.replay_all_failed_batches();
+            co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup] {
+                    return bm.replay_all_failed_batches(cleanup);
                 });
             });
         }
@@ -97,7 +97,7 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
             co_return;
         }
         try {
-            co_await do_batch_log_replay();
+            co_await do_batch_log_replay(post_replay_cleanup::yes);
         } catch (seastar::broken_semaphore&) {
             if (_stop.abort_requested()) {
                 co_return;
@@ -145,7 +145,7 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
-future<> db::batchlog_manager::replay_all_failed_batches() {
+future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
     typedef db_clock::rep clock_type;
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -257,14 +257,17 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
     };
 
-    return seastar::with_gate(_gate, [this, batch = std::move(batch)] () mutable {
+    return seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
         return _qp.query_internal(
                 format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
                 db::consistency_level::ONE,
                 {},
                 page_size,
-                std::move(batch)).then([this] {
+                std::move(batch)).then([this, cleanup] {
+            if (cleanup == post_replay_cleanup::no) {
+                return make_ready_future<>();
+            }
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
             return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
