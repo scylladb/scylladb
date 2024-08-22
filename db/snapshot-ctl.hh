@@ -52,9 +52,12 @@ public:
         table_snapshot_details details;
     };
 
+    struct config {
+    };
+
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm);
+    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
     future<> stop();
 
@@ -105,6 +108,7 @@ public:
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 private:
+    config _config;
     sharded<replica::database>& _db;
     seastar::rwlock _lock;
     seastar::gate _ops;

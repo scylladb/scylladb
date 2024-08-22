@@ -22,8 +22,9 @@ logging::logger snap_log("snapshots");
 
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm)
-    : _db(db)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
+    : _config(std::move(cfg))
+    , _db(db)
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
     , _storage_manager(sstm)
 {
