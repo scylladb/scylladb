@@ -11,6 +11,7 @@
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
+#include "sstables/sstables.hh"
 
 namespace sstables {
 namespace mx {
@@ -48,7 +49,8 @@ mutation_reader make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
-        read_monitor& monitor);
+        read_monitor& monitor,
+        sstable::integrity_check integrity);
 
 // Validate the content of the sstable with the mutation_fragment_stream_valdiator,
 // additionally cross checking that the content is laid out as expected by the

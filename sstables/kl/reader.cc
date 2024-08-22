@@ -1548,10 +1548,11 @@ public:
     crawling_sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
              reader_permit permit,
              tracing::trace_state_ptr trace_state,
-             read_monitor& mon)
+             read_monitor& mon,
+             sstable::integrity_check integrity)
         : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
-        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, sstable::integrity_check::no))
+        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, integrity))
         , _monitor(mon) {
         _monitor.on_read_started(_context->reader_position());
     }
@@ -1594,9 +1595,10 @@ mutation_reader make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
-        read_monitor& monitor) {
+        read_monitor& monitor,
+        sstable::integrity_check integrity) {
     return make_mutation_reader<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
-            std::move(trace_state), monitor);
+            std::move(trace_state), monitor, integrity);
 }
 
 } // namespace kl

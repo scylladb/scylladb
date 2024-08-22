@@ -288,7 +288,8 @@ public:
             schema_ptr schema,
             reader_permit permit,
             tracing::trace_state_ptr trace_state = {},
-            read_monitor& monitor = default_read_monitor());
+            read_monitor& monitor = default_read_monitor(),
+            integrity_check integrity = integrity_check::no);
 
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
