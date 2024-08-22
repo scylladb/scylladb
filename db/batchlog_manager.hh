@@ -35,6 +35,7 @@ struct batchlog_manager_config {
     std::chrono::duration<double> write_request_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
     std::chrono::milliseconds delay = std::chrono::milliseconds(0);
+    unsigned replay_cleanup_after_replays;
 };
 
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
@@ -59,6 +60,7 @@ private:
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
+    unsigned _replay_cleanup_after_replays = 100;
     semaphore _sem{1};
     seastar::gate _gate;
     unsigned _cpu = 0;

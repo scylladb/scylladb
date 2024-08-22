@@ -47,6 +47,7 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
+        , _replay_cleanup_after_replays(config.replay_cleanup_after_replays)
         , _loop_done(batchlog_replay_loop())
 {
     namespace sm = seastar::metrics;
@@ -89,6 +90,7 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
         co_return;
     }
 
+    unsigned replay_counter = 0;
     auto delay = _delay;
     while (!_stop.abort_requested()) {
         try {
@@ -97,7 +99,12 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
             co_return;
         }
         try {
-            co_await do_batch_log_replay(post_replay_cleanup::yes);
+            auto cleanup = post_replay_cleanup::no;
+            if (++replay_counter >= _replay_cleanup_after_replays) {
+                replay_counter = 0;
+                cleanup = post_replay_cleanup::yes;
+            }
+            co_await do_batch_log_replay(cleanup);
         } catch (seastar::broken_semaphore&) {
             if (_stop.abort_requested()) {
                 co_return;
