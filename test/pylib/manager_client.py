@@ -287,7 +287,8 @@ class ManagerClient():
                                 property_file: Optional[dict[str, Any]],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
-                                expected_error: Optional[str]) -> dict[str, Any]:
+                                expected_error: Optional[str],
+                                server_encryption: Optional[str]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -301,6 +302,8 @@ class ManagerClient():
             data['seeds'] = seeds
         if expected_error:
             data['expected_error'] = expected_error
+        if server_encryption:
+            data['server_encryption'] = server_encryption
         return data
 
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
@@ -310,10 +313,11 @@ class ManagerClient():
                          start: bool = True,
                          expected_error: Optional[str] = None,
                          seeds: Optional[List[IPAddress]] = None,
-                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> ServerInfo:
+                         timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
+                         server_encryption: str = "none") -> ServerInfo:
         """Add a new server"""
         try:
-            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error)
+            data = self._create_server_add_data(replace_cfg, cmdline, config, property_file, start, seeds, expected_error, server_encryption)
 
             # If we replace, we should wait until other nodes see the node being
             # replaced as dead because the replace operation can be rejected if
@@ -347,7 +351,8 @@ class ManagerClient():
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
-                          expected_error: Optional[str] = None) -> [ServerInfo]:
+                          expected_error: Optional[str] = None,
+                          server_encryption: str = "none") -> [ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
@@ -355,7 +360,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
