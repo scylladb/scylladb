@@ -145,6 +145,7 @@ struct repair_flush_hints_batchlog_request {
 };
 
 struct repair_flush_hints_batchlog_response {
+    gc_clock::time_point flush_time [[version 6.2]];
 };
 
 verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request req [[ref]]) -> repair_update_system_table_response;
