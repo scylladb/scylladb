@@ -1899,14 +1899,37 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
         std::function<void(sstring)> error_handler, sstables::read_monitor& monitor) {
+    auto handle_sstable_exception = [&error_handler](const malformed_sstable_exception& e, uint64_t& errors) -> std::exception_ptr {
+        std::exception_ptr ex;
+        try {
+            error_handler(format("unrecoverable error: {}", e));
+            ++errors;
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        return ex;
+    };
+
+    uint64_t errors = 0;
+    std::exception_ptr ex;
+    lw_shared_ptr<checksum> checksum;
+    try {
+        checksum = co_await read_checksum();
+    } catch (const malformed_sstable_exception& e) {
+        ex = handle_sstable_exception(e, errors);
+    }
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+    if (errors) {
+        co_return errors;
+    }
+
     if (_version >= sstable_version_types::mc) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
-    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor);
-
-    uint64_t errors = 0;
-    std::exception_ptr ex;
+    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor, integrity_check::yes);
 
     try {
         auto validator = mutation_fragment_stream_validator(*_schema);
@@ -1938,12 +1961,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
             ++errors;
         }
     } catch (const malformed_sstable_exception& e) {
-        try {
-            error_handler(format("unrecoverable error: {}", e));
-            ++errors;
-        } catch (...) {
-            ex = std::current_exception();
-        }
+        ex = handle_sstable_exception(e, errors);
     } catch (...) {
         ex = std::current_exception();
     }
