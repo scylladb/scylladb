@@ -2960,8 +2960,10 @@ storage_proxy::~storage_proxy() {
 }
 
 storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory,
+        distributed<service::storage_service>& ss)
     : _db(db)
+    , _ss(ss)
     , _shared_token_metadata(stm)
     , _erm_factory(erm_factory)
     , _read_smp_service_group(cfg.read_smp_service_group)
