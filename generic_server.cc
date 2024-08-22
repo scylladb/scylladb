@@ -11,7 +11,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
-#include <seastar/core/loop.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
 
 namespace generic_server {
@@ -120,7 +120,7 @@ future<> server::stop() {
 
 future<> server::shutdown() {
     if (_gate.is_closed()) {
-        return make_ready_future<>();
+        co_return;
     }
     _all_connections_stopped = _gate.close();
     size_t nr = 0;
@@ -130,16 +130,14 @@ future<> server::shutdown() {
         l.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
-    auto nr_conn = make_lw_shared<size_t>(0);
+    size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
-    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [this, nr_conn, nr_conn_total] (auto&& c) {
-        return c.shutdown().then([this, nr_conn, nr_conn_total] {
-            _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
-        });
-    }).then([this] {
-        return std::move(_listeners_stopped);
+    co_await coroutine::parallel_for_each(_connections_list, [&] (auto&& c) -> future<> {
+        co_await c.shutdown();
+        _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     });
+    co_await std::move(_listeners_stopped);
 }
 
 future<>
