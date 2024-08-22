@@ -2262,7 +2262,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             },
             [this, &from, &req] () -> future<>  {
                 rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
-                co_await _bm.local().do_batch_log_replay();
+                co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
                 rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
             }
         );

@@ -38,6 +38,9 @@ struct batchlog_manager_config {
 };
 
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
+public:
+    using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
+
 private:
     static constexpr uint32_t replay_interval = 60 * 1000; // milliseconds
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
@@ -62,7 +65,7 @@ private:
     seastar::abort_source _stop;
     future<> _loop_done;
 
-    future<> replay_all_failed_batches();
+    future<> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -73,7 +76,7 @@ public:
     future<> drain();
     future<> stop();
 
-    future<> do_batch_log_replay();
+    future<> do_batch_log_replay(post_replay_cleanup cleanup);
 
     future<size_t> count_all_batches() const;
     size_t get_total_batches_replayed() const {
