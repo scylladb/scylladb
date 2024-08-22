@@ -252,9 +252,10 @@ class ScyllaRESTAPIClient():
     async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
         """Compact the specified or all tables in the keyspace"""
         url = f"/storage_service/keyspace_compaction/{keyspace}"
+        params = {}
         if table is not None:
-            url += "?cf={table}"
-        await self.client.post(url, host=node_ip)
+            params["cf"] = table
+        await self.client.post(url, host=node_ip, params=params)
 
 
 class ScyllaMetrics:
