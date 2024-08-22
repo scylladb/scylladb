@@ -120,6 +120,12 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
+    seastar::semaphore _flush_hints_batchlog_sem{1};
+    gc_clock::time_point _flush_hints_batchlog_time;
+    future<std::tuple<bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
+            sstring keyspace, std::vector<sstring> cfs,
+            std::unordered_set<gms::inet_address> ignore_nodes, std::list<gms::inet_address> participants);
+
 public:
     repair_service(sharded<service::topology_state_machine>& tsm,
             distributed<gms::gossiper>& gossiper,
@@ -265,7 +271,7 @@ class repair_writer;
 
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<gms::inet_address>& all_peer_nodes, bool small_table_optimization);
+        const std::vector<gms::inet_address>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
