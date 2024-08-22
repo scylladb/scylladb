@@ -4591,6 +4591,13 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         rtlogger.info("request rebuild for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_session(session_id(guard.new_group0_state_id()));
+<<<<<<< HEAD
+=======
+        sstring source_dc = sdc_param.value_or("");
+        if (sdc_param.force() && !source_dc.empty()) {
+            source_dc += ":force";
+        }
+>>>>>>> de7186cb85 (raft_rebuild: propagate source_dc force option to rebuild_option)
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
@@ -5560,7 +5567,19 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         co_await retrier(_rebuild_result, [&] () -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+<<<<<<< HEAD
                                 co_await _repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+=======
+                                utils::optional_param sdc_param;
+                                bool force;
+                                if ((force = source_dc.ends_with(":force"))) {
+                                    source_dc.resize(source_dc.size() - 6);
+                                }
+                                if (!source_dc.empty()) {
+                                    sdc_param.emplace(source_dc).set_user_provided().set_force(force);
+                                }
+                                co_await _repair.local().rebuild_with_repair(std::move(ks_erms), tmptr, std::move(sdc_param));
+>>>>>>> de7186cb85 (raft_rebuild: propagate source_dc force option to rebuild_option)
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
