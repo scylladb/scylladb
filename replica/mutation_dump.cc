@@ -575,6 +575,7 @@ schema_ptr generate_output_schema_from_underlying_schema(schema_ptr underlying_s
 
 future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
         sharded<database>& db,
+        locator::effective_replication_map_ptr erm_keepalive,
         schema_ptr output_schema,
         schema_ptr underlying_schema,
         const dht::partition_range_vector& prs,

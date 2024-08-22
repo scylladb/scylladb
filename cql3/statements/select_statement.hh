@@ -336,6 +336,7 @@ public:
 private:
     future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
     do_query(
+            locator::effective_replication_map_ptr erm_keepalive,
             locator::host_id this_node,
             service::storage_proxy& sp,
             schema_ptr schema,
