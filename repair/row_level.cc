@@ -1874,28 +1874,30 @@ public:
     future<> put_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (!set_diff.empty()) {
             if (remote_node == myip()) {
-                return make_ready_future<>();
+                co_return;
             }
             size_t sz = set_diff.size();
-            return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, dst_cpu_id, sz] (std::list<repair_row> row_diff) {
+            std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+            {
                 if (row_diff.size() != sz) {
                     rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
                             _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
                 }
-                return do_with(std::move(row_diff), [this, remote_node, dst_cpu_id] (std::list<repair_row>& row_diff) {
-                    return get_repair_rows_size(row_diff).then([this, remote_node, dst_cpu_id, &row_diff] (size_t row_bytes) mutable {
+                {
+                    size_t row_bytes = co_await get_repair_rows_size(row_diff);
+                    {
                         stats().tx_row_nr += row_diff.size();
                         stats().tx_row_nr_peer[remote_node] += row_diff.size();
                         stats().tx_row_bytes += row_bytes;
                         stats().rpc_call_nr++;
-                        return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, dst_cpu_id] (repair_rows_on_wire rows)  {
-                            return _messaging.send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows), dst_cpu_id);
-                        });
-                    });
-                });
-            });
+                        repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
+                        {
+                            co_await _messaging.send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows), dst_cpu_id);
+                        }
+                    }
+                }
+            }
         }
-        return make_ready_future<>();
     }
 
 private:
