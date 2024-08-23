@@ -829,6 +829,10 @@ struct repair_options {
     // to repair.
     sstring start_token;
     sstring end_token;
+    // If true, repair will store tracing information in system.traces.
+    // There is a primary tracing session created for the entire repair and
+    // secondary tracing session for each individual range repair.
+    bool trace = false;
     // column_families is the list of column families to repair in the given
     // keyspace. If this list is empty (the default), all the column families
     // in this keyspace are repaired
@@ -877,11 +881,8 @@ struct repair_options {
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
 
-        bool trace = false;
         bool_opt(trace, options, TRACE_KEY);
-        if (trace) {
-            throw std::runtime_error("unsupported trace");
-        }
+
         // Consume, ignore.
         int job_threads;
         int_opt(job_threads, options, JOB_THREADS_KEY);
