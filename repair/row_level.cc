@@ -1328,13 +1328,16 @@ private:
 
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf() {
-        return do_with(std::list<repair_row>(), [this] (std::list<repair_row>& rows) {
-            return do_for_each(_working_row_buf, [&rows] (const repair_row& r) {
+        std::list<repair_row> rows;
+        {
+            for (const repair_row& r : _working_row_buf) {
                 rows.push_back(r);
-            }).then([&rows] {
-                return std::move(rows);
-            });
-        });
+                co_await coroutine::maybe_yield();
+            }
+            {
+                co_return rows;
+            }
+        }
     }
 
     future<std::list<repair_row>>
