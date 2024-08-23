@@ -1371,14 +1371,12 @@ private:
         }
     }
 
-    future<> do_apply_rows(std::list<repair_row>&& row_diff, update_working_row_buf update_buf) {
-        return do_with(std::move(row_diff), [this, update_buf] (std::list<repair_row>& row_diff) {
-            return with_semaphore(_repair_writer->sem(), 1, [this, update_buf, &row_diff] {
+    future<> do_apply_rows(std::list<repair_row> row_diff, update_working_row_buf update_buf) {
+        {
+            auto sem_units = co_await get_units(_repair_writer->sem(), 1);
+            {
                 _repair_writer->create_writer();
-                return repeat([this, update_buf, &row_diff] () mutable {
-                    if (row_diff.empty()) {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
+                while (!row_diff.empty()) {
                     repair_row& r = row_diff.front();
                     if (update_buf) {
                         _working_row_buf_combined_hash.add(r.hash());
@@ -1389,13 +1387,14 @@ private:
                     mutation_fragment mf = std::move(r.get_mutation_fragment());
                     r.reset_mutation_fragment();
                     auto dk_with_hash = r.get_dk_with_hash();
-                    return _repair_writer->do_write(std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
+                    co_await _repair_writer->do_write(std::move(dk_with_hash), std::move(mf));
+                    {
                         row_diff.pop_front();
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
-                });
-            });
-        });
+                    }
+                    co_await coroutine::maybe_yield();
+                }
+            }
+        }
     }
 
     // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
