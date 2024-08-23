@@ -742,6 +742,30 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         co_return;
     }
     try {
+        tracing::trace_state_ptr child_trace_state;
+        if (_trace_state) {
+            tracing::trace_state_props_set trace_props;
+            trace_props.set<tracing::trace_state_props::full_tracing>();
+            child_trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::REPAIR, trace_props);
+            tracing::begin(child_trace_state, "repair range", gms::inet_address("127.0.0.1"));
+
+            tracing::add_session_param(child_trace_state, "parent_session_id", fmt::to_string(_trace_state->session_id()));
+            tracing::add_session_param(child_trace_state, "keyspace", _status.keyspace);
+            tracing::add_session_param(child_trace_state, "table", table.name);
+            tracing::add_session_param(child_trace_state, "table_id", fmt::to_string(table.id));
+            tracing::add_session_param(child_trace_state, "range", fmt::to_string(range));
+            tracing::add_session_param(child_trace_state, "neighbors", fmt::to_string(neighbors));
+            tracing::add_session_param(child_trace_state, "small_table_optimization", fmt::to_string(_small_table_optimization));
+            tracing::add_table_name(child_trace_state, _status.keyspace, table.name);
+
+            // Link the two sessions together, this is mainly for humans, we
+            // already do this in the session parameters above.
+            tracing::trace(_trace_state, "repair_range(): table.id: {}, table.name: {}, range: {}, child repair trace session id: {}",
+                    table.id, table.name, range, child_trace_state->session_id());
+            tracing::trace(child_trace_state, "repair_range(): table.id: {}, table.name: {}, range: {}, parent repair trace session id: {}",
+                    table.id, table.name, range, _trace_state->session_id());
+        }
+
         auto dropped = co_await with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
             return repair_cf_range_row_level(*this, table.name, table.id, range, neighbors, _small_table_optimization);
         });
