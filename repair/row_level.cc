@@ -2026,6 +2026,18 @@ get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
     return set_diff;
 }
 
+static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
+        sharded<repair_service>& repair,
+        gms::inet_address from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd> sink,
+        rpc::source<repair_hash_with_cmd> source,
+        bool &error,
+        repair_hash_set& current_set_diff,
+        std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt);
+
 static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         gms::inet_address from,
@@ -2042,7 +2054,24 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
     if (hash_cmd.cmd == repair_stream_cmd::hash_data) {
         current_set_diff.insert(hash_cmd.hash);
         return make_ready_future<stop_iteration>(stop_iteration::no);
-    } else if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set || hash_cmd.cmd == repair_stream_cmd::needs_all_rows) {
+    } else {
+        return repair_get_row_diff_with_rpc_stream_process_op_slow_path(repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, std::move(sink), std::move(source), error, current_set_diff, std::move(hash_cmd_opt));
+    }
+}
+
+static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
+        sharded<repair_service>& repair,
+        gms::inet_address from,
+        uint32_t src_cpu_id,
+        uint32_t dst_cpu_id,
+        uint32_t repair_meta_id,
+        rpc::sink<repair_row_on_wire_with_cmd> sink,
+        rpc::source<repair_hash_with_cmd> source,
+        bool &error,
+        repair_hash_set& current_set_diff,
+        std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) {
+    repair_hash_with_cmd hash_cmd = std::get<0>(hash_cmd_opt.value());
+    if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set || hash_cmd.cmd == repair_stream_cmd::needs_all_rows) {
         if (inject_rpc_stream_error) {
             return make_exception_future<stop_iteration>(std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop"));
         }
