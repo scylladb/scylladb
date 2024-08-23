@@ -185,22 +185,6 @@ bool ks_prop_defs::get_durable_writes() const {
     return get_boolean(KW_DURABLE_WRITES, true);
 }
 
-std::map<sstring, sstring> ks_prop_defs::get_all_options_flattened(const gms::feature_service& feat) const {
-    std::map<sstring, sstring> all_options;
-
-    auto ingest_flattened_options = [&all_options](const std::map<sstring, sstring>& options, const sstring& prefix) {
-        for (auto& option: options) {
-            all_options[prefix + ":" + option.first] = option.second;
-        }
-    };
-    ingest_flattened_options(get_replication_options(), KW_REPLICATION);
-    ingest_flattened_options(get_storage_options().to_map(), KW_STORAGE);
-    ingest_flattened_options(get_map(KW_TABLETS).value_or(std::map<sstring, sstring>{}), KW_TABLETS);
-    ingest_flattened_options({{sstring(KW_DURABLE_WRITES), to_sstring(get_boolean(KW_DURABLE_WRITES, true))}}, KW_DURABLE_WRITES);
-
-    return all_options;
-}
-
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0 for N.T.S. only
