@@ -1454,12 +1454,13 @@ private:
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
         lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
-        return do_with(repair_rows_on_wire(), std::move(row_list), std::move(last_dk_with_hash),
-                [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& last_dk_with_hash) {
-            return get_repair_rows_size(row_list).then([this, &rows, &row_list, &last_dk_with_hash] (size_t row_bytes) {
+        repair_rows_on_wire rows;
+        {
+            size_t row_bytes = co_await get_repair_rows_size(row_list);
+            {
                 _metrics.tx_row_nr += row_list.size();
                 _metrics.tx_row_bytes += row_bytes;
-                return do_for_each(row_list, [this, &rows, &last_dk_with_hash] (repair_row& r) {
+                for (repair_row& r : row_list) {
                     const auto& dk_with_hash = r.get_dk_with_hash();
                     // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
                     if (rows.empty()) {
@@ -1476,11 +1477,13 @@ private:
                             rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
                         }
                     }
-                }).then([&rows] {
-                    return std::move(rows);
-                });
-            });
-        });
+                    co_await coroutine::maybe_yield();
+                }
+                {
+                    co_return rows;
+                }
+            }
+        }
     };
 
 public:
