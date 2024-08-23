@@ -1125,9 +1125,30 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     // yet. The id field of repair_uniq_ids returned by next_repair_command()
     // will be >= 1.
     auto id = _repair_module->new_repair_uniq_id();
-    rlogger.info("repair[{}]: starting user-requested repair for keyspace {}, repair id {}, options {}", id.uuid(), keyspace, id.id, options_map);
 
     repair_options options(options_map);
+
+    tracing::trace_state_ptr trace_state;
+    sstring trace_description;
+
+    if (options.trace) {
+        tracing::trace_state_props_set trace_props;
+        trace_props.set<tracing::trace_state_props::full_tracing>();
+        trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::REPAIR, trace_props);
+        // While in theory the client can be on a remote machine, in all our current
+        // production setups, client is always talking to the REST api via either
+        // a tunnel or an agent, so in practice its IP will always be localhost.
+        tracing::begin(trace_state, "user requested repair", gms::inet_address("127.0.0.1"));
+
+        tracing::add_session_param(trace_state, "repair_id", fmt::to_string(id.id));
+        tracing::add_session_param(trace_state, "repair_uuid", fmt::to_string(id.uuid()));
+        tracing::add_session_param(trace_state, "keyspace", keyspace);
+        tracing::add_session_param(trace_state, "options", fmt::to_string(options_map));
+
+        trace_description = format(", tracing session id {}", trace_state->session_id());
+    }
+
+    rlogger.info("repair[{}]: starting user-requested repair for keyspace {}, repair id {}{}, options {}", id.uuid(), keyspace, id.id, trace_description, options_map);
 
     std::vector<sstring> cfs =
         options.column_families.size() ? options.column_families : list_column_families(db, keyspace);
