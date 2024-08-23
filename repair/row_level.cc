@@ -2668,6 +2668,8 @@ private:
         _zero_rows = false;
         rlogger.debug("ROUND {}, _last_sync_boundary={}, _current_sync_boundary={}, _skipped_sync_boundary={}",
                 master.stats().round_nr, master.last_sync_boundary(), master.current_sync_boundary(), _skipped_sync_boundary);
+        tracing::trace(_trace_state, "negotiate_sync_boundary(): round: {}, _last_sync_boundary: {}, _current_sync_boundary: {}, _skipped_sync_boundary: {}",
+                master.stats().round_nr, master.last_sync_boundary(), master.current_sync_boundary(), _skipped_sync_boundary);
         master.stats().round_nr++;
         parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
             const auto& node = ns.node;
@@ -2957,6 +2959,8 @@ private:
 public:
     future<> run() {
         return seastar::async([this] {
+            tracing::trace(_trace_state, "starting row-level repair");
+
             _shard_task.check_in_abort_or_shutdown();
             auto repair_meta_id = _shard_task.rs.get_next_repair_meta_id().get();
             auto algorithm = get_common_diff_detect_algorithm(_shard_task.messaging.local(), _all_live_peer_nodes);
@@ -2981,6 +2985,9 @@ public:
             auto mem_permit = seastar::get_units(mem_sem, wanted).get();
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
+
+            tracing::trace(_trace_state, "repair meta id: {}, diff detection algorithm: {}, max_row_buf_size: {}; memory budget: wanted={}, available={}, max_repair_memory={}",
+                    repair_meta_id, algorithm, max_row_buf_size, wanted, mem_sem.current(), max);
 
             auto permit = _shard_task.db.local().obtain_reader_permit(_shard_task.db.local().find_column_family(_table_id), "repair-meta", db::no_timeout, {}).get();
 
@@ -3108,6 +3115,9 @@ public:
             }
             rlogger.debug("<<< Finished Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}, tx_hashes_nr={}, rx_hashes_nr={}, tx_row_nr={}, rx_row_nr={}, row_from_disk_bytes={}, row_from_disk_nr={}",
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _shard_task.get_keyspace(), _cf_name, _range, master.stats().tx_hashes_nr, master.stats().rx_hashes_nr, master.stats().tx_row_nr, master.stats().rx_row_nr, master.stats().row_from_disk_bytes, master.stats().row_from_disk_nr);
+
+            tracing::trace(_trace_state, "finished row-level repair: tx_hashes_nr={}, rx_hashes_nr={}, tx_row_nr={}, rx_row_nr={}, row_from_disk_bytes={}, row_from_disk_nr={}",
+                    master.stats().tx_hashes_nr, master.stats().rx_hashes_nr, master.stats().tx_row_nr, master.stats().rx_row_nr, master.stats().row_from_disk_bytes, master.stats().row_from_disk_nr);
         });
     }
 };
