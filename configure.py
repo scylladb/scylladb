@@ -686,7 +686,7 @@ other = set([
 
 all_artifacts = apps | tests | other | wasms
 
-arg_parser = argparse.ArgumentParser('Configure scylla')
+arg_parser = argparse.ArgumentParser('Configure scylla', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
                         help='Output build-file name (by default build.ninja)')
 arg_parser.add_argument('--out-final-name', dest="buildfile_final_name", action='store',
