@@ -1086,13 +1086,16 @@ private:
     }
 
     future<size_t> get_repair_rows_size(const std::list<repair_row>& rows) const {
-        return do_with(size_t(0), [&rows] (size_t& sz) {
-            return do_for_each(rows, [&sz] (const repair_row& r) mutable {
+        size_t sz = 0;
+        {
+            for (const repair_row& r : rows) {
                 sz += r.size();
-            }).then([&sz] {
-                return sz;
-            });
-        });
+                co_await coroutine::maybe_yield();
+            }
+            {
+                co_return sz;
+            }
+        }
     }
 
     // Get the size of rows in _row_buf
