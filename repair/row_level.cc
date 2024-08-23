@@ -383,10 +383,11 @@ future<> repair_reader::on_end_of_stream() noexcept {
 }
 
 future<> repair_reader::close() noexcept {
-    return _reader.close().then([this] {
+    co_await _reader.close();
+    {
         _permit.release_base_resources();
         _reader_handle.reset();
-    });
+    }
 }
 
 void repair_reader::set_current_dk(const dht::decorated_key& key) {
