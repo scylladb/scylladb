@@ -51,7 +51,7 @@ if [ -f /.dockerenv ]; then
 fi
 
 container_images=(
-    docker.io/centos:7
+    docker.io/rockylinux:9
 )
 
 for container_image in "${container_images=[@]}"
