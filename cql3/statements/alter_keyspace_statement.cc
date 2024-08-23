@@ -11,6 +11,7 @@
 #include <boost/range/algorithm.hpp>
 #include <fmt/format.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <stdexcept>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
@@ -43,18 +44,17 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static bool validate_rf_difference(const std::string_view curr_rf, const std::string_view new_rf) {
-    auto to_number = [] (const std::string_view rf) {
-        int result;
-        // We assume the passed string view represents a valid decimal number,
-        // so we don't need the error code.
-        (void) std::from_chars(rf.begin(), rf.end(), result);
-        return result;
-    };
-
-    // We want to ensure that each DC's RF is going to change by at most 1
-    // because in that case the old and new quorums must overlap.
-    return std::abs(to_number(curr_rf) - to_number(new_rf)) <= 1;
+// We want to ensure that each DC's RF is going to change by at most 1
+static bool validate_rf_difference(const std::string& curr_rf, const std::string& new_rf) {
+    try {
+        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf)) <= 1;
+    } catch (std::invalid_argument const& ex) {
+        on_internal_error(mylogger, format("validate_rf_difference expects integer arguments, "
+                                 "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+    } catch (std::out_of_range const& ex) {
+        on_internal_error(mylogger, format("validate_rf_difference expects integer arguments to fit into `int` type, "
+                                 "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+    }
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
