@@ -45,6 +45,7 @@
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
+#include <seastar/coroutine/as_future.hh>
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
@@ -158,27 +159,21 @@ public:
         }
     }
     future<> close() {
-        return parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) mutable {
+        co_await coroutine::parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) -> future<> {
             std::optional<rpc::sink<SinkType>>& sink_opt = _sinks[node_idx];
             auto f = sink_opt ? sink_opt->close() : make_ready_future<>();
-            return f.finally([this, node_idx] {
+            f = co_await coroutine::as_future(std::move(f));
+            try {
                 std::optional<rpc::source<SourceType>>& source_opt = _sources[node_idx];
                 if (source_opt && !_sources_closed[node_idx]) {
-                    return repeat([&source_opt] () mutable {
+                    while (co_await (*source_opt)()) {
                         // Keep reading source until end of stream
-                        return (*source_opt)().then([] (std::optional<std::tuple<SourceType>> opt) mutable {
-                            if (opt) {
-                                return make_ready_future<stop_iteration>(stop_iteration::no);
-                            } else {
-                                return make_ready_future<stop_iteration>(stop_iteration::yes);
-                            }
-                        }).handle_exception([] (std::exception_ptr ep) {
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        });
-                    });
+                    }
                 }
-                return make_ready_future<>();
-            });
+            } catch (...) {
+                // Ignore the exception as we're just draining *source_opt
+            }
+            f.get();
         });
     }
 };
