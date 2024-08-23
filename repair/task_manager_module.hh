@@ -49,8 +49,22 @@ private:
     std::unordered_set<gms::inet_address> _ignore_nodes;
     bool _small_table_optimization;
     std::optional<int> _ranges_parallelism;
+    tracing::trace_state_ptr _trace_state;
 public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism) noexcept
+    user_requested_repair_task_impl(
+            tasks::task_manager::module_ptr module,
+            repair_uniq_id id,
+            std::string keyspace,
+            std::string entity,
+            lw_shared_ptr<locator::global_vnode_effective_replication_map> germs,
+            std::vector<sstring> cfs,
+            dht::token_range_vector ranges,
+            std::vector<sstring> hosts,
+            std::vector<sstring> data_centers,
+            std::unordered_set<gms::inet_address> ignore_nodes,
+            bool small_table_optimization,
+            std::optional<int> ranges_parallelism,
+            tracing::trace_state_ptr trace_state) noexcept
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
         , _germs(germs)
         , _cfs(std::move(cfs))
@@ -60,6 +74,7 @@ public:
         , _ignore_nodes(std::move(ignore_nodes))
         , _small_table_optimization(small_table_optimization)
         , _ranges_parallelism(ranges_parallelism)
+        , _trace_state(std::move(trace_state))
     {}
 
     virtual tasks::is_abortable is_abortable() const noexcept override {
@@ -108,13 +123,23 @@ private:
     std::vector<tablet_repair_task_meta> _metas;
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
+    tracing::trace_state_ptr _trace_state;
 public:
-    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
+    tablet_repair_task_impl(
+            tasks::task_manager::module_ptr module,
+            repair_uniq_id id,
+            sstring keyspace,
+            std::vector<sstring> tables,
+            streaming::stream_reason reason,
+            std::vector<tablet_repair_task_meta> metas,
+            std::optional<int> ranges_parallelism,
+            tracing::trace_state_ptr trace_state)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
         , _keyspace(std::move(keyspace))
         , _tables(std::move(tables))
         , _metas(std::move(metas))
         , _ranges_parallelism(ranges_parallelism)
+        , _trace_state(std::move(trace_state))
     {
     }
 
@@ -153,6 +178,7 @@ public:
     bool _hints_batchlog_flushed = false;
     std::unordered_set<gms::inet_address> nodes_down;
     bool _small_table_optimization = false;
+    tracing::trace_state_ptr _trace_state;
 private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;
@@ -173,7 +199,8 @@ public:
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
             bool small_table_optimization,
-            std::optional<int> ranges_parallelism);
+            std::optional<int> ranges_parallelism,
+            tracing::trace_state_ptr trace_state);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
