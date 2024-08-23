@@ -130,4 +130,12 @@ add_custom_command(
 add_custom_target(dist-unified ALL
   DEPENDS ${unified_dist_pkg})
 
+add_custom_target(dist)
+add_dependencies(dist
+  dist-cqlsh
+  dist-tools
+  dist-jmx
+  dist-python3
+  dist-server)
+
 add_subdirectory(debuginfo)
