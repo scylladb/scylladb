@@ -67,6 +67,8 @@ private:
     seastar::abort_source _stop;
     future<> _loop_done;
 
+    gc_clock::time_point _last_replay;
+
     future<> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
@@ -85,6 +87,9 @@ public:
         return _total_batches_replayed;
     }
     db_clock::duration get_batch_log_timeout() const;
+    gc_clock::time_point get_last_replay() const {
+        return _last_replay;
+    }
 private:
     future<> batchlog_replay_loop();
 };

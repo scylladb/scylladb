@@ -66,6 +66,7 @@ future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) 
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
+        auto last_replay = gc_clock::now();
         if (dest == 0) {
             co_await bm.replay_all_failed_batches(cleanup);
         } else {
@@ -75,6 +76,9 @@ future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) 
                 });
             });
         }
+        co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
+            bm._last_replay = last_replay;
+        });
         blogger.debug("Batchlog replay on shard {}: done", dest);
     });
 }
