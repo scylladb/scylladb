@@ -7,6 +7,7 @@
  */
 
 
+#include <unordered_set>
 #include <boost/test/unit_test.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -376,4 +377,58 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
         auto tagset = client->get_object_tagging(name).get();
         BOOST_CHECK(tagset.empty());
     }
+}
+
+static std::unordered_set<sstring> populate_bucket(shared_ptr<s3::client> client, sstring bucket, sstring prefix, int nr_objects) {
+    std::unordered_set<sstring> names;
+
+    for (int i = 0; i < nr_objects; i++) {
+        temporary_buffer<char> data = sstring("1234567890").release();
+        auto name = format("{}obj.{}", prefix, i);
+        client->put_object(format("/{}/{}", bucket, name), std::move(data)).get();
+        names.insert(name);
+    }
+
+    return names;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects) {
+    const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
+    const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
+    semaphore mem(16<<20);
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto close_client = deferred_close(*client);
+
+    // Put extra object to check list-by-prefix filters it out
+    temporary_buffer<char> data = sstring("1234567890").release();
+    client->put_object(format("/{}/extra-{}", bucket, ::getpid()), std::move(data)).get();
+    auto names = populate_bucket(client, bucket, prefix, 12);
+
+    s3::client::bucket_lister lister(client, bucket, prefix, 5);
+    auto close_lister = deferred_close(lister);
+
+    while (auto de = lister.get().get()) {
+        testlog.info("-> [{}]", de->name);
+        auto it = names.find(de->name);
+        BOOST_REQUIRE(it != names.end());
+        names.erase(it);
+    }
+    BOOST_REQUIRE(names.empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete) {
+    const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
+    const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
+    semaphore mem(16<<20);
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto close_client = deferred_close(*client);
+
+    populate_bucket(client, bucket, prefix, 8);
+
+    s3::client::bucket_lister lister(client, bucket, prefix, 9, 2);
+    auto close_lister = deferred_close(lister);
+
+    // Peek one entry to start lister work
+    auto de = lister.get().get();
+    close_lister.close_now();
 }
