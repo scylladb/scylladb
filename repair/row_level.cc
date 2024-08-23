@@ -374,11 +374,12 @@ repair_reader::read_mutation_fragment() {
 }
 
 future<> repair_reader::on_end_of_stream() noexcept {
-    return _reader.close().then([this] {
+    co_await _reader.close();
+    {
         _permit.release_base_resources();
         _reader = mutation_fragment_v1_stream(make_empty_flat_reader_v2(_schema, _permit));
         _reader_handle.reset();
-    });
+    }
 }
 
 future<> repair_reader::close() noexcept {
