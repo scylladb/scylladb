@@ -2939,12 +2939,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         if (row.has("tokens")) {
             auto tokens = decode_tokens(deserialize_set_column(*topology(), row, "tokens"));
 
-            if (tokens.empty()) {
-                on_fatal_internal_error(slogger, format(
-                    "load_topology_state: node {} has tokens column present but tokens are empty",
-                    host_id));
-            }
-
             ring_slice = service::ring_slice {
                 .tokens = std::move(tokens),
             };
