@@ -1064,10 +1064,12 @@ private:
     }
 
     future<> set_estimated_partitions(uint64_t estimated_partitions) {
-        return with_gate(_gate, [this, estimated_partitions] {
+        auto gate_held = _gate.hold();
+        {
             _estimated_partitions = estimated_partitions;
             _repair_writer->set_estimated_partitions(_estimated_partitions);
-        });
+        }
+        co_return;
     }
 
     dht::static_sharder make_remote_sharder() {
