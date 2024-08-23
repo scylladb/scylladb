@@ -1905,24 +1905,21 @@ private:
             gms::inet_address remote_node,
             unsigned node_idx,
             rpc::source<repair_stream_cmd>& source) {
-        return repeat([this, remote_node, node_idx, &source] () mutable {
-            return source().then([this, remote_node, node_idx] (std::optional<std::tuple<repair_stream_cmd>> status_opt) mutable {
-                if (status_opt) {
+        while (std::optional<std::tuple<repair_stream_cmd>> status_opt = co_await source()) {
                     repair_stream_cmd status = std::move(std::get<0>(status_opt.value()));
                     rlogger.trace("put_row_diff: Got status code from follower={} for put_row_diff, status={}", remote_node, int(status));
                     if (status == repair_stream_cmd::put_rows_done) {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        co_return;
                     } else if (status == repair_stream_cmd::error) {
                         throw std::runtime_error(format("put_row_diff: Repair follower={} failed in put_row_diff handler, status={}", remote_node, int(status)));
                     } else {
                         throw std::runtime_error("put_row_diff: Got unexpected repair_stream_cmd");
                     }
-                } else {
+        }
+        {
                     _sink_source_for_put_row_diff.mark_source_closed(node_idx);
                     throw std::runtime_error("put_row_diff: Got unexpected end of stream");
-                }
-            });
-        });
+        }
     }
 
     future<> put_row_diff_sink_op(
