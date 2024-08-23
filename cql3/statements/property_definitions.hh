@@ -46,13 +46,13 @@ public:
 protected:
     std::optional<sstring> get_simple(const sstring& name) const;
 
-    std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
-
     void remove_from_map_if_exists(const sstring& name, const sstring& key) const;
 public:
     bool has_property(const sstring& name) const;
 
     std::optional<value_type> get(const sstring& name) const;
+
+    std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
 
     sstring get_string(sstring key, sstring default_value) const;
 
