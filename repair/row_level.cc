@@ -2007,11 +2007,12 @@ public:
 
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
-        return with_gate(_gate, [this, rows = std::move(rows)] () mutable {
+        auto gate_held = _gate.hold();
+        {
             auto& cf = _db.local().find_column_family(_schema->id());
             cf.update_off_strategy_trigger();
-            return apply_rows_on_follower(std::move(rows));
-        });
+            co_await apply_rows_on_follower(std::move(rows));
+        }
     }
 };
 
