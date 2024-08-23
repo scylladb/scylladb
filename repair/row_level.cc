@@ -1033,32 +1033,34 @@ private:
     }
 
     future<uint64_t> get_estimated_partitions() {
-      return with_gate(_gate, [this] {
+      auto gate_held = _gate.hold();
+      {
         if (_repair_master || _same_sharding_config || _is_tablet) {
-            return do_estimate_partitions_on_local_shard();
+            co_return co_await do_estimate_partitions_on_local_shard();
         } else {
-            return do_with(dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard), uint64_t(0), uint64_t(0), [this] (auto& sharder, auto& partitions_sum, auto& subranges) mutable {
-                return repeat([this, &sharder, &partitions_sum, &subranges] () mutable {
-                    auto shard_range = sharder.next();
-                    if (shard_range) {
+            auto sharder = dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard);
+            auto partitions_sum = uint64_t(0);
+            auto subranges = uint64_t(0);
+            {
+                for (auto shard_range = sharder.next(); shard_range; shard_range = sharder.next()) {
+                    {
                         ++subranges;
-                        return do_estimate_partitions_on_all_shards(*shard_range).then([&partitions_sum] (uint64_t partitions) mutable {
+                        auto partitions = co_await do_estimate_partitions_on_all_shards(*shard_range);
+                        {
                             partitions_sum += partitions;
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    } else {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        }
                     }
-                }).then([this, &partitions_sum, &subranges] {
+                }
+                {
                     _local_range_estimation = local_range_estimation {
                         .master_subranges_count = subranges,
                         .partitions_count = partitions_sum
                     };
-                    return partitions_sum;
-                });
-            });
+                    co_return partitions_sum;
+                }
+            }
         }
-      });
+      }
     }
 
     future<> set_estimated_partitions(uint64_t estimated_partitions) {
