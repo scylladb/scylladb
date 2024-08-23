@@ -84,10 +84,21 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rfs = ks.metadata()->strategy_options();
-                for (const auto& [new_dc, new_rf] : _attrs->get_replication_options()) {
-                    auto it = current_rfs.find(new_dc);
-                    sstring old_rf = it != current_rfs.end() ? it->second : "0";
+                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                auto new_rf_per_dc = _attrs->get_replication_options();
+                new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+                for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
+                    sstring old_rf = "0";
+                    if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
+                             new_dc_in_current_mapping != current_rf_per_dc.end()) {
+                        old_rf = new_dc_in_current_mapping->second;
+                    } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
+                        // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
+                        // during validation in abstract_replication_strategy::validate_replication_strategy.
+                        // We can't report this error now, because it'd change the order of errors reported:
+                        // first we need to report non-existing DCs, then if RFs aren't changed by too much.
+                        continue;
+                    }
                     if (!validate_rf_difference(old_rf, new_rf)) {
                         throw exceptions::invalid_request_exception("Cannot modify replication factor of any DC by more than 1 at a time.");
                     }
