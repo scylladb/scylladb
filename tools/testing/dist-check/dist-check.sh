@@ -59,7 +59,7 @@ do
     container_script="${container_image//:/-}"
     install_sh="$(pwd)/tools/testing/dist-check/$container_script.sh"
     if [ -f "$install_sh" ]; then
-        $contool run -i --rm -v $(pwd):$(pwd) $container_image /bin/bash -c "cd $(pwd) && $install_sh --mode $MODE"
+        $contool run -i --rm -v $(pwd):$(pwd):Z $container_image /bin/bash -c "cd $(pwd) && $install_sh --mode $MODE"
     else
         echo "internal error: $install_sh does not exist, please create one to verify packages on $container_image."
         exit 1
