@@ -1342,16 +1342,18 @@ private:
 
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf_within_set_diff(repair_hash_set set_diff) {
-        return do_with(std::list<repair_row>(), std::move(set_diff),
-                [this] (std::list<repair_row>& rows, repair_hash_set& set_diff) {
-            return do_for_each(_working_row_buf, [&set_diff, &rows] (const repair_row& r) {
+        std::list<repair_row> rows;
+        {
+            for (const repair_row& r : _working_row_buf) {
                 if (set_diff.contains(r.hash())) {
                     rows.push_back(r);
                 }
-            }).then([&rows] {
-                return std::move(rows);
-            });
-        });
+                co_await coroutine::maybe_yield();
+            }
+            {
+                co_return rows;
+            }
+        }
     }
 
     // Return rows in the _working_row_buf with hash within the given sef_diff
