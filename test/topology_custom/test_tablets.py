@@ -201,23 +201,24 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": "true"}
 
     logger.info("Creating a new cluster of 1 node in 1st DC and 2 nodes in 2nd DC")
-    await manager.server_add(config=config, property_file={'dc': f'dc1', 'rack': 'myrack'})
-    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
-    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+    await manager.servers_add(3, config=config, property_file={'dc': f'dc1', 'rack': 'myrack'})
+    await manager.servers_add(2, config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+    # await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
 
-    conn = manager.get_cql()
-    conn.execute("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};")
-    conn.execute("create table ks.t (pk int primary key);")  # need a table to not only change schema, but also replicas
+    cql = manager.get_cql()
+    await cql.run_async("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}")
+    # need to create a table to not change only the schema, but also tablets replicas
+    await cql.run_async("create table ks.t (pk int primary key)")
     with pytest.raises(InvalidRequest, match="Cannot modify replication factor of any DC by more than 1 at a time."):
         # changing RF of dc2 from 0 to 2 should fail
-        conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 2};")
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 2}")
 
     # changing RF of dc2 from 0 to 1 should succeed
-    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 1};")
-    # also check that we can safely remove all replicas by changing RF of dc2 from 1 to 0 back again
-    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 0};")
-    # we may also remove all the replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
-    conn.execute("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0};")
+    await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 1}")
+    # we want to ensure that RFs of both DCs are equal to 1 now
+    res = await cql.run_async("SELECT * FROM system_schema.keyspaces  WHERE keyspace_name = 'ks'")
+    assert res[0].replication['dc1'] == '1'
+    assert res[0].replication['dc2'] == '1'
 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
