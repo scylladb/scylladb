@@ -1105,13 +1105,16 @@ private:
 
     // return the combined checksum of rows in _row_buf
     future<repair_hash> row_buf_csum() {
-        return do_with(repair_hash(), [this] (repair_hash& combined) {
-            return do_for_each(_row_buf, [&combined] (repair_row& r) mutable {
+        repair_hash combined;
+        {
+            for (repair_row& r : _row_buf) {
                 combined.add(r.hash());
-            }).then([&combined] {
-                return combined;
-            });
-        });
+                co_await coroutine::maybe_yield();
+            }
+            {
+                co_return combined;
+            }
+        }
     }
 
     void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
