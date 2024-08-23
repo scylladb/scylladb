@@ -44,16 +44,15 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-// We want to ensure that each DC's RF is going to change by at most 1
-static bool validate_rf_difference(const std::string& curr_rf, const std::string& new_rf) {
+static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
     try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf)) <= 1;
+        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
     } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, format("validate_rf_difference expects integer arguments, "
-                                 "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
+                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
     } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, format("validate_rf_difference expects integer arguments to fit into `int` type, "
-                                 "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
+                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
     }
 }
 
@@ -87,6 +86,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+                unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
                     sstring old_rf = "0";
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
@@ -99,8 +99,8 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         // first we need to report non-existing DCs, then if RFs aren't changed by too much.
                         continue;
                     }
-                    if (!validate_rf_difference(old_rf, new_rf)) {
-                        throw exceptions::invalid_request_exception("Cannot modify replication factor of any DC by more than 1 at a time.");
+                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+                        throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
                 }
             }
