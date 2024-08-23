@@ -145,16 +145,17 @@ public:
     future<std::tuple<sink_type, source_type>> get_sink_source(gms::inet_address remote_node, unsigned node_idx, std::optional<shard_id> dst_cpu_id) {
         using value_type = std::tuple<sink_type, source_type>;
         if (_sinks[node_idx] && _sources[node_idx]) {
-            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
+            co_return value_type(_sinks[node_idx].value(), _sources[node_idx].value());
         }
         if (_sinks[node_idx] || _sources[node_idx]) {
-            return make_exception_future<value_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
+            throw std::runtime_error(format("sink or source is missing for node {}", remote_node));
         }
-        return _fn(_repair_meta_id, dst_cpu_id, netw::messaging_service::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
+        auto [sink, source] = co_await _fn(_repair_meta_id, dst_cpu_id, netw::messaging_service::msg_addr(remote_node));
+        {
             _sinks[node_idx].emplace(std::move(sink));
             _sources[node_idx].emplace(std::move(source));
-            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
-        });
+            co_return value_type(_sinks[node_idx].value(), _sources[node_idx].value());
+        }
     }
     future<> close() {
         return parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) mutable {
