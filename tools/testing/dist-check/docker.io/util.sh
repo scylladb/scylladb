@@ -41,6 +41,32 @@ SCYLLA_JMX_PRODUCT=$(cat tools/jmx/build/SCYLLA-PRODUCT-FILE)
 SCYLLA_JMX_RELEASE=$(cat tools/jmx/build/SCYLLA-RELEASE-FILE)
 SCYLLA_TOOLS_PRODUCT=$(cat tools/java/build/SCYLLA-PRODUCT-FILE)
 SCYLLA_TOOLS_RELEASE=$(cat tools/java/build/SCYLLA-RELEASE-FILE)
+case $MODE in
+    debug)
+        config=Debug
+        ;;
+    release)
+        config=RelWithDebInfo
+        ;;
+    dev)
+        config=Dev
+        ;;
+    sanitize)
+        config=Sanitize
+        ;;
+    coverage)
+        config=Coverage
+        ;;
+    *)
+        echo "unknown mode: $MODE"
+        exit 1
+        ;;
+esac
+
+if [ ! -e build/dist/$MODE ]; then
+  # fallback to cmake directory
+  MODE=$config
+fi
 
 SCYLLA_RPMS=(
     build/dist/$MODE/redhat/RPMS/x86_64/$SCYLLA_PRODUCT-*$SCYLLA_RELEASE*.rpm
