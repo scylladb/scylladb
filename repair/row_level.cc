@@ -1860,11 +1860,13 @@ public:
 
     // RPC handler
     future<repair_rows_on_wire> get_row_diff_handler(repair_hash_set set_diff, needs_all_rows_t needs_all_rows) {
-        return with_gate(_gate, [this, set_diff = std::move(set_diff), needs_all_rows] () mutable {
-            return get_row_diff(std::move(set_diff), needs_all_rows).then([this] (std::list<repair_row> row_diff) {
-                return to_repair_rows_on_wire(std::move(row_diff));
-            });
-        });
+        auto gate_held = _gate.hold();
+        {
+            std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
+            {
+                co_return co_await to_repair_rows_on_wire(std::move(row_diff));
+            }
+        }
     }
 
     // RPC API
