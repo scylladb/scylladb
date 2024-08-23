@@ -13,8 +13,8 @@ from test.pylib.manager_client import ManagerClient
 
 logger = logging.getLogger(__name__)
 
+
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="issue #14945")
 async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     """
     Issue https://github.com/scylladb/scylladb/issues/14945.
