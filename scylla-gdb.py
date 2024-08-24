@@ -838,6 +838,74 @@ class chunked_managed_vector:
                 yield e
 
 
+class chunked_fifo:
+    class chunk:
+        def __init__(self, ref):
+            self.items = ref['items']
+            self.begin = ref['begin']
+            self.end = ref['end']
+            self.next_one = ref['next']
+
+        def __len__(self):
+            return self.end - self.begin
+
+    class iterator:
+        def __init__(self, fifo, chunk):
+            self.fifo = fifo
+            self.chunk = chunk
+            self.index = self.chunk.begin if chunk else 0
+
+        def __next__(self):
+            if self.index == 0:
+                raise StopIteration
+            if self.index == self.chunk.end:
+                if not self.chunk.next_one:
+                    raise StopIteration
+                self.chunk = chunked_fifo.chunk(self.chunk.next_one)
+                self.index = self.chunk.begin
+            index = self.index
+            self.index += 1
+            return self.chunk.items[self.fifo.mask(index)]['data']
+
+    def __init__(self, ref):
+        self._ref = ref
+        # try to access the member variable, so the constructor throws if the
+        # inspected variable is of the wrong type
+        _ = self.front_chunk
+
+    def mask(self, index):
+        return index & (self.items_per_chunk - 1)
+
+    @property
+    def items_per_chunk(self):
+        return self._ref.type.template_argument(1)
+
+    @property
+    def front_chunk(self):
+        return self._ref['_front_chunk']
+
+    @property
+    def back_chunk(self):
+        return self._ref['_back_chunk']
+
+    def __len__(self):
+        if not self.front_chunk:
+            return 0
+        if self.back_chunk == self.front_chunk:
+            front_chunk = self.chunk(self.front_chunk.dereference())
+            return len(front_chunk)
+        else:
+            front_chunk = self.chunk(self.front_chunk.dereference())
+            back_chunk = self.chunk(self.back_chunk.dereference())
+            num_chunks = self._ref['_nchunks'] - 2
+            return (len(front_chunk) +
+                    len(back_chunk) +
+                    num_chunks * self.items_per_chunk)
+
+    def __iter__(self):
+        return self.iterator(self, self.front_chunk)
+
+
 class sstring:
     def __init__(self, ref):
         self.ref = ref
@@ -3789,7 +3857,10 @@ class scylla_io_queues(gdb.Command):
                 for pclass_ptr in handles:
                     self._print_io_priority_class(fq_pclass(pclass_ptr), names_from_ptrs)
 
-            pending = circular_buffer(ioq['_sink']['_pending_io'])
+            try:
+                pending = chunked_fifo(ioq['_sink']['_pending_io'])
+            except gdb.error:
+                pending = circular_buffer(ioq['_sink']['_pending_io'])
             gdb.write("\tPending in sink: ({})\n".format(len(pending)))
             for op in pending:
                 gdb.write("Completion {}\n".format(op['_completion']))
