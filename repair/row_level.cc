@@ -2073,43 +2073,48 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slo
     repair_hash_with_cmd hash_cmd = std::get<0>(hash_cmd_opt.value());
     if (hash_cmd.cmd == repair_stream_cmd::end_of_current_hash_set || hash_cmd.cmd == repair_stream_cmd::needs_all_rows) {
         if (inject_rpc_stream_error) {
-            return make_exception_future<stop_iteration>(std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop"));
+            throw std::runtime_error("get_row_diff_with_rpc_stream: Inject error in handler loop");
         }
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
         _metrics.rx_hashes_nr += current_set_diff.size();
         auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(current_set_diff)));
-        return repair.invoke_on(dst_cpu_id, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] (repair_service& local_repair) {
+        repair_rows_on_wire rows_on_wire  = co_await repair.invoke_on(dst_cpu_id, [&] (repair_service& local_repair) -> future<repair_rows_on_wire> {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
-                return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows)).then([rm] (repair_rows_on_wire rows) {
+                repair_rows_on_wire rows = co_await rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
+                {
                     rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_finished);
-                    return rows;
-                });
+                    co_return rows;
+                }
             } else {
-                return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows)).then([rm] (repair_rows_on_wire rows) {
+                repair_rows_on_wire rows = co_await rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
+                {
                     rm->set_repair_state_for_local_node(repair_state::get_row_diff_with_rpc_stream_finished);
-                    return rows;
-                });
+                    co_return rows;
+                }
             }
-        }).then([sink] (repair_rows_on_wire rows_on_wire) mutable {
-            if (rows_on_wire.empty()) {
-                return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
-            }
-            return do_with(std::move(rows_on_wire), [sink] (repair_rows_on_wire& rows_on_wire) mutable {
-                return do_for_each(rows_on_wire, [sink] (repair_row_on_wire& row) mutable {
-                    return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
-                }).then([sink] () mutable {
-                    return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
-                });
-            });
-        }).then([sink] () mutable {
-            return sink.flush();
-        }).then([sink] {
-            return make_ready_future<stop_iteration>(stop_iteration::no);
         });
+        {
+            if (rows_on_wire.empty()) {
+                co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
+            } else {
+                for (repair_row_on_wire& row : rows_on_wire) {
+                    co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
+                }
+                {
+                    co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
+                }
+            }
+        }
+        {
+            co_await sink.flush();
+        }
+        {
+            co_return stop_iteration::no;
+        }
     } else {
-        return make_exception_future<stop_iteration>(std::runtime_error("Got unexpected repair_stream_cmd"));
+        throw std::runtime_error("Got unexpected repair_stream_cmd");
     }
 }
 
