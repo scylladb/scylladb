@@ -2301,35 +2301,42 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
         uint32_t repair_meta_id,
         rpc::sink<repair_hash_with_cmd> sink,
         rpc::source<repair_stream_cmd> source) {
-    return repeat([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source] () mutable {
-        return do_with(false, [&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source] (bool& error) mutable {
-            return source().then([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source, &error] (std::optional<std::tuple<repair_stream_cmd>> status_opt) mutable {
-                if (status_opt) {
+    std::exception_ptr outer_exception;
+    try {
+        while (std::optional<std::tuple<repair_stream_cmd>> status_opt = co_await source()) {
+            bool error = false;
+            std::exception_ptr ep;
+            try {
                     if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                        continue;
                     }
-                    return repair_get_full_row_hashes_with_rpc_stream_process_op(repair, from,
+                    auto stop = co_await repair_get_full_row_hashes_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             dst_cpu_id,
                             repair_meta_id,
                             sink,
                             source,
                             error,
-                            std::move(status_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(status_opt));
+                    if (stop) {
+                        break;
+                    }
+            } catch (...) {
+                        ep = std::current_exception();
                         rlogger.warn("repair_get_full_row_hashes_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
-                        return sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()}).then([] () {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        });
-    }).finally([sink] () mutable {
-        return sink.close().finally([sink] { });
-    });
+            }
+            if (ep) {
+                                    co_await sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()});
+            }
+        }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
 }
 
 future<repair_update_system_table_response> repair_service::repair_update_system_table_handler(gms::inet_address from, repair_update_system_table_request req) {
