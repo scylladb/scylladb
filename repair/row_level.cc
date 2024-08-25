@@ -2211,14 +2211,17 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
         uint32_t repair_meta_id,
         rpc::sink<repair_row_on_wire_with_cmd> sink,
         rpc::source<repair_hash_with_cmd> source) {
-    return do_with(false, repair_hash_set(), [&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source] (bool& error, repair_hash_set& current_set_diff) mutable {
-        return repeat([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] () mutable {
-            return source().then([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
-                if (hash_cmd_opt) {
+    bool error = false;
+    repair_hash_set current_set_diff = repair_hash_set();
+    std::exception_ptr outer_exception;
+    try {
+            while (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt = co_await source()) {
+                std::exception_ptr ep;
+                try {
                     if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                        continue;
                     }
-                    return repair_get_row_diff_with_rpc_stream_process_op(repair, from,
+                    co_await repair_get_row_diff_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             dst_cpu_id,
                             repair_meta_id,
@@ -2226,21 +2229,23 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
                             source,
                             error,
                             current_set_diff,
-                            std::move(hash_cmd_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(hash_cmd_opt));
+                } catch (...) {
+                        ep = std::current_exception();
                         rlogger.warn("repair_get_row_diff_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
-                        return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()}).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-            });
-        });
-    }).finally([sink] () mutable {
-        return sink.close().finally([sink] { });
-    });
+                if (ep) {
+                    co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()});
+                }
+            }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
 }
 
 static future<> repair_put_row_diff_with_rpc_stream_handler(
