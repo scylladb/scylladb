@@ -2256,14 +2256,17 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
         uint32_t repair_meta_id,
         rpc::sink<repair_stream_cmd> sink,
         rpc::source<repair_row_on_wire_with_cmd> source) {
-    return do_with(false, repair_rows_on_wire(), [&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source] (bool& error, repair_rows_on_wire& current_rows) mutable {
-        return repeat([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source, &current_rows, &error] () mutable {
-            return source().then([&repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, sink, source, &current_rows, &error] (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt) mutable {
-                if (row_opt) {
+    std::exception_ptr outer_exception;
+    bool error = false;
+    repair_rows_on_wire current_rows = repair_rows_on_wire();
+    try {
+        while (std::optional<std::tuple<repair_row_on_wire_with_cmd>> row_opt = co_await source()) {
+            std::exception_ptr ep;
+            try {
                     if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                        continue;
                     }
-                    return repair_put_row_diff_with_rpc_stream_process_op(repair, from,
+                    co_await repair_put_row_diff_with_rpc_stream_process_op(repair, from,
                             src_cpu_id,
                             dst_cpu_id,
                             repair_meta_id,
@@ -2271,21 +2274,23 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
                             source,
                             error,
                             current_rows,
-                            std::move(row_opt)).handle_exception([from, repair_meta_id, sink, &error] (std::exception_ptr ep) mutable {
+                            std::move(row_opt));
+            } catch (...) {
+                        ep = std::current_exception();
                         rlogger.warn("repair_put_row_diff_with_rpc_stream_handler: from={} repair_meta_id={} error={}", from, repair_meta_id, ep);
                         error = true;
-                        return sink(repair_stream_cmd::error).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        });
-    }).finally([sink] () mutable {
-        return sink.close().finally([sink] { });
-    });
+            }
+            if (ep) {
+                        co_await sink(repair_stream_cmd::error);
+            }
+        }
+    } catch (...) {
+        outer_exception = std::current_exception();
+    }
+    co_await sink.close();
+    if (outer_exception) {
+        std::rethrow_exception(outer_exception);
+    }
 }
 
 static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
