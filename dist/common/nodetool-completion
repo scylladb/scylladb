@@ -128,6 +128,7 @@ have nodetool && have cqlsh &&
 
         local lngopt='
             assassinate
+            backup
             cleanup
             clearsnapshot
             compact

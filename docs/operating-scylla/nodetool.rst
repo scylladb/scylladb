@@ -7,6 +7,7 @@ Nodetool
    :maxdepth: 1
    :hidden:
 
+   nodetool-commands/backup
    nodetool-commands/cfhistograms
    nodetool-commands/cfstats
    nodetool-commands/checkandrepaircdcstreams
@@ -84,6 +85,7 @@ Supported Nodetool operations
 =============================
 Operations that are not listed below are currently not available.
 
+* :doc:`backup <nodetool-commands/backup/>` - Copy SSTables from a specified keyspace's snapshot to a designated bucket in object storage.
 * :doc:`cfhistograms <nodetool-commands/cfhistograms/>` - Provides statistics about a table, including number of SSTables, read/write latency, partition size and column count.
 * :doc:`cfstats </operating-scylla/nodetool-commands/cfstats/>` - Provides in-depth diagnostics regard table.
 * :doc:`checkandrepaircdcstreams </operating-scylla/nodetool-commands/checkandrepaircdcstreams/>` - Checks and fixes CDC streams.

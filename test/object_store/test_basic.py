@@ -12,6 +12,7 @@ from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import reconnect_driver
 from test.object_store.conftest import get_s3_resource
+from test.object_store.conftest import format_tuples
 
 logger = logging.getLogger(__name__)
 
@@ -241,12 +242,3 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     have_res = { x.name: x.value for x in res }
     assert have_res == dict(rows), f'Unexpected table content: {have_res}'
-
-
-def format_tuples(tuples=None, **kwargs):
-    '''format a dict to structured values (tuples) in CQL'''
-    if tuples is None:
-        tuples = {}
-    tuples.update(kwargs)
-    body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
-    return f'{{ {body} }}'

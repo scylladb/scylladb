@@ -1200,9 +1200,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     const db::config& db_config = db.get_config();
 
     for (auto& extra : db_config.data_file_directories()) {
-        auto uuid_sstring = s.id().to_sstring();
-        boost::erase_all(uuid_sstring, "-");
-        cfg.all_datadirs.push_back(format("{}/{}/{}-{}", extra, s.ks_name(), s.cf_name(), uuid_sstring));
+        cfg.all_datadirs.push_back(format("{}/{}/{}", extra, s.ks_name(), format_table_directory_name(s.cf_name(), s.id())));
     }
     cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -2592,7 +2590,7 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
     return table_name + "-";
 }
 
-static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& directory_name) {
+std::pair<sstring, table_id> parse_table_directory_name(const sstring& directory_name) {
     // cf directory is of the form: 'cf_name-uuid'
     // uuid is assumed to be exactly 32 hex characters wide.
     constexpr size_t uuid_size = 32;
@@ -2601,6 +2599,12 @@ static std::pair<sstring, table_id> extract_cf_name_and_uuid(const sstring& dire
         on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
+}
+
+sstring format_table_directory_name(sstring name, table_id id) {
+    auto uuid_sstring = id.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return format("{}-{}", name, uuid_sstring);
 }
 
 future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
@@ -2623,7 +2627,7 @@ future<std::unordered_map<sstring, database::snapshot_details>> database::get_sn
                     co_return;
                 }
 
-                auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
+                auto cf_name_and_uuid = parse_table_directory_name(de.name);
                 co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     auto snapshot_name = de.name;
                     auto cf_details = co_await table::get_snapshot_details(parent_dir / snapshot_name, cf_dir);
@@ -2718,7 +2722,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                     // zap the table directory if the table is dropped
                     // and has no remaining snapshots
                     if (!has_snapshots) {
-                        auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
+                        auto [cf_name, cf_uuid] = parse_table_directory_name(table_ent->name);
                         auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
                         auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {

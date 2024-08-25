@@ -17,12 +17,26 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
+#include "tasks/task_manager.hh"
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
 
 using namespace seastar;
 
+namespace sstables { class storage_manager; }
+
 namespace db {
+
+namespace snapshot {
+
+class task_manager_module : public tasks::task_manager::module {
+public:
+    task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
+};
+
+class backup_task_impl;
+
+} // snapshot namespace
 
 class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
@@ -40,13 +54,15 @@ public:
         table_snapshot_details details;
     };
 
+    struct config {
+        seastar::scheduling_group backup_sched_group;
+    };
+
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    explicit snapshot_ctl(sharded<replica::database>& db) : _db(db) {}
+    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
-    future<> stop() {
-        return _ops.close();
-    }
+    future<> stop();
 
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
@@ -90,14 +106,19 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
+    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring keyspace, sstring snapshot_name);
+
     future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 private:
+    config _config;
     sharded<replica::database>& _db;
     seastar::rwlock _lock;
     seastar::gate _ops;
+    shared_ptr<snapshot::task_manager_module> _task_manager_module;
+    sstables::storage_manager& _storage_manager;
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
@@ -105,7 +126,15 @@ private:
     std::invoke_result_t<Func> run_snapshot_modify_operation(Func&&);
 
     template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_list_operation(Func&&);
+    std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
+        return with_gate(_ops, [f = std::move(f), this] () {
+            return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+                return with_lock(snap._lock.for_read(), std::move(f));
+            });
+        });
+    }
+
+    friend class snapshot::backup_task_impl;
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf = skip_flush::no);
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snap_views, skip_flush sf = skip_flush::no);
