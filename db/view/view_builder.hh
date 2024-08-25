@@ -257,6 +257,22 @@ private:
     future<> mark_as_built(view_ptr);
     void setup_metrics();
 
+    template <typename Func1, typename Func2>
+    future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {
+        auto op = _upgrade_phaser.start();
+
+        // read locally so it doesn't change between async calls
+        const auto v = _view_build_status_on;
+
+        if (v == view_build_status_location::group0 || v == view_build_status_location::both) {
+            co_await fn_group0();
+        }
+
+        if (v == view_build_status_location::sys_dist_ks || v == view_build_status_location::both) {
+            co_await fn_sys_dist();
+        }
+    }
+
     future<> mark_view_build_started(sstring ks_name, sstring view_name);
     future<> mark_view_build_success(sstring ks_name, sstring view_name);
     future<> remove_view_build_status(sstring ks_name, sstring view_name);
