@@ -10,6 +10,7 @@ from test.pylib.manager_client import ManagerClient
 from test.object_store.conftest import format_tuples
 from test.object_store.conftest import get_s3_resource
 from test.topology.conftest import skip_mode
+from test.pylib.util import unique_name
 
 logger = logging.getLogger(__name__)
 
@@ -120,3 +121,55 @@ async def test_backup_is_abortable(manager: ManagerClient, s3_server):
         if f'{cf}/backup/{f}' in objects:
             uploaded_count += 1
     assert uploaded_count > 0 and uploaded_count < len(files)
+
+
+@pytest.mark.asyncio
+async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
+    '''check that restoring from backed up snapshot for a keyspace:table works'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+
+    cql = manager.get_cql()
+    workdir = await manager.server_get_workdir(server.server_id)
+
+    # This test is sensitive not to share the bucket with any other test
+    # that can run in parallel, so generate some unique name for the snapshot
+    snap_name = unique_name('backup_')
+    print(f'Create and backup keyspace (snapshot name is {snap_name})')
+    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name)
+
+    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+    def list_sstables():
+        return [ f for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file() ]
+
+    orig_res = cql.execute(f"SELECT * FROM {ks}.{cf}")
+    orig_rows = { x.name: x.value for x in orig_res }
+
+    tid = await manager.api.backup(server.ip_addr, ks, snap_name, s3_server.address, s3_server.bucket_name)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+
+    print(f'Drop the table data and validate it\'s gone')
+    cql.execute(f"TRUNCATE TABLE {ks}.{cf};")
+    files = list_sstables()
+    assert len(files) == 0
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    assert not res
+
+    print(f'Try to restore')
+    tid = await manager.api.restore(server.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+    print(f'Check that sstables came back')
+    files = list_sstables()
+    assert len(files) > 0
+    print(f'Check that data came back too')
+    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+    rows = { x.name: x.value for x in res }
+    assert rows == orig_rows, "Unexpected table contents after restore"
