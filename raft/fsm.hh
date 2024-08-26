@@ -355,6 +355,15 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
+    std::string_view current_state() const {
+        static constexpr std::string_view leader_state = "Leader";
+        static constexpr std::string_view follower_state = "Follower";
+        static constexpr std::string_view candidate_state = "Candidate";
+        if (is_leader()) {
+            return leader_state;
+        }
+        return is_follower() ? follower_state : candidate_state;
+    }
     bool is_prevote_candidate() const {
         return is_candidate() && std::get<candidate>(_state).is_prevote;
     }

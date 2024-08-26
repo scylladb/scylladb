@@ -348,7 +348,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
   } catch (const abort_requested_exception&) {
-    throw raft::request_aborted();
+    throw raft::request_aborted(format(
+        "Abort requested while transferring snapshot from ID/IP: {}/{}, snapshot descriptor id: {}, snapshot index: {}", from_id, from_ip, snp.id, snp.idx));
   }
 }
 
