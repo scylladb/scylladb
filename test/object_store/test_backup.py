@@ -30,7 +30,7 @@ def create_ks_and_cf(cql):
 
     return ks, cf
 
-async def prepare_snapshot_for_backup(manager: ManagerClient, server):
+async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name = 'backup'):
     cql = manager.get_cql()
     workdir = await manager.server_get_workdir(server.server_id)
     print(f'Create keyspace')
@@ -38,7 +38,7 @@ async def prepare_snapshot_for_backup(manager: ManagerClient, server):
     print('Flush keyspace')
     await manager.api.flush_keyspace(server.ip_addr, ks)
     print('Take keyspace snapshot')
-    await manager.api.take_snapshot(server.ip_addr, ks, 'backup')
+    await manager.api.take_snapshot(server.ip_addr, ks, snap_name)
 
     return ks, cf
 
