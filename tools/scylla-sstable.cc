@@ -1030,16 +1030,16 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        sstables::index_reader idx_reader(sst, permit);
-        auto close_idx_reader = deferred_close(idx_reader);
+        auto idx_reader = make_index_reader(sst, permit);
+        auto close_idx_reader = deferred_close(*idx_reader);
 
         writer.Key(sst->get_filename());
         writer.StartArray();
 
-        while (!idx_reader.eof()) {
-            idx_reader.read_partition_data().get();
-            auto pos = idx_reader.get_data_file_position();
-            auto pkey = idx_reader.get_partition_key();
+        while (!idx_reader->eof()) {
+            idx_reader->read_partition_data().get();
+            auto pos = idx_reader->get_data_file_position();
+            auto pkey = idx_reader->get_partition_key_prefix();
 
             writer.StartObject();
             writer.Key("key");
@@ -1048,7 +1048,7 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
             writer.Uint64(pos);
             writer.EndObject();
 
-            idx_reader.advance_to_next_partition().get();
+            idx_reader->advance_to_next_partition().get();
         }
         writer.EndArray();
     }

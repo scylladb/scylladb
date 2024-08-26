@@ -34,7 +34,7 @@ public:
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            auto k = _r->get_partition_key();
+            auto k = _r->get_partition_key_prefix();
             auto rp = dht::ring_position(dht::decorate_key(s, k));
 
             if (rp_cmp(prev, rp) >= 0) {

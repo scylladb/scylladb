@@ -47,7 +47,7 @@ public:
     }
 
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
-        return std::make_unique<index_reader>(_sst, std::move(permit));
+        return ::make_index_reader(_sst, std::move(permit));
     }
 
     struct index_entry {
@@ -68,7 +68,7 @@ public:
         try {
             while (!ir->eof()) {
                 co_await ir->read_partition_data();
-                auto pk = ir->get_partition_key();
+                auto pk = ir->get_partition_key_prefix();
                 entries.emplace_back(index_entry{sstables::key::from_partition_key(*s, pk),
                                         pk, ir->get_promoted_index_size()});
                 co_await ir->advance_to_next_partition();

@@ -36,7 +36,6 @@
 
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
-#include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -3055,7 +3054,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
             reader_concurrency_semaphore::register_metrics::no);
     std::unique_ptr<sstables::index_reader> lh_index_ptr = nullptr;
     try {
-        lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema, s->get_filename(), db::no_timeout, {}));
+        lh_index_ptr = make_index_reader(s, sem.make_tracking_only_permit(_schema, s->get_filename(), db::no_timeout, {}));
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
     } catch (...) {
         ex = std::current_exception();

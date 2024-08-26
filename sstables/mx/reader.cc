@@ -15,7 +15,6 @@
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
 #include "utils/assert.hh"
-#include "utils/to_string.hh"
 #include "utils/value_or_reference.hh"
 
 namespace sstables {
@@ -1338,7 +1337,7 @@ private:
     index_reader& get_index_reader() {
         if (!_index_reader) {
             auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
-            _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
+            _index_reader = make_index_reader(_sst, _consumer.permit(),
                                                            _consumer.trace_state(), caching, _single_partition_read);
         }
         return *_index_reader;
@@ -1375,7 +1374,11 @@ private:
             return read_from_datafile();
         }
         auto pk = _index_reader->get_partition_key();
-        auto key = dht::decorate_key(*_schema, std::move(pk));
+        if (!pk) {
+            sstlog.trace("reader {}: no full partition key", fmt::ptr(this));
+            return read_from_datafile();
+        }
+        auto key = dht::decorate_key(*_schema, std::move(*pk));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
         return make_ready_future<>();
@@ -1855,6 +1858,7 @@ private:
     mutation_fragment_stream_validator _validator;
     uint64_t _error_count = 0;
     std::optional<partition_key> _expected_pkey;
+    std::optional<partition_key> _actual_pkey;
     std::optional<clustering_block> _expected_clustering_block;
     position_in_partition _current_pos;
     bool _stop_after_partition_header = false;
@@ -1919,6 +1923,9 @@ public:
     void set_index_expected_partition(partition_key pkey) {
         _expected_pkey.emplace(std::move(pkey));
     }
+    std::optional<partition_key> current_pkey() {
+        return _actual_pkey;
+    };
     void reset_index_expected_partition() {
         _expected_pkey.reset();
     }
@@ -1935,10 +1942,10 @@ public:
     }
 
     data_consumer::proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) {
-        auto pk = key.to_partition_key(*_schema);
-        auto dk = dht::decorate_key(*_schema, pk);
+        _actual_pkey = key.to_partition_key(*_schema);
+        auto dk = dht::decorate_key(*_schema, *_actual_pkey);
         _current_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
-        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, pk, _expected_pkey);
+        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, *_actual_pkey, _expected_pkey);
         validate_fragment_order(mutation_fragment_v2::kind::partition_start, {});
         if (_expected_pkey && !_expected_pkey->equal(*_schema, dk.key())) {
             report_error(format("mismatching index/data: partition mismatch: index: {}, data: {}", *_expected_pkey, dk.key()));
@@ -2056,8 +2063,7 @@ future<uint64_t> validate(
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
     auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, sstable::integrity_check::yes);
 
-    std::optional<sstables::index_reader> idx_reader;
-    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto idx_reader = make_index_reader(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
 
     try {
         monitor.on_read_started(context->reader_position());
@@ -2083,8 +2089,7 @@ future<uint64_t> validate(
                     consumer.report_error(format("mismatching index/data: position mismatch: index: {}, data: {}", index_pos, data_pos));
                 }
                 current_partition_pos = data_pos;
-
-                consumer.set_index_expected_partition(idx_reader->get_partition_key());
+                consumer.set_index_expected_partition(idx_reader->get_partition_key().value());
             } else {
                 consumer.reset_index_expected_partition();
             }
@@ -2141,8 +2146,8 @@ future<uint64_t> validate(
             // Check if promoted index still has more entries.
             if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
                 consumer.report_error(format("mismatching index/data: promoted index has more blocks, but it is end of partition {} ({})",
-                        idx_reader->get_partition_key().with_schema(*schema),
-                        idx_reader->get_partition_key()));
+                        consumer.current_pkey()->with_schema(*schema),
+                        *consumer.current_pkey()));
             }
 
             if (idx_reader) {

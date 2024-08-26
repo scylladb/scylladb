@@ -12,7 +12,6 @@
 #include "version.hh"
 #include "shared_sstable.hh"
 #include "open_info.hh"
-#include "sstables_registry.hh"
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -1006,6 +1005,7 @@ public:
 
     friend class mc::writer;
     friend class index_reader;
+    friend class index_reader_old;
     friend class promoted_index;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
