@@ -324,7 +324,7 @@ struct no_other_voting_member : public error {
 };
 
 struct request_aborted : public error {
-    request_aborted() : error("Request is aborted by a caller") {}
+    request_aborted(const std::string& error_msg) : error(error_msg) {}
 };
 
 inline bool is_uncertainty(const std::exception& e) {
