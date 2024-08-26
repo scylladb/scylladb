@@ -1324,7 +1324,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
         ranges = {range};
         rlogger.info("repair[{}]: Using small table optimization for keyspace={} tables={} range={}", id.uuid(), keyspace, cfs, range);
     }
-    auto mixed_shard_optimization = options.mixed_shard_optimization;
+    auto mixed_shard_optimization = true;
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
     auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, mixed_shard_optimization, ranges_parallelism);
