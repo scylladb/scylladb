@@ -527,6 +527,7 @@ scylla_tests = set([
     'test/boost/flush_queue_test',
     'test/boost/fragmented_temporary_buffer_test',
     'test/boost/frozen_mutation_test',
+    'test/boost/generic_server_test',
     'test/boost/gossiping_property_file_snitch_test',
     'test/boost/group0_cmd_merge_test',
     'test/boost/group0_test',
