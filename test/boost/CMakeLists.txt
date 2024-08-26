@@ -136,6 +136,8 @@ add_scylla_test(fragmented_temporary_buffer_test
   KIND SEASTAR)
 add_scylla_test(frozen_mutation_test
   KIND SEASTAR)
+add_scylla_test(generic_server_test
+  KIND SEASTAR)
 add_scylla_test(gossiping_property_file_snitch_test
   KIND SEASTAR)
 add_scylla_test(group0_cmd_merge_test
