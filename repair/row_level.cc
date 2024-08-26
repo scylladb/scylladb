@@ -2296,6 +2296,9 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::move(target_nodes));
     lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
     try {
+        if (!_bm.local_is_initialized()) {
+            throw std::runtime_error("Backlog manager isn't initialized");
+        }
         co_await coroutine::all(
             [this, &from, &req, &sync_point, &deadline] () -> future<> {
                 rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
