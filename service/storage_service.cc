@@ -565,21 +565,29 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 =======
             SCYLLA_ASSERT(existing_ip);
             if (rs.ring.has_value()) {
+<<<<<<< HEAD
 >>>>>>> 17f4a151ce (topology coordinator: do not add replacing node without a ring to topology)
             const auto replaced_host_id = locator::host_id(replaced_id.uuid());
             tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
             update_topology(host_id, ip, rs);
             tmptr->add_replacing_endpoint(replaced_host_id, host_id);
             co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+=======
+                const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+                tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+                update_topology(host_id, ip, rs);
+                tmptr->add_replacing_endpoint(replaced_host_id, host_id);
+                co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
+>>>>>>> 32a59ba98f (topology coordinator: fix indentation after the last patch)
             } else {
-            // After adding replacing endpoint above the node will no longer be reported for reads and writes,
-            // but it needs to be marked as alive before it is reported as pending. Otherwise increased CL
-            // during bootstrap will not be satisfied (replaced node cannot be contacted and replacing is reported
-            // as dead). So instead mark the node as UP (the node started report itself as alive already by this
-            // point). If it is down it will be marked as such eventually.
-            if (existing_ip == ip && !_gossiper.is_alive(*existing_ip)) {
-                co_await _gossiper.real_mark_alive(*existing_ip);
-            }
+                // After adding replacing endpoint above the node will no longer be reported for reads and writes,
+                // but it needs to be marked as alive before it is reported as pending. Otherwise increased CL
+                // during bootstrap will not be satisfied (replaced node cannot be contacted and replacing is reported
+                // as dead). So instead mark the node as UP (the node started report itself as alive already by this
+                // point). If it is down it will be marked as such eventually.
+                if (existing_ip == ip && !_gossiper.is_alive(*existing_ip)) {
+                    co_await _gossiper.real_mark_alive(*existing_ip);
+                }
             }
         }
             break;
