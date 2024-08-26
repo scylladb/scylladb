@@ -27,7 +27,7 @@ all: dirhtml
 # Setup commands
 .PHONY: setupenv
 setupenv:
-	pip install -q poetry
+	pip install -q 'poetry>=1.8.0'
 
 .PHONY: setup
 setup:
