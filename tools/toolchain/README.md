@@ -97,7 +97,7 @@ type in your password.
    commit it. The commit updating install-dependencies.sh should
    include the toolchain change, for atomicity. Do not push the commit
    to `next` yet.
-2. Run `tools/toolchain/prepare --clang-build-mode INSTALL` and wait. It requires `buildah` and to be installed (and will complain if they are not).
+2. Run `tools/toolchain/prepare --clang-build-mode INSTALL` and wait. It requires `buildah` and `reg` to be installed (and will complain if they are not).
 3. Push the commit to a personal repository/branch.
 4. Perform the following on an x86 and an ARM machine:
     1. check out the branch containing the new toolchain name
