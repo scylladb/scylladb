@@ -422,7 +422,7 @@ cql3_type::values() {
 
 namespace util {
 
-sstring maybe_quote(const sstring& identifier) {
+sstring maybe_quote(const std::string_view identifier) {
     // quote empty string
     if (identifier.empty()) {
         return "\"\"";
@@ -451,7 +451,7 @@ sstring maybe_quote(const sstring& identifier) {
         try {
             // In general it's not a good idea to use the default dialect, but for parsing an identifier, it's okay.
             cql3::util::do_with_parser(identifier, dialect{}, std::mem_fn(&cql3_parser::CqlParser::cident));
-            return identifier;
+            return sstring{identifier};
         } catch(exceptions::syntax_exception&) {
             // This alphanumeric string is not a valid identifier, so fall
             // through to have it quoted:
@@ -470,7 +470,7 @@ sstring maybe_quote(const sstring& identifier) {
 }
 
 template <char C>
-static sstring quote_with(const sstring& str) {
+static sstring quote_with(const std::string_view str) {
     static const std::string quote_str{C};
 
     // quote empty string
@@ -495,11 +495,11 @@ static sstring quote_with(const sstring& str) {
     return result;
 }
 
-sstring quote(const sstring& identifier) {
+sstring quote(const std::string_view identifier) {
     return quote_with<'"'>(identifier);
 }
 
-sstring single_quote(const sstring& str) {
+sstring single_quote(const std::string_view str) {
     return quote_with<'\''>(str);
 }
 

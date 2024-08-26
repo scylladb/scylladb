@@ -69,7 +69,7 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// parser. To avoid this forward-compatibility issue, use quote() instead
 /// of maybe_quote() - to unconditionally quote an identifier even if it is
 /// lowercase and not (yet) a keyword.
-sstring maybe_quote(const sstring& s);
+sstring maybe_quote(const std::string_view s);
 
 /// quote() takes an identifier - the name of a column, table or keyspace -
 /// and transforms it to a string which can be safely used in CQL commands.
@@ -80,14 +80,14 @@ sstring maybe_quote(const sstring& s);
 /// lowercase if not quoted), or when the identifier is one of many CQL
 /// keywords. But it's allowed - and easier - to just unconditionally
 /// quote the identifier name in CQL, so that is what this function does does.
-sstring quote(const sstring& s);
+sstring quote(const std::string_view s);
 
 /// single_quote() takes a string and transforms it to a string 
 /// which can be safely used in CQL commands.
 /// Single quoting involves wrapping the name in single-quotes ('). A sigle-quote
 /// character itself is quoted by doubling it.
 /// Single quoting is necessary for dates, IP addresses or string literals.
-sstring single_quote(const sstring& s);
+sstring single_quote(const std::string_view s);
 
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).
