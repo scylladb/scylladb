@@ -319,7 +319,7 @@ static size_t random_offset(size_t min, size_t max) {
 // this range's primary node is down. For this we need to return not just
 // a list of this node's secondary ranges - but also the primary owner of
 // each of those ranges.
-static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary_ranges(
+static future<std::vector<std::pair<dht::token_range, gms::inet_address>>> get_secondary_ranges(
         const locator::effective_replication_map_ptr& erm,
         gms::inet_address ep) {
     const auto& tm = *erm->get_token_metadata_ptr();
@@ -330,6 +330,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
     }
     auto prev_tok = sorted_tokens.back();
     for (const auto& tok : sorted_tokens) {
+        co_await coroutine::maybe_yield();
         inet_address_vector_replica_set eps = erm->get_natural_endpoints(tok);
         if (eps.size() <= 1 || eps[1] != ep) {
             prev_tok = tok;
@@ -357,7 +358,7 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
         }
         prev_tok = tok;
     }
-    return ret;
+    co_return ret;
 }
 
 
@@ -393,63 +394,63 @@ static std::vector<std::pair<dht::token_range, gms::inet_address>> get_secondary
 //
 // FIXME: Check if this algorithm is safe with tablet migration.
 // https://github.com/scylladb/scylladb/issues/16567
-enum primary_or_secondary_t {primary, secondary};
-template<primary_or_secondary_t primary_or_secondary>
-class token_ranges_owned_by_this_shard {
-    // ranges_holder_primary holds just the primary ranges themselves
-    class ranges_holder_primary {
-        const dht::token_range_vector _token_ranges;
-     public:
-        ranges_holder_primary(const locator::vnode_effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
-            : _token_ranges(erm->get_primary_ranges(ep)) {}
-        std::size_t size() const { return _token_ranges.size(); }
-        const dht::token_range& operator[](std::size_t i) const {
-            return _token_ranges[i];
-        }
-        bool should_skip(std::size_t i) const {
-            return false;
-        }
-    };
-    // ranges_holder<secondary> holds the secondary token ranges plus each
-    // range's primary owner, needed to implement should_skip().
-    class ranges_holder_secondary {
-        std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
-        gms::gossiper& _gossiper;
-     public:
-        ranges_holder_secondary(const locator::effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
-            : _token_ranges(get_secondary_ranges(erm, ep))
-            , _gossiper(g) {}
-        std::size_t size() const { return _token_ranges.size(); }
-        const dht::token_range& operator[](std::size_t i) const {
-            return _token_ranges[i].first;
-        }
-        // range i should be skipped if its primary owner is alive.
-        bool should_skip(std::size_t i) const {
-            return _gossiper.is_alive(_token_ranges[i].second);
-        }
-    };
 
+// ranges_holder_primary holds just the primary ranges themselves
+class ranges_holder_primary {
+    dht::token_range_vector _token_ranges;
+public:
+    explicit ranges_holder_primary(dht::token_range_vector token_ranges) : _token_ranges(std::move(token_ranges)) {}
+    static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map_ptr& erm, gms::inet_address ep) {
+        co_return ranges_holder_primary(co_await erm->get_primary_ranges(ep));
+    }
+    std::size_t size() const { return _token_ranges.size(); }
+    const dht::token_range& operator[](std::size_t i) const {
+        return _token_ranges[i];
+    }
+    bool should_skip(std::size_t i) const {
+        return false;
+    }
+};
+// ranges_holder<secondary> holds the secondary token ranges plus each
+// range's primary owner, needed to implement should_skip().
+class ranges_holder_secondary {
+    std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
+    const gms::gossiper& _gossiper;
+public:
+    explicit ranges_holder_secondary(std::vector<std::pair<dht::token_range, gms::inet_address>> token_ranges, const gms::gossiper& g)
+        : _token_ranges(std::move(token_ranges))
+        , _gossiper(g) {}
+    static future<ranges_holder_secondary> make(const locator::effective_replication_map_ptr& erm, gms::inet_address ep, const gms::gossiper& g) {
+        co_return ranges_holder_secondary(co_await get_secondary_ranges(erm, ep), g);
+    }
+    std::size_t size() const { return _token_ranges.size(); }
+    const dht::token_range& operator[](std::size_t i) const {
+        return _token_ranges[i].first;
+    }
+    // range i should be skipped if its primary owner is alive.
+    bool should_skip(std::size_t i) const {
+        return _gossiper.is_alive(_token_ranges[i].second);
+    }
+};
+
+template<class primary_or_secondary_t>
+class token_ranges_owned_by_this_shard {
     schema_ptr _s;
     locator::effective_replication_map_ptr _erm;
     // _token_ranges will contain a list of token ranges owned by this node.
     // We'll further need to split each such range to the pieces owned by
     // the current shard, using _intersecter.
-    using ranges_holder = std::conditional_t<
-            primary_or_secondary == primary_or_secondary_t::primary,
-            ranges_holder_primary,
-            ranges_holder_secondary>;
-    const ranges_holder _token_ranges;
+    const primary_or_secondary_t _token_ranges;
     // NOTICE: _range_idx is used modulo _token_ranges size when accessing
     // the data to ensure that it doesn't go out of bounds
     size_t _range_idx;
     size_t _end_idx;
     std::optional<dht::selective_token_range_sharder> _intersecter;
 public:
-    token_ranges_owned_by_this_shard(replica::database& db, gms::gossiper& g, schema_ptr s)
+    token_ranges_owned_by_this_shard(schema_ptr s, primary_or_secondary_t token_ranges)
         :  _s(s)
         , _erm(s->table().get_effective_replication_map())
-        , _token_ranges(db.find_keyspace(s->ks_name()).get_vnode_effective_replication_map(),
-                g, _erm->get_topology().my_address())
+        , _token_ranges(std::move(token_ranges))
         , _range_idx(random_offset(0, _token_ranges.size() - 1))
         , _end_idx(_range_idx + _token_ranges.size())
     {
@@ -731,7 +732,9 @@ static future<bool> scan_table(
     expiration_stats.scan_table++;
     // FIXME: need to pace the scan, not do it all at once.
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
-    token_ranges_owned_by_this_shard<primary> my_ranges(db.real_database(), gossiper, s);
+    auto erm = db.real_database().find_keyspace(s->ks_name()).get_vnode_effective_replication_map();
+    auto my_address = erm->get_topology().my_address();
+    token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm, my_address));
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
@@ -751,7 +754,7 @@ static future<bool> scan_table(
     // by tasking another node to take over scanning of the dead node's primary
     // ranges. What we do here is that this node will also check expiration
     // on its *secondary* ranges - but only those whose primary owner is down.
-    token_ranges_owned_by_this_shard<secondary> my_secondary_ranges(db.real_database(), gossiper, s);
+    token_ranges_owned_by_this_shard my_secondary_ranges(s, co_await ranges_holder_secondary::make(erm, my_address, gossiper));
     while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
         expiration_stats.secondary_ranges_scanned++;
         dht::partition_range_vector partition_ranges;

@@ -582,7 +582,8 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
             data_dictionary::storage_options local;
             return cf.get_sstables_manager().make_sstable(cf.schema(), cf.dir(), local, generation, sstables::sstable_state::upload);
         };
-        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.db().local().get_keyspace_local_ranges("ks"));
+        const auto& erm = e.db().local().find_keyspace("ks").get_vnode_effective_replication_map();
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.db().local().get_keyspace_local_ranges(erm).get());
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable), std::move(owned_ranges_ptr)).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
