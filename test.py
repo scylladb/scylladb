@@ -414,7 +414,13 @@ class PythonTestSuite(TestSuite):
 
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         cluster_size = cluster_cfg["initial_size"]
-        pool_size = cfg.get("pool_size", 2)
+        env_pool_size = os.getenv("CLUSTER_POOL_SIZE")
+        if options.cluster_pool_size is not None:
+            pool_size = options.cluster_pool_size
+        elif env_pool_size is not None:
+            pool_size = int(env_pool_size)
+        else:
+            pool_size = cfg.get("pool_size", 2)
         self.dirties_cluster = set(cfg.get("dirties_cluster", []))
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)
@@ -1349,6 +1355,9 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
+    parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
+                        help="Set the pool_size for PythonTest and its descendants. Alternatively environment variable "
+                             "CLUSTER_POOL_SIZE can be used to achieve the same")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
