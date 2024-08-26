@@ -1064,6 +1064,10 @@ const sstring& abstract_type::cql3_type_name() const {
     return _cql3_type_name;
 }
 
+sstring abstract_type::cql3_type_name_without_frozen() const {
+    return cql3_type_name_impl(*this);
+}
+
 void write_collection_value(bytes::iterator& out, data_type type, const data_value& value) {
     if (value.is_null()) {
         auto val_len = -1;

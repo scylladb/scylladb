@@ -11,6 +11,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
+#include "types/map.hh"
+#include "types/set.hh"
 #include "types/user.hh"
 #include "types/list.hh"
 #include "test/lib/exception_utils.hh"
@@ -638,5 +640,34 @@ SEASTAR_TEST_CASE(test_user_type_quoted) {
         e.execute_cql("CREATE TABLE cf2 (pk blob, pn frozen<\"PHone\">, PRIMARY KEY (pk))").get();
         e.execute_cql("CREATE TABLE cf3 (pk blob, pn frozen<list<\"PHone\">>, PRIMARY KEY (pk))").get();
         // Pass if the above CREATE TABLE completes without an exception.
+    });
+}
+
+SEASTAR_TEST_CASE(test_cql3_name_without_frozen) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const sstring type_name = "ut1";
+        const sstring frozen_type_name = seastar::format("frozen<{}>", type_name);
+
+        const auto type_ptr = user_type_impl::get_instance("ks", to_bytes(type_name),
+                {to_bytes("my_int")}, {int32_type}, false);
+        BOOST_REQUIRE(type_ptr->cql3_type_name_without_frozen() == type_name);
+
+        const auto wrapped_type_ptr = user_type_impl::get_instance("ks", to_bytes("wrapped_type"),
+                {to_bytes("field_name")}, {type_ptr->freeze()}, false);
+        const auto& field_type = wrapped_type_ptr->field_types()[0];
+        BOOST_REQUIRE(field_type->cql3_type_name() == frozen_type_name);
+        BOOST_REQUIRE(field_type->cql3_type_name_without_frozen() == type_name);
+
+        const sstring set_type_name = seastar::format("set<{}>", frozen_type_name);
+        const auto set_type_ptr = set_type_impl::get_instance(type_ptr->freeze(), false);
+        BOOST_REQUIRE(set_type_ptr->cql3_type_name_without_frozen() == set_type_name);
+
+        const sstring map_type_name = seastar::format("map<int, {}>", frozen_type_name);
+        const auto map_type_ptr = map_type_impl::get_instance(int32_type, type_ptr->freeze(), false);
+        BOOST_REQUIRE(map_type_ptr->cql3_type_name_without_frozen() == map_type_name);
+
+        const sstring list_type_name = seastar::format("list<{}>", frozen_type_name);
+        const auto list_type_ptr = list_type_impl::get_instance(type_ptr->freeze(), false);
+        BOOST_REQUIRE(list_type_ptr->cql3_type_name_without_frozen() == list_type_name);
     });
 }
