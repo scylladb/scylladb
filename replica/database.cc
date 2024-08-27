@@ -2376,13 +2376,11 @@ future<> database::flush_all_tables() {
 }
 
 future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
-    db_clock::time_point min_all_tables_flushed_at;
-    co_await sharded_db.map_reduce0([&] (const database& db) {
+    return sharded_db.map_reduce0([&] (const database& db) {
         return db._all_tables_flushed_at;
     }, db_clock::now(), [] (db_clock::time_point l, db_clock::time_point r) {
         return std::min(l, r);
     });
-    co_return min_all_tables_flushed_at;
 }
 
 future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
