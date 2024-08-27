@@ -115,7 +115,7 @@ server::~server()
 
 future<> server::stop() {
     co_await shutdown();
-    co_await std::move(_all_connections_stopped);
+    co_await std::exchange(_all_connections_stopped, make_ready_future<>());
 }
 
 future<> server::shutdown() {
