@@ -372,7 +372,8 @@ public:
         for (size_t i = 0; i < _current_histogram.size(); i++) {
             total_diff += _current_histogram[i] - _previous_histogram[i];
             while (pos < _summary.size() && total_diff >= _summary[pos]) {
-                _summary[pos] = _current_histogram.get_bucket_upper_limit(i);
+                _summary[pos] = (i + 1 < _current_histogram.size()) ? _current_histogram.get_bucket_upper_limit(i):
+                        _current_histogram.get_bucket_lower_limit(i);
                 pos++;
             }
             _previous_histogram[i] = _current_histogram[i];
