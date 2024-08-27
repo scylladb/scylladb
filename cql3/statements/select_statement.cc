@@ -283,31 +283,42 @@ select_statement::make_partition_slice(const query_options& options) const
         std::reverse(bounds.begin(), bounds.end());
         ++_stats.reverse_queries;
     }
+
+    const uint64_t per_partition_limit = get_inner_loop_limit(get_limit(options, _per_partition_limit),
+        _selection->is_aggregate());
     return query::partition_slice(std::move(bounds),
-        std::move(static_columns), std::move(regular_columns), _opts, nullptr, get_per_partition_limit(options));
+        std::move(static_columns), std::move(regular_columns), _opts, nullptr, per_partition_limit);
 }
 
-uint64_t select_statement::do_get_limit(const query_options& options,
-                                        const std::optional<expr::expression>& limit,
-                                        const expr::unset_bind_variable_guard& limit_unset_guard,
-                                        uint64_t default_limit) const {
-    if (!limit.has_value() || limit_unset_guard.is_unset(options) || _selection->is_aggregate()) {
-        return default_limit;
-    }
-
-    auto val = expr::evaluate(*limit, options);
-    if (val.is_null()) {
-        throw exceptions::invalid_request_exception("Invalid null value of limit");
+select_statement::get_limit_result select_statement::get_limit(
+    const query_options& options, const std::optional<expr::expression>& limit) const
+{
+    if (!limit.has_value()) {
+        return bo::success(query::max_rows);
     }
     try {
+        auto val = expr::evaluate(*limit, options);
+        if (val.is_null()) {
+            return bo::failure(exceptions::invalid_request_exception("Invalid null value of limit"));
+        }
         auto l = val.view().validate_and_deserialize<int32_t>(*int32_type);
         if (l <= 0) {
-            throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
+            return bo::failure(exceptions::invalid_request_exception("LIMIT must be strictly positive"));
         }
-        return l;
+        return bo::success(l);
     } catch (const marshal_exception& e) {
-        throw exceptions::invalid_request_exception("Invalid limit value");
+        return bo::failure(exceptions::invalid_request_exception("Invalid limit value"));
+    } catch (const exceptions::invalid_request_exception& e) {
+        return bo::failure(e);
     }
+}
+
+uint64_t select_statement::get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate)
+{
+    if (!limit.has_value() || is_aggregate) {
+        return query::max_rows;
+    }
+    return limit.value();
 }
 
 bool select_statement::needs_post_query_ordering() const {
@@ -358,7 +369,8 @@ select_statement::do_execute(query_processor& qp,
 
     validate_for_read(cl);
 
-    uint64_t limit = get_limit(options);
+    const auto parsed_limit = get_limit(options, _limit);
+    const uint64_t inner_loop_limit = get_inner_loop_limit(parsed_limit, _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
@@ -380,7 +392,7 @@ select_statement::do_execute(query_processor& qp,
             std::move(slice),
             max_result_size,
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(limit),
+            query::row_limit(inner_loop_limit),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
@@ -393,14 +405,13 @@ select_statement::do_execute(query_processor& qp,
 
     _stats.unpaged_select_queries(_ks_sel) += page_size <= 0;
 
-    // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
-    // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
-    // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
+    // An aggregation query may not be paged for the user, but we always page it internally to avoid OOM.
+    // If the user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Also note: all GROUP BY queries are considered aggregation.
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = internal_paging_size;
+        page_size = page_size <= 0 ? internal_paging_size : std::min(page_size, internal_paging_size);
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
@@ -438,7 +449,9 @@ select_statement::do_execute(query_processor& qp,
                     *command, key_ranges))) {
         f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);
     } else {
-        f = execute_without_checking_exception_message_aggregate_or_paged(qp, command, std::move(key_ranges), state, options, now, page_size, aggregate, nonpaged_filtering);
+        f = execute_without_checking_exception_message_aggregate_or_paged(qp, command,
+            std::move(key_ranges), state, options, now, page_size, aggregate,
+            nonpaged_filtering, parsed_limit.has_value() ? parsed_limit.value() : query::max_rows);
     }
 
     if (!tablet_info.has_value()) {
@@ -454,7 +467,8 @@ select_statement::do_execute(query_processor& qp,
 future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> command, dht::partition_range_vector&& key_ranges, service::query_state& state,
-        const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering) const {
+        const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering,
+        uint64_t limit) const {
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
@@ -462,8 +476,11 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
     if (aggregate || nonpaged_filtering) {
-        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices);
-        coordinator_result<void> result_void = co_await utils::result_do_until([&p] {return p->is_exhausted();},
+        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
+        coordinator_result<void> result_void = co_await utils::result_do_until(
+                [&p, &builder, limit] {
+                    return p->is_exhausted() || (limit < builder.result_set_size());
+                },
                 [&p, &builder, page_size, now, timeout] {
                     return p->fetch_page_result(builder, page_size, now, timeout);
                 }
@@ -586,7 +603,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
             std::move(slice),
             qp.proxy().get_max_result_size(slice),
             query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(get_limit(options)),
+            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())),
             query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
@@ -1368,7 +1385,8 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    return read_posting_list(qp, options, get_limit(options), state, now, timeout, false).then(utils::result_wrap(
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
+    return read_posting_list(qp, options, limit, state, now, timeout, false).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
@@ -1417,7 +1435,8 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
     using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    return read_posting_list(qp, options, get_limit(options), state, now, timeout, true).then(utils::result_wrap(
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
+    return read_posting_list(qp, options, limit, state, now, timeout, true).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
         auto rs = cql3::untyped_result_set(rows);
@@ -1704,7 +1723,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     auto cl = options.get_consistency();
 
-    uint64_t limit = get_limit(options);
+    const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     auto now = gc_clock::now();
 
     _stats.filtered_reads += _restrictions_need_filtering;
