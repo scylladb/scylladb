@@ -9,6 +9,7 @@
 #pragma once
 
 #include "db/view/view_update_backlog.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/cacheline.hh>
 #include <seastar/core/future.hh>
@@ -48,6 +49,10 @@ public:
             , _interval(interval)
             , _last_update(clock::now() - _interval)
             , _max(update_backlog::no_backlog()) {
+        if (utils::get_local_injector().enter("update_backlog_immediately")) {
+            _interval = std::chrono::milliseconds(0);
+            _last_update = clock::now();
+        }
     }
 
     update_backlog fetch();
