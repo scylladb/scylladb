@@ -1802,6 +1802,8 @@ public:
     // Note: force_new_active_segment in the commitlog, so that
     // flushing all tables will allow reclaiming of all commitlog segments
     future<> flush_all_tables();
+    // a wrapper around flush_all_tables, allowing the caller to express intent more clearly
+    future<> flush_commitlog() { return flush_all_tables(); }
 
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 

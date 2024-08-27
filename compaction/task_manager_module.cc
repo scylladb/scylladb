@@ -329,8 +329,8 @@ tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
     return tasks::is_abortable{!_parent_id};
 }
 
-static future<bool> maybe_flush_all_tables(sharded<replica::database>& db, bool force_flush) {
-    // flush all tables either if
+static future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool force_flush) {
+    // flush commitlog if
     // (a) force_flush == true (or)
     // (b) flush_all_tables_before_major > 0s and the configured seconds have elapsed since last all tables flush
     if (!force_flush) {
@@ -346,7 +346,7 @@ static future<bool> maybe_flush_all_tables(sharded<replica::database>& db, bool 
     }
 
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-        co_await db.flush_all_tables();
+        co_await db.flush_commitlog();
     });
     co_return true;
 }
@@ -354,7 +354,7 @@ static future<bool> maybe_flush_all_tables(sharded<replica::database>& db, bool 
 future<> global_major_compaction_task_impl::run() {
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db, false);
+        flushed_all_tables = co_await maybe_flush_commitlog(_db, false);
     }
 
     std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
@@ -387,7 +387,7 @@ future<> major_keyspace_compaction_task_impl::run() {
 
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_all_tables(_db, false);
+        flushed_all_tables = co_await maybe_flush_commitlog(_db, false);
     }
 
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
