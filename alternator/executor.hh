@@ -262,4 +262,9 @@ public:
 // add more than a couple of levels in its own output construction.
 bool is_big(const rjson::value& val, int big_size = 100'000);
 
+// Check CQL's Role-Based Access Control (RBAC) permission (MODIFY,
+// SELECT, DROP, etc.) on the given table. When permission is denied an
+// appropriate user-readable api_error::access_denied is thrown.
+future<> verify_permission(const service::client_state&, const schema_ptr&, auth::permission);
+
 }
