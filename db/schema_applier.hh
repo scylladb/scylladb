@@ -45,6 +45,13 @@ struct schema_persisted_state {
     schema_tables::schema_result scylla_aggregates;
 };
 
+// groups keyspaces based on what is happening to them during schema change
+struct affected_keyspaces {
+    std::set<sstring> created;
+    std::set<sstring> altered;
+    std::set<sstring> dropped;
+};
+
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
@@ -61,6 +68,8 @@ class schema_applier {
 
     schema_persisted_state _before;
     schema_persisted_state _after;
+
+    affected_keyspaces _affected_keyspaces;
 
     future<schema_persisted_state> get_schema_persisted_state();
 public:
