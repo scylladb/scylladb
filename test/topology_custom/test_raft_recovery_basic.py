@@ -21,7 +21,9 @@ from test.topology.util import reconnect_driver, enter_recovery_state, \
 async def test_raft_recovery_basic(request, manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True}
-    servers = [await manager.server_add(config=cfg) for _ in range(3)]
+    cmd = ['--logger-log-level', 'raft=trace']
+
+    servers = [await manager.server_add(config=cfg, cmdline=cmd) for _ in range(3)]
     cql = manager.cql
     assert(cql)
 
@@ -61,4 +63,4 @@ async def test_raft_recovery_basic(request, manager: ManagerClient):
     assert(table.full_name in rs[0].description)
 
     logging.info("Booting new node")
-    await manager.server_add(config=cfg)
+    await manager.server_add(config=cfg, cmdline=cmd)
