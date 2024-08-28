@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture
 def raft_op_timeout(mode):
-    return 5000 if mode == 'debug' else 1000
+    return 10000 if mode == 'debug' else 1000
 
 
 @pytest.mark.asyncio
