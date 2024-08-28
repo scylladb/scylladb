@@ -10,6 +10,8 @@
 
 #include <boost/test/unit_test.hpp>
 #include "utils/top_k.hh"
+#include "test/lib/test_utils.hh"
+#include <fmt/ranges.h>
 #include <vector>
 #include <algorithm>
 

@@ -405,6 +405,20 @@ future<flat_mutation_reader_v2> make_partition_mutation_dump_reader(
         tracing::trace_state_ptr ts,
         db::timeout_clock::time_point timeout) {
     const auto& tbl = db.local().find_column_family(underlying_schema);
+
+    // We can get a request for a token we don't own.
+    // Just return empty reader in this case, otherwise we will hit
+    // std::terminate because the replica side does not handle requests for
+    // un-owned tokens.
+    {
+        auto erm = tbl.get_effective_replication_map();
+        auto& topo = erm->get_topology();
+        const auto endpoints = erm->get_endpoints_for_reading(dk.token());
+        if (std::ranges::find(endpoints, topo.this_node()->endpoint()) == endpoints.end()) {
+            co_return make_empty_flat_reader_v2(output_schema, std::move(permit));
+        }
+    }
+
     const auto shard = tbl.shard_for_reads(dk.token());
     if (shard == this_shard_id()) {
         co_return make_flat_mutation_reader_v2<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),
@@ -561,6 +575,7 @@ schema_ptr generate_output_schema_from_underlying_schema(schema_ptr underlying_s
 
 future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
         sharded<database>& db,
+        locator::effective_replication_map_ptr erm_keepalive,
         schema_ptr output_schema,
         schema_ptr underlying_schema,
         const dht::partition_range_vector& prs,

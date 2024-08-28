@@ -8,10 +8,13 @@
 
 #include "test/lib/scylla_test_case.hh"
 
+#include <fmt/ranges.h>
+
 #include "transport/request.hh"
 #include "transport/response.hh"
 
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 
 namespace cql3 {
 

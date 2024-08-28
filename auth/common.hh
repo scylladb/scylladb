@@ -84,7 +84,7 @@ future<> create_legacy_metadata_table_if_missing(
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
 // Use this function when need to perform read before write on a single guard or if
 // you have more than one mutation and potentially exceed single command size limit.
-using start_operation_func_t = std::function<future<::service::group0_guard>(abort_source*)>;
+using start_operation_func_t = std::function<future<::service::group0_guard>(abort_source&)>;
 using mutations_generator = coroutine::experimental::generator<mutation>;
 future<> announce_mutations_with_batching(
         ::service::raft_group0_client& group0_client,
@@ -93,7 +93,7 @@ future<> announce_mutations_with_batching(
         // function here
         start_operation_func_t start_operation_func,
         std::function<mutations_generator(api::timestamp_type& t)> gen,
-        seastar::abort_source* as,
+        seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout);
 
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
@@ -102,7 +102,7 @@ future<> announce_mutations(
         ::service::raft_group0_client& group0_client,
         const sstring query_string,
         std::vector<data_value_or_unset> values,
-        seastar::abort_source* as,
+        seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout);
 
 }

@@ -519,6 +519,73 @@ SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
     });
 }
 
+// Tests the intended usage of hold_reserve.
+//
+// Sets up a reserve, exhausts memory, opens the reserve,
+// checks that this allows us to do multiple additional allocations
+// without failing.
+SEASTAR_THREAD_TEST_CASE(test_hold_reserve) {
+    logalloc::region region;
+    logalloc::allocating_section as;
+
+    // We will fill LSA with an intrusive list of small entries.
+    // We make it intrusive to avoid any containers which do std allocations,
+    // since it could make the test imprecise.
+    struct entry {
+        using link = boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+        link _link;
+        // We are going to fill the entire memory with this.
+        // Padding makes the entries bigger to speed up the test.
+        std::array<char, 8192> _padding;
+    };
+    using list = boost::intrusive::list<entry,
+        boost::intrusive::member_hook<entry, entry::link, &entry::_link>,
+        boost::intrusive::constant_time_size<false>>;
+
+    as.with_reserve(region, [&] {
+        with_allocator(region.allocator(), [&] {
+            assert(sizeof(entry) + 128 < current_allocator().preferred_max_contiguous_allocation());
+            logalloc::reclaim_lock rl(region);
+
+            // Reserve a segment.
+            auto guard = std::make_optional<hold_reserve>(128*1024);
+
+            // Fill the entire available memory with LSA objects.
+            list entries;
+            auto clean_up = defer([&entries] {
+                entries.clear_and_dispose([] (entry *e) {current_allocator().destroy(e);});
+            });
+            auto alloc_entry = [] () {
+                return current_allocator().construct<entry>();
+            };
+            try {
+                while (true) {
+                    entries.push_back(*alloc_entry());
+                }
+            } catch (const std::bad_alloc&) {
+                // expected
+            }
+
+            // Sanity check. We should be OOM at this point.
+            BOOST_REQUIRE_THROW(hold_reserve(128*1024), std::bad_alloc);
+            BOOST_REQUIRE_THROW(alloc_entry(), std::bad_alloc);
+
+            // Release the reserve.
+            guard.reset();
+
+            // Sanity check.
+            BOOST_REQUIRE_NO_THROW(hold_reserve(128*1024));
+            BOOST_REQUIRE_NO_THROW(hold_reserve(128*1024));
+            BOOST_REQUIRE_NO_THROW(hold_reserve(128*1024));
+
+            // Freeing up a segment should be enough to allocate multiple small entries;
+            for (int i = 0; i < 10; ++i) {
+                entries.push_back(*alloc_entry());
+            }
+        });
+    });
+}
+
 // No point in testing contiguous memory allocation in debug mode
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocations) {

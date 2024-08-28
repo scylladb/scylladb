@@ -663,7 +663,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
     co_await announce_mutations_with_batching(g0,
             start_operation_func,
             std::move(gen),
-            &as,
+            as,
             std::nullopt);
 }
 

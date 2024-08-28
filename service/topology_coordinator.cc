@@ -294,7 +294,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
      };
 
     future<group0_guard> start_operation() {
-        auto guard = co_await _group0.client().start_operation(&_as);
+        rtlogger.debug("obtaining group 0 guard...");
+        auto guard = co_await _group0.client().start_operation(_as);
+        rtlogger.debug("guard taken, prev_state_id: {}, new_state_id: {}, coordinator term: {}, current Raft term: {}",
+                       guard.observed_group0_state_id(), guard.new_group0_state_id(), _term, _raft.get_current_term());
 
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
@@ -337,7 +340,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.trace("update_topology_state mutations: {}", updates);
             topology_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         } catch (group0_concurrent_modification&) {
             rtlogger.info("race while changing state: {}. Retrying", reason);
             throw;
@@ -763,8 +766,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.info("keyspace_rf_change requested");
             while (true) {
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
-                auto& ks = _db.find_keyspace(ks_name);
-                auto tmptr = get_token_metadata_ptr();
                 std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
                 cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
@@ -773,35 +774,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 utils::UUID req_uuid = *_topo_sm._topology.global_request_id;
                 std::vector<canonical_mutation> updates;
                 sstring error;
-                size_t unimportant_init_tablet_count = 2; // must be a power of 2
-                locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
+                if (_db.has_keyspace(ks_name)) {
+                    auto& ks = _db.find_keyspace(ks_name);
+                    auto tmptr = get_token_metadata_ptr();
+                    size_t unimportant_init_tablet_count = 2; // must be a power of 2
+                    locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
-                for (const auto& table : ks.metadata()->tables()) {
-                    try {
-                        locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table->id());
-                        locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
-                        auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table, tmptr, old_tablets);
-                    } catch (const std::exception& e) {
-                        error = e.what();
-                        rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
-                                       "desired new ks opts: {}", error, new_ks_props.get_replication_options());
-                        updates.clear(); // remove all tablets mutations ...
-                        break;           // ... and only create mutations deleting the global req
+                    for (const auto& table : ks.metadata()->tables()) {
+                        try {
+                            locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table->id());
+                            locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
+                            auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+                            new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table, tmptr, old_tablets);
+                        } catch (const std::exception& e) {
+                            error = e.what();
+                            rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
+                                           "desired new ks opts: {}", error, new_ks_props.get_replication_options());
+                            updates.clear(); // remove all tablets mutations ...
+                            break;           // ... and only create mutations deleting the global req
+                        }
+
+                        replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table->id());
+                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                            auto last_token = new_tablet_map.get_last_token(tablet_id);
+                            updates.emplace_back(co_await make_canonical_mutation_gently(
+                                    replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
+                                            .set_new_replicas(last_token, tablet_info.replicas)
+                                            .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+                                            .build()
+                            ));
+                            co_await coroutine::maybe_yield();
+                        });
                     }
-
-                    replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table->id());
-                    co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
-                        auto last_token = new_tablet_map.get_last_token(tablet_id);
-                        updates.emplace_back(co_await make_canonical_mutation_gently(
-                                replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
-                                        .set_new_replicas(last_token, tablet_info.replicas)
-                                        .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-                                        .set_transition(last_token, locator::tablet_transition_kind::rebuild)
-                                        .build()
-                        ));
-                        co_await coroutine::maybe_yield();
-                    });
+                } else {
+                    error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
                 }
 
                 updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
@@ -829,7 +836,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 mixed_change change{std::move(updates)};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
                 try {
-                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), &_as);
+                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
                     break;
                 } catch (group0_concurrent_modification&) {
                     rtlogger.info("handle_global_request(): concurrent modification, retrying");
@@ -2338,7 +2345,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder.with_node(id).set("cleanup_status", cleanup_status::needed);
                 muts.emplace_back(builder.build());
-                rtlogger.trace("mark node {} as needed cleanup", id);
+                rtlogger.debug("mark node {} as needed for cleanup", id);
             }
         }
         return muts;
@@ -2359,7 +2366,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 topology_mutation_builder builder(guard.write_timestamp());
                 builder.with_node(id).set("cleanup_status", cleanup_status::running);
                 muts.emplace_back(builder.build());
-                rtlogger.trace("mark node {} as cleanup running", id);
+                rtlogger.debug("mark node {} as cleanup running", id);
             }
         }
         if (!muts.empty()) {
@@ -2604,7 +2611,7 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     if (auth_version < db::system_keyspace::auth_version_t::v2) {
         rtlogger.info("migrating system_auth keyspace data");
         co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
-                [this] (abort_source*) { return start_operation();}, _as);
+                [this] (abort_source&) { return start_operation();}, _as);
     }
 
     auto tmptr = get_token_metadata_ptr();
@@ -2894,6 +2901,12 @@ future<> topology_coordinator::run() {
                 co_await await_event();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
+            co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", [] (auto& handler) -> future<> {
+                rtlogger.info("wait-after-topology-coordinator-gets-event injection hit");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{30});
+                rtlogger.info("wait-after-topology-coordinator-gets-event injection done");
+            });
+
         } catch (...) {
             sleep = handle_topology_coordinator_error(std::current_exception());
         }

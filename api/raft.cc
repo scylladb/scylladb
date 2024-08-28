@@ -61,17 +61,31 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         co_return json_void{};
     });
     r::get_leader_host.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
-        return smp::submit_to(0, [&] {
-            auto& srv = std::invoke([&] () -> raft::server& {
-                if (req->query_parameters.contains("group_id")) {
-                    raft::group_id id{utils::UUID{req->get_query_param("group_id")}};
-                    return raft_gr.local().get_server(id);
-                } else {
-                    return raft_gr.local().group0();
-                }
+        if (!req->query_parameters.contains("group_id")) {
+            const auto leader_id = co_await raft_gr.invoke_on(0, [] (service::raft_group_registry& raft_gr) {
+                auto& srv = raft_gr.group0();
+                return srv.current_leader();
             });
-            return json_return_type(srv.current_leader().to_sstring());
+            co_return json_return_type{leader_id.to_sstring()};
+        }
+
+        const raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
+
+        std::atomic<bool> found_srv{false};
+        std::atomic<raft::server_id> leader_id = raft::server_id::create_null_id();
+        co_await raft_gr.invoke_on_all([gid, &found_srv, &leader_id] (service::raft_group_registry& raft_gr) {
+            if (raft_gr.find_server(gid)) {
+                found_srv = true;
+                leader_id = raft_gr.get_server(gid).current_leader();
+            }
+            return make_ready_future<>();
         });
+
+        if (!found_srv) {
+            throw bad_param_exception{fmt::format("Server for group ID {} not found", gid)};
+        }
+
+        co_return json_return_type(leader_id.load().to_sstring());
     });
 }
 

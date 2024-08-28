@@ -278,7 +278,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms:
         auto it = _ep_managers.find(*hid);
         if (it != _ep_managers.end()) {
             const hint_endpoint_manager& ep_man = it->second;
-            rps[addr] = ep_man.last_written_replay_position();
+            rps[*hid] = ep_man.last_written_replay_position();
         }
     }
 
@@ -316,10 +316,14 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     hid_rps.reserve(rps.size());
 
     for (const auto& [addr, rp] : rps) {
-        const auto maybe_hid = tmptr->get_host_id_if_known(addr);
-        // Ignore the IPs we cannot map.
-        if (maybe_hid) [[likely]] {
-            hid_rps.emplace(*maybe_hid, rp);
+        if (std::holds_alternative<gms::inet_address>(addr)) {
+            const auto maybe_hid = tmptr->get_host_id_if_known(std::get<gms::inet_address>(addr));
+            // Ignore the IPs we cannot map.
+            if (maybe_hid) [[likely]] {
+                hid_rps.emplace(*maybe_hid, rp);
+            }
+        } else {
+            hid_rps.emplace(std::get<locator::host_id>(addr), rp);
         }
     }
 
@@ -577,6 +581,8 @@ future<> manager::change_host_filter(host_filter filter) {
             });
 
             if (!maybe_host_id_and_ip) {
+                manager_logger.warn("Encountered a hint directory of invalid name while changing the host filter: {}. "
+                        "Hints stored in it won't be replayed.", de.name);
                 co_return;
             }
 
@@ -756,6 +762,8 @@ future<> manager::initialize_endpoint_managers() {
 
         // The directory is invalid, so there's nothing more to do.
         if (!maybe_host_id_or_ep) {
+            manager_logger.warn("Encountered a hint directory of invalid name while initializing endpoint managers: {}. "
+                    "Hints stored in it won't be replayed", de.name);
             co_return;
         }
 

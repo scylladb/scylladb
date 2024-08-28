@@ -44,6 +44,14 @@ namespace sstables {
     extern bool use_binary_search_in_promoted_index;
 } // namespace sstables
 
+namespace std {
+// required by boost::lexical_cast<std::string>(vector<string>), which is in turn used
+// by boost::program_option for printing out the default value of an option
+std::ostream& operator<<(std::ostream& os, const std::vector<string>& v) {
+    return os << fmt::format("{}", v);
+}
+}
+
 reactor::io_stats s;
 
 static bool errors_found = false;
@@ -1736,6 +1744,14 @@ replica::table& find_table(replica::database& db, dataset& ds) {
     return db.find_column_family("ks", ds.table_name());
 }
 
+static std::vector<replica::memtable*> active_memtables(replica::table& t) {
+    std::vector<replica::memtable*> active_memtables;
+    t.for_each_active_memtable([&] (replica::memtable& mt) {
+        active_memtables.push_back(&mt);
+    });
+    return active_memtables;
+}
+
 static
 void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const table_config& cfg, size_t flush_threshold) {
     drop_keyspace_if_exists(env, "ks");
@@ -1767,7 +1783,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
                     ++fragments;
-                    replica::memtable& active_memtable = *cf.active_memtables().front();
+                    replica::memtable& active_memtable = *active_memtables(cf).front();
                     active_memtable.apply(*mopt);
                     if (active_memtable.region().occupancy().used_space() > flush_threshold) {
                         metrics_snapshot before;
@@ -1965,8 +1981,8 @@ int scylla_fast_forward_main(int argc, char** argv) {
             logging::logger_registry().set_logger_level("sstable", seastar::log_level::trace);
         }
 
-        std::cout << "Data directory: " << db_cfg.data_file_directories() << "\n";
-        std::cout << "Output directory: " << output_dir << "\n";
+        fmt::print("Data directory: {}\n", db_cfg.data_file_directories());
+        fmt::print("Output directory: {}\n", output_dir);
 
         auto init = [&app] {
             auto conf_seed = app.configuration()["random-seed"];

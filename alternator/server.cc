@@ -211,7 +211,10 @@ protected:
         sstring local_dc = topology.get_datacenter();
         std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
         for (auto& ip : local_dc_nodes) {
-            if (_gossiper.is_alive(ip)) {
+            // Note that it's not enough for the node to be is_alive() - a
+            // node joining the cluster is also "alive" but not responsive to
+            // requests. We need the node to be in normal state. See #19694.
+            if (_gossiper.is_normal(ip)) {
                 rjson::push_back(results, rjson::from_string(fmt::to_string(ip)));
             }
         }

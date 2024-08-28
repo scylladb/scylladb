@@ -17,6 +17,8 @@
 #include "utils/preempt.hh"
 #include "utils/xx_hasher.hh"
 
+#include <fmt/ranges.h>
+
 #include <seastar/core/sstring.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
@@ -46,6 +48,8 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/log.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -595,7 +599,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
                 assert_that_scanner3.produces(mutations[i]);
             }
 
-            auto ms = cf.active_memtables(); // held by scanners
+            auto ms = active_memtables(cf); // held by scanners
 
             auto flushed = cf.flush();
 

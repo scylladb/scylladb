@@ -17,15 +17,9 @@ First, let's setup a Scylla cluster and create a CDC-enabled table.
 Scylla installation
 ^^^^^^^^^^^^^^^^^^^
 
-<<<<<<< HEAD
-For the purpose of this quickstart, we will configure a Scylla instance using Docker. You can skip this 
-section if you have already installed Scylla. To learn more about installing Scylla in production
-environments, please refer to the :doc:`Install Scylla page </getting-started/install-scylla/index>`.
-=======
 For the purpose of this quickstart, we will configure a ScyllaDB instance using Docker. You can skip this 
 section if you have already installed ScyllaDB. To learn more about installing and configuring ScyllaDB in production
 environments, please refer to the :doc:`Getting Started guide </getting-started/index>`.
->>>>>>> f90867c740 (doc: replace a link on the CDC+Kafka page)
 
 #. Using `Docker <https://hub.docker.com/r/scylladb/scylla/>`_, follow the instructions to launch Scylla.
 #. Start the Docker container, replacing the ``--name`` and ``--host name`` parameters with your own information. For example:

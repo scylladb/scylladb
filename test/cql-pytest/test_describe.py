@@ -447,6 +447,90 @@ def test_desc_index(cql, test_keyspace):
         
         assert f"CREATE INDEX named_index ON {tbl}{maybe_space}(c)" in c_desc
 
+def test_desc_index_on_collections(cql, test_keyspace):
+    # In this test, all assertions are in form of
+    # `assert create_stmt in desc or create_stmt.replace("(", " (", 1) in desc`
+    # This is because Scylla and Cassandra have slightly different (whitespace-wise)
+    # output of `DESC INDEX`. 
+    #   Scylla:     `CREATE INDEX ON table_name(column_name)`
+    #   Cassandra:  `CREATE INDEX ON table_name (column_name)`
+    #
+    # This helper function asserts index create statement is present in the description
+    # and it matches both Scylla and Cassandra description output style.
+    def assert_desc_index(create_stmt, description):
+        cassandra_format_create = create_stmt.replace("(", " (", 1)
+        assert create_stmt in description or cassandra_format_create in description
+
+    
+    with new_test_table(cql, test_keyspace, "a int primary key, b int, c frozen<set<int>>, d map<int, int>, e list<int>, f set<int>, g list<int>, h set<int>, akeysb set<int>") as tbl:
+        indexes = [
+            ("idx_b",           f"CREATE INDEX idx_b ON {tbl}(b)"),
+            ("idx_c",           f"CREATE INDEX idx_c ON {tbl}(full(c))"),
+            ("idx_d_entries",   f"CREATE INDEX idx_d_entries ON {tbl}(entries(d))"),
+            ("idx_d_keys",      f"CREATE INDEX idx_d_keys ON {tbl}(keys(d))"),
+            ("idx_d_values",    f"CREATE INDEX idx_d_values ON {tbl}(values(d))"),
+            ("idx_e",           f"CREATE INDEX idx_e ON {tbl}(values(e))"),
+            ("idx_f",           f"CREATE INDEX idx_f ON {tbl}(values(f))"),
+            ("idx_akeysb",      f"CREATE INDEX idx_akeysb ON {tbl}(values(akeysb))"),
+        ]
+
+        for name, create_stmt in indexes:
+            cql.execute(create_stmt)
+            desc = cql.execute(f"DESC INDEX {test_keyspace}.{name}").one().create_statement
+            assert_desc_index(create_stmt, desc)
+        
+        # When an index is created on list column with `CREATE INDEX ON tbl(list_column)`,
+        # its target is `values(list_column)` and describe will print create statement with that
+        # values() function added.
+        cql.execute(f"CREATE INDEX idx_g ON {tbl}(g)")
+        idx_g_desc = cql.execute(f"DESC INDEX {test_keyspace}.idx_g").one().create_statement
+        idx_g_create_stmt = f"CREATE INDEX idx_g ON {tbl}(values(g))"
+        assert_desc_index(idx_g_create_stmt, idx_g_desc)
+
+        # The same situation but with set
+        cql.execute(f"CREATE INDEX idx_h ON {tbl}(h)")
+        idx_h_desc = cql.execute(f"DESC INDEX {test_keyspace}.idx_h").one().create_statement
+        idx_h_create_stmt = f"CREATE INDEX idx_h ON {tbl}(values(h))"
+        assert_desc_index(idx_h_create_stmt, idx_h_desc)
+
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DESC INDEX {test_keyspace}.nosuchindex")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DESC INDEX {tbl}")
+
+def test_desc_index_column_quoting(cql, test_keyspace):
+    # In this test, all assertions are in form of
+    # `assert create_stmt in desc or create_stmt.replace("(", " (", 1)`
+    # This is because Scylla and Cassandra have slightly different (whitespace-wise)
+    # output of `DESC INDEX`. 
+    #   Scylla:     `CREATE INDEX ON table_name(column_name)`
+    #   Cassandra:  `CREATE INDEX ON table_name (column_name)`
+
+    quoted_names = ['"select"', '"hEllo"', '"x y"', '"hi""hello""yo"', '"""hi"""']
+    with new_test_table(cql, test_keyspace, "a int primary key, \"keys(m)\" map<int, int>, \"values(m)\" set<int>, \"entries(m)\" map<int, int>, " + ', '.join([name + " int" for name in quoted_names])) as tbl:
+        indexes = [
+            ("idx_1", f"CREATE INDEX idx_1 ON {tbl}(keys(\"keys(m)\"))"),
+            ("idx_2", f"CREATE INDEX idx_2 ON {tbl}(values(\"values(m)\"))"),
+            ("idx_3", f"CREATE INDEX idx_3 ON {tbl}(entries(\"entries(m)\"))"),
+        ] + [(f"idx_{n}", f"CREATE INDEX idx_{n} ON {tbl}({name})") for n, name in enumerate(quoted_names, 4)]
+
+        for name, create_stmt in indexes:
+            cql.execute(create_stmt)
+            desc = cql.execute(f"DESC INDEX {test_keyspace}.{name}").one().create_statement
+            assert create_stmt in desc or create_stmt.replace("(", " (", 1)
+
+def test_desc_local_secondary_index(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int primary key, b int, c frozen<list<int>>") as tbl:
+        indexes = [
+            ("idx_1", f"CREATE INDEX idx_1 ON {tbl}((a), b)"),
+            ("idx_2", f"CREATE INDEX idx_2 ON {tbl}((a), full(c))"),
+        ]
+        
+        for name, create_stmt in indexes:
+            cql.execute(create_stmt)
+            desc = cql.execute(f"DESC INDEX {test_keyspace}.{name}").one().create_statement
+            assert create_stmt in desc
+
 # Test that 'DESC TABLE' contains description of indexes
 def test_index_desc_in_table_desc(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as tbl:

@@ -92,7 +92,7 @@ class raft_server_with_timeouts {
     run_with_timeout(Op&& op, const char* op_name, seastar::abort_source* as, std::optional<raft_timeout> timeout);
 public:
     raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry);
-    future<> add_entry(raft::command command, raft::wait_type type, seastar::abort_source* as, std::optional<raft_timeout> timeout);
+    future<> add_entry(raft::command command, raft::wait_type type, seastar::abort_source& as, std::optional<raft_timeout> timeout);
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<> read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout);
 };

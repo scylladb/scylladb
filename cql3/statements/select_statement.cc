@@ -1683,6 +1683,7 @@ schema_ptr mutation_fragments_select_statement::generate_output_schema(schema_pt
 
 future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
 mutation_fragments_select_statement::do_query(
+        locator::effective_replication_map_ptr erm_keepalive,
         locator::host_id this_node,
         service::storage_proxy& sp,
         schema_ptr schema,
@@ -1690,7 +1691,7 @@ mutation_fragments_select_statement::do_query(
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
         service::storage_proxy_coordinator_query_options optional_params) const {
-    auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
+    auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), std::move(erm_keepalive), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
     service::replicas_per_token_range last_replicas;
     if (this_node) {
         last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node});
@@ -1762,7 +1763,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
-        return do_query({}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
+        return do_query(erm_keepalive, {}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
                 {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
         .then(wrap_result_to_error_message([this, erm_keepalive, now, slice = command->slice] (service::storage_proxy_coordinator_query_result&& qr) mutable {
             cql3::selection::result_set_builder builder(*_selection, now);
@@ -1801,8 +1802,8 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             std::move(key_ranges),
             _restrictions_need_filtering ? _restrictions : nullptr,
             [this, erm_keepalive, this_node] (service::storage_proxy& sp, schema_ptr schema, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges,
-                    db::consistency_level cl, service::storage_proxy_coordinator_query_options optional_params) {
-                return do_query(this_node, sp, std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
+                    db::consistency_level cl, service::storage_proxy_coordinator_query_options optional_params) mutable {
+                return do_query(std::move(erm_keepalive), this_node, sp, std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
             });
 
     if (_selection->is_trivial() && !_restrictions_need_filtering && !_per_partition_limit) {
