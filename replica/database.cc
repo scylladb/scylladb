@@ -2581,19 +2581,9 @@ const sstring& database::get_snitch_name() const {
     return _cfg.endpoint_snitch();
 }
 
-dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
-    auto my_address = get_token_metadata().get_topology().my_address();
-    return find_keyspace(ks).get_vnode_effective_replication_map()->get_ranges(my_address);
-}
-
-std::optional<dht::token_range_vector> database::maybe_get_keyspace_local_ranges(sstring ks) {
-    const auto& keyspace = find_keyspace(ks);
-    if (keyspace.get_replication_strategy().is_per_table()) {
-        // return nullopt if each tables have their own effective_replication_map
-        return std::nullopt;
-    }
-    auto my_address = get_token_metadata().get_topology().my_address();
-    return keyspace.get_vnode_effective_replication_map()->get_ranges(my_address);
+future<dht::token_range_vector> database::get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm) {
+    auto my_address = erm->get_topology().my_address();
+    co_return co_await erm->get_ranges(my_address);
 }
 
 /*!
