@@ -1468,8 +1468,7 @@ public:
             auto src_host = nodes_by_load.back();
             auto& src_node_info = nodes[src_host];
 
-            bool drain_skipped = src_node_info.shards_by_load.empty() && src_node_info.drained
-                    && !src_node_info.skipped_candidates.empty();
+            bool drain_skipped = src_node_info.shards_by_load.empty() && !src_node_info.skipped_candidates.empty();
 
             lblogger.debug("source node: {}, avg_load={:.2f}, skipped={}, drain_skipped={}", src_host,
                            src_node_info.avg_load, src_node_info.skipped_candidates.size(), drain_skipped);
@@ -1632,6 +1631,7 @@ public:
                 _stats.for_dc(dc).migrations_produced++;
                 plan.add(std::move(mig));
             } else {
+                lblogger.debug("Skipped migration: {}", mig);
                 // Shards are overloaded with streaming. Do not include the migration in the plan, but
                 // continue as if it was in the hope that we will find a migration which can be executed without
                 // violating the load. Next make_plan() invocation will notice that the migration was not executed.
