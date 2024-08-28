@@ -1096,10 +1096,13 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, sharded<se
                 break;
             }
             rtlogger.debug("cleanup flag cleared");
-        } catch (const seastar::abort_requested_exception &) {
+        } catch (const seastar::abort_requested_exception&) {
              rtlogger.info("cleanup fiber aborted");
              break;
         } catch (raft::request_aborted&) {
+             rtlogger.info("cleanup fiber aborted");
+             break;
+        } catch (const seastar::broken_condition_variable&) {
              rtlogger.info("cleanup fiber aborted");
              break;
         } catch (...) {
@@ -4600,6 +4603,8 @@ future<> storage_service::drain() {
 
 future<> storage_service::do_drain() {
     co_await stop_transport();
+
+    co_await wait_for_group0_stop();
 
     co_await tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown);
 
