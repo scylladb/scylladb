@@ -838,7 +838,7 @@ database::init_commitlog() {
     });
 }
 
-future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier) {
+future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
@@ -849,7 +849,6 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
         }
         return func(db);
     });
-    co_await sharded_db.invoke_on_all(notifier);
 }
 
 future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
@@ -872,9 +871,6 @@ future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
 future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm) {
     return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
         return db.update_keyspace(ksm);
-    }, [&] (replica::database& db) {
-        const auto& ks = db.find_keyspace(ksm.name());
-        return db.get_notifier().update_keyspace(ks.metadata());
     });
 }
 
@@ -886,8 +882,6 @@ future<> database::drop_keyspace_on_all_shards(sharded<database>& sharded_db, co
     return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
         db.drop_keyspace(name);
         return make_ready_future<>();
-    }, [&] (replica::database& db) {
-        return db.get_notifier().drop_keyspace(name);
     });
 }
 
@@ -1430,9 +1424,6 @@ future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, 
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
         co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
-    }, [&] (replica::database& db) -> future<> {
-        const auto& ks = db.find_keyspace(ks_metadata.name());
-        co_await db.get_notifier().create_keyspace(ks.metadata());
     });
 }
 
