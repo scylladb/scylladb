@@ -13,6 +13,7 @@
 
 #include <seastar/json/formatter.hh>
 
+#include "auth/permission.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"
@@ -823,12 +824,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    if (!co_await client_state.check_has_permission(auth::command_desc(
-            auth::permission::SELECT,
-            auth::make_data_resource(schema->ks_name(), schema->cf_name())))) {
-        co_return api_error::access_denied(format(
-            "SELECT permissions denied on {}.{} by RBAC", schema->ks_name(), schema->cf_name()));
-    }
+    co_await verify_permission(client_state, schema, auth::permission::SELECT);
 
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
     partition_key pk = iter.shard.id.to_partition_key(*schema);
