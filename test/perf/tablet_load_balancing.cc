@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <fmt/color.h>
 #include <bit>
 
 #include <seastar/core/distributed.hh>
@@ -17,8 +18,10 @@
 
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
+#include "service/raft/raft_address_map.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
+#include "service/topology_mutation.hh"
 #include "locator/load_sketch.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -38,24 +41,22 @@ using namespace service;
 
 static seastar::abort_source aborted;
 
-static const sstring dc = "dc1";
+static const sstring dc = "datacenter1";
 
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
+    c.db_config->enable_tablets(true);
+    c.initial_tablets = 1;
     return c;
 }
 
 static
-future<table_id> add_table(cql_test_env& e) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([id] (std::string_view ks_name) {
-        return *schema_builder(ks_name, id.to_sstring(), id)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
-    });
-    co_return id;
+future<table_id> add_table(cql_test_env& e, sstring ks_name) {
+    static int id = 1;
+    auto table_name = fmt::format("table{}", id++);
+    co_await e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name));
+    co_return e.local_db().find_schema(ks_name, table_name)->id();
 }
 
 static
@@ -183,6 +184,38 @@ struct cluster_balance {
     table_balance tables[nr_tables];
 };
 
+// Wrapper around a value with a formatter which colors it based on value thresholds.
+struct pretty_value {
+    double val;
+
+    const std::array<double, 5>& thresholds;
+
+    static constexpr std::array<fmt::terminal_color, 5> colors = {
+        fmt::terminal_color::bright_white,
+        fmt::terminal_color::bright_yellow,
+        fmt::terminal_color::yellow,
+        fmt::terminal_color::bright_red,
+        fmt::terminal_color::red,
+    };
+};
+
+template<>
+struct fmt::formatter<pretty_value> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const pretty_value& v, FormatContext& ctx) const {
+        auto i = std::upper_bound(v.thresholds.begin(), v.thresholds.end(), std::max(v.val, v.thresholds[0]));
+        auto col = v.colors[std::distance(v.thresholds.begin(), i) - 1];
+        return fmt::format_to(ctx.out(), fg(col), "{:.3f}", v.val);
+    }
+};
+
+struct overcommit_value : public pretty_value {
+    static constexpr std::array<double, 5> thresholds = {1.02, 1.1, 1.3, 1.7};
+    overcommit_value(double value) : pretty_value(value, thresholds) {}
+};
+
+template<> struct fmt::formatter<overcommit_value> : fmt::formatter<pretty_value> {};
+
 struct results {
     cluster_balance init;
     cluster_balance worst;
@@ -194,8 +227,10 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
-                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={} (best={:.2f}), node={}}}",
+                              overcommit_value(b.shard_overcommit),
+                              b.best_shard_overcommit,
+                              overcommit_value(b.node_overcommit));
     }
 };
 
@@ -221,7 +256,7 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     }
 };
 
-future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
+future<results> test_load_balancing_with_many_tables(params p, bool table_aware = true, bool global_rebalancing = false) {
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
@@ -241,30 +276,63 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             testlog.info("Added new node: {} ({})", hosts.back(), ips.back());
         };
 
-        auto add_host_to_topology = [&] (token_metadata& tm, int i) {
-            tm.update_host_id(hosts[i], ips[i]);
-            tm.update_topology(hosts[i], rack1, std::nullopt, shard_count);
-        };
-
         for (int i = 0; i < n_hosts; ++i) {
             add_host();
         }
 
         semaphore sem(1);
         auto stm = shared_token_metadata([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
-                locator::topology::config {
-                        .this_endpoint = ips[0],
-                        .this_host_id = hosts[0],
-                        .local_dc_rack = rack1
-                }
+            locator::topology::config {
+                .this_endpoint = ips[0],
+                .this_host_id = hosts[0],
+                .local_dc_rack = rack1
+            }
         });
 
-        auto bootstrap = [&] {
+        auto add_host_to_topology = [&] (int i) {
+            auto host_id = hosts[i];
+            auto ip = ips[i];
+
             stm.mutate_token_metadata([&] (token_metadata& tm) {
-                add_host();
-                add_host_to_topology(tm, hosts.size() - 1);
+                tm.update_host_id(host_id, ip);
+                tm.update_topology(host_id, rack1, std::nullopt, shard_count);
                 return make_ready_future<>();
             }).get();
+
+            e.get_raft_address_map().local().add_or_update_entry(raft::server_id(host_id.uuid()), ip);
+
+            // Need to create nodes in the database's topology because the load balancer
+            // invokes table's replication strategy. Normally, load balancer accepts arbitrary
+            // token_metadata_pr, so we can manufacture topology without going through group0.
+            // But we need it to create keyspaces with proper replication strategy,
+            // with the correct replication factor, which will fail if we don't have enough nodes
+            // at the time of schema change.
+            auto& client = e.get_raft_group0_client();
+            auto guard = client.start_operation(aborted).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            std::unordered_set<dht::token> tokens;
+            tokens.insert(dht::token(0));
+            builder.with_node(raft::server_id(host_id.uuid()))
+                    .set("datacenter", rack1.dc)
+                    .set("rack", rack1.rack)
+                    .set("node_state", node_state::normal)
+                    .set("shard_count", (uint32_t)shard_count)
+                    .set("cleanup_status", cleanup_status::clean)
+                    .set("release_version", version::release())
+                    .set("num_tokens", (uint32_t)1)
+                    .set("tokens_string", "0")
+                    .set("tokens", tokens)
+                    .set("supported_features", std::set<sstring>())
+                    .set("request_id", utils::UUID())
+                    .set("ignore_msb", (uint32_t)0)                    ;
+            topology_change change({builder.build()});
+            group0_command g0_cmd = client.prepare_command(std::move(change), guard, "adding node to topology");
+            client.add_entry(std::move(g0_cmd), std::move(guard), aborted).get();
+        };
+
+        auto bootstrap = [&] {
+            add_host();
+            add_host_to_topology(hosts.size() - 1);
             global_res.stats += rebalance_tablets(e.get_tablet_allocator().local(), stm);
         };
 
@@ -289,12 +357,9 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             ips.erase(ips.begin() + i);
         };
 
-        stm.mutate_token_metadata([&] (token_metadata& tm) {
-            for (int i = 0; i < n_hosts; ++i) {
-                add_host_to_topology(tm, i);
-            }
-            return make_ready_future<>();
-        }).get();
+        for (int i = 0; i < n_hosts; ++i) {
+            add_host_to_topology(i);
+        }
 
         auto allocate = [&] (schema_ptr s, int rf, std::optional<int> initial_tablets) {
             replication_strategy_config_options opts;
@@ -306,11 +371,21 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             }).get();
         };
 
-        auto id1 = add_table(e).get();
-        auto id2 = add_table(e).get();
-        schema_ptr s1 = e.local_db().find_schema(id1);
-        schema_ptr s2 = e.local_db().find_schema(id2);
+        sstring ks_name1 = "test_ks1";
+        e.execute_cql(format("create keyspace {} with replication = "
+                             "{{'class': 'NetworkTopologyStrategy', '{}': {}}} "
+                             "and tablets = {{'enabled': true}}", ks_name1, rack1.dc, p.rf1)).get();
+        testlog.info("top {}", e.local_db().get_shared_token_metadata().get()->get_topology().get_datacenter_endpoints());
+        auto id1 = add_table(e, ks_name1).get();
+        auto s1 = e.local_db().find_schema(id1);
         allocate(s1, p.rf1, p.tablets1);
+
+        sstring ks_name2 = "test_ks2";
+        e.execute_cql(format("create keyspace {} with replication = "
+                             "{{'class': 'NetworkTopologyStrategy', '{}': {}}} "
+                             "and tablets = {{'enabled': true}}", ks_name2, rack1.dc, p.rf2)).get();
+        auto id2 = add_table(e, ks_name2).get();
+        auto s2 = e.local_db().find_schema(id2);
         allocate(s2, p.rf2, p.tablets2);
 
         auto check_balance = [&] () -> cluster_balance {
@@ -371,7 +446,8 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
-        e.get_tablet_allocator().local().set_use_table_aware_balancing(tablet_aware);
+        e.get_tablet_allocator().local().set_use_table_aware_balancing(table_aware);
+        e.get_tablet_allocator().local().set_use_global_rebalancing(global_rebalancing);
 
         check_balance();
 
@@ -390,38 +466,48 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
     co_return global_res;
 }
 
-future<> run_simulation(const params& p, const sstring& name = "") {
+future<> run_simulation(const params& p, bool check_table_unaware, const sstring& name = "") {
     testlog.info("[run {}] params: {}", name, p);
 
     auto total_tablet_count = p.tablets1.value_or(0) * p.rf1 + p.tablets2.value_or(0) * p.rf2;
     testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
     testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
-    auto res = co_await test_load_balancing_with_many_tables(p, true);
-    testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
-    testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
-    testlog.info("[run {}] Overcommit       : last : {}", name, res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
+    auto check_results = [&] (const results& res, const sstring& tag) {
+        testlog.info("[run {}] Overcommit {:<7} : init : {}", name, tag, res.init);
+        testlog.info("[run {}] Overcommit {:<7} : worst: {}", name, tag, res.worst);
+        testlog.info("[run {}] Overcommit {:<7} : last : {}", name, tag, res.last);
+        testlog.info("[run {}] Overcommit {:<7} : time : {:.3f} [s], max={:.3f} [s], count={}", name, tag,
+                     res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
 
-    if (res.stats.elapsed_time > seconds_double(1)) {
-        testlog.warn("[run {}] Scheduling took longer than 1s!", name);
+        if (res.stats.elapsed_time > seconds_double(1)) {
+            testlog.warn("[run {}] Scheduling took longer than 1s!", name);
+        }
+
+        for (int i = 0; i < nr_tables; ++i) {
+            auto overcommit = res.worst.tables[i].shard_overcommit;
+            if (overcommit > 1.2) {
+                testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
+            }
+        }
+    };
+
+    auto res = co_await test_load_balancing_with_many_tables(p, true, true);
+    check_results(res, "(glob)");
+
+    {
+        auto old_res = co_await test_load_balancing_with_many_tables(p, true, false);
+        check_results(old_res, "(dflt)");
     }
 
-    auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-    testlog.info("[run {}] Overcommit (old) : init : {}", name, old_res.init);
-    testlog.info("[run {}] Overcommit (old) : worst: {}", name, old_res.worst);
-    testlog.info("[run {}] Overcommit (old) : last : {}", name, old_res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 old_res.stats.elapsed_time.count(), old_res.stats.max_rebalance_time.count(), old_res.stats.rebalance_count);
+    if (check_table_unaware) {
+        auto old_res = co_await test_load_balancing_with_many_tables(p, false, false);
+        check_results(old_res, "(unawr)");
 
-    for (int i = 0; i < nr_tables; ++i) {
-        if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
-            testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
-        }
-        auto overcommit = res.worst.tables[i].shard_overcommit;
-        if (overcommit > 1.2) {
-            testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
+        for (int i = 0; i < nr_tables; ++i) {
+            if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
+                testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
+            }
         }
     }
 }
@@ -447,7 +533,7 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
         };
 
         auto name = format("#{}", i);
-        co_await run_simulation(p, name);
+        co_await run_simulation(p, app_cfg["check-table-unaware"].as<bool>(), name);
     }
 }
 
@@ -458,6 +544,7 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
     app_template app;
     app.add_options()
             ("runs", bpo::value<int>(), "Number of simulation runs.")
+            ("check-table-unaware", bpo::value<bool>()->default_value(false), "Compare with table-unaware load balancer.")
             ("iterations", bpo::value<int>()->default_value(8), "Number of topology-changing cycles in each run.")
             ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
             ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
@@ -492,7 +579,7 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
                         .rf2 = app.configuration()["rf2"].as<int>(),
                         .shards = app.configuration()["shards"].as<int>(),
                     };
-                    run_simulation(p).get();
+                    run_simulation(p, app.configuration()["check-table-unaware"].as<bool>()).get();
                 }
             } catch (seastar::abort_requested_exception&) {
                 // Ignore
