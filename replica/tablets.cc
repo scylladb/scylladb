@@ -378,14 +378,6 @@ public:
         });
     }
 
-    tablet_sstable_set(const tablet_sstable_set& o)
-        : _schema(o._schema)
-        , _tablet_map(o._tablet_map.tablet_count())
-        , _sstable_sets(o._sstable_sets)
-        , _size(o._size)
-        , _bytes_on_disk(o._bytes_on_disk)
-    {}
-
     static lw_shared_ptr<sstables::sstable_set> make(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap) {
         return make_lw_shared<sstables::sstable_set>(std::make_unique<tablet_sstable_set>(std::move(s), sgm, tmap));
     }
