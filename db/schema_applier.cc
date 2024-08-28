@@ -233,7 +233,7 @@ static void maybe_delete_schema_version(mutation& m) {
     }
 }
 
-static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy,
+static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_proxy>& proxy,
                                                  const schema_result& before, const schema_result& after,
                                                  const schema_result& sk_before, const schema_result& sk_after)
 {
@@ -250,39 +250,45 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
     auto sk_diff = difference(sk_before, sk_after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
-    auto& created = diff.entries_only_on_right;
-    auto& altered = diff.entries_differing;
-    auto& dropped = diff.entries_only_on_left;
+    auto created = std::move(diff.entries_only_on_right);
+    auto altered = std::move(diff.entries_differing);
+
+    affected_keyspaces affected;
+    affected.dropped = std::move(diff.entries_only_on_left);
+
+    auto& sk_created = sk_diff.entries_only_on_right;
+    auto& sk_altered = sk_diff.entries_differing;
+    auto& sk_dropped = sk_diff.entries_only_on_left;
 
     // For the ALTER case, we have to also consider changes made to SCYLLA_KEYSPACES, not only to KEYSPACES:
     // 1. changes made to non-null columns...
-    altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
+    altered.insert(sk_altered.begin(), sk_altered.end());
     // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
-    for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
-        if (!created.contains(ks) && !dropped.contains(ks)) {
+    for (auto&& ks : boost::range::join(sk_created, sk_dropped)) {
+        if (!created.contains(ks) && !affected.dropped.contains(ks)) {
             altered.emplace(ks);
         }
     }
 
     auto& sharded_db = proxy.local().get_db();
-    for (auto& name : created) {
+    for (auto& name : affected.created) {
         slogger.info("Creating keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto ksm = co_await create_keyspace_from_schema_partition(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
-    for (auto& name : altered) {
+    for (auto& name : affected.altered) {
         slogger.info("Altering keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
-    for (auto& key : dropped) {
+    for (auto& key : affected.dropped) {
         slogger.info("Dropping keyspace {}", key);
     }
-    co_return dropped;
+    co_return affected;
 }
 
 static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
@@ -803,7 +809,7 @@ future<> schema_applier::prepare(std::vector<mutation>& muts) {
 future<> schema_applier::update() {
     _after = co_await get_schema_persisted_state();
 
-    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
+    _affected_keyspaces = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
     auto types_to_drop = co_await merge_types(_proxy, _before.types, _after.types);
     co_await merge_tables_and_views(_proxy, _sys_ks,
             _before.tables, _after.tables,
@@ -816,8 +822,8 @@ future<> schema_applier::update() {
 
     auto& sharded_db = _proxy.local().get_db();
     // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-    for (auto keyspace_to_drop : keyspaces_to_drop) {
-        co_await replica::database::drop_keyspace_on_all_shards(sharded_db, keyspace_to_drop);
+    for (auto& name : _affected_keyspaces.dropped) {
+        co_await replica::database::drop_keyspace_on_all_shards(sharded_db, name);
     }
 }
 
@@ -826,6 +832,22 @@ void schema_applier::commit() {
 }
 
 future<> schema_applier::notify() {
+    auto& sharded_db = _proxy.local().get_db();
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto& notifier = db.get_notifier();
+        // notify about keyspaces
+        for (auto& name : _affected_keyspaces.created) {
+            const auto& ks = db.find_keyspace(name);
+            co_await notifier.create_keyspace(ks.metadata());
+        }
+        for (auto& name : _affected_keyspaces.altered) {
+            const auto& ks = db.find_keyspace(name);
+            co_await notifier.update_keyspace(ks.metadata());
+        }
+        for (auto& name : _affected_keyspaces.dropped) {
+            co_await notifier.drop_keyspace(name);
+        }
+    });
     // TODO: pull out notifications code from update() and place here
     co_return;
 }
