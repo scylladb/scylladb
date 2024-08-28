@@ -8,6 +8,7 @@
 
 #include "tools/read_mutation.hh"
 #include "readers/combined.hh"
+#include "replica/database.hh"
 #include "partition_slice_builder.hh"
 
 #include <algorithm>
@@ -25,15 +26,6 @@ future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_d
         if (!found.empty()) {
             return make_ready_future();
         }
-
-        auto dash_pos = de.name.find_last_of('-');
-        if (dash_pos == de.name.npos) {
-            // unlikely. but this should not be fatal
-            return make_ready_future();
-        }
-        if (de.name.substr(0, dash_pos) != table_name) {
-            return make_ready_future();
-        }
         if (!de.type) {
             throw std::runtime_error(fmt::format("failed to find directory: {}/{}: unrecognized type",
                                                  scylla_data_path, de.name));
@@ -41,6 +33,10 @@ future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_d
         if (*de.type != directory_entry_type::directory) {
             throw std::runtime_error(fmt::format("failed to find directory: {}/{}: not a directory",
                                                  scylla_data_path, de.name));
+        }
+        auto [cf_name, uuid] = replica::parse_table_directory_name(de.name);
+        if (cf_name  != table_name) {
+            return make_ready_future();
         }
         found = de.name;
         return make_ready_future();
