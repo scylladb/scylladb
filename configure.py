@@ -686,7 +686,7 @@ other = set([
 
 all_artifacts = apps | tests | other | wasms
 
-arg_parser = argparse.ArgumentParser('Configure scylla', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+arg_parser = argparse.ArgumentParser('Configure scylla', add_help=False, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
                         help='Output build-file name (by default build.ninja)')
 arg_parser.add_argument('--out-final-name', dest="buildfile_final_name", action='store',
@@ -756,12 +756,15 @@ arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store
                         help='List all available build artifacts, that can be passed to --with')
 arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
-arg_parser.add_argument('--use-cmake', action='store_true', help='Use CMake as the build system')
+arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, default=False, help='Whether to use CMake as the build system')
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')
-
+arg_parser.add_argument('-h', '--help', action='store_true', help='show this help message and exit')
 args = arg_parser.parse_args()
+if args.help:
+    arg_parser.print_help()
+    arg_parser.exit()
 
 PROFILES_LIST_FILE_NAME = "coverage_sources.list"
 
