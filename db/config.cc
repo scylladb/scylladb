@@ -1231,7 +1231,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , sstable_compression_dictionaries_min_training_improvement_factor(this, "sstable_compression_dictionaries_min_training_improvement_factor", liveness::LiveUpdate, value_status::Used, 0.95,
         "New dictionaries will be only published if the estimated compression ratio is smaller than current ratio multiplied by this factor.")
     , uuid_sstable_identifiers_enabled(this,
-            "uuid_sstable_identifiers_enabled", liveness::LiveUpdate, value_status::Used, true, "If set to true, each newly created sstable will have a UUID "
+            "uuid_sstable_identifiers_enabled", value_status::Unused, true, "If set to true, each newly created sstable will have a UUID "
             "based generation identifier, and such files are not readable by previous Scylla versions.")
     , table_digest_insensitive_to_expiry(this, "table_digest_insensitive_to_expiry", liveness::MustRestart, value_status::Used, true,
             "When enabled, per-table schema digest calculation ignores empty partitions.")
