@@ -7,7 +7,7 @@ import pytest
 import time
 import asyncio
 import logging
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view, wait_for_view_v1
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
@@ -406,7 +406,7 @@ async def test_view_build_status_migration_to_v2_with_cleanup(request, manager: 
     await create_table(cql)
     await create_mv(cql, "vt1")
 
-    await wait_for_view(cql, "vt1", 4)
+    await wait_for_view_v1(cql, "vt1", 4)
 
     result = await cql.run_async("SELECT * FROM system_distributed.view_build_status")
     assert len(result) == 4
