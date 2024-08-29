@@ -45,18 +45,7 @@ constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2)
 
 } // anonymous namespace
 
-bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    try {
-        // Future is waited on indirectly in `stop()` (via `_store_gate`).
-        (void) with_gate(_store_gate,
-                [this, s_ = std::move(s), fm_ = std::move(fm), tr_state_ = tr_state] () mutable -> future<> {
-            // We discard the future to this call to `with_gate()`, so wrapping this lambda
-            // within `coroutine::lambda` will NOT work. That's why we need to copy these
-            // variables by hand.
-            auto s = std::move(s_);
-            auto fm = std::move(fm_);
-            auto tr_state = std::move(tr_state_);
-
+future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) {
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
@@ -93,6 +82,14 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
 
             --_hints_in_progress;
             shard_stats().size_of_hints_in_progress -= mut_size;
+}
+
+bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+    try {
+        // Future is waited on indirectly in `stop()` (via `_store_gate`).
+        (void) with_gate(_store_gate,
+                [this, s = std::move(s), fm = std::move(fm), tr_state = tr_state] () mutable -> future<> {
+            return do_store_hint(std::move(s), std::move(fm), tr_state);
         });
     } catch (...) {
         manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
