@@ -131,16 +131,16 @@ public:
     /// Unregister a migration listener on current shard.
     future<> unregister_listener(migration_listener* listener);
 
-    future<> create_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
+    future<> create_keyspace(const sstring& ks_name);
     future<> create_column_family(schema_ptr cfm);
     future<> create_user_type(user_type type);
     future<> create_view(view_ptr view);
-    future<> update_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
+    future<> update_keyspace(const sstring& ks_name);
     future<> update_column_family(schema_ptr cfm, bool columns_changed);
     future<> update_user_type(user_type type);
     future<> update_view(view_ptr view, bool columns_changed);
     future<> update_tablet_metadata(locator::tablet_metadata_change_hint);
-    future<> drop_keyspace(sstring ks_name);
+    future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(schema_ptr cfm);
     future<> drop_user_type(user_type type);
     future<> drop_view(view_ptr view);
