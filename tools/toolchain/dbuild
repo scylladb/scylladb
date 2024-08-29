@@ -16,10 +16,10 @@ EOF
     exit 1
 }
 
-if which docker >/dev/null 2>&1 ; then
-  tool=${DBUILD_TOOL-docker}
-elif which podman >/dev/null 2>&1 ; then
+if which podman >/dev/null 2>&1 ; then
   tool=${DBUILD_TOOL-podman}
+elif which docker >/dev/null 2>&1 ; then
+  tool=${DBUILD_TOOL-docker}
 else
   die "Please make sure you install either podman or docker on this machine to run dbuild"
 fi
