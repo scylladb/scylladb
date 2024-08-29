@@ -179,7 +179,8 @@ latest submodules.
     updated.
  3. Edit the submodule update commits with any necessary additional
     information. For example, amend the message with `Fixes` tags.
- 4. Use `git push` to publish your work.
+ 4. Use `git push` to push the submodule update commits to the remote
+    `next` branch.
 
 By default `refresh-submodules.sh` will refresh all submodules from their
 master branches. It's possible to specify submodules and branches as command
