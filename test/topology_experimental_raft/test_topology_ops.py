@@ -16,6 +16,7 @@ import asyncio
 import time
 import pytest
 import logging
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +73,13 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
     servers = servers[1:]
 
     logger.info("Checking results of the background writes")
-    await finish_writes()
+    write_results = await finish_writes()
 
     for server in servers:
         await check_node_log_for_failed_mutations(manager, server)
+
+    logger.info("Checking data consistency")
+    await verify_data_consistency(cql, write_results)
 
 
 async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
@@ -95,14 +99,11 @@ async def start_writes(cql: Session, rf: int, concurrency: int = 3):
     await cql.run_async(f"USE {ks_name}")
     await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
 
-    # In the test we only care about whether operations report success or not
-    # and whether they trigger errors in the nodes' logs. Inserting the same
-    # value repeatedly is enough for our purposes.
-    stmt = SimpleStatement("INSERT INTO tbl (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ONE)
-
     async def do_writes(worker_id: int):
         write_count = 0
         while not stop_event.is_set():
+            pk = worker_id * 1_000_000 + write_count
+            stmt = SimpleStatement(f"INSERT INTO tbl (pk, v) VALUES ({pk}, {pk})", consistency_level=ConsistencyLevel.ONE)
             start_time = time.time()
             try:
                 await cql.run_async(stmt)
@@ -111,12 +112,28 @@ async def start_writes(cql: Session, rf: int, concurrency: int = 3):
                 logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
                 raise
         logger.info(f"Worker #{worker_id} did {write_count} successful writes")
+        return (worker_id, write_count)
 
     tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
 
     async def finish():
         logger.info("Stopping write workers")
         stop_event.set()
-        await asyncio.gather(*tasks)
+        result = await asyncio.gather(*tasks)
+        total = sum(r[1] for r in result)
+        logger.info(f"All write workers stopped, total writes: {total} (per worker: {result})")
+        return result
 
     return finish
+
+async def verify_data_consistency(cql: Session, write_results: tuple):
+    logger.info("Verifying data consistency")
+    ks_name = cql.keyspace
+
+    total_writes = sum(r[1] for r in write_results)
+    count = await cql.run_async(f"SELECT COUNT(*) FROM {ks_name}.tbl")
+    assert count[0].count == total_writes
+
+    rows = await cql.run_async(f"SELECT * FROM {ks_name}.tbl")
+    rows_per_worker = dict(Counter(row.pk // 1_000_000 for row in rows))
+    assert rows_per_worker == {worker_id: count for worker_id, count in write_results}
