@@ -24,6 +24,7 @@
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
+#include "utils/s3/client.hh"
 #include "replica/database.hh"
 #include "dht/auto_refreshing_sharder.hh"
 
@@ -46,6 +47,14 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
+sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir, sstables_manager& mgr, const data_dictionary::storage_options::s3& os)
+        : _directory(dir)
+        , _state(std::make_unique<scan_state>())
+        , _client(mgr.get_endpoint_client(os.endpoint))
+        , _bucket(os.bucket)
+{
+}
+
 sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location)
         : _sstables_registry(sstables_registry)
         , _location(std::move(location))
@@ -59,6 +68,11 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(_table_dir, _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            if (_state == sstable_state::upload) {
+                // Sstables in this state are not tracked in registry, so the only way to
+                // collect and process them is by listing the bucket
+                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(_table_dir), _manager, os);
+            }
             return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
         }
     }, _storage_opts->value);
@@ -74,6 +88,21 @@ sstable_directory::sstable_directory(replica::table& table,
         table.get_storage_options_ptr(),
         table.dir(),
         std::move(state),
+        std::move(error_handler_gen)
+    )
+{}
+
+sstable_directory::sstable_directory(replica::table& table,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+        sstring table_dir,
+        io_error_handler_gen error_handler_gen)
+    : sstable_directory(
+        table.get_sstables_manager(),
+        table.schema(),
+        std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
+        std::move(storage_opts),
+        table_dir,
+        sstable_state::upload,
         std::move(error_handler_gen)
     )
 {}
@@ -222,6 +251,10 @@ future<> sstable_directory::prepare(process_flags flags) {
 }
 
 future<> sstable_directory::filesystem_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
+    if (_client) {
+        co_return;
+    }
+
     if (dir._state == sstable_state::quarantine) {
         if (!co_await file_exists(_directory.native())) {
             co_return;
@@ -273,8 +306,14 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     //   to make sure they all update their own version of scan_state and then merge it.
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
+    //
+    // For bucket lister, slashes are not considered as path components separator, so in order for
+    // the lister to list only basename components, append trailing / to prefix name
 
-    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
+    auto lister = !_client ?
+            abstract_lister::make<directory_lister>(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter) :
+            abstract_lister::make<s3::client::bucket_lister>(_client, _bucket, _directory.native() + "/", &manifest_json_filter);
+
     std::exception_ptr ex;
     try {
         while (true) {
@@ -283,7 +322,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
                 break;
             }
             auto component_path = _directory / de->name;
-            auto [ comps, ks, cf ] = sstables::parse_path(component_path);
+            auto comps = sstables::parse_path(component_path, directory._schema->ks_name(), directory._schema->cf_name());
             handle(std::move(comps), component_path);
         }
     } catch (...) {

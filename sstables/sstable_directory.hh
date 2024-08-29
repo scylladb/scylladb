@@ -27,6 +27,7 @@
 #include "sstables/sstables_registry.hh"
 
 class compaction_manager;
+namespace s3 { class client; }
 
 namespace sstables {
 
@@ -104,6 +105,8 @@ public:
 
         std::filesystem::path _directory;
         std::unique_ptr<scan_state> _state;
+        shared_ptr<s3::client> _client;
+        sstring _bucket;
 
         future<> garbage_collect(storage&);
         future<> cleanup_column_family_temp_sst_dirs();
@@ -113,6 +116,7 @@ public:
 
     public:
         filesystem_components_lister(std::filesystem::path dir);
+        filesystem_components_lister(std::filesystem::path dir, sstables_manager&, const data_dictionary::storage_options::s3&);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
@@ -190,6 +194,10 @@ private:
 public:
     sstable_directory(replica::table& table,
             sstable_state state,
+            io_error_handler_gen error_handler_gen);
+    sstable_directory(replica::table& table,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+            sstring table_dir,
             io_error_handler_gen error_handler_gen);
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,

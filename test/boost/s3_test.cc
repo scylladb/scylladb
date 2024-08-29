@@ -384,8 +384,8 @@ static std::unordered_set<sstring> populate_bucket(shared_ptr<s3::client> client
 
     for (int i = 0; i < nr_objects; i++) {
         temporary_buffer<char> data = sstring("1234567890").release();
-        auto name = format("{}obj.{}", prefix, i);
-        client->put_object(format("/{}/{}", bucket, name), std::move(data)).get();
+        auto name = format("obj.{}", i);
+        client->put_object(format("/{}/{}{}", bucket, prefix, name), std::move(data)).get();
         names.insert(name);
     }
 

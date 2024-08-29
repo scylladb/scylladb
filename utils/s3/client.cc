@@ -1235,10 +1235,17 @@ future<> client::close() {
 }
 
 client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, size_t objects_per_page, size_t entries_batch)
+    : bucket_lister(std::move(client), std::move(bucket), std::move(prefix),
+            [] (const fs::path& parent_dir, const directory_entry& entry) { return true; },
+            objects_per_page, entries_batch)
+{}
+
+client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page, size_t entries_batch)
     : _client(std::move(client))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _max_keys(format("{}", objects_per_page))
+    , _filter(std::move(filter))
     , _queue(entries_batch)
 {
 }
@@ -1304,8 +1311,13 @@ future<> client::bucket_lister::start_listing() {
             co_return;
         }
 
+        fs::path dir(_prefix);
         for (auto&& o : names) {
-            co_await _queue.push_eventually(directory_entry{std::move(o)});
+            directory_entry ent{o.substr(_prefix.size())};
+            if (!_filter(dir, ent)) {
+                continue;
+            }
+            co_await _queue.push_eventually(std::move(ent));
         }
     } while (!continuation_token.empty());
     co_await _queue.push_eventually(std::nullopt);

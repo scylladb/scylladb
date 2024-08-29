@@ -1443,6 +1443,39 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     }
 }
 
+void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    for (auto required_param : {"endpoint", "bucket", "snapshot", "keyspace"}) {
+        if (!vm.count(required_param)) {
+            throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
+        }
+        params[required_param] = vm[required_param].as<sstring>();
+    }
+    if (vm.count("table")) {
+        params["table"] = vm["table"].as<sstring>();
+    }
+    const auto restore_res = client.post("/storage_service/restore", std::move(params));
+    if (vm.count("nowait")) {
+        return;
+    }
+
+    const auto task_id = rjson::to_string_view(restore_res);
+    const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
+    const auto wait_res = client.get(url);
+    const auto& status = wait_res.GetObject();
+    auto state = rjson::to_string_view(status["state"]);
+    fmt::print("{}", state);
+    if (state != "done") {
+        fmt::print(": {}", rjson::to_string_view(status["error"]));
+    }
+    fmt::print(R"(
+start: {}
+end: {}
+)",
+               rjson::to_string_view(status["start_time"]),
+               rjson::to_string_view(status["end_time"]));
+}
+
 struct host_stat {
     sstring endpoint;
     sstring address;
@@ -2886,7 +2919,7 @@ For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/backup.html")),
                 {
                     typed_option<sstring>("keyspace", "Name of a keyspace to copy SSTables from"),
-                    typed_option<sstring>("snapshot", "Name of a snapshot to copy sstables from"),
+                    typed_option<sstring>("snapshot", "Name of a snapshot to copy SSTables from"),
                     typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables to"),
                     typed_option<sstring>("bucket", "Name of the bucket to backup SSTables to"),
                     typed_option<>("nowait", "Don't wait on the backup process"),
@@ -3438,6 +3471,25 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 { },
             },
             resetlocalschema_operation
+        },
+        {
+            {
+                "restore",
+                "Copy SSTables from a designated bucket in object store to a specified keyspace or table",
+fmt::format(R"(
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/restore.html")),
+                {
+                    typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables from"),
+                    typed_option<sstring>("bucket", "Name of the bucket to copy SSTables from"),
+                    typed_option<sstring>("snapshot", "Name of a snapshot to copy sstables from"),
+                    typed_option<sstring>("keyspace", "Name of a keyspace to copy SSTables to"),
+                    typed_option<sstring>("table", "Name of a table to copy SSTables to"),
+                    typed_option<>("nowait", "Don't wait on the restore process"),
+                },
+
+            },
+            restore_operation
         },
         {
             {

@@ -142,7 +142,53 @@ private:
     future<directory_entry> guarantee_type(directory_entry de);
 };
 
-class directory_lister {
+class abstract_lister {
+public:
+    class impl {
+    public:
+        // Get the next directory_entry from the lister,
+        // if available.  When the directory listing is done,
+        // a disengaged optional is returned.
+        //
+        // Caller should either drain all entries using get()
+        // until it gets a disengaged result or an error, or
+        // close() can be called to terminate the listing prematurely,
+        // and wait on any background work to complete.
+        //
+        // Calling get() after the listing is done and a disengaged
+        // result has been returned results in a broken_pipe_exception.
+        virtual future<std::optional<directory_entry>> get() = 0;
+
+        // Close the directory_lister, ignoring any errors.
+        // Must be called after get() if not all entries were retrieved.
+        //
+        // Close aborts the lister, waking up get() if any is waiting,
+        // and waits for all background work to complete.
+        virtual future<> close() noexcept = 0;
+        virtual ~impl() = default;
+    };
+
+private:
+    std::unique_ptr<impl> _impl;
+    abstract_lister(std::unique_ptr<impl> i) noexcept : _impl(std::move(i)) {}
+
+public:
+    future<std::optional<directory_entry>> get() {
+        return _impl->get();
+    }
+    future<> close() noexcept {
+        return _impl->close();
+    }
+
+    abstract_lister(abstract_lister&&) noexcept = default;
+
+    template <typename L, typename... Args>
+    static abstract_lister make(Args&&... args) {
+        return abstract_lister(std::make_unique<L>(std::forward<Args>(args)...));
+    }
+};
+
+class directory_lister final : public abstract_lister::impl {
     fs::path _dir;
     lister::dir_entry_types _type;
     lister::filter_type _filter;
@@ -164,25 +210,8 @@ public:
 
     ~directory_lister();
 
-    // Get the next directory_entry from the lister,
-    // if available.  When the directory listing is done,
-    // a disengaged optional is returned.
-    //
-    // Caller should either drain all entries using get()
-    // until it gets a disengaged result or an error, or
-    // close() can be called to terminate the listing prematurely,
-    // and wait on any background work to complete.
-    //
-    // Calling get() after the listing is done and a disengaged
-    // result has been returned results in a broken_pipe_exception.
-    future<std::optional<directory_entry>> get();
-
-    // Close the directory_lister, ignoring any errors.
-    // Must be called after get() if not all entries were retrieved.
-    //
-    // Close aborts the lister, waking up get() if any is waiting,
-    // and waits for all background work to complete.
-    future<> close() noexcept;
+    future<std::optional<directory_entry>> get() override;
+    future<> close() noexcept override;
 };
 
 static inline fs::path operator/(const fs::path& lhs, const char* rhs) {
