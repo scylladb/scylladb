@@ -1011,7 +1011,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", value_status::Used, "me", "Default sstable file format", {"md", "me"})
     , uuid_sstable_identifiers_enabled(this,
-            "uuid_sstable_identifiers_enabled", liveness::LiveUpdate, value_status::Used, true, "If set to true, each newly created sstable will have a UUID "
+            "uuid_sstable_identifiers_enabled", value_status::Unused, true, "If set to true, each newly created sstable will have a UUID "
             "based generation identifier, and such files are not readable by previous Scylla versions.")
     , table_digest_insensitive_to_expiry(this, "table_digest_insensitive_to_expiry", liveness::MustRestart, value_status::Used, true,
             "When enabled, per-table schema digest calculation ignores empty partitions.")
