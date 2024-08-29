@@ -440,12 +440,11 @@ future<> migration_notifier::on_schema_change(std::function<void(migration_liste
     });
 }
 
-future<> migration_notifier::create_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
-    const auto& name = ksm->name();
+future<> migration_notifier::create_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_create_keyspace(name);
+        listener->on_create_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
-        return fmt::format("Create keyspace notification failed {}: {}", name, ex);
+        return fmt::format("Create keyspace notification failed {}: {}", ks_name, ex);
     });
 }
 
@@ -479,12 +478,11 @@ future<> migration_notifier::create_view(view_ptr view) {
     });
 }
 
-future<> migration_notifier::update_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
-    const auto& name = ksm->name();
+future<> migration_notifier::update_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_update_keyspace(name);
+        listener->on_update_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
-        return fmt::format("Update keyspace notification failed {}: {}", name, ex);
+        return fmt::format("Update keyspace notification failed {}: {}", ks_name, ex);
     });
 }
 
@@ -526,7 +524,7 @@ future<> migration_notifier::update_tablet_metadata(locator::tablet_metadata_cha
     });
 }
 
-future<> migration_notifier::drop_keyspace(sstring ks_name) {
+future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_drop_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {

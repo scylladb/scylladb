@@ -837,12 +837,10 @@ future<> schema_applier::notify() {
         auto& notifier = db.get_notifier();
         // notify about keyspaces
         for (auto& name : _affected_keyspaces.created) {
-            const auto& ks = db.find_keyspace(name);
-            co_await notifier.create_keyspace(ks.metadata());
+            co_await notifier.create_keyspace(name);
         }
         for (auto& name : _affected_keyspaces.altered) {
-            const auto& ks = db.find_keyspace(name);
-            co_await notifier.update_keyspace(ks.metadata());
+            co_await notifier.update_keyspace(name);
         }
         for (auto& name : _affected_keyspaces.dropped) {
             co_await notifier.drop_keyspace(name);
