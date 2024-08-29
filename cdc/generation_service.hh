@@ -98,7 +98,7 @@ public:
      * that generation timestamp moved in as the `startup_gen_id` parameter.
      * This passes the responsibility of managing generations from the node startup code to this service;
      * until then, the service remains dormant.
-     * At the time of writing this comment, the startup code is in `storage_service::join_token_ring`, hence
+     * The startup code is in `storage_service::join_topology`, hence
      * `after_join` should be called at the end of that function.
      * Precondition: the node has completed bootstrapping and system_distributed_keyspace is initialized.
      * Must be called on shard 0 - that's where the generation management happens.

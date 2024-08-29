@@ -105,7 +105,7 @@ void endpoints_check(
     const locator::topology& topo,
     bool strict_dc_rf = false) {
 
-    auto&& nodes_per_dc = tm->get_topology().get_datacenter_endpoints();
+    auto&& nodes_per_dc = tm->get_datacenter_token_owners_ips();
     const network_topology_strategy* nts_ptr =
             dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
 
@@ -465,6 +465,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                     ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
                     node_count_per_dc[dc_name]++;
                     node_count_per_rack[dc_name][rack_name]++;
+                    point++;
                 }
             }
         }
@@ -553,6 +554,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
             sstring rack_name = fmt::format("{}", 10 + rack);
             for (size_t i = 1; i <= nodes_per_rack; ++i) {
                 ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
+                point++;
             }
         }
     }
@@ -729,23 +731,21 @@ static locator::host_id_set calculate_natural_endpoints(
         skipped_dc_endpoints[dc_name] = {};
     }
 
-    const topology& tp = tm.get_topology();
-
     //
-    // all endpoints in each DC, so we can check when we have exhausted all
-    // the members of a DC
+    // all token owners in each DC, so we can check when we have exhausted all
+    // the token-owning members of a DC
     //
     const std::unordered_map<sstring,
                        std::unordered_set<inet_address>>
-        all_endpoints = tp.get_datacenter_endpoints();
+        all_endpoints = tm.get_datacenter_token_owners_ips();
     //
-    // all racks in a DC so we can check when we have exhausted all racks in a
-    // DC
+    // all racks (with non-token owners filtered out) in a DC so we can check
+    // when we have exhausted all racks in a DC
     //
     const std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>
-        racks = tp.get_datacenter_racks();
+        racks = tm.get_datacenter_racks_token_owners_ips();
 
     // not aware of any cluster members
     SCYLLA_ASSERT(!all_endpoints.empty() && !racks.empty());

@@ -80,6 +80,9 @@ std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata_ptr tmptr, const db::config& cfg, dht::check_token_endpoint check) {
+    if (!cfg.join_ring()) {
+        return std::unordered_set<token>();
+    }
     return get_bootstrap_tokens(std::move(tmptr), cfg.initial_token(), cfg.num_tokens(), check);
 }
 

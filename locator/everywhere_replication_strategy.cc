@@ -25,7 +25,7 @@ future<host_id_set> everywhere_replication_strategy::calculate_natural_endpoints
         host_id_set result{host_id_vector_replica_set({host_id{}})};
         return make_ready_future<host_id_set>(std::move(result));
     }
-    const auto& all_endpoints = tm.get_all_endpoints();
+    const auto& all_endpoints = tm.get_normal_token_owners();
     return make_ready_future<host_id_set>(host_id_set(all_endpoints.begin(), all_endpoints.end()));
 }
 

@@ -187,7 +187,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
 bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::vnode_effective_replication_map_ptr& erm) {
     auto rf = erm->get_replication_factor();
-    auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
+    auto nr_nodes_in_ring = get_token_metadata().get_normal_token_owners().size();
     bool everywhere_topology = erm->get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
     auto strict = _db.local().get_config().consistent_rangemovement()

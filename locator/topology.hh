@@ -137,8 +137,16 @@ public:
         }
     }
 
+    bool is_member() const noexcept {
+        return is_normal() || is_leaving();
+    }
+
     bool left() const noexcept {
         return _state == state::left;
+    }
+
+    bool is_none() const noexcept {
+        return _state == state::none;
     }
 
     shard_id get_shard_count() const noexcept { return _shard_count; }
@@ -342,7 +350,14 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    // Executes a function for each node in a state other than "none" and "left".
     void for_each_node(std::function<void(const node*)> func) const;
+
+    // Returns pointers to all nodes in a state other than "none" and "left".
+    std::unordered_set<const node*> get_nodes() const;
+
+    // Returns addresses of all nodes in a state other than "none" and "left".
+    std::unordered_set<gms::inet_address> get_all_ips() const;
 
     host_id my_host_id() const noexcept {
         return _cfg.this_host_id;

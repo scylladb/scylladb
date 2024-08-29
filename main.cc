@@ -857,6 +857,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 throw bad_configuration_error();
             }
 
+            // We want to ensure a node is zero-token if and only if join_ring=false, so all the logic can rely on it.
+            if (cfg->join_ring() && cfg->num_tokens() == 0 && cfg->initial_token().empty()) {
+                startlog.error(
+                        "Bad configuration: cannot join the ring with zero tokens. If you do not want the node "
+                        "to join the ring, use join-ring=false");
+                throw bad_configuration_error();
+            }
+
             auto preferred = cfg->listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
             auto family = cfg->enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 

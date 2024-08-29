@@ -33,6 +33,9 @@ for information on how to handle failures.
 Note that when you have a two-DC cluster with the same number of nodes in each DC, the cluster will lose the quorum if one
 of the DCs is down.
 **We recommend configuring three DCs per cluster to ensure that the cluster remains available and operational when one DC is down.**
+In the case of two-DC cluster with the same number of nodes in each DC, it is sufficient for the third DC to contain only one node.
+That node can be configured with ``join_ring=false`` and run on a weaker machine.
+See :doc:`Configuration Parameters </reference/configuration-parameters/>` for details about the ``join_ring`` option.
 
 .. _raft-schema-changes:
 

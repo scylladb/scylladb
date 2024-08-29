@@ -647,10 +647,10 @@ public:
         // If tables still have a low tablet count, the concurrency must be high in order to saturate the cluster.
         // If a table covers the entire cluster, and needs split, concurrency will be reduced to 1.
 
-        size_t total_shard_count = std::invoke([&topo = _tm->get_topology()] {
+        size_t total_shard_count = std::invoke([this] {
             size_t shard_count = 0;
-            topo.for_each_node([&] (const locator::node* node_ptr) {
-                shard_count += node_ptr->get_shard_count();
+            _tm->for_each_token_owner([&] (const locator::node& node) {
+                shard_count += node.get_shard_count();
             });
             return shard_count;
         });
@@ -1739,23 +1739,23 @@ public:
             }
         };
 
-        topo.for_each_node([&] (const locator::node* node_ptr) {
-            if (node_ptr->dc_rack().dc != dc) {
+        _tm->for_each_token_owner([&] (const locator::node& node) {
+            if (node.dc_rack().dc != dc) {
                 return;
             }
-            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed;
-            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
+            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+                              || node.get_state() == locator::node::state::being_removed;
+            if (node.get_state() == locator::node::state::normal || is_drained) {
                 if (is_drained) {
-                    ensure_node(node_ptr->host_id());
-                    lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
-                    nodes_to_drain.emplace(node_ptr->host_id());
-                    nodes[node_ptr->host_id()].drained = true;
-                } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
+                    ensure_node(node.host_id());
+                    lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
+                    nodes_to_drain.emplace(node.host_id());
+                    nodes[node.host_id()].drained = true;
+                } else if (node.is_excluded() || _skiplist.contains(node.host_id())) {
                     // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
+                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node.host_id(), node.get_state());
                 } else {
-                    ensure_node(node_ptr->host_id());
+                    ensure_node(node.host_id());
                 }
             }
         });

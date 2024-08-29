@@ -22,6 +22,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from contextlib import asynccontextmanager
+from typing import Optional
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,9 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
     """Ensure that the normal token owners and group 0 members match
        according to each currently running server.
+
+       Note that the normal token owners and group 0 members never match
+       in the presence of zero-token nodes.
     """
     servers = await manager.running_servers()
     for srv in servers:
@@ -207,17 +211,23 @@ async def wait_until_last_generation_is_in_use(cql: Session):
     else:
         logger.info(f"The last generation is already in use.")
 
-async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host]):
+async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host], cqls: Optional[list[Session]] = None):
+    # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
+    # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
+    # in the system.peers table.
     assert len(hosts) != 0
 
-    topo_results = await asyncio.gather(*(manager.cql.run_async("SELECT * FROM system.topology", host=host) for host in hosts))
+    if cqls is None:
+        cqls = [manager.cql] * len(hosts)
+
+    topo_results = await asyncio.gather(*(cql.run_async("SELECT * FROM system.topology", host=host) for cql, host in zip(cqls, hosts)))
 
     for host, topo_res in zip(hosts, topo_results):
         logging.info(f"Dumping the state of system.topology as seen by {host}:")
         for row in topo_res:
             logging.info(f"  {row}")
 
-    for host, topo_res in zip(hosts, topo_results):
+    for cql, host, topo_res in zip(cqls, hosts, topo_results):
         assert len(topo_res) != 0
 
         for row in topo_res:
@@ -230,9 +240,8 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
             assert row.release_version is not None
             assert row.supported_features is not None
             assert row.shard_count is not None
-            assert row.tokens is not None
 
-            assert len(row.tokens) == row.num_tokens
+            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
 
         assert topo_res[0].committed_cdc_generations is not None
         committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
@@ -248,7 +257,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert enabled_features == computed_enabled_features
         assert "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES" in enabled_features
 
-        cdc_res = await manager.cql.run_async("SELECT * FROM system.cdc_generations_v3", host=host)
+        cdc_res = await cql.run_async("SELECT * FROM system.cdc_generations_v3", host=host)
         assert len(cdc_res) != 0
 
         all_generations = frozenset(row.id for row in cdc_res)
@@ -256,6 +265,49 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
 
         # Check that the contents fetched from the current host are the same as for other nodes
         assert topo_results[0] == topo_res
+
+async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
+    logging.info(f"Checking that node {server} had no failed mutations")
+    log = await manager.server_open_log(server.server_id)
+    occurrences = await log.grep(expr="Failed to apply mutation from")
+    assert len(occurrences) == 0
+
+
+async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3):
+    logging.info(f"Starting to asynchronously write, concurrency = {concurrency}")
+
+    stop_event = asyncio.Event()
+
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    await cql.run_async(f"USE {ks_name}")
+    await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
+
+    # In the test we only care about whether operations report success or not
+    # and whether they trigger errors in the nodes' logs. Inserting the same
+    # value repeatedly is enough for our purposes.
+    stmt = SimpleStatement("INSERT INTO tbl (pk, v) VALUES (0, 0)", consistency_level=cl)
+
+    async def do_writes(worker_id: int):
+        write_count = 0
+        while not stop_event.is_set():
+            start_time = time.time()
+            try:
+                await cql.run_async(stmt)
+                write_count += 1
+            except Exception as e:
+                logging.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                raise
+        logging.info(f"Worker #{worker_id} did {write_count} successful writes")
+
+    tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
+
+    async def finish():
+        logging.info("Stopping write workers")
+        stop_event.set()
+        await asyncio.gather(*tasks)
+
+    return finish
 
 async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")

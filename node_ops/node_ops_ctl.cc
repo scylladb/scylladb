@@ -49,7 +49,6 @@ void node_ops_ctl::start(sstring desc_, std::function<bool(gms::inet_address)> s
 void node_ops_ctl::refresh_sync_nodes(std::function<bool(gms::inet_address)> sync_to_node) {
     // sync data with all normal token owners
     sync_nodes.clear();
-    const auto& topo = tmptr->get_topology();
     auto can_sync_with_node = [] (const locator::node& node) {
         // Sync with reachable token owners.
         // Note that although nodes in `being_replaced` and `being_removed`
@@ -62,12 +61,12 @@ void node_ops_ctl::refresh_sync_nodes(std::function<bool(gms::inet_address)> syn
             return false;
         }
     };
-    topo.for_each_node([&] (const locator::node* np) {
+    tmptr->for_each_token_owner([&] (const locator::node& node) {
         seastar::thread::maybe_yield();
         // FIXME: use node* rather than endpoint
-        auto node = np->endpoint();
-        if (!ignore_nodes.contains(node) && can_sync_with_node(*np) && sync_to_node(node)) {
-            sync_nodes.insert(node);
+        auto endpoint = node.endpoint();
+        if (!ignore_nodes.contains(endpoint) && can_sync_with_node(node) && sync_to_node(endpoint)) {
+            sync_nodes.insert(endpoint);
         }
     });
 

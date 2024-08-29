@@ -341,7 +341,7 @@ void topology::index_node(const node* node) {
                 on_internal_error(tlogger, format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
             }
         }
-        if (node->get_state() != node::state::left) {
+        if (!node->left() && !node->is_none()) {
             _nodes_by_endpoint.try_emplace(node->endpoint(), node);
         }
     }
@@ -350,7 +350,7 @@ void topology::index_node(const node* node) {
     // and algorithms expect to know which dc they belonged to. View replica pairing needs stable
     // replica indexes.
     // But we don't consider those nodes as members of the cluster so don't update dc registry.
-    if (!node->left()) {
+    if (!node->left() && !node->is_none()) {
         const auto& dc = node->dc_rack().dc;
         const auto& rack = node->dc_rack().rack;
         const auto& endpoint = node->endpoint();
@@ -477,7 +477,7 @@ const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_addr
     return add_node(id,
                     opt_ep.value_or(inet_address{}),
                     opt_dr.value_or(endpoint_dc_rack::default_location),
-                    opt_st.value_or(node::state::normal),
+                    opt_st.value_or(node::state::none),
                     shard_count.value_or(0));
 }
 
@@ -559,10 +559,30 @@ std::weak_ordering topology::compare_endpoints(const inet_address& address, cons
 
 void topology::for_each_node(std::function<void(const node*)> func) const {
     for (const auto& np : _nodes) {
-        if (np && !np->left()) {
+        if (np && !np->left() && !np->is_none()) {
             func(np.get());
         }
     }
+}
+
+std::unordered_set<const node*> topology::get_nodes() const {
+    std::unordered_set<const node*> nodes;
+    for (const auto& np : _nodes) {
+        if (np && !np->left() && !np->is_none()) {
+            nodes.insert(np.get());
+        }
+    }
+    return nodes;
+}
+
+std::unordered_set<gms::inet_address> topology::get_all_ips() const {
+    std::unordered_set<gms::inet_address> ips;
+    for (const auto& np : _nodes) {
+        if (np && !np->left() && !np->is_none()) {
+            ips.insert(np->endpoint());
+        }
+    }
+    return ips;
 }
 
 } // namespace locator
