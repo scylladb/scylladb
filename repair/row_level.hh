@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
@@ -17,6 +19,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
 #include "service/raft/raft_address_map.hh"
+#include "utils/user_provided_param.hh"
 
 using namespace seastar;
 
@@ -113,6 +116,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     future<> _load_history_done = make_ready_future<>();
 
+    mutable std::default_random_engine _random_engine{std::random_device{}()};
+
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
 
@@ -151,11 +156,12 @@ public:
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
     future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
     future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
-    future<> rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc);
-    future<> replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<gms::inet_address> ignore_nodes);
+    future<> rebuild_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc);
+    future<> replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node);
 private:
     future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
-    future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes);
+
+    future<> do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<locator::host_id> ignore_nodes = {}, locator::host_id replaced_node = {});
 
     // Must be called on shard 0
     future<> sync_data_using_repair(sstring keyspace,
