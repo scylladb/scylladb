@@ -1924,6 +1924,12 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     if (errors) {
         co_return errors;
     }
+    co_await utils::get_local_injector().inject("sstable_validate/pause", [] (auto& handler) {
+        sstlog.info("sstable_validate/pause init");
+        auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
+        sstlog.info("sstable_validate/pause done");
+        return ret;
+    });
 
     if (_version >= sstable_version_types::mc) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);

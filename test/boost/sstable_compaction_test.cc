@@ -66,6 +66,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/eventually.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
@@ -2280,6 +2281,61 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_uncompre
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_uncompressed) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    scrub_test_framework test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+
+        utils::get_local_injector().enable("sstable_validate/pause");
+
+        auto scrub1 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        BOOST_REQUIRE(eventually_true([sst] {
+            auto checksum = sst->get_checksum();
+            return checksum != nullptr;
+        }));
+        auto checksum1 = sst->get_checksum();
+
+        auto scrub2 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        BOOST_REQUIRE(eventually_true([sst] {
+            auto checksum = sst->get_checksum();
+            return checksum != nullptr;
+        }));
+        auto checksum2 = sst->get_checksum();
+
+        // Scrub instances use the same checksum component.
+        BOOST_REQUIRE(checksum1);
+        BOOST_REQUIRE(checksum2);
+        BOOST_REQUIRE(checksum1 == checksum2);
+        checksum1.release();
+        checksum2.release();
+
+        utils::get_local_injector().receive_message("sstable_validate/pause");
+        when_all_succeed(std::move(scrub1), std::move(scrub2)).get();
+
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        // Checksum component released after scrub instances terminate.
+        BOOST_REQUIRE(sst->get_checksum() == nullptr);
+
+        utils::get_local_injector().disable("sstable_validate/pause");
     });
 }
 
