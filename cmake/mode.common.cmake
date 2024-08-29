@@ -83,7 +83,7 @@ function(get_padded_dynamic_linker_option output length)
   set(${output} "${dynamic_linker_option}=${padded_dynamic_linker}" PARENT_SCOPE)
 endfunction()
 
-add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
+add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}=.")
 
 default_target_arch(target_arch)
 if(target_arch)
