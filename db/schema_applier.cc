@@ -17,6 +17,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/shard_id.hh>
+#include <seastar/core/sharded.hh>
 
 #include <boost/range/join.hpp>
 
@@ -442,41 +444,41 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
     return {std::move(created), std::move(dropped)};
 }
 
-struct [[nodiscard]] user_types_to_drop final {
-    seastar::noncopyable_function<future<> ()> drop;
-};
-
 // see the comments for merge_keyspaces()
-static future<user_types_to_drop> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
+static future<> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, affected_user_types& affected)
 {
     auto diff = diff_rows(before, after);
-
-    // Create and update user types before any tables/views are created that potentially
-    // use those types. Similarly, defer dropping until after tables/views that may use
-    // some of these user types are dropped.
-
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        auto created_types = co_await create_types(db, diff.created);
-        for (auto&& user_type : created_types) {
+    co_await affected.start();
+    co_await affected.invoke_on_all([&] (affected_user_types_per_shard& af) mutable -> future<> {
+        auto& db = proxy.local().get_db().local();
+        // Create and update user types before any tables/views are created that potentially
+        // use those types.
+        auto created = co_await create_types(db, diff.created);
+        for (auto&& user_type : created) {
             db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            co_await db.get_notifier().create_user_type(user_type);
+            af.created.push_back(user_type);
         }
-        auto altered_types = co_await create_types(db, diff.altered);
-        for (auto&& user_type : altered_types) {
+        auto altered = co_await create_types(db, diff.altered);
+        for (auto&& user_type : altered) {
             db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            co_await db.get_notifier().update_user_type(user_type);
+            af.altered.push_back(user_type);
+        }
+        auto dropped = co_await create_types(proxy.local().get_db().local(), diff.dropped);
+        for (auto&& user_type : dropped) {
+            // Just add to affected, defers dropping until after tables/views that may use
+            // some of these user types are dropped.
+            af.dropped.push_back(user_type);
         }
     });
+}
 
-    co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
-        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-            auto dropped = co_await create_types(db, rows);
-            for (auto& user_type : dropped) {
-                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                co_await db.get_notifier().drop_user_type(user_type);
-            }
-        });
-    }};
+static future<> drop_types(distributed<service::storage_proxy>& proxy, affected_user_types& types) {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
+        for (auto& user_type : types.local().dropped) {
+            db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+        }
+        co_return;
+    });
 }
 
 struct schema_diff {
@@ -812,7 +814,7 @@ future<> schema_applier::update() {
     _after = co_await get_schema_persisted_state();
 
     _affected_keyspaces = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
-    auto types_to_drop = co_await merge_types(_proxy, _before.types, _after.types);
+    co_await merge_types(_proxy, _before.types, _after.types, _affected_user_types);
     co_await merge_tables_and_views(_proxy, _sys_ks,
             _before.tables, _after.tables,
             _before.views, _after.views,
@@ -820,7 +822,8 @@ future<> schema_applier::update() {
     co_await merge_functions(_proxy, _before.functions, _after.functions);
     co_await merge_aggregates(_proxy, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates);
-    co_await types_to_drop.drop();
+
+    co_await drop_types(_proxy, _affected_user_types);
 
     auto& sharded_db = _proxy.local().get_db();
     // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
@@ -847,9 +850,24 @@ future<> schema_applier::notify() {
         for (auto& name : _affected_keyspaces.dropped) {
             co_await notifier.drop_keyspace(name);
         }
+        // notify about user types
+        auto& types = _affected_user_types.local();
+        for (auto& type : types.created) {
+            co_await notifier.create_user_type(type);
+        }
+        for (auto& type : types.altered) {
+            co_await notifier.update_user_type(type);
+        }
+        for (auto& type : types.dropped) {
+            co_await notifier.drop_user_type(type);
+        }
     });
     // TODO: pull out notifications code from update() and place here
     co_return;
+}
+
+future<> schema_applier::destroy() {
+    co_await _affected_user_types.stop();
 }
 
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
@@ -861,6 +879,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     co_await ap.update();
     ap.commit();
     co_await ap.notify();
+    co_await ap.destroy();
 }
 
 /**
