@@ -1430,7 +1430,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
             auto group0_id = sys_ks.local().get_raft_group0_id().get();
-            auto gossiper_seeds = get_seeds_from_db_config(*cfg, broadcast_addr);
+
+            // Fail on a gossiper seeds lookup error only if the node is not bootstrapped.
+            const bool fail_on_lookup_error = !sys_ks.local().bootstrap_complete();
+
+            auto gossiper_seeds = get_seeds_from_db_config(*cfg, broadcast_addr, fail_on_lookup_error);
 
             auto get_gossiper_cfg = sharded_parameter([&] {
                 gms::gossip_config gcfg;

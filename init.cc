@@ -16,7 +16,9 @@
 
 logging::logger startlog("init");
 
-std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg, gms::inet_address broadcast_address) {
+std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
+                                                     const gms::inet_address broadcast_address,
+                                                     const bool fail_on_lookup_error) {
     auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     const auto listen = gms::inet_address::lookup(cfg.listen_address(), family).get();
@@ -32,8 +34,13 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg, gms:
             try {
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {
-                startlog.error("Bad configuration: invalid value in 'seeds': '{}': {}", seed, std::current_exception());
-                throw bad_configuration_error();
+                if (fail_on_lookup_error) {
+                    startlog.error("Bad configuration: invalid value in 'seeds': '{}': {}", seed, std::current_exception());
+                    throw bad_configuration_error();
+                }
+                startlog.warn("Bad configuration: invalid value in 'seeds': '{}': {}. Node will continue booting since already bootstrapped.",
+                               seed,
+                               std::current_exception());
             }
             begin = next+1;
         }
