@@ -45,54 +45,51 @@ constexpr std::chrono::seconds HINT_FILE_WRITE_TIMEOUT = std::chrono::seconds(2)
 
 } // anonymous namespace
 
+future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) {
+    ++_hints_in_progress;
+    size_t mut_size = fm->representation().size();
+    shard_stats().size_of_hints_in_progress += mut_size;
+
+    if (utils::get_local_injector().enter("slow_down_writing_hints")) {
+        co_await seastar::sleep(std::chrono::seconds(10));
+    }
+
+    try {
+        const auto shared_lock = co_await get_shared_lock(file_update_mutex());
+
+        hints_store_ptr log_ptr = co_await get_or_load();
+        commitlog_entry_writer cew(s, *fm, commitlog::force_sync::no);
+
+        rp_handle rh = co_await log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
+
+        const replay_position rp = rh.release();
+        if (_last_written_rp < rp) {
+            _last_written_rp = rp;
+            manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+        }
+
+        ++shard_stats().written;
+
+        manager_logger.trace("Hint to {} was stored", end_point_key());
+        tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
+    } catch (...) {
+        ++shard_stats().errors;
+        const auto eptr = std::current_exception();
+
+        manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
+        tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
+    }
+
+    --_hints_in_progress;
+    shard_stats().size_of_hints_in_progress -= mut_size;
+}
+
 bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
         (void) with_gate(_store_gate,
-                [this, s_ = std::move(s), fm_ = std::move(fm), tr_state_ = tr_state] () mutable -> future<> {
-            // We discard the future to this call to `with_gate()`, so wrapping this lambda
-            // within `coroutine::lambda` will NOT work. That's why we need to copy these
-            // variables by hand.
-            auto s = std::move(s_);
-            auto fm = std::move(fm_);
-            auto tr_state = std::move(tr_state_);
-
-            ++_hints_in_progress;
-            size_t mut_size = fm->representation().size();
-            shard_stats().size_of_hints_in_progress += mut_size;
-
-            if (utils::get_local_injector().enter("slow_down_writing_hints")) {
-                co_await seastar::sleep(std::chrono::seconds(10));
-            }
-
-            try {
-                const auto shared_lock = co_await get_shared_lock(file_update_mutex());
-
-                hints_store_ptr log_ptr = co_await get_or_load();
-                commitlog_entry_writer cew(s, *fm, commitlog::force_sync::no);
-
-                rp_handle rh = co_await log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + HINT_FILE_WRITE_TIMEOUT);
-
-                const replay_position rp = rh.release();
-                if (_last_written_rp < rp) {
-                    _last_written_rp = rp;
-                    manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
-                }
-
-                ++shard_stats().written;
-
-                manager_logger.trace("Hint to {} was stored", end_point_key());
-                tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
-            } catch (...) {
-                ++shard_stats().errors;
-                const auto eptr = std::current_exception();
-
-                manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
-                tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
-            }
-
-            --_hints_in_progress;
-            shard_stats().size_of_hints_in_progress -= mut_size;
+                [this, s = std::move(s), fm = std::move(fm), tr_state = tr_state] () mutable -> future<> {
+            return do_store_hint(std::move(s), std::move(fm), tr_state);
         });
     } catch (...) {
         manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());

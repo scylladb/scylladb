@@ -175,6 +175,8 @@ public:
     }
 
 private:
+    future<> do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state);
+
     seastar::shared_mutex& file_update_mutex() noexcept {
         return _file_update_mutex;
     }
