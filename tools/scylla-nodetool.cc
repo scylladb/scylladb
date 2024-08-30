@@ -319,7 +319,7 @@ keyspace_and_tables parse_keyspace_and_tables(scylla_rest_client& client, const 
         throw std::invalid_argument(fmt::format("keyspace {} does not exist", ret.keyspace));
     }
 
-    if (vm.count("table")) {
+    if (vm.contains("table")) {
         ret.tables = vm["table"].as<std::vector<sstring>>();
     }
 
@@ -390,16 +390,16 @@ const std::map<operation, operation_action>& get_operations_with_func();
 void backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
     for (auto required_param : {"endpoint", "bucket", "keyspace"}) {
-        if (!vm.count(required_param)) {
+        if (!vm.contains(required_param)) {
             throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
         }
         params[required_param] = vm[required_param].as<sstring>();
     }
-    if (vm.count("snapshot")) {
+    if (vm.contains("snapshot")) {
         params["snapshot"] = vm["snapshot"].as<sstring>();
     }
     const auto backup_res = client.post("/storage_service/backup", std::move(params));
-    if (vm.count("nowait")) {
+    if (vm.contains("nowait")) {
         return;
     }
 
@@ -425,7 +425,7 @@ void checkandrepaircdcstreams_operation(scylla_rest_client& client, const bpo::v
 }
 
 void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (vm.count("cleanup_arg")) {
+    if (vm.contains("cleanup_arg")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "cleanup_arg");
         std::unordered_map<sstring, sstring> params;
         if (!tables.empty()) {
@@ -440,7 +440,7 @@ void cleanup_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
 
-    if (vm.count("keyspaces")) {
+    if (vm.contains("keyspaces")) {
         std::vector<sstring> keyspaces;
         const auto all_keyspaces = get_keyspaces(client);
         for (const auto& keyspace : vm["keyspaces"].as<std::vector<sstring>>()) {
@@ -455,7 +455,7 @@ void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_ma
         }
     }
 
-    if (vm.count("tag")) {
+    if (vm.contains("tag")) {
         params["tag"] = vm["tag"].as<sstring>();
     }
 
@@ -463,16 +463,16 @@ void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_ma
 }
 
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (vm.count("user-defined")) {
+    if (vm.contains("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
     }
 
     std::unordered_map<sstring, sstring> params;
-    if (vm.count("flush-memtables")) {
+    if (vm.contains("flush-memtables")) {
         params["flush_memtables"] = vm["flush-memtables"].as<bool>() ? "true" : "false";
     }
 
-    if (vm.count("compaction_arg")) {
+    if (vm.contains("compaction_arg")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm, "compaction_arg");
         if (!tables.empty()) {
             params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
@@ -724,7 +724,7 @@ void describering_operation(scylla_rest_client& client, const bpo::variables_map
     const auto schema_version_res = client.get("/storage_service/schema_version");
 
     std::unordered_map<sstring, sstring> params;
-    if (vm.count("table")) {
+    if (vm.contains("table")) {
         auto tables = vm["table"].as<std::vector<sstring>>();
         if (tables.size() != 1) {
             throw std::invalid_argument(fmt::format("expected a single table parameter, got {}", tables.size()));
@@ -790,7 +790,7 @@ void describecluster_operation(scylla_rest_client& client, const bpo::variables_
 }
 
 void disableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace")) {
+    if (!vm.contains("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
             client.del(format("/storage_service/auto_compaction/{}", keyspace));
         }
@@ -821,7 +821,7 @@ void drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void enableautocompaction_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace")) {
+    if (!vm.contains("keyspace")) {
         for (const auto& keyspace :  get_keyspaces(client)) {
             client.post(format("/storage_service/auto_compaction/{}", keyspace));
         }
@@ -861,7 +861,7 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void getendpoints_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace") || !vm.count("table") || !vm.count("key")) {
+    if (!vm.contains("keyspace") || !vm.count("table") || !vm.count("key")) {
         throw std::invalid_argument("getendpoint requires keyspace, table and partition key arguments");
     }
     auto res = client.get(seastar::format("/storage_service/natural_endpoints/{}",
@@ -889,7 +889,7 @@ void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables
 }
 
 void getsstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace") || !vm.count("table") || !vm.count("key")) {
+    if (!vm.contains("keyspace") || !vm.count("table") || !vm.count("key")) {
         throw std::invalid_argument("getsstables requires keyspace, table and partition key arguments");
     }
 
@@ -905,7 +905,7 @@ void getsstables_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 
     auto params = std::unordered_map<sstring, sstring>{{"key", vm["key"].as<sstring>()}};
-    if (vm.count("hex-format")) {
+    if (vm.contains("hex-format")) {
         params["format"] = "hex";
     }
 
@@ -1155,7 +1155,7 @@ void print_stream_session(
 
 void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto mode = sstring(rjson::to_string_view(client.get("/storage_service/operation_mode")));
-    const bool human_readable = vm.count("human-readable");
+    const bool human_readable = vm.contains("human-readable");
 
     fmt::print(std::cout, "Mode: {}\n", mode);
 
@@ -1252,7 +1252,7 @@ sstring get_command_name(const std::vector<sstring>& cmds) {
 }
 
 void help_operation(const tool_app_template::config& cfg, const bpo::variables_map& vm) {
-    if (vm.count("command")) {
+    if (vm.contains("command")) {
         const auto command = vm["command"].as<std::vector<sstring>>();
         const auto& ops = get_operations_with_func();
         auto keys = ops | boost::adaptors::map_keys;
@@ -1319,7 +1319,7 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
 
 void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
-    if (vm.count("source-dc")) {
+    if (vm.contains("source-dc")) {
         params["source_dc"] = vm["source-dc"].as<sstring>();
     }
     if (vm.contains("force")) {
@@ -1329,18 +1329,18 @@ void rebuild_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 }
 
 void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("keyspace")) {
+    if (!vm.contains("keyspace")) {
         throw std::invalid_argument("required parameters are missing: keyspace and table");
     }
-    if (!vm.count("table")) {
+    if (!vm.contains("table")) {
         throw std::invalid_argument("required parameter is missing: table");
     }
     std::unordered_map<sstring, sstring> params{{"cf", vm["table"].as<sstring>()}};
-    if (vm.count("load-and-stream")) {
+    if (vm.contains("load-and-stream")) {
         params["load_and_stream"] = "true";
     }
-    if (vm.count("primary-replica-only")) {
-        if (!vm.count("load-and-stream")) {
+    if (vm.contains("primary-replica-only")) {
+        if (!vm.contains("load-and-stream")) {
             throw std::invalid_argument("--primary-replica-only|-pro takes no effect without --load-and-stream|-las");
         }
         params["primary_replica_only"] = "true";
@@ -1349,12 +1349,12 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 }
 
 void removenode_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("remove-operation")) {
+    if (!vm.contains("remove-operation")) {
         throw std::invalid_argument("required parameters are missing: remove-operation, pass one of (status, force or a host id)");
     }
     const auto op = vm["remove-operation"].as<sstring>();
     if (op == "status" || op == "force") {
-        if (vm.count("ignore-dead-nodes")) {
+        if (vm.contains("ignore-dead-nodes")) {
             throw std::invalid_argument("cannot use --ignore-dead-nodes with status or force");
         }
         fmt::print(std::cout, "RemovalStatus: {}\n", rjson::to_string_view(client.get("/storage_service/removal_status")));
@@ -1363,7 +1363,7 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
         }
     } else {
         std::unordered_map<sstring, sstring> params{{"host_id", op}};
-        if (vm.count("ignore-dead-nodes")) {
+        if (vm.contains("ignore-dead-nodes")) {
             params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
         }
         client.post("/storage_service/remove_node", std::move(params));
@@ -1807,7 +1807,7 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     } else {
         keyspaces.push_back(std::move(keyspace));
     }
-    if (vm.count("skip-corrupted") && vm.count("mode")) {
+    if (vm.contains("skip-corrupted") && vm.count("mode")) {
         throw std::invalid_argument("cannot use --skip-corrupted when --mode is used");
     }
 
@@ -1817,17 +1817,17 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
         params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
     }
 
-    if (vm.count("mode")) {
+    if (vm.contains("mode")) {
         params["scrub_mode"] = vm["mode"].as<sstring>();
-    } else if (vm.count("skip-corrupted")) {
+    } else if (vm.contains("skip-corrupted")) {
         params["scrub_mode"] = "SKIP";
     }
 
-    if (vm.count("quarantine-mode")) {
+    if (vm.contains("quarantine-mode")) {
         params["quarantine_mode"] = vm["quarantine-mode"].as<sstring>();
     }
 
-    if (vm.count("no-snapshot")) {
+    if (vm.contains("no-snapshot")) {
         params["disable_snapshot"] = "true";
     }
 
@@ -1850,14 +1850,14 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void setlogginglevel_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("logger") || !vm.count("level")) {
+    if (!vm.contains("logger") || !vm.count("level")) {
         throw std::invalid_argument("resetting logger(s) is not supported yet, the logger and level parameters are required");
     }
     client.post(format("/system/logger/{}", vm["logger"].as<sstring>()), {{"level", vm["level"].as<sstring>()}});
 }
 
 void settraceprobability_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("trace_probability")) {
+    if (!vm.contains("trace_probability")) {
         throw std::invalid_argument("required parameters are missing: trace_probability");
     }
     const auto value = vm["trace_probability"].as<double>();
@@ -1887,20 +1887,20 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
     };
 
     std::vector<sstring> kt_list;
-    if (vm.count("keyspace-table-list")) {
-        if (vm.count("table")) {
+    if (vm.contains("keyspace-table-list")) {
+        if (vm.contains("table")) {
             throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify table(s)");
         }
-        if (vm.count("keyspaces")) {
+        if (vm.contains("keyspaces")) {
             throw std::invalid_argument("when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)");
         }
 
         const auto kt_list_str = vm["keyspace-table-list"].as<sstring>();
         boost::split(kt_list, kt_list_str, boost::algorithm::is_any_of(","));
-    } else if (vm.count("keyspaces")) {
+    } else if (vm.contains("keyspaces")) {
         kt_list = vm["keyspaces"].as<std::vector<sstring>>();
 
-        if (kt_list.size() > 1 && vm.count("table")) {
+        if (kt_list.size() > 1 && vm.contains("table")) {
             throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
         }
     }
@@ -1915,19 +1915,19 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
             kn_msg = kt_list.front();
         } else {
             params["kn"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
-            if (vm.count("table")) {
+            if (vm.contains("table")) {
                 params["cf"] = vm["table"].as<sstring>();
             }
         }
     }
 
-    if (vm.count("tag")) {
+    if (vm.contains("tag")) {
         params["tag"] = vm["tag"].as<sstring>();
     } else {
         params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
     }
 
-    if (vm.count("skip-flush")) {
+    if (vm.contains("skip-flush")) {
         params["sf"] = "true";
     } else {
         params["sf"] = "false";
@@ -1948,12 +1948,12 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
 
 void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::vector<keyspace_and_table> requests;
-    if (vm.count("table")) {
+    if (vm.contains("table")) {
         const auto keyspace = vm["keyspace"].as<sstring>();
         for (const auto& table : vm["table"].as<std::vector<sstring>>()) {
             requests.push_back(keyspace_and_table{.keyspace = keyspace, .table = table});
         }
-    } else if (vm.count("keyspace")) {
+    } else if (vm.contains("keyspace")) {
         requests.push_back(keyspace_and_table{.keyspace = vm["keyspace"].as<sstring>()});
     } else {
         requests.push_back(keyspace_and_table{});
@@ -2017,16 +2017,16 @@ void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map&
 
 void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::optional<sstring> keyspace;
-    if (vm.count("keyspace")) {
+    if (vm.contains("keyspace")) {
         keyspace.emplace(vm["keyspace"].as<sstring>());
     }
 
     std::optional<sstring> table;
-    if (vm.count("table")) {
+    if (vm.contains("table")) {
         table.emplace(vm["table"].as<sstring>());
     }
 
-    const auto resolve_ips = vm.count("resolve-ip");
+    const auto resolve_ips = vm.contains("resolve-ip");
 
     const auto live = get_endpoints_of_status(client, "live");
     const auto down = get_endpoints_of_status(client, "down");
@@ -2135,10 +2135,10 @@ void statusgossip_operation(scylla_rest_client& client, const bpo::variables_map
 }
 
 void stop_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (vm.count("id")) {
+    if (vm.contains("id")) {
         throw std::invalid_argument("stopping compactions by id is not implemented");
     }
-    if (!vm.count("compaction_type")) {
+    if (!vm.contains("compaction_type")) {
         throw std::invalid_argument("missing required parameter: compaction_type");
     }
 
@@ -2987,13 +2987,13 @@ void toppartitions_operation(scylla_rest_client& client, const bpo::variables_ma
     int duration_in_milli = 0;
     const auto positional_args = {"keyspace", "table", "duration-milli"};
     if (std::ranges::all_of(positional_args,
-                            [&] (auto& arg) { return vm.count(arg); })) {
+                            [&] (auto& arg) { return vm.contains(arg); })) {
         table_filters = seastar::format("{}:{}",
                                         vm["keyspace"].as<sstring>(),
                                         vm["table"].as<sstring>());
         duration_in_milli = vm["duration-milli"].as<int>();
     } else if (std::ranges::none_of(positional_args,
-                                    [&] (auto& arg) { return vm.count(arg); })) {
+                                    [&] (auto& arg) { return vm.contains(arg); })) {
         table_filters = vm["cf-filters"].as<sstring>();
         duration_in_milli = vm["duration"].as<int>();
     } else {
@@ -3097,7 +3097,7 @@ void upgradesstables_operation(scylla_rest_client& client, const bpo::variables_
 
     std::unordered_map<sstring, sstring> params;
 
-    if (!vm.count("include-all-sstables")) {
+    if (!vm.contains("include-all-sstables")) {
         params["exclude_current_version"] = "true";
     }
 
