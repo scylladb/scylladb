@@ -190,4 +190,18 @@ def test_read_stats(gdb, sstable):
 def test_get_config_value(gdb):
     scylla(gdb, f'get-config-value compaction_static_shares')
 
+@pytest.mark.without_scylla
+def test_run_without_scylla(scylla_gdb):
+    # just try to load the scylla-gdb module without attaching to scylla.
+    #
+    # please note, if this test fails, there are good chances that scylla-gdb.py
+    # is unable to load without debug symbols. Calls to "gdb.lookup_type()" and
+    # similar functions that rely on debug symbols should be made within GDB
+    # commands themselves when they get exuecuted. To address potential
+    # failures, consider moving code that references debug symbols into a code
+    # path executed only when debug symbols is loaded. If the value of the
+    # symbol is a constant, consider caching it. using functools.cache
+    # decorator.
+    _ = scylla_gdb
+
 # FIXME: need a simple test for lsa-segment
