@@ -66,29 +66,5 @@ struct table_for_tests {
 
     future<> stop();
 
-    sstables::shared_sstable make_sstable() {
-        auto& table = *_data->cf;
-        auto& sstables_manager = table.get_sstables_manager();
-        return sstables_manager.make_sstable(_data->s, table.dir(), _data->storage, table.calculate_generation_for_new_table());
-    }
-
-    sstables::shared_sstable make_sstable(sstables::sstable_version_types version) {
-        auto& table = *_data->cf;
-        auto& sstables_manager = table.get_sstables_manager();
-        return sstables_manager.make_sstable(_data->s, table.dir(), _data->storage, table.calculate_generation_for_new_table(), sstables::sstable_state::normal, version);
-    }
-
-    std::function<sstables::shared_sstable()> make_sst_factory() {
-        return [this] {
-            return make_sstable();
-        };
-    }
-
-    std::function<sstables::shared_sstable()> make_sst_factory(sstables::sstable_version_types version) {
-        return [this, version] {
-            return make_sstable(version);
-        };
-    }
-
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
 };

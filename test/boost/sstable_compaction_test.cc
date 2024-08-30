@@ -165,7 +165,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
-    auto sst_gen = cf.make_sst_factory();
+    auto sst_gen = env.make_sst_factory(s);
 
     auto idx = std::vector<unsigned long>({1, 2, 3, 4});
     for (auto i : idx) {
@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(compact) {
         auto sstables = open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).get();
         std::vector<shared_sstable> new_sstables;
         auto new_sstable = [&] {
-            auto sst = cf.make_sstable();
+            auto sst = env.make_sstable(cf->schema());
             new_sstables.push_back(sst);
             return sst;
         };
@@ -1234,7 +1234,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 schema_ptr s = builder.build(schema_builder::compact_storage::no);
                 auto cf = env.make_table_for_tests(s);
                 auto close_cf = deferred_stop(cf);
-                auto sst_gen = cf.make_sst_factory(version);
+                auto sst_gen = env.make_sst_factory(s, version);
                 auto mt = make_lw_shared<replica::memtable>(s);
                 auto now = gc_clock::now();
                 int32_t last_expiry = 0;
@@ -1622,7 +1622,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                       .build();
             auto cf = env.make_table_for_tests(s);
             auto close_cf = deferred_stop(cf);
-            auto sst_gen = cf.make_sst_factory(version);
+            auto sst_gen = env.make_sst_factory(s, version);
             auto mt = make_lw_shared<replica::memtable>(s);
             const column_definition &r1_col = *s->get_column_definition("r1");
 
@@ -1667,7 +1667,7 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     int max_threshold = cf->schema()->max_compaction_threshold();
     candidates.reserve(max_threshold+1);
     for (auto i = 0; i < (max_threshold+1); i++) { // (max_threshold+1) sstables of similar size
-        auto sst = cf.make_sstable();
+        auto sst = env.make_sstable(cf->schema());
         sstables::test(sst).set_data_file_size(1);
         candidates.push_back(std::move(sst));
     }
@@ -1690,7 +1690,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto stcs_schema = make_schema("stcs", sstables::compaction_strategy_type::size_tiered);
         auto stcs_table = env.make_table_for_tests(stcs_schema);
         auto close_stcs_table = deferred_stop(stcs_table);
-        auto sst_gen = stcs_table.make_sst_factory();
+        auto sst_gen = env.make_sst_factory(stcs_schema);
 
         auto mt = make_lw_shared<replica::memtable>(stcs_schema);
 
@@ -3732,7 +3732,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             auto cf = env.make_table_for_tests(s, tmp.path().string());
             auto close_cf = deferred_stop(cf);
             auto sst_gen = [&] () mutable {
-                return cf.make_sstable(version);
+                return env.make_sstable(cf->schema(), version);
             };
 
             cf->start();
@@ -4395,7 +4395,7 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         auto sst_gen = [&] () mutable {
-            return cf.make_sstable();
+            return env.make_sstable(cf->schema());
         };
 
         auto row_mut = [&] () {
@@ -4574,7 +4574,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
             auto cf = env.make_table_for_tests(s);
             auto close_cf = deferred_stop(cf);
-            auto sst_gen = cf.make_sst_factory();
+            auto sst_gen = env.make_sst_factory(s);
 
             using namespace std::chrono;
             auto now = gc_clock::now().time_since_epoch() + duration_cast<microseconds>(seconds(tests::random::get_int(0, 3600*24)));

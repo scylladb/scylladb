@@ -49,7 +49,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
-    auto sst_gen = cf.make_sst_factory(version);
+    auto sst_gen = env.make_sst_factory(s, version);
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;
 
@@ -72,7 +72,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
                 mt->apply(std::move(m));
             }
         }
-        return make_sstable_containing(cf.make_sstable(version), mt);
+        return make_sstable_containing(env.make_sstable(s, version), mt);
     });
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
