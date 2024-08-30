@@ -14,6 +14,7 @@
 #include "service/storage_proxy.hh"
 #include "query-result-set.hh"
 #include "db/schema_tables.hh"
+#include "data_dictionary/user_types_metadata.hh"
 
 #include <seastar/core/distributed.hh>
 
@@ -52,6 +53,15 @@ struct affected_keyspaces {
     std::set<sstring> dropped;
 };
 
+struct affected_user_types_per_shard {
+    std::vector<user_type> created;
+    std::vector<user_type> altered;
+    std::vector<user_type> dropped;
+};
+
+// groups UDTs based on what is happening to them during schema change
+using affected_user_types = sharded<affected_user_types_per_shard>;
+
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
@@ -70,6 +80,7 @@ class schema_applier {
     schema_persisted_state _after;
 
     affected_keyspaces _affected_keyspaces;
+    affected_user_types _affected_user_types;
 
     future<schema_persisted_state> get_schema_persisted_state();
 public:
@@ -95,6 +106,8 @@ public:
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> post_commit();
+    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
+    future<> destroy();
 };
 
 }
