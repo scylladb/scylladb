@@ -24,10 +24,25 @@ namespace bpo = boost::program_options;
 namespace tools::utils {
 
 bool operation::matches(std::string_view name) const {
-    return _name == name || std::ranges::find(_aliases, name) != _aliases.end();
+    return _name[0] == name || std::ranges::find(_aliases, name) != _aliases.end();
 }
 
 namespace {
+
+bool is_help(const sstring& op) {
+    return op == "--help" || op == "-h";
+}
+
+std::vector<std::string_view> get_all_operation_names(const std::vector<operation>& operations) {
+    std::vector<std::string_view> all_operation_names;
+    for (const auto& op : operations) {
+        all_operation_names.push_back(op.name());
+        for (const auto& alias : op.aliases()) {
+            all_operation_names.push_back(alias);
+        }
+    }
+    return all_operation_names;
+}
 
 // Extract the operation from the argv.
 //
@@ -94,21 +109,31 @@ const operation* get_selected_operation(int& ac, char**& av, const std::vector<o
             if (op_name == av[i]) {
                 std::shift_left(av + i, av + ac, 1);
                 --ac;
+                while (!found->suboperations().empty()) {
+                    sstring subop = i < ac ? av[i] : "";
+                    if (is_help(subop)) {
+                        break;
+                    }
+                    auto& suboperations = found->suboperations();
+                    found = std::ranges::find_if(suboperations, [&subop] (auto& op) {
+                        return op.matches(subop);
+                    });
+                    if (found != suboperations.end()) {
+                        op_name += format(" {}", subop);
+                        std::shift_left(av + i, av + ac, 1);
+                        --ac;
+                        continue;
+                    }
+                    fmt::print(std::cerr, "error: unrecognized suboperation of {}: expected one of ({}), got {}\n", op_name, get_all_operation_names(suboperations), subop);
+                    exit(100);
+                }
                 break;
             }
         }
         return &*found;
     }
 
-    std::vector<std::string_view> all_operation_names;
-    for (const auto& op : operations) {
-        all_operation_names.push_back(op.name());
-        for (const auto& alias : op.aliases()) {
-            all_operation_names.push_back(alias);
-        }
-    }
-
-    fmt::print(std::cerr, "error: unrecognized operation argument: expected one of ({}), got {}\n", all_operation_names, op_name);
+    fmt::print(std::cerr, "error: unrecognized operation argument: expected one of ({}), got {}\n", get_all_operation_names(operations), op_name);
     exit(100);
 }
 

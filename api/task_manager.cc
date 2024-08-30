@@ -51,7 +51,7 @@ tm::task_status make_status(tasks::task_status status) {
     res.start_time = st;
     res.end_time = et;
     res.error = status.error;
-    res.parent_id = status.parent_id.to_sstring();
+    res.parent_id = status.parent_id ? status.parent_id.to_sstring() : "none";
     res.sequence_number = status.sequence_number;
     res.shard = status.shard;
     res.keyspace = status.keyspace;
@@ -155,6 +155,8 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             co_await task.abort();
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
+        } catch (tasks::task_not_abortable& e) {
+            throw httpd::base_exception{e.what(), http::reply::status_type::forbidden};
         }
         co_return json_void();
     });
@@ -162,11 +164,17 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_status status;
+        std::optional<std::chrono::seconds> timeout = std::nullopt;
+        if (auto it = req->query_parameters.find("timeout"); it != req->query_parameters.end()) {
+            timeout = std::chrono::seconds(boost::lexical_cast<uint32_t>(it->second));
+        }
         try {
             auto task = tasks::task_handler{tm.local(), id};
-            status = co_await task.wait_for_task();
+            status = co_await task.wait_for_task(timeout);
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
+        } catch (timed_out_error& e) {
+            throw httpd::base_exception{e.what(), http::reply::status_type::request_timeout};
         }
         co_return make_status(status);
     });
@@ -205,6 +213,11 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         }
         co_return json::json_return_type(ttl);
     });
+
+    tm::get_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        uint32_t ttl = cfg.task_ttl_seconds();
+        co_return json::json_return_type(ttl);
+    });
 }
 
 void unset_task_manager(http_context& ctx, routes& r) {
@@ -215,6 +228,7 @@ void unset_task_manager(http_context& ctx, routes& r) {
     tm::wait_task.unset(r);
     tm::get_task_status_recursively.unset(r);
     tm::get_and_update_ttl.unset(r);
+    tm::get_ttl.unset(r);
 }
 
 }

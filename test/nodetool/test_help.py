@@ -43,7 +43,7 @@ def test_help_command_too_many_args(nodetool, scylla_only):
             nodetool,
             ("help", "compact", "foo", "bar"),
             {},
-            ["error: too many positional options have been specified on the command line"])
+            ["error processing arguments: unknown command compact foo bar"])
 
 
 def test_help_consistent(nodetool, scylla_only):

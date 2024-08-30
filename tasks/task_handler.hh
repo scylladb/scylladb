@@ -65,11 +65,21 @@ public:
     {}
     future<task_stats> get_stats();
     future<task_status> get_status();
-    future<task_status> wait_for_task();
+    future<task_status> wait_for_task(std::optional<std::chrono::seconds> timeout);
     future<utils::chunked_vector<task_status>> get_status_recursively(bool local);
     future<> abort();
 private:
     future<status_helper> get_status_helper();
+};
+
+class task_not_abortable : public std::exception {
+    sstring _cause;
+public:
+    explicit task_not_abortable(task_id tid)
+        : _cause(format("task with id {} cannot be aborted", tid))
+    { }
+
+    virtual const char* what() const noexcept override { return _cause.c_str(); }
 };
 
 }

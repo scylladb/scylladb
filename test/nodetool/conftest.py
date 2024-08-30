@@ -196,21 +196,28 @@ def cassandra_only(request):
     if request.config.getoption("nodetool") != "cassandra":
         pytest.skip('Cassandra-only test skipped')
 
+def split_list(l, delim):
+    before = []
+    after = []
+    for elem in l:
+        (after if after or elem == delim else before).append(elem)
+    return (before, after)
 
 @pytest.fixture(scope="module")
 def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
     def invoker(method, *args, expected_requests=None, check_return_code=True):
         with expected_requests_manager(rest_api_mock_server, expected_requests or []):
+            before, after = split_list(list(args), "--")
             if request.config.getoption("nodetool") == "scylla":
                 api_ip, api_port = rest_api_mock_server
-                cmd = [nodetool_path, "nodetool", method,
-                       "--logger-log-level", "scylla-nodetool=trace",
+                cmd = [nodetool_path, "nodetool", method] + before + ["--logger-log-level",
+                       "scylla-nodetool=trace",
                        "-h", api_ip,
-                       "-p", str(api_port)]
+                       "-p", str(api_port)] + after
             else:
                 jmx_ip, jmx_port = jmx
                 cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
-            cmd += list(args)
+                cmd += list(args)
             suppressions_path = _path_from_top_srcdir("ubsan-suppressions.supp")
             env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={suppressions_path}',
                    'ASAN_OPTIONS': f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'}

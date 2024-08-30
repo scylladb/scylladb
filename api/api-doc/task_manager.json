@@ -115,7 +115,7 @@
                "parameters":[
                   {
                      "name":"task_id",
-                     "description":"The uuid of a task to abort",
+                     "description":"The uuid of a task to abort; if the task is not abortable, 403 status code is returned",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -144,6 +144,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout for waiting; if times out, 408 status code is returned",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
                   }
                ]
             }
@@ -196,6 +204,17 @@
                      "type":"long",
                      "paramType":"query"
                   }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get current ttl value",
+               "type":"long",
+               "nickname":"get_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
                ]
             }
          ]
