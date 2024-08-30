@@ -433,12 +433,21 @@ future<> raft_group0::leadership_monitor_fiber() {
                 co_await group0_server().wait_for_state_change(&_leadership_monitor_as);
             }
             group0_log.info("gaining leadership");
+            _leadership_observable.set(true);
             co_await group0_server().wait_for_state_change(&_leadership_monitor_as);
             group0_log.info("losing leadership");
+            _leadership_observable.set(false);
         }
     } catch (...) {
         group0_log.debug("leadership_monitor_fiber aborted with {}", std::current_exception());
     }
+}
+
+utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> cb) {
+    if (_leadership_observable.get()) {
+        cb(true);
+    }
+    return _leadership_observable.observe(cb);
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
