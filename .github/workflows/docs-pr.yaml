@@ -12,7 +12,8 @@ on:
       - enterprise
     paths:
       - "docs/**"
-
+      - "db/config.hh"
+      - "db/config.cc"
 jobs:
   build:
     runs-on: ubuntu-latest
