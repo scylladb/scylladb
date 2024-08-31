@@ -2542,6 +2542,8 @@ def configure_using_cmake(args):
         settings['Scylla_DATE_STAMP'] = args.date_stamp
     if args.staticboost:
         settings['Boost_USE_STATIC_LIBS'] = 'ON'
+    if args.clang_inline_threshold != -1:
+        settings['Scylla_CLANG_INLINE_THRESHOLD'] = args.clang_inline_threshold
 
     source_dir = os.path.realpath(os.path.dirname(__file__))
     build_dir = os.path.join(source_dir, 'build')
