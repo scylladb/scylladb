@@ -164,33 +164,6 @@ Obsoletes:	scylla-server < 1.1
 %description conf
 This package contains the main scylla configuration file.
 
-# we need to refuse upgrade if current scylla < 1.7.3 && commitlog remains
-%pretrans conf
-ver=$(rpm -qi scylla-server | grep Version | awk '{print $3}')
-if [ -n "$ver" ]; then
-    ver_fmt=$(echo $ver | awk -F. '{printf "%d%02d%02d", $1,$2,$3}')
-    if [ $ver_fmt -lt 10703 ]; then
-        # for <scylla-1.2
-        if [ ! -f /opt/scylladb/lib/scylla/scylla_config_get.py ]; then
-            echo
-            echo "Error: Upgrading from scylla-$ver to scylla-%{version} is not supported."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to %{version}."
-            echo
-            exit 1
-        fi
-        commitlog_directory=$(/opt/scylladb/lib/scylla/scylla_config_get.py -g commitlog_directory)
-        commitlog_files=$(ls $commitlog_directory | wc -l)
-        if [ $commitlog_files -ne 0 ]; then
-            echo
-            echo "Error: Upgrading from scylla-$ver to scylla-%{version} is not supported when commitlog is not clean."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to %{version}."
-            echo "Also make sure $commitlog_directory is empty."
-            echo
-            exit 1
-        fi
-    fi
-fi
-
 %files conf
 %defattr(-,root,root)
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
