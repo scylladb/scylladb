@@ -16,10 +16,11 @@ set(scylla_build_mode_RelWithDebInfo "release")
 add_compile_definitions(
     $<$<CONFIG:RelWithDebInfo>:SCYLLA_BUILD_MODE=${scylla_build_mode_RelWithDebInfo}>)
 
-set(clang_inline_threshold 2500)
+set(Scylla_CLANG_INLINE_THRESHOLD "2500" CACHE STRING
+  "LLVM-specific inline threshold compilation parameter")
 add_compile_options(
   "$<$<AND:$<CONFIG:RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:--param;inline-unit-growth=300>"
-  "$<$<AND:$<CONFIG:RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-mllvm;-inline-threshold=${clang_inline_threshold}>")
+  "$<$<AND:$<CONFIG:RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-mllvm;-inline-threshold=${Scylla_CLANG_INLINE_THRESHOLD}>")
 # clang generates 16-byte loads that break store-to-load forwarding
 # gcc also has some trouble: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103554
 check_cxx_compiler_flag("-fno-slp-vectorize" _slp_vectorize_supported)
