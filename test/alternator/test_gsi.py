@@ -1871,3 +1871,65 @@ def test_17119a(test_table_gsi_2):
     assert_index_query(test_table_gsi_2, 'hello', [item],
         KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                        'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# The following test checks what happens when we have an LSI and a GSI using
+# the same base-table attribute. We want to verify that if the implementation
+# happens to store key attributes for LSIs and GSIs differently, and we have
+# both on the same table, both are usable. This is a delicate corner case,
+# which should be tested so it doesn't regress.
+#
+# In particular, we plan LSI and GSI to be implemented as follows: When "x"
+# is an LSI key, "x" becomes a full-fleged column in the schema (remember
+# that in DynamoDB, an LSI must be defined at table-creation time). Yet, when
+# "x" is a GSI key, it will use a "computed column" to extract x from the
+# map ":attrs" of un-schema'ed attributes. So do the two work at the same time?
+# It turns out the code value_getter::operator() which is supposed to
+# read the base data from either a real column or a computed column,
+# looks for the real column *first*; If it exists (as in the case of the
+# LSI), it is used and the computed column is outright ignored. Because
+# this logic is delicate and even counter-intuitive and at risk of being
+# "cleaned up" in the future, this test is an important regression test.
+# By the way, we have in test_lsi.py::test_lsi_and_gsi() another test
+# for combining GSI and LSI, testing somewhat different things.
+def test_gsi_and_lsi_same_key(dynamodb):
+    # A table whose non-key column "x" serves as a range key in an LSI,
+    # and partition key in a GSI.
+    with new_test_table(dynamodb,
+        KeySchema=[
+            # Must have both hash key and range key to allow LSI creation
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        # Write some data with attribute x, see it appear in the base table
+        # and both LSI and GSI.
+        p = random_string() # key column in base (and therefore in GSI & LSI)
+        c = random_string() # key column in base (and therefore in GSI & LSI)
+        x = random_string() # key column in LSI and GSI (regular in base)
+        y = random_string() # not a key anywhere
+        item = {'p': p, 'c': c, 'x': x, 'y': y}
+        table.put_item(Item=item)
+        assert table.get_item(Key={'p':  p, 'c': c}, ConsistentRead=True)['Item'] == item
+        assert_index_query(table, 'lsi', [item],
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}, 'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        assert_index_query(table, 'gsi', [item],
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})

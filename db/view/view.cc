@@ -629,6 +629,15 @@ public:
     vector_type operator()(const column_definition& cdef) {
         column_position++;
 
+        // Note that in the following lines, if the key column exists in the
+        // base table, then it will be used and the requested computed column
+        // will be outright ignored.
+        // I'm not sure why we chose this surprising logic, but it turns out
+        // to be useful in Alternator when combining an LSI (which puts its
+        // key attribute a real base column) and GSI (which uses a computed
+        // column) - and this logic means the GSI will read the real column
+        // stored by the LSI, which turns out to be the right thing to do
+        // (see the test test_gsi.py::test_gsi_and_lsi_same_key).
         auto* base_col = _base.get_column_definition(cdef.name());
         if (!base_col) {
             return handle_computed_column(cdef);
