@@ -478,10 +478,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
     auto& state = get_state(table_s);
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
-    for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
-        auto key = key_bucket.first;
-        auto& bucket = key_bucket.second;
-
+    for (auto&& [key, bucket] : buckets | boost::adaptors::reversed) {
         bool last_active_bucket = is_last_active_bucket(key, now);
         if (last_active_bucket) {
             state.recent_active_windows.insert(key);
@@ -536,10 +533,7 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(time_
     int64_t n = 0;
     timestamp_type now = state.highest_window_seen;
 
-    for (auto& task : tasks) {
-        const bucket_t& bucket = task.second;
-        timestamp_type bucket_key = task.first;
-
+    for (auto& [bucket_key, bucket] : tasks) {
         switch (compaction_mode(state, bucket, bucket_key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
             n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
