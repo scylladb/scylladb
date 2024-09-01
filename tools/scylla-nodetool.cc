@@ -399,11 +399,15 @@ void backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         params["snapshot"] = vm["snapshot"].as<sstring>();
     }
     const auto backup_res = client.post("/storage_service/backup", std::move(params));
+    const auto task_id = rjson::to_string_view(backup_res);
     if (vm.contains("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
         return;
     }
 
-    const auto task_id = rjson::to_string_view(backup_res);
     const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
     const auto wait_res = client.get(url);
     const auto& status = wait_res.GetObject();
@@ -1494,11 +1498,15 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         params["table"] = vm["table"].as<sstring>();
     }
     const auto restore_res = client.post("/storage_service/restore", std::move(params));
+    const auto task_id = rjson::to_string_view(restore_res);
     if (vm.count("nowait")) {
+        fmt::print(R"(The task id of this operation is {}
+Please use the 'task' subcommands to manage the task.
+)",
+                   task_id);
         return;
     }
 
-    const auto task_id = rjson::to_string_view(restore_res);
     const auto url = seastar::format("/task_manager/wait_task/{}", task_id);
     const auto wait_res = client.get(url);
     const auto& status = wait_res.GetObject();

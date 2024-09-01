@@ -63,7 +63,8 @@ def test_restore(nodetool, scylla_only, table, nowait):
         args.extend(["--table", table])
     if nowait:
         args.append("--nowait")
-        expected_output = ""
+        res = nodetool(*args, expected_requests=expected_requests)
+        assert task_id in res.stdout
     else:
         # wait for the completion of backup task
         expected_requests.append(
@@ -71,9 +72,9 @@ def test_restore(nodetool, scylla_only, table, nowait):
                 "GET",
                 f"/task_manager/wait_task/{task_id}",
                 response=task_status))
+        res = nodetool(*args, expected_requests=expected_requests)
         expected_output = f"""{state}
 start: {start_time}
 end: {end_time}
 """
-    res = nodetool(*args, expected_requests=expected_requests)
-    assert res.stdout == expected_output
+        assert res.stdout == expected_output
