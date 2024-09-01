@@ -1147,7 +1147,14 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(table_state* t) const {
-    return (_state == state::enabled) && _compaction_state.contains(t) && !_compaction_state.at(t).compaction_disabled();
+    if (_state != state::enabled) {
+        return false;
+    }
+    auto found = _compaction_state.find(t);
+    if (found == _compaction_state.end()) {
+        return false;
+    }
+    return !found->second.compaction_disabled();
 }
 
 future<> compaction_task_executor::perform() {
