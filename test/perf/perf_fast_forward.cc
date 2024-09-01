@@ -29,6 +29,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/units.hh>
+#include <seastar/testing/random.hh>
 #include <seastar/testing/test_runner.hh>
 #include <seastar/util/closeable.hh>
 #include "compaction/compaction_manager.hh"

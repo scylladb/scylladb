@@ -13,6 +13,7 @@
 #include <boost/range/algorithm/generate.hpp>
 #include <iostream>
 
+#include <seastar/testing/random.hh>
 #include <seastar/testing/test_runner.hh>
 
 #include "bytes.hh"
