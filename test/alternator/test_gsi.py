@@ -488,15 +488,12 @@ def test_gsi_wrong_type_attribute_update_nested(test_table_gsi_2):
     test_table_gsi_2.put_item(Item={'p':  p, 'x': x})
     # We can't write a map into a GSI key column, which in this case can only
     # be a string and in any case can never be a map. DynamoDB and Alternator
-    # report different errors here: DynamoDB reports a type mismatch (exactly
-    # like in test test_gsi_wrong_type_attribute_update), but Alternator
-    # reports the obscure message "Malformed value object for key column x".
-    # Alternator's error message should probably be improved here, but let's
-    # not test it in this test.
-    with pytest.raises(ClientError, match='ValidationException'):
+    # both report a "type mismatch" error, exactly like in the test
+    # test_gsi_wrong_type_attribute_update.
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
         test_table_gsi_2.update_item(Key={'p': p}, UpdateExpression='SET x = :val1',
             ExpressionAttributeValues={':val1': {'a': 3, 'b': 4}})
-    # Here we try to set x.y for the GSI key column x. Again DynamoDB and
+    # Here we try to set x.y for the GSI key column x. Here DynamoDB and
     # Alternator produce different error messages - but both make sense.
     # DynamoDB says "Key attributes must be scalars; list random access '[]'
     # and map # lookup '.' are not allowed: IndexKey: x", while Alternator

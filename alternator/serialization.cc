@@ -277,8 +277,7 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
 // mentioned in the exception message).
 // If the type does match, a reference to the encoded value is returned.
 static const rjson::value& get_typed_value(const rjson::value& key_typed_value, std::string_view type_str, std::string_view name, std::string_view value_name) {
-    if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1 ||
-            !key_typed_value.MemberBegin()->value.IsString()) {
+    if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1) {
         throw api_error::validation(
                 format("Malformed value object for {} {}: {}",
                         value_name, name, key_typed_value));
@@ -289,6 +288,14 @@ static const rjson::value& get_typed_value(const rjson::value& key_typed_value, 
         throw api_error::validation(
                 format("Type mismatch: expected type {} for {} {}, got type {}",
                         type_str, value_name, name, it->name));
+    }
+    // We assume this function is called just for key types (S, B, N), and
+    // all of those always have a string value in the JSON.
+    if (!it->value.IsString()) {
+        throw api_error::validation(
+            format("Malformed value object for {} {}: {}",
+                    value_name, name, key_typed_value));
+
     }
     return it->value;
 }
