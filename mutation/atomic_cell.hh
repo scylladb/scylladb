@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <seastar/util/bool_class.hh>
+
 #include "bytes.hh"
 #include "timestamp.hh"
 #include "mutation/tombstone.hh"
@@ -31,6 +33,7 @@ template <mutable_view is_mutable>
 using atomic_cell_value_basic_view = managed_bytes_basic_view<is_mutable>;
 using atomic_cell_value_view = atomic_cell_value_basic_view<mutable_view::no>;
 using atomic_cell_value_mutable_view = atomic_cell_value_basic_view<mutable_view::yes>;
+using is_live = bool_class<struct is_live_tag>;
 
 template <typename T>
 requires std::is_trivial_v<T>

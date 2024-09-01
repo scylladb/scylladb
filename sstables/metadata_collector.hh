@@ -43,6 +43,12 @@ struct column_stats {
 
     /** the largest/smallest (client-supplied) timestamp in the partition */
     min_max_tracker<api::timestamp_type> timestamp_tracker;
+    /** the largest/smallest (client-supplied) timestamp of live data in the partition, for the purpose of tombstone garbage collection **/
+    min_tracker<api::timestamp_type> min_live_timestamp_tracker;
+    /** the largest/smallest (client-supplied) timestamp of live data that would shadow shadowable tomebstones in the partition,
+     ** for the purpose of tombstone garbage collection of shadowable tombstones **/
+    min_tracker<api::timestamp_type> min_live_row_marker_timestamp_tracker;
+
     min_max_tracker<int32_t> local_deletion_time_tracker;
     min_max_tracker<int32_t> ttl_tracker;
     /** histogram of tombstone drop time */
@@ -59,6 +65,8 @@ struct column_stats {
         dead_rows_count(0),
         start_offset(0),
         partition_size(0),
+        min_live_timestamp_tracker(api::max_timestamp),
+        min_live_row_marker_timestamp_tracker(api::max_timestamp),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
         has_legacy_counter_shards(false)
         {
@@ -68,8 +76,15 @@ struct column_stats {
         *this = column_stats();
     }
 
-    void update_timestamp(api::timestamp_type value) {
+    void update_timestamp(api::timestamp_type value, is_live is_live) {
         timestamp_tracker.update(value);
+        if (is_live) {
+            min_live_timestamp_tracker.update(value);
+        }
+    }
+
+    void update_live_row_marker_timestamp(api::timestamp_type value) {
+        min_live_row_marker_timestamp_tracker.update(value);
     }
 
     void update_local_deletion_time(int32_t value) {
@@ -89,7 +104,7 @@ struct column_stats {
         ttl_tracker.update(gc_clock::as_int32(value));
     }
     void do_update(const tombstone& t) {
-        update_timestamp(t.timestamp);
+        update_timestamp(t.timestamp, is_live::no);
         update_local_deletion_time_and_tombstone_histogram(t.deletion_time);
     }
     void update(const tombstone& t) {

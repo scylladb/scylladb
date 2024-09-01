@@ -31,30 +31,26 @@ static mutation_reader make_partition_snapshot_flat_reader_from_snp_schema(
         std::any pointer_to_container,
         streamed_mutation::forwarding fwd, memtable& memtable);
 
-void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) noexcept {
-    if (ts != api::missing_timestamp) {
-        encoding_stats_collector::update_timestamp(ts);
-        min_max_timestamp.update(ts);
-    }
-}
-
 memtable::memtable_encoding_stats_collector::memtable_encoding_stats_collector() noexcept
     : min_max_timestamp(0, 0)
+    , min_live_timestamp(api::max_timestamp)
+    , min_live_row_marker_timestamp(api::max_timestamp)
 {}
 
 void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) noexcept {
-    update_timestamp(cell.timestamp());
+    is_live is_live = ::is_live(cell.is_live());
+    update_timestamp(cell.timestamp(), is_live);
     if (cell.is_live_and_has_ttl()) {
         update_ttl(cell.ttl());
         update_local_deletion_time(cell.expiry());
-    } else if (!cell.is_live()) {
+    } else if (!is_live) {
         update_local_deletion_time(cell.deletion_time());
     }
 }
 
 void memtable::memtable_encoding_stats_collector::update(tombstone tomb) noexcept {
     if (tomb) {
-        update_timestamp(tomb.timestamp);
+        update_timestamp(tomb.timestamp, is_live::no);
         update_local_deletion_time(tomb.deletion_time);
     }
 }
@@ -88,15 +84,19 @@ void memtable::memtable_encoding_stats_collector::update(const row_marker& marke
     if (marker.is_missing()) {
         return;
     }
-    update_timestamp(marker.timestamp());
-    // FIXME: indentation
-        if (!marker.is_live()) {
-            update_ttl(gc_clock::duration(sstables::expired_liveness_ttl));
-            update_local_deletion_time(marker.deletion_time());
-        } else if (marker.is_expiring()) {
+    auto timestamp = marker.timestamp();
+    if (!marker.is_live()) {
+        update_timestamp(timestamp, is_live::no);
+        update_ttl(gc_clock::duration(sstables::expired_liveness_ttl));
+        update_local_deletion_time(marker.deletion_time());
+    } else {
+        update_timestamp(timestamp, is_live::yes);
+        update_live_row_marker_timestamp(timestamp);
+        if (marker.is_expiring()) {
             update_ttl(marker.ttl());
             update_local_deletion_time(marker.expiry());
         }
+    }
 }
 
 void memtable::memtable_encoding_stats_collector::update(const ::schema& s, const deletable_row& dr) {

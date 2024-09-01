@@ -890,7 +890,8 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
 
     auto md2 = tests::data_model::mutation_description({ to_bytes("pk2") });
     auto md2_ttl = gc_clock::duration(std::chrono::seconds(1));
-    md2.add_clustered_row_marker({ to_bytes("ck1") }, -10);
+    api::timestamp_type md2_timestamp = -10;
+    md2.add_clustered_row_marker({ to_bytes("ck1") }, md2_timestamp);
     md2.add_clustered_cell({ to_bytes("ck1") }, "v1", random_int32_value());
     md2.add_clustered_cell({ to_bytes("ck2") }, "v2",
             tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md2_ttl, now + md2_ttl));
@@ -903,30 +904,61 @@ SEASTAR_THREAD_TEST_CASE(test_collecting_encoding_stats) {
             tests::data_model::mutation_description::atomic_value(random_int32_value(), tests::data_model::data_timestamp, md3_ttl, md3_expiry_point));
     auto m3 = md3.build(s);
 
+    auto md4 = tests::data_model::mutation_description({ to_bytes("pk1") });
+    auto md4_tombstone = tombstone(md2_timestamp - 10, now - std::chrono::hours(9));
+    md4.set_partition_tombstone(md4_tombstone);
+    auto m4 = md4.build(s);
+
     auto mt = make_lw_shared<replica::memtable>(s);
 
     auto stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());
     BOOST_CHECK_EQUAL(stats.min_timestamp, api::max_timestamp);
     BOOST_CHECK(stats.min_ttl == gc_clock::duration::max());
+    BOOST_CHECK_EQUAL(mt->get_min_timestamp(), 0);
+    BOOST_CHECK_EQUAL(mt->get_max_timestamp(), 0);
+    BOOST_CHECK_EQUAL(mt->get_min_live_timestamp(), api::max_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_row_marker_timestamp(), api::max_timestamp);
 
     mt->apply(m1);
     stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == gc_clock::time_point::max());
     BOOST_CHECK_EQUAL(stats.min_timestamp, tests::data_model::data_timestamp);
     BOOST_CHECK(stats.min_ttl == gc_clock::duration::max());
+    BOOST_CHECK_EQUAL(mt->get_min_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_max_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_row_marker_timestamp(), tests::data_model::data_timestamp);
 
     mt->apply(m2);
     stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == now + md2_ttl);
-    BOOST_CHECK_EQUAL(stats.min_timestamp, -10);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, md2_timestamp);
     BOOST_CHECK(stats.min_ttl == md2_ttl);
+    BOOST_CHECK_EQUAL(mt->get_min_timestamp(), md2_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_max_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_timestamp(), md2_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_row_marker_timestamp(), md2_timestamp);
 
     mt->apply(m3);
     stats = mt->get_encoding_stats();
     BOOST_CHECK(stats.min_local_deletion_time == md3_expiry_point);
-    BOOST_CHECK_EQUAL(stats.min_timestamp, -10);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, md2_timestamp);
     BOOST_CHECK(stats.min_ttl == md2_ttl);
+    BOOST_CHECK_EQUAL(mt->get_min_timestamp(), md2_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_max_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_timestamp(), md2_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_row_marker_timestamp(), md2_timestamp);
+
+    mt->apply(m4);
+    stats = mt->get_encoding_stats();
+    BOOST_CHECK(stats.min_local_deletion_time == md4_tombstone.deletion_time);
+    BOOST_CHECK_EQUAL(stats.min_timestamp, md4_tombstone.timestamp);
+    BOOST_CHECK(stats.min_ttl == md2_ttl);
+    BOOST_CHECK_EQUAL(mt->get_min_timestamp(), md4_tombstone.timestamp);
+    BOOST_CHECK_EQUAL(mt->get_max_timestamp(), tests::data_model::data_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_timestamp(), md2_timestamp);
+    BOOST_CHECK_EQUAL(mt->get_min_live_row_marker_timestamp(), md2_timestamp);
 }
 
 
