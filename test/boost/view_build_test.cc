@@ -21,17 +21,18 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
+#include "schema/schema_builder.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/sstable_utils.hh"
-#include "schema/schema_builder.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/ranges.hh"
 
