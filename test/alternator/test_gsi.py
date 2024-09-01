@@ -11,7 +11,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
+from test.alternator.util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -1513,6 +1513,147 @@ def test_gsi_query_select_2(dynamodb):
             IndexName='hello',
             Select='COUNT',
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# In all GSIs above, the GSI's key was a string from the base table
+# (AttributeType: S). While most of the GSI functionality is independent of
+# the key's type, some may be type-specific - Alternator may rely on a
+# "computed function" to deserializes the value from the base to put it in
+# the view row. So test_table_gsi_6 is a table which has six GSIs, each one
+# with one of the three legal AttributeType (S, B, and N) for its partition
+# key or clustering key.
+@pytest.fixture(scope="module")
+def test_table_gsi_6(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 's', 'AttributeType': 'S' },
+                    { 'AttributeName': 'b', 'AttributeType': 'B' },
+                    { 'AttributeName': 'n', 'AttributeType': 'N' }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_s',
+                'KeySchema': [
+                    { 'AttributeName': 's', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_ss',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 's', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_b',
+                'KeySchema': [
+                    { 'AttributeName': 'b', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_sb',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'b', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_n',
+                'KeySchema': [
+                    { 'AttributeName': 'n', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_sn',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'n', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+# Tests for test_table_gsi_6, just checking that the write of different types
+# doesn't fail (below we'll have additional tests that also read the GSI).
+# Also check failure cases (wrong types, and empty string).
+# As explained in a comment above for test_table_gsi_6, the main goal of these
+# tests is to check the "computed function" which our implementation uses to
+# parse the base-table values of different types.
+def test_gsi_6_write_s(test_table_gsi_6):
+    test_table_gsi_6.put_item(Item={'p': random_string(), 's': random_string()})
+
+def test_gsi_6_write_s_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': ''})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': 3})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': b'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': {'hi', 'there'}})
+
+def test_gsi_6_write_b(test_table_gsi_6):
+    p = random_string()
+    b = random_bytes()
+    test_table_gsi_6.put_item(Item={'p': p, 'b': b})
+
+def test_gsi_6_write_b_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': b''})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': 3})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': 'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': {'hi', 'there'}})
+
+def test_gsi_6_write_n(test_table_gsi_6):
+    p = random_string()
+    n = 87
+    test_table_gsi_6.put_item(Item={'p': p, 'n': n})
+
+def test_gsi_6_write_n_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': b'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': 'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': {'hi', 'there'}})
+
+def test_gsi_6(test_table_gsi_6):
+    p = random_string()
+    s = random_string()
+    b = random_bytes()
+    n = 17
+    x = random_string()
+    item={'p': p, 's': s, 'b': b, 'n': n, 'x': x}
+    test_table_gsi_6.put_item(Item=item)
+    # Check that all six GSIs as usable with their different keys.
+    # Note that we're reading from six different GSIs, so we need to use
+    # the maybe-retrying assert_index_query() for each of them.
+    assert_index_query(test_table_gsi_6, 'gsi_s', [item],
+        KeyConditions={'s': {'AttributeValueList': [s], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [item],
+        KeyConditions={'s': {'AttributeValueList': [s], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_b', [item],
+        KeyConditions={'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_sb', [item],
+        KeyConditions={'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_n', [item],
+        KeyConditions={'n': {'AttributeValueList': [n], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_sn', [item],
+        KeyConditions={'n': {'AttributeValueList': [n], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
 
 # Test that trying to create a table with two GSIs with the same name is an
 # error.

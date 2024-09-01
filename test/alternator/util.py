@@ -117,6 +117,8 @@ def freeze(item):
         return frozenset((key, freeze(value)) for key, value in item.items())
     elif isinstance(item, list):
         return tuple(freeze(value) for value in item)
+    elif isinstance(item, bytearray):
+        return bytes(item)
     return item
 
 def multiset(items):
