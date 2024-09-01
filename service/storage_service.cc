@@ -4684,6 +4684,12 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 future<> storage_service::rebuild(utils::optional_param source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) -> future<> {
         ss.check_ability_to_perform_topology_operation("rebuild");
+        if (auto tablets_keyspaces = ss._db.local().get_tablets_keyspaces(); !tablets_keyspaces.empty()) {
+            std::ranges::sort(tablets_keyspaces);
+            slogger.warn("Rebuild is not supported for the following tablets-enabled keyspaces: {}: "
+                    "Rebuild is not required for tablets-enabled keyspace after increasing replication factor. "
+                    "However, recovering from local data loss on this node requires running repair on all nodes in the datacenter", tablets_keyspaces);
+        }
         if (ss.raft_topology_change_enabled()) {
             co_await ss.raft_rebuild(source_dc);
         } else {

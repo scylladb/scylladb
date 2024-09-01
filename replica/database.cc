@@ -1111,6 +1111,18 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
     return res;
 }
 
+std::vector<sstring> database::get_tablets_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& [name, ks] : _keyspaces) {
+        auto&& rs = ks.get_replication_strategy();
+        if (rs.is_per_table()) {
+            res.emplace_back(name);
+        }
+    }
+    return res;
+}
+
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
         get_tables_metadata().filter([] (auto uuid_and_cf) {
