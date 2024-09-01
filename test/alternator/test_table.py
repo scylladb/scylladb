@@ -687,6 +687,17 @@ def test_delete_table_description_with_si(dynamodb):
         assert i in got_describe
         assert not i in got_delete
 
+# Test that CreateTable rejects spurious entries in AttributeDefinitions
+# (entries which aren't used as a key of the table or any GSI or LSI).
+# Reproduces issue #19784.
+def test_create_table_spurious_attribute_definitions(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
+        with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }]) as table:
+                pass
+
 # Currently, because of incomplete LWT support, Alternator tables do not use
 # tablets by default - even if the tablets experimental feature is enabled.
 # This test enshrines this fact - that an Alternator table doesn't use tablets.

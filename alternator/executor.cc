@@ -946,7 +946,10 @@ static void verify_billing_mode(const rjson::value& request) {
 // throws user-facing api_error::validation if it's not.
 // In particular, verify that the same AttributeName doesn't appear more than
 // once (Issue #13870).
-static void validate_attribute_definitions(const rjson::value& attribute_definitions){
+// Return the set of attribute names defined in AttributeDefinitions - this
+// set is useful for later verifying that all of them are used by some
+// KeySchema (issue #19784)
+static std::unordered_set<std::string> validate_attribute_definitions(const rjson::value& attribute_definitions){
     if (!attribute_definitions.IsArray()) {
         throw api_error::validation("AttributeDefinitions must be an array");
     }
@@ -972,6 +975,7 @@ static void validate_attribute_definitions(const rjson::value& attribute_definit
             throw api_error::validation("AttributeType in AttributeDefinitions must be a string");
         }
     }
+    return seen_attribute_names;
 }
 
 static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
@@ -989,15 +993,22 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value& attribute_definitions = request["AttributeDefinitions"];
-    validate_attribute_definitions(attribute_definitions);
+    // Save the list of AttributeDefinitions in unused_attribute_definitions,
+    // and below remove each one as we see it in a KeySchema of the table or
+    // any of its GSIs or LSIs. If anything remains in this set at the end of
+    // this function, it's an error.
+    std::unordered_set<std::string> unused_attribute_definitions =
+        validate_attribute_definitions(attribute_definitions);
 
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
     schema_builder builder(keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request);
     add_column(builder, hash_key, attribute_definitions, column_kind::partition_key);
+    unused_attribute_definitions.erase(hash_key);
     if (!range_key.empty()) {
         add_column(builder, range_key, attribute_definitions, column_kind::clustering_key);
+        unused_attribute_definitions.erase(range_key);
     }
     builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
@@ -1038,6 +1049,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 add_column(builder, view_hash_key, attribute_definitions, column_kind::regular_column);
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
+            unused_attribute_definitions.erase(view_hash_key);
             if (!view_range_key.empty()) {
                 if (partial_schema->get_column_definition(to_bytes(view_range_key)) == nullptr) {
                     // A column that exists in a global secondary index is upgraded from being a map entry
@@ -1050,6 +1062,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                     add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
                 }
                 add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
+                unused_attribute_definitions.erase(view_range_key);
             }
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
@@ -1100,9 +1113,11 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 co_return api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
+            unused_attribute_definitions.erase(view_hash_key);
             if (view_range_key.empty()) {
                 co_return api_error::validation("LocalSecondaryIndex must specify a sort key");
             }
+            unused_attribute_definitions.erase(view_range_key);
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
               }
@@ -1133,6 +1148,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
         }
+    }
+
+    if (!unused_attribute_definitions.empty()) {
+        co_return api_error::validation(format(
+            "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
+            unused_attribute_definitions));
     }
 
     // We don't yet support configuring server-side encryption (SSE) via the
