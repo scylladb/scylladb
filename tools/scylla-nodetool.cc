@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <concepts>
+#include <cstdlib>
 #include <future>
 #include <limits>
 #include <iterator>
@@ -413,7 +414,9 @@ Please use the 'task' subcommands to manage the task.
     const auto& status = wait_res.GetObject();
     auto state = rjson::to_string_view(status["state"]);
     fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
     if (state != "done") {
+        exit_code = EXIT_FAILURE;
         fmt::print(": {}", rjson::to_string_view(status["error"]));
     }
     fmt::print(R"(
@@ -422,6 +425,9 @@ end: {}
 )",
                rjson::to_string_view(status["start_time"]),
                rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
 }
 
 void checkandrepaircdcstreams_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -1512,7 +1518,9 @@ Please use the 'task' subcommands to manage the task.
     const auto& status = wait_res.GetObject();
     auto state = rjson::to_string_view(status["state"]);
     fmt::print("{}", state);
+    int exit_code = EXIT_SUCCESS;
     if (state != "done") {
+        exit_code = EXIT_FAILURE;
         fmt::print(": {}", rjson::to_string_view(status["error"]));
     }
     fmt::print(R"(
@@ -1521,6 +1529,9 @@ end: {}
 )",
                rjson::to_string_view(status["start_time"]),
                rjson::to_string_view(status["end_time"]));
+    if (exit_code != EXIT_SUCCESS) {
+        throw operation_failed_with_status{exit_code};
+    }
 }
 
 struct host_stat {
