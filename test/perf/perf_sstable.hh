@@ -12,6 +12,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/seastar.hh>
 
+#include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/time_window_compaction_strategy.hh"
@@ -154,6 +155,58 @@ private:
         return builder.build(schema_builder::compact_storage::no);
     }
 
+    using clk = std::chrono::steady_clock;
+    static auto now() {
+        return clk::now();
+    }
+
+    enum class sst_reader {
+        crawling,
+        partitioned,
+    };
+
+    future<double> do_streaming(sst_reader reader_type) {
+        const auto start = perf_sstable_test_env::now();
+
+        // mimic the behavior of sstable_streamer::stream_sstable_mutations()
+        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+        // stream all previously loaded sstables
+        for (auto& sst : _sst) {
+            sst_set->insert(sst);
+        }
+        // do not compact when performing streaming, as we focus on the read
+        // performance
+        auto reader = mutation_reader{nullptr};
+        if (reader_type == sst_reader::crawling) {
+            reader = sst_set->make_crawling_reader(s,
+                                                   _env.make_reader_permit(),
+                                                   tracing::trace_state_ptr{},
+                                                   default_read_monitor_generator());
+        } else {
+            const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
+            auto& slice = s->full_slice();
+            reader = sst_set->make_range_sstable_reader(s,
+                                                        _env.make_reader_permit(),
+                                                        full_partition_range,
+                                                        slice,
+                                                        tracing::trace_state_ptr{},
+                                                        streamed_mutation::forwarding::no,
+                                                        mutation_reader::forwarding::no);
+        }
+        auto frag_stream = mutation_fragment_v1_stream{std::move(reader)};
+        size_t num_partitions_processed = 0;
+        while (auto frag = co_await frag_stream()) {
+            if (frag->is_partition_start()) {
+                ++num_partitions_processed;
+            }
+            auto frozen_frag = freeze(*s, *frag);
+        }
+
+        const auto end = perf_sstable_test_env::now();
+        const auto duration = std::chrono::duration<double>(end - start).count();
+        co_return num_partitions_processed / duration;
+    }
+
 public:
     perf_sstable_test_env(conf cfg) : _cfg(std::move(cfg))
            , s(create_schema(cfg.compaction_strategy))
@@ -194,12 +247,6 @@ public:
         });
         co_await h.done();
     }
-
-    using clk = std::chrono::steady_clock;
-    static auto now() {
-        return clk::now();
-    }
-
 
     // Mappers below
     future<double> flush_memtable(int idx) {
@@ -306,6 +353,14 @@ public:
                 return *total / duration;
             });
         });
+    }
+
+    future<double> crawling_streaming(int idx) {
+        return do_streaming(sst_reader::crawling);
+    }
+
+    future<double> partitioned_streaming(int idx) {
+        return do_streaming(sst_reader::partitioned);
     }
 };
 
