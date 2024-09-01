@@ -17,7 +17,8 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/algorithm/partial_sort.hpp>
-#include <boost/range/adaptor/reversed.hpp>
+
+#include <ranges>
 
 namespace sstables {
 
@@ -463,7 +464,7 @@ struct fmt::formatter<std::map<sstables::timestamp_type, std::vector<sstables::s
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const std::map<sstables::timestamp_type, std::vector<sstables::shared_sstable>>& buckets, fmt::format_context& ctx) const {
         auto out = fmt::format_to(ctx.out(), "  buckets = {{\n");
-        for (auto& [timestamp, sstables] : buckets | boost::adaptors::reversed) {
+        for (auto& [timestamp, sstables] : buckets | std::views::reverse) {
             out = fmt::format_to(out, "    key={}, size={}\n", timestamp, sstables.size());
         }
         return fmt::format_to(out, "  }}\n");
@@ -478,7 +479,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
     auto& state = get_state(table_s);
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
-    for (auto&& [key, bucket] : buckets | boost::adaptors::reversed) {
+    for (auto&& [key, bucket] : buckets | std::views::reverse) {
         bool last_active_bucket = is_last_active_bucket(key, now);
         if (last_active_bucket) {
             state.recent_active_windows.insert(key);
