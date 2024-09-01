@@ -58,27 +58,26 @@ def assert_index_scan(table, index_name, expected_items, **kwargs):
 # The following test does not work for KA/LA tables due to #6157, but we
 # no longer allow writing those in Scylla.
 def test_gsi_identical(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
-        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'hello',
-                'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-                'Projection': { 'ProjectionType': 'ALL' }
-            }
-        ])
-    items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    # Scanning the entire table directly or via the index yields the same
-    # results (in different order).
-    assert multiset(items) == multiset(full_scan(table))
-    assert_index_scan(table, 'hello', items)
-    # We can't scan a non-existent index
-    with pytest.raises(ClientError, match='ValidationException'):
-        full_scan(table, ConsistentRead=False, IndexName='wrong')
-    table.delete()
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ]) as table:
+        items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Scanning the entire table directly or via the index yields the same
+        # results (in different order).
+        assert multiset(items) == multiset(full_scan(table))
+        assert_index_scan(table, 'hello', items)
+        # We can't scan a non-existent index
+        with pytest.raises(ClientError, match='ValidationException'):
+            full_scan(table, ConsistentRead=False, IndexName='wrong')
 
 # One of the simplest forms of a non-trivial GSI: The base table has a hash
 # and sort key, and the index reverses those roles. Other attributes are just
@@ -1153,7 +1152,7 @@ def test_gsi_delete(dynamodb):
 # and, if creation was successful, delete it. Useful for testing which
 # GSI names work.
 def create_gsi(dynamodb, index_name):
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
         GlobalSecondaryIndexes=[
@@ -1161,10 +1160,9 @@ def create_gsi(dynamodb, index_name):
                 'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
                 'Projection': { 'ProjectionType': 'ALL' }
             }
-        ])
-    # Verify that the GSI wasn't just ignored, as Scylla originally did ;-)
-    assert 'GlobalSecondaryIndexes' in table.meta.client.describe_table(TableName=table.name)['Table']
-    table.delete()
+        ]) as table:
+        # Verify that the GSI wasn't just ignored, as Scylla originally did ;-)
+        assert 'GlobalSecondaryIndexes' in table.meta.client.describe_table(TableName=table.name)['Table']
 
 # Like table names (tested in test_table.py), index names must must also
 # be 3-255 characters and match the regex [a-zA-Z0-9._-]+. This test
