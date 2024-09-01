@@ -1682,6 +1682,7 @@ public:
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
     std::vector<sstring> get_non_local_vnode_based_strategy_keyspaces() const;
     std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
+    std::vector<sstring> get_tablets_keyspaces() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
     column_family& find_column_family(const table_id&);
