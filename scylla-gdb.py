@@ -6,6 +6,7 @@ import gdb.printing
 import uuid
 import argparse
 import datetime
+import functools
 import re
 from operator import attrgetter
 from collections import defaultdict
@@ -118,7 +119,11 @@ def downcast_vptr(ptr):
 
 
 class intrusive_list:
-    size_t = gdb.lookup_type('size_t')
+    @classmethod
+    @property
+    @functools.cache
+    def size_t(cls):
+        return gdb.lookup_type('size_t')
 
     def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
@@ -160,7 +165,11 @@ class intrusive_list:
 
 
 class intrusive_slist:
-    size_t = gdb.lookup_type('size_t')
+    @classmethod
+    @property
+    @functools.cache
+    def size_t(cls):
+        return gdb.lookup_type('size_t')
 
     def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
@@ -240,7 +249,11 @@ class std_tuple:
 
 
 class intrusive_set:
-    size_t = gdb.lookup_type('size_t')
+    @classmethod
+    @property
+    @functools.cache
+    def size_t(cls):
+        return gdb.lookup_type('size_t')
 
     def __init__(self, ref, link=None):
         container_type = ref.type.strip_typedefs()
@@ -428,7 +441,11 @@ class std_variant:
 
 
 class std_map:
-    size_t = gdb.lookup_type('size_t')
+    @classmethod
+    @property
+    @functools.cache
+    def size_t(cls):
+        return gdb.lookup_type('size_t')
 
     def __init__(self, ref):
         container_type = ref.type.strip_typedefs()
@@ -3890,9 +3907,14 @@ class scylla_fiber(gdb.Command):
     Invoke `scylla fiber --help` for more information on usage.
     """
 
+    @classmethod
+    @property
+    @functools.cache
+    def _vptr_type(cls):
+        return gdb.lookup_type('uintptr_t').pointer()
+
     def __init__(self):
         gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
-        self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
         self._task_symbol_matcher = task_symbol_matcher()
         self._thread_map = None
 
@@ -4174,7 +4196,12 @@ class scylla_find(gdb.Command):
       thread 1, small (size <= 512), live (0x6000000f3800 +48)
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
-    _vptr_type = gdb.lookup_type('uintptr_t').pointer()
+    @classmethod
+    @property
+    @functools.cache
+    def _vptr_type(cls):
+        return gdb.lookup_type('uintptr_t').pointer()
+
     _size_char_to_size = {
         'b': 8,
         'h': 16,

@@ -11,6 +11,7 @@
 
 import pytest
 import os
+import sys
 
 try:
     import gdb as gdb_library
@@ -18,12 +19,6 @@ except:
     print('This test must be run inside gdb. Run ./run instead.')
     exit(1)
 
-try:
-    gdb_library.lookup_type('size_t')
-except:
-    print(f'ERROR: Scylla executable was compiled without debugging information (-g)')
-    print(f'so cannot be used to test gdb. Please set SCYLLA environment variable.')
-    exit(1)
 
 def pytest_addoption(parser):
     parser.addoption('--scylla-pid', action='store', default=None,
@@ -40,7 +35,6 @@ def pytest_addoption(parser):
 # object.
 @pytest.fixture(scope="session")
 def scylla_gdb(request):
-    import sys
     save_sys_path = sys.path
     sys.path.insert(1, sys.path[0] + '/../..')
     # Unfortunately, the file's name includes a dash which requires some
@@ -59,6 +53,13 @@ def scylla_gdb(request):
 # subcommands are loaded into gdb.
 @pytest.fixture(scope="session")
 def gdb(request, scylla_gdb):
+    try:
+        gdb_library.lookup_type('size_t')
+    except:
+        print('ERROR: Scylla executable was compiled without debugging information (-g)')
+        print('so cannot be used to test gdb. Please set SCYLLA environment variable.')
+        sys.exit(1)
+
     # The gdb tests are known to be broken on aarch64 (see
     # https://sourceware.org/bugzilla/show_bug.cgi?id=27886) and untested
     # on anything else. So skip them.

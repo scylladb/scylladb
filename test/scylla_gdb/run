@@ -32,7 +32,7 @@ run.wait_for_services(pid, [lambda: run.check_cql(ip)])
 # run pytest inside gdb - and instead run gdb as a separate process and
 # pytest just sends commands to it.
 # TODO: think if we can avoid code duplication with run.run_ptest().
-def run_pytest_in_gdb(pytest_dir, additional_parameters):
+def run_pytest_in_gdb(pytest_dir, executable, additional_parameters):
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
@@ -43,13 +43,16 @@ def run_pytest_in_gdb(pytest_dir, additional_parameters):
         os.chdir(pytest_dir)
         pytest_args = ['-o', 'junit_family=xunit2'] + additional_parameters
         pytest_cmd = f'print("Starting pytest {" ".join(pytest_args)}"); import pytest; sys.argv[0]="pytest"; sys.exit(pytest.main({str(pytest_args)}))'
-        print(f'Starting gdb {run.scylla}')
+        print(f'Starting gdb {executable}')
         sys.stdout.flush()
-        os.execvp('gdb', ['gdb',
-            '-batch', '-n', '-se', run.scylla,
-            '-ex', 'set python print-stack full',
-            '-ex', 'python ' + pytest_cmd,
-            ])
+        args = ['gdb',
+                '-batch', '-n',
+                '-ex', 'set python print-stack full',
+                '-ex', 'python ' + pytest_cmd,
+                ]
+        if executable:
+            args += ['-se', executable]
+        os.execvp('gdb', args)
         exit(1)
     # parent:
     run.run_pytest_pids.add(pid)
@@ -65,7 +68,18 @@ def run_pytest_in_gdb(pytest_dir, additional_parameters):
 # command line, saves it as "initialpaths", and uses it to print what it
 # thinks are nice (but are really incorrect) relative paths for "nodes" (test
 # source files).
-success = run_pytest_in_gdb(sys.path[0], ['--scylla-pid='+str(pid), '--scylla-tmp-dir='+run.pid_to_dir(pid)] + sys.argv[1:])
+success = True
+for with_scylla in [True, False]:
+    if with_scylla:
+        args = ['--scylla-pid='+str(pid),
+                '--scylla-tmp-dir='+run.pid_to_dir(pid),
+                '-m', 'not without_scylla']
+        executable = run.scylla
+    else:
+        args = ['-m', 'without_scylla']
+        executable = ''
+    if not run_pytest_in_gdb(sys.path[0], executable, args + sys.argv[1:]):
+        success = False
 
 run.summary = 'Scylla GDB tests pass' if success else 'Scylla GDB tests failure'
 
