@@ -72,6 +72,9 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
             // the node won't try to fetch a topology snapshot if the other
             // node doesn't support it yet.
             _topology_change_enabled = true;
+        }))
+        , _snapshot_rpc_receiver_side_listener(feat.snapshot_rpc_receiver_side.when_enabled([this] () noexcept {
+            _snapshot_rpc_receiver_side_enabled = true;
         })) {
 }
 
@@ -306,26 +309,66 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> raft_snp;
 
     if (_topology_change_enabled) {
-        auto auth_tables = db::system_keyspace::auth_tables();
-        std::vector<table_id> tables;
-        tables.reserve(3);
-        tables.push_back(db::system_keyspace::topology()->id());
-        tables.push_back(db::system_keyspace::topology_requests()->id());
-        tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+        auto split_into_topology_and_raft_snapshot = [] (service::raft_snapshot&& snp) -> std::pair<service::raft_snapshot, service::raft_snapshot> {
+            auto it = std::partition(snp.mutations.begin(), snp.mutations.end(), [] (const canonical_mutation& m) {
+                    return m.column_family_id() == db::system_keyspace::topology()->id()
+                            || m.column_family_id() == db::system_keyspace::topology_requests()->id()
+                            || m.column_family_id() == db::system_keyspace::cdc_generations_v3()->id();
+            });
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            service::raft_snapshot topology_snp;
+            service::raft_snapshot raft_snp;
 
-        tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size());
+            std::move(snp.mutations.begin(), it, std::back_inserter(topology_snp.mutations));
+            std::move(it, snp.mutations.end(), std::back_inserter(raft_snp.mutations));
 
-        for (const auto& schema : auth_tables) {
-            tables.push_back(schema->id());
+            return {std::move(topology_snp), std::move(raft_snp)};
+        };
+
+        if (_snapshot_rpc_receiver_side_enabled) {
+            slogger.info("transfer snapshot: requesting everything at once using the new RPC semantics");
+
+            // The other node will ignore the tables list and will send everything at once.
+            auto snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{});
+
+            std::tie(topology_snp, raft_snp) = split_into_topology_and_raft_snapshot(std::move(snp));
+        } else {
+            // Send two RPCs as if we operated in legacy semantics. If the second RPC or both of them
+            // use new semantics, new data in the second snapshot will overwrite data in the old snapshot.
+
+            slogger.info("transfer snapshot: first round: requesting the topology tables via legacy RPC");
+            std::vector<table_id> tables;
+            tables.reserve(3);
+            tables.push_back(db::system_keyspace::topology()->id());
+            tables.push_back(db::system_keyspace::topology_requests()->id());
+            tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+
+            auto snp1 = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{tables});
+
+            slogger.trace("transfer snapshot: second round: requesting others (auth, SLs, view build status)");
+
+            tables = std::vector<table_id>();
+
+            auto auth_tables = db::system_keyspace::auth_tables();
+            tables.reserve(auth_tables.size() + 2);
+            for (const auto& schema : auth_tables) {
+                tables.push_back(schema->id());
+            }
+            tables.push_back(db::system_keyspace::service_levels_v2()->id());
+
+            auto snp2 = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{tables});
+
+            slogger.trace("transfer snapshot: second round: combining both snapshots and then applying");
+            service::raft_snapshot combined_snp;
+            combined_snp.mutations.reserve(snp1.mutations.size() + snp2.mutations.size());
+            std::move(snp1.mutations.begin(), snp1.mutations.end(), std::back_inserter(combined_snp.mutations));
+            std::move(snp2.mutations.begin(), snp2.mutations.end(), std::back_inserter(combined_snp.mutations));
+
+            std::tie(topology_snp, raft_snp) = split_into_topology_and_raft_snapshot(std::move(combined_snp));
         }
-        tables.push_back(db::system_keyspace::service_levels_v2()->id());
-
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());

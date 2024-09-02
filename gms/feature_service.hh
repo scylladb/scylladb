@@ -144,6 +144,7 @@ public:
     // have it or none, otherwise we can get partial failures on writes.
     gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
     gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
+    gms::feature snapshot_rpc_receiver_side { *this, "SNAPSHOT_RPC_RECEIVER_SIDE"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
