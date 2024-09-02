@@ -24,7 +24,7 @@ the same version works with ScyllaDB.
 
 The following table lists the available ScyllaDB drivers, specifying which support
 `ScyllaDB Cloud Serversless <https://cloud.docs.scylladb.com/stable/serverless/index.html>`_ 
-or include a library for :doc:`CDC </using-scylla/cdc/cdc-intro>`.
+or include a library for :doc:`CDC </features/cdc/cdc-intro>`.
 
 .. list-table:: 
    :widths: 30 35 35 

@@ -88,7 +88,7 @@ The conflict-resolution algorithm is documented in `ScyllaDB's internal document
 and it may be subject to change.
 
 Reliable serialization can be achieved using unique write ``TIMESTAMP``
-and by using :doc:`Lightweight Transactions (LWT) </using-scylla/lwt>` to ensure atomicity of
+and by using :doc:`Lightweight Transactions (LWT) </features/lwt>` to ensure atomicity of
 :ref:`INSERT <insert-statement>`, :ref:`UPDATE <update-statement>`, and :ref:`DELETE <delete_statement>`.
 
 

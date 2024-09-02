@@ -59,7 +59,7 @@ automatically at insertion time.
 Local Secondary Index
 ^^^^^^^^^^^^^^^^^^^^^
 
-:doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>` is an enhancement of :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`, which allows ScyllaDB to optimize the use case in which the partition key of the base table is also the partition key of the index. Local Secondary Index syntax is the same as above, with extra parentheses on the partition key.
+:doc:`Local Secondary Indexes </features/local-secondary-indexes>` is an enhancement of :doc:`Global Secondary Indexes </features/secondary-indexes>`, which allows ScyllaDB to optimize the use case in which the partition key of the base table is also the partition key of the index. Local Secondary Index syntax is the same as above, with extra parentheses on the partition key.
 
 .. code-block::
 
@@ -73,7 +73,7 @@ Example:
           CREATE TABLE menus (location text, name text, price float, dish_type text, PRIMARY KEY(location, name));
           CREATE INDEX ON menus((location),dish_type);
 
-More on :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>`
+More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 
 .. Attempting to create an already existing index will return an error unless the ``IF NOT EXISTS`` option is used. If it
 .. is used, the statement will be a no-op if the index already exists.
@@ -105,8 +105,8 @@ name, which may optionally specify the keyspace of the index.
 Additional Information
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
-* :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes/>`
+* :doc:`Global Secondary Indexes </features/secondary-indexes/>`
+* :doc:`Local Secondary Indexes </features/local-secondary-indexes/>`
 
 The following courses are available from ScyllaDB University:
 

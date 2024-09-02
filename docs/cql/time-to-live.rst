@@ -75,7 +75,7 @@ TTL with  LWT
 
 .. include:: /rst_include/note-ttl-lwt.rst
 
-Refer to :doc:`LWT </using-scylla/lwt/>` for more information.
+Refer to :doc:`LWT </features/lwt/>` for more information.
 
 The ``gc_grace_seconds`` parameter is defined :ref:`here <create-table-general-options>`.
 

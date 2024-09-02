@@ -7,7 +7,7 @@ This page contains information about ScyllaDB compatibility with Apache Cassandr
 
 The tables on this page include information about ScyllaDB Open Source support for Apache Cassandra features. 
 They do not include the ScyllaDB Enterprise-only features or ScyllaDB-specific features with no match in 
-Apache Cassandra.  See :doc:`ScyllaDB Features </using-scylla/features>` for more information about ScyllaDB features.
+Apache Cassandra.  See :doc:`ScyllaDB Features </features/index>` for more information about ScyllaDB features.
 
 How to Read the Tables on This Page
 -------------------------------------
@@ -100,7 +100,7 @@ Consistency Level (read and write)
 | LOCAL_SERIAL                        | |v|:sup:`*`  |
 +-------------------------------------+--------------+
 
-:sup:`*` See :doc:`ScyllaDB LWT </using-scylla/lwt>`.
+:sup:`*` See :doc:`ScyllaDB LWT </features/lwt>`.
 
 
 Snitches
@@ -197,7 +197,7 @@ Repair and Consistency
 +----------------------------------------------------------------------+--------------+
 |:doc:`Hinted Handoff </architecture/anti-entropy/hinted-handoff>`     | |v|          |
 +----------------------------------------------------------------------+--------------+
-|:doc:`Lightweight Transactions </using-scylla/lwt>`                   |  |v|         |
+|:doc:`Lightweight Transactions </features/lwt>`                       |  |v|         |
 +----------------------------------------------------------------------+--------------+
 
 
@@ -230,9 +230,9 @@ Indexing and Caching
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
 |   Options                                                    | Support                                                                              |
 +==============================================================+======================================================================================+
-|:doc:`Secondary Index </using-scylla/secondary-indexes>`      | |v|                                                                                  |
+|:doc:`Secondary Index </features/secondary-indexes>`          | |v|                                                                                  |
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
-|:doc:`Materialized Views </using-scylla/materialized-views>`  |  |v|                                                                                 |
+|:doc:`Materialized Views </features/materialized-views>`      |  |v|                                                                                 |
 +--------------------------------------------------------------+--------------------------------------------------------------------------------------+
 
 

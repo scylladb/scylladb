@@ -35,7 +35,7 @@ Repeat the following steps for each node in the cluster:
 
 .. note::
 
-      Best practise is **not** to restore :doc:`Materialized Views (MV) </using-scylla/materialized-views>` and :doc:`Secondary Indexes (SI) </using-scylla/secondary-indexes>` SSTables.
+      Best practise is **not** to restore :doc:`Materialized Views (MV) </features/materialized-views>` and :doc:`Secondary Indexes (SI) </features/secondary-indexes>` SSTables.
       It is recommended to:
 
       - Drop the MV and SI using `DROP MATERIALIZED VIEW` or `DROP INDEX`

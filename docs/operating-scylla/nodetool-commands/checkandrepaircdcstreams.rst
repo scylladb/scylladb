@@ -21,7 +21,7 @@ Usage
 See Also
 ----------
 
-:doc:`Change Data Capture (CDC) </using-scylla/cdc/index>`
+:doc:`Change Data Capture (CDC) </features/cdc/index>`
 
 :doc:`Upgrading from experimental CDC </kb/cdc-experimental-upgrade>`
 

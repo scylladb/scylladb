@@ -31,6 +31,7 @@ Documentation Highlights
 * :doc:`Upgrade ScyllaDB Open Source </upgrade/index>`
 * :doc:`CQL Reference </cql/index>`
 * :doc:`ScyllaDB Drivers </using-scylla/drivers/index>`
+* :doc:`Features </features/index>`
 
 ScyllaDB Community
 --------------------------
@@ -55,6 +56,7 @@ In addition, you can read our `blog <https://www.scylladb.com/blog/>`_ and atten
   operating-scylla/index
   using-scylla/index
   cql/index
+  features/index
   architecture/index
   troubleshooting/index
   kb/index

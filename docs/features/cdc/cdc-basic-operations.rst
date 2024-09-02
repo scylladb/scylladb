@@ -12,8 +12,8 @@ The CDC log table reflects operations that are performed on the base table. Diff
 
 The following sections describe how each of these operations are handled by the CDC log.
 
-.. include:: /using-scylla/cdc/_common/cdc-updates.rst
-.. include:: /using-scylla/cdc/_common/cdc-inserts.rst
-.. include:: /using-scylla/cdc/_common/cdc-row-deletions.rst
-.. include:: /using-scylla/cdc/_common/cdc-row-range-deletions.rst
-.. include:: /using-scylla/cdc/_common/cdc-partition-deletions.rst
+.. include:: /features/cdc/_common/cdc-updates.rst
+.. include:: /features/cdc/_common/cdc-inserts.rst
+.. include:: /features/cdc/_common/cdc-row-deletions.rst
+.. include:: /features/cdc/_common/cdc-row-range-deletions.rst
+.. include:: /features/cdc/_common/cdc-partition-deletions.rst

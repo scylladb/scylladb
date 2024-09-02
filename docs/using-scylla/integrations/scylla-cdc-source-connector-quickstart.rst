@@ -7,7 +7,7 @@ Synopsis
 --------
 
 This quickstart will show you how to setup the ScyllaDB CDC Source Connector to replicate changes made in 
-a ScyllaDB table using :doc:`ScyllaDB CDC <../cdc/cdc-intro>`.
+a ScyllaDB table using :doc:`ScyllaDB CDC </features/cdc/cdc-intro>`.
 
 ScyllaDB setup
 --------------
@@ -66,7 +66,7 @@ If you already have a table you wish to use, but it does not have CDC enabled, y
 
    ALTER TABLE keyspace.table_name with cdc = {'enabled': true};
 
-To learn more about ScyllaDB CDC, visit :doc:`Change Data Capture (CDC) page <../cdc/index>`.
+To learn more about ScyllaDB CDC, visit :doc:`Change Data Capture (CDC) page </features/cdc/index>`.
 
 Kafka setup
 -----------

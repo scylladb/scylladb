@@ -72,7 +72,7 @@ because responses to any new requests must wait while the replicas are updated.
 To summarize, in contrast to SQL’s ACID guarantees, NoSQL databases generally provide BASE guarantees. This enables high availability and relaxes 
 the stringent consistency.
 
-A related feature is `Lightweight Transactions <https://docs.scylladb.com/stable/using-scylla/lwt>`_ (LWT). LWT in ScyllaDB allow the client 
+A related feature is :doc:`Lightweight Transactions (LWT) </features/lwt>`. LWT in ScyllaDB allow the client 
 to modify data based on its current state: that is, to perform an update that is executed only if a row does not exist or contains a certain value. 
 LWT are limited to a single conditional statement, which allows an “atomic compare and set” operation. That is, it checks if a condition is true, 
 and if so, it conducts the transaction. If the condition is not met, the transaction does not go through.
