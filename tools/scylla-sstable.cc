@@ -1436,6 +1436,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
         case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
+        case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
     }
     std::abort();
 }
@@ -1447,6 +1448,14 @@ const char* to_string(sstables::large_data_type t) {
         case sstables::large_data_type::cell_size: return "cell_size";
         case sstables::large_data_type::rows_in_partition: return "rows_in_partition";
         case sstables::large_data_type::elements_in_collection: return "elements_in_collection";
+    }
+    std::abort();
+}
+
+const char* to_string(sstables::ext_timestamp_stats_type t) {
+    switch (t) {
+        case sstables::ext_timestamp_stats_type::min_live_timestamp: return "min_live_timestamp";
+        case sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp: return "min_live_row_marker_timestamp";
     }
     std::abort();
 }
@@ -1527,6 +1536,14 @@ public:
             _writer.Key("above_threshold");
             _writer.Uint(v.above_threshold);
             _writer.EndObject();
+        }
+        _writer.EndObject();
+    }
+    void operator()(const sstables::scylla_metadata::ext_timestamp_stats& val) const {
+        _writer.StartObject();
+        for (const auto& [k, v] : val.map) {
+            _writer.Key(to_string(k));
+            _writer.Int64(v);
         }
         _writer.EndObject();
     }

@@ -497,6 +497,9 @@ The content is dumped in JSON, using the following schema:
         "run_identifier": String, // UUID
         "large_data_stats": {"$key": $LARGE_DATA_STATS_METADATA, ...}
         "sstable_origin": String
+        "scylla_build_id": String
+        "scylla_version": String
+        "ext_timestamp_stats": {"$key": int64, ...}
     }
 
     $SHARDING_METADATA := {

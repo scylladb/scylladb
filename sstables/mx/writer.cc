@@ -1494,7 +1494,10 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats));
+    std::optional<scylla_metadata::ext_timestamp_stats> ts_stats(scylla_metadata::ext_timestamp_stats{
+        .map = _collector.get_ext_timestamp_stats()
+    });
+    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), std::move(ts_stats));
     _sst.seal_sstable(_cfg.backup).get();
 }
 
