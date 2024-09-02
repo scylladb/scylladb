@@ -107,7 +107,16 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(
             ksm->strategy_name(),
             locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
-        if (rs->uses_tablets()) {
+        if (_attrs->get_initial_tablets("NetworkTopologyStrategy", feat.tablets).enabled_via_cql
+                && rs->get_type() != locator::replication_strategy_type::network_topology) {
+            throw exceptions::configuration_exception(format("Cannot create a keyspace with initial tablets "
+                                                             "and {} replication strategy, which doesn't "
+                                                             "support tablets", rs->get_type()));
+        } else if (feat.tablets && rs->get_type() != locator::replication_strategy_type::network_topology) {
+            warnings.push_back(format("Tablets are turned on by default in the configuration, "
+                                      "but are not supported with {} replication strategy. "
+                                      "The keyspace will be created without tablets.", rs->get_type()));
+        } else if (rs->uses_tablets()) {
             warnings.push_back(
                 "Tables in this keyspace will be replicated using Tablets "
                 "and will not support CDC, LWT and counters features. "

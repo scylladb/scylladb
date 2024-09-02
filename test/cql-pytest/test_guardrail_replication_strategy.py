@@ -118,7 +118,7 @@ def test_given_rf_and_strategy_guardrails_when_creating_ks_should_print_2_warnin
         config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_warn_threshold', '3'))
         create_ks_and_assert_warnings_and_errors(cql,
                                                  f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}",
-                                                 warnings_count=2, fails_count=0)
+                                                 warnings_count=3, fails_count=0)
 
 
 def test_given_rf_and_strategy_guardrails_when_violating_fail_rf_limit_and_warn_strategy_limit_should_fail_the_query_without_warning(cql):
@@ -144,7 +144,7 @@ def test_given_restrict_replication_simplestrategy_when_it_is_set_should_emulate
                                                  warnings_count=0, fails_count=1)
         config_modifications.enter_context(config_value_context(cql, 'restrict_replication_simplestrategy', 'warn'))
         create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}",
-                                                 warnings_count=1, fails_count=0)
+                                                 warnings_count=2, fails_count=0)
 
 def test_config_replication_strategy_warn_list_roundtrips_quotes(cql):
     # Use direct SELECT/UPDATE to avoid trippy config_value_context behavior

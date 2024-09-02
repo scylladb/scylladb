@@ -51,6 +51,7 @@ private:
 public:
     struct init_tablets_options {
         bool enabled;
+        bool enabled_via_cql;
         std::optional<unsigned> specified_count;
     };
 

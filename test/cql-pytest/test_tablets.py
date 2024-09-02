@@ -13,6 +13,7 @@
 #############################################################################
 
 import pytest
+from contextlib import nullcontext as does_not_raise
 from util import new_test_keyspace, new_test_table, unique_name, index_table_name
 from cassandra.protocol import ConfigurationException, InvalidRequest
 
@@ -45,6 +46,36 @@ def test_create_loop_with_tablets(cql, test_keyspace_128_tablets):
     for i in range(100):
         cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int)")
         cql.execute("DROP TABLE " + table)
+
+
+@pytest.mark.parametrize(
+    "strategy_name, expectation",
+    [('SimpleStrategy', pytest.raises(ConfigurationException, match="Cannot create a keyspace with initial tablets and simple replication strategy")),
+     ('NetworkTopologyStrategy', does_not_raise()),
+     ('EverywhereStrategy', pytest.raises(ConfigurationException, match="Cannot create a keyspace with initial tablets and everywhere_topology replication strategy")),
+     ('LocalStrategy', pytest.raises(ConfigurationException, match="Cannot create a keyspace with initial tablets and local replication strategy"))])
+def test_create_ks_with_tablets_enabled_in_cql_and_config(strategy_name, expectation, cql, skip_without_tablets):
+    with expectation:
+        ksdef = f"WITH REPLICATION = {{'class': '{strategy_name}', 'replication_factor': 1}} AND TABLETS = {{'enabled': true}}"
+        with new_test_keyspace(cql, ksdef) as keyspace:
+            pass
+
+
+@pytest.mark.parametrize(
+    "strategy_name", ['SimpleStrategy', 'NetworkTopologyStrategy', 'EverywhereStrategy', 'LocalStrategy'])
+def test_create_ks_with_tablets_enabled_only_in_config(strategy_name, cql, this_dc, skip_without_tablets):
+    ks_name = unique_name()
+    ks_opts = f"WITH REPLICATION = {{'class': '{strategy_name}', 'replication_factor': 1}}"
+    if strategy_name == 'NetworkTopologyStrategy':
+        ks_opts = f"WITH REPLICATION = {{'class': '{strategy_name}', '{this_dc}': 1}}"
+    response_future = cql.execute_async("CREATE KEYSPACE " + ks_name + " " + ks_opts)
+    response_future.result()
+    cql.execute("DROP KEYSPACE " + ks_name)
+
+    if strategy_name == 'NetworkTopologyStrategy':
+        assert not "The keyspace will be created without tablets" in "\n".join(response_future.warnings)
+    else:
+        assert response_future.warnings is not None and "The keyspace will be created without tablets" in "\n".join(response_future.warnings)
 
 
 # Converting vnodes-based keyspace to tablets-based in not implemented yet

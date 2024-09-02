@@ -141,7 +141,7 @@ data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
 
 ks_prop_defs::init_tablets_options ks_prop_defs::get_initial_tablets(const sstring& strategy_class, bool enabled_by_default) const {
     // FIXME -- this should be ignored somehow else
-    init_tablets_options ret{ .enabled = false, .specified_count = std::nullopt };
+    init_tablets_options ret{ .enabled = false, .enabled_via_cql = false, .specified_count = std::nullopt };
     if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
         return ret;
     }
@@ -157,7 +157,8 @@ ks_prop_defs::init_tablets_options ks_prop_defs::get_initial_tablets(const sstri
         tablets_options->erase(it);
 
         if (enabled == "true") {
-            ret = init_tablets_options{ .enabled = true, .specified_count = 0 }; // even if 'initial' is not set, it'll start with auto-detection
+            // even if 'initial' is not set, it'll start with auto-detection
+            ret = init_tablets_options{ .enabled = true, .enabled_via_cql = true, .specified_count = 0 };
         } else if (enabled == "false") {
             SCYLLA_ASSERT(!ret.enabled);
             return ret;
@@ -169,7 +170,7 @@ ks_prop_defs::init_tablets_options ks_prop_defs::get_initial_tablets(const sstri
     it = tablets_options->find("initial");
     if (it != tablets_options->end()) {
         try {
-            ret = init_tablets_options{ .enabled = true, .specified_count = std::stol(it->second)};
+            ret = init_tablets_options{ .enabled = true, .enabled_via_cql = true, .specified_count = std::stol(it->second)};
         } catch (...) {
             throw exceptions::configuration_exception(sstring("Initial tablets value should be numeric; found ") + it->second);
         }
