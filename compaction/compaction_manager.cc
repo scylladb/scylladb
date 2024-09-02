@@ -394,9 +394,8 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
     if (can_purge) {
         descriptor.enable_garbage_collection(t.main_sstable_set());
     }
-    descriptor.creator = [&t] (shard_id dummy) {
-        auto sst = t.make_sstable();
-        return sst;
+    descriptor.creator = [&t] (shard_id) {
+        return t.make_sstable();
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
