@@ -390,7 +390,7 @@ const std::map<operation, operation_action>& get_operations_with_func();
 
 void backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
-    for (auto required_param : {"endpoint", "bucket", "keyspace"}) {
+    for (auto required_param : {"endpoint", "bucket", "prefix", "keyspace"}) {
         if (!vm.contains(required_param)) {
             throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
         }
@@ -3245,6 +3245,7 @@ For more information, see: {}"
                     typed_option<sstring>("snapshot", "Name of a snapshot to copy SSTables from"),
                     typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables to"),
                     typed_option<sstring>("bucket", "Name of the bucket to backup SSTables to"),
+                    typed_option<sstring>("prefix", "The prefix to backup SSTables under"),
                     typed_option<>("nowait", "Don't wait on the backup process"),
                 },
             },

@@ -783,6 +783,14 @@
                           "paramType":"query"
                       },
                       {
+                           "name":"prefix",
+                           "description":"The prefix of the objects for the backuped sstables",
+                           "required":true,
+                           "allowMultiple":false,
+                           "type":"string",
+                           "paramType":"query"
+                      },
+                      {
                           "name":"keyspace",
                           "description":"Name of a keyspace to copy sstables from",
                           "required":true,

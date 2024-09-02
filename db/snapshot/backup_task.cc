@@ -21,14 +21,21 @@ extern logging::logger snap_log;
 
 namespace db::snapshot {
 
-backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module, snapshot_ctl& ctl, shared_ptr<s3::client> client, sstring bucket, sstring ks, sstring snapshot_name) noexcept
+backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
+                                   snapshot_ctl& ctl,
+                                   shared_ptr<s3::client> client,
+                                   sstring bucket,
+                                   sstring prefix,
+                                   sstring ks,
+                                   sstring snapshot_name) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
     , _client(std::move(client))
     , _bucket(std::move(bucket))
+    , _prefix(std::move(prefix))
     , _ks(std::move(ks))
-    , _snapshot_name(std::move(snapshot_name))
-{}
+    , _snapshot_name(std::move(snapshot_name)) {
+}
 
 std::string backup_task_impl::type() const {
     return "backup";
@@ -86,7 +93,7 @@ future<> backup_task_impl::run(sstring data_dir) {
             while (auto component_ent = snapshot_dir_lister.get().get()) {
                 auto gh = uploads.hold();
                 auto component_name = snapshot_dir / component_ent->name;
-                auto destination = fmt::format("/{}/{}/{}/{}", _bucket, cf_name_and_uuid.first, _snapshot_name, component_ent->name);
+                auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, component_ent->name);
                 snap_log.trace("Upload {} to {}", component_name.native(), destination);
                 // Start uploading in the background. The caller waits for these fibers
                 // with the _uploads gate.
