@@ -6574,10 +6574,34 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
     if (local_db().find_keyspace(keyspace).get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-        return replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
+        co_return co_await replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
     }
 
-    return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
+    slogger.debug("Running TRUNCATE TABLE on {}.{}", keyspace, cfname);
+    co_await utils::get_local_injector().inject("truncate_with_tablets_wait_before", [] (auto& handler) {
+        slogger.debug("truncate_with_tablets_wait_before: start");
+        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+    });
+
+    // Holding the erm pointer will pause load balancing until the pointer is released
+    const auto wait_started = db::timeout_clock::now();
+    locator::effective_replication_map_ptr erm = co_await _ss.local().get_erm_when_table_has_no_migrations(keyspace, cfname);
+    slogger.debug("Holding ERM pointer for TRUNCATE TABLE on {}.{}", keyspace, cfname);
+    const auto wait_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(db::timeout_clock::now() - wait_started);
+    if (timeout_in_ms && wait_duration_ms >= timeout_in_ms) {
+        throw timed_out_error{};
+    }
+
+    co_await utils::get_local_injector().inject("truncate_with_tablets_wait_holding_erm", [] (auto& handler) {
+        slogger.debug("truncate_with_tablets_wait_holding_erm: start");
+        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+    });
+
+    if (timeout_in_ms) {
+        timeout_in_ms = timeout_in_ms.value() - wait_duration_ms;
+    }
+
+    co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
 void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks) {
