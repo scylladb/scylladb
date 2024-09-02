@@ -139,7 +139,7 @@ $ docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scyl
 ### Configuring resource limits
 
 The ScyllaDB docker image defaults to running on overprovisioned mode and won't apply any CPU pinning optimizations, which it normally does in non-containerized environments.
-For better performance, it is recommended to configure resource limits for your Docker container using the `--smp`, `--memory`, and `--cpuset` command line options, as well as 
+For better performance, it is recommended to configure resource limits for your Docker container using the `--smp`, `--memory`, and `--cpuset` command line options, as well as
 disabling the overprovisioned flag as documented in the section "Command-line options".
 
 ### Restart ScyllaDB
@@ -348,7 +348,7 @@ The `--authorizer` command lines option allows to provide the authorizer class S
 
 JMX ScyllaDB service is initialized from the `/scylla-jmx-service.sh` on
 container startup. By default the script uses `/etc/sysconfig/scylla-jmx`
-to read the default configuration. It then can be overridden by setting 
+to read the default configuration. It then can be overridden by setting
 environmental parameters.
 
 An example:
