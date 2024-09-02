@@ -150,12 +150,6 @@ static void with_sstable_directory(
 
     testlog.debug("with_sstable_directory: {}/{}", path, state);
 
-    sharded<sstables::directory_semaphore> sstdir_sem;
-    sstdir_sem.start(1).get();
-    auto stop_sstdir_sem = defer([&sstdir_sem] {
-        sstdir_sem.stop().get();
-    });
-
     sharded<sstable_directory> sstdir;
     auto stop_sstdir = defer([&sstdir] {
         // The func is allowed to stop sstdir, and some tests actually do it
