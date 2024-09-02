@@ -72,6 +72,9 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
             // the node won't try to fetch a topology snapshot if the other
             // node doesn't support it yet.
             _topology_change_enabled = true;
+        }))
+        , _snapshot_rpc_receiver_side_listener(feat.snapshot_rpc_receiver_side.when_enabled([this] () noexcept {
+            _snapshot_rpc_receiver_side_enabled = true;
         })) {
 }
 
@@ -306,26 +309,55 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> raft_snp;
 
     if (_topology_change_enabled) {
-        auto auth_tables = db::system_keyspace::auth_tables();
-        std::vector<table_id> tables;
-        tables.reserve(3);
-        tables.push_back(db::system_keyspace::topology()->id());
-        tables.push_back(db::system_keyspace::topology_requests()->id());
-        tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+        if (!_snapshot_rpc_receiver_side_enabled) {
+            // legacy rpc mode:
+            // it is possible the other node doesn't support the empty parameter mode, or
+            // maybe it supports it but we don't know it yet, so in this case we use the
+            // legacy rpc, setting the parameter with tables we want, and the sender may
+            // add additional tables if needed.
+            std::vector<table_id> tables;
+            tables.reserve(3);
+            tables.push_back(db::system_keyspace::topology()->id());
+            tables.push_back(db::system_keyspace::topology_requests()->id());
+            tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
-        tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size());
+            tables = std::vector<table_id>();
 
-        for (const auto& schema : auth_tables) {
-            tables.push_back(schema->id());
+            auto auth_tables = db::system_keyspace::auth_tables();
+            tables.reserve(auth_tables.size() + 1);
+            for (const auto& schema : auth_tables) {
+                tables.push_back(schema->id());
+            }
+            tables.push_back(db::system_keyspace::service_levels_v2()->id());
+
+            raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+        } else {
+            // we send an empty vector parameter and let the sender decide which tables to send.
+            std::vector<table_id> tables;
+            service::raft_snapshot snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+
+            auto& snp_muts = snp.mutations;
+
+            // partition to topology tables first and then the rest of the tables, and separate them to two snapshots
+            auto it = std::partition(snp_muts.begin(), snp_muts.end(), [] (const canonical_mutation& m) {
+                    return m.column_family_id() == db::system_keyspace::topology()->id()
+                            || m.column_family_id() == db::system_keyspace::topology_requests()->id()
+                            || m.column_family_id() == db::system_keyspace::cdc_generations_v3()->id();
+            });
+
+            raft_snp = service::raft_snapshot();
+            raft_snp->mutations.reserve(std::distance(it, snp_muts.end()));
+            std::move(it, snp_muts.end(), std::back_inserter(raft_snp->mutations));
+
+            snp_muts.resize(std::distance(snp_muts.begin(), it));
+
+            topology_snp = std::move(snp);
         }
-        tables.push_back(db::system_keyspace::service_levels_v2()->id());
-
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());

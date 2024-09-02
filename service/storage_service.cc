@@ -6799,7 +6799,28 @@ void storage_service::init_messaging_service() {
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
             auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
-            for (const auto& table : params.tables) {
+
+            // additional tables that we need to send, regardless of whether they are
+            // requested in the parameter.
+            std::vector<table_id> additional_tables;
+
+            if (params.tables.size() == 0) {
+                // empty parameter means we should decide which tables to send.
+                auto auth_tables = db::system_keyspace::auth_tables();
+
+                additional_tables.reserve(3 + auth_tables.size() + 1);
+
+                additional_tables.push_back(db::system_keyspace::topology()->id());
+                additional_tables.push_back(db::system_keyspace::topology_requests()->id());
+                additional_tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+
+                for (const auto& schema : auth_tables) {
+                    additional_tables.push_back(schema->id());
+                }
+                additional_tables.push_back(db::system_keyspace::service_levels_v2()->id());
+            }
+
+            for (const auto& table : boost::join(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
