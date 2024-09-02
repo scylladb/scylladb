@@ -85,8 +85,11 @@ void memtable::memtable_encoding_stats_collector::update(const range_tombstone& 
 }
 
 void memtable::memtable_encoding_stats_collector::update(const row_marker& marker) noexcept {
+    if (marker.is_missing()) {
+        return;
+    }
     update_timestamp(marker.timestamp());
-    if (!marker.is_missing()) {
+    // FIXME: indentation
         if (!marker.is_live()) {
             update_ttl(gc_clock::duration(sstables::expired_liveness_ttl));
             update_local_deletion_time(marker.deletion_time());
@@ -94,7 +97,6 @@ void memtable::memtable_encoding_stats_collector::update(const row_marker& marke
             update_ttl(marker.ttl());
             update_local_deletion_time(marker.expiry());
         }
-    }
 }
 
 void memtable::memtable_encoding_stats_collector::update(const ::schema& s, const deletable_row& dr) {
