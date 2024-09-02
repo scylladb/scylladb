@@ -889,11 +889,9 @@ private:
     virtual std::string_view report_start_desc() const = 0;
     virtual std::string_view report_finish_desc() const = 0;
 
-    std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
+    max_purgeable_fn max_purgeable_func() {
         if (!tombstone_expiration_enabled()) {
-            return [] (const dht::decorated_key& dk) {
-                return api::min_timestamp;
-            };
+            return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk) {
             return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value());

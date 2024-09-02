@@ -144,7 +144,7 @@ template<compact_for_sstables SSTableCompaction>
 class compact_mutation_state {
     const schema& _schema;
     gc_clock::time_point _query_time;
-    std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
+    max_purgeable_fn _get_max_purgeable;
     can_gc_fn _can_gc;
     api::timestamp_type _max_purgeable = api::missing_timestamp;
     std::optional<gc_clock::time_point> _gc_before;
@@ -312,7 +312,7 @@ public:
     }
 
     compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            max_purgeable_fn get_max_purgeable,
             const tombstone_gc_state& gc_state)
         : _schema(s)
         , _query_time(compaction_time)
@@ -655,7 +655,7 @@ public:
 
     // Can only be used for compact_for_sstables::yes
     compact_mutation_v2(const schema& s, gc_clock::time_point compaction_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            max_purgeable_fn get_max_purgeable,
             const tombstone_gc_state& gc_state,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer())
         : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state))

@@ -20,6 +20,7 @@
 #include "mutation_compactor.hh"
 #include "counters.hh"
 #include "row_cache.hh"
+#include "timestamp.hh"
 #include "view_info.hh"
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
@@ -2518,5 +2519,8 @@ future<> mutation_cleaner_impl::drain() {
 
 can_gc_fn always_gc = [] (tombstone) { return true; };
 can_gc_fn never_gc = [] (tombstone) { return false; };
+
+max_purgeable_fn can_always_purge = [] (const dht::decorated_key&) { return api::max_timestamp; };
+max_purgeable_fn can_never_purge = [] (const dht::decorated_key&) { return api::min_timestamp; };
 
 logging::logger compound_logger("compound");

@@ -285,7 +285,7 @@ static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, c
     return make_compacting_reader(
             std::move(underlying),
             compaction_time,
-            [compaction_can_gc] (const dht::decorated_key&) { return compaction_can_gc ? api::max_timestamp : api::min_timestamp; },
+            compaction_can_gc ? can_always_purge : can_never_purge,
             cm.get_tombstone_gc_state(),
             streamed_mutation::forwarding::no);
 }
@@ -2499,7 +2499,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
-                [](const dht::decorated_key&) { return api::max_timestamp; },
+                can_always_purge,
                 _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {

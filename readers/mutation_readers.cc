@@ -1460,7 +1460,7 @@ private:
 
 public:
     compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+            max_purgeable_fn get_max_purgeable,
             const tombstone_gc_state& gc_state,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
         : impl(source.schema(), source.permit())
@@ -1547,7 +1547,7 @@ public:
 } // anonymous namespace
 
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
-        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable,
+        max_purgeable_fn get_max_purgeable,
         const tombstone_gc_state& gc_state, streamed_mutation::forwarding fwd) {
     return make_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, gc_state, fwd);
 }

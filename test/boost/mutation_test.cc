@@ -2707,7 +2707,7 @@ class basic_compacted_fragments_consumer_base {
     const schema& _schema;
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
-    std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
+    max_purgeable_fn _get_max_purgeable;
     api::timestamp_type _max_purgeable;
 
     std::vector<mutation> _mutations;
@@ -2768,7 +2768,7 @@ private:
 
 public:
     basic_compacted_fragments_consumer_base(const schema& schema, gc_clock::time_point query_time,
-            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+            max_purgeable_fn get_max_purgeable)
         : _schema(schema)
         , _query_time(query_time)
         , _gc_before(saturating_subtract(query_time, _schema.gc_grace_seconds()))
@@ -2844,9 +2844,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
 
     auto reader = make_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
     auto close_reader = deferred_close(reader);
-    auto get_max_purgeable = [] (const dht::decorated_key&) {
-        return api::max_timestamp;
-    };
+    auto get_max_purgeable = can_always_purge;
     auto consumer = compact_for_compaction_v2<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>(
             schema,
             query_time,
