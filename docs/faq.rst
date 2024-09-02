@@ -344,17 +344,6 @@ when you perform a delete, instead, a marker (also called a "tombstone") is writ
 Never fear though, on the first compaction that occurs between the data and the tombstone, the data will be expunged
 completely and the corresponding disk space recovered. 
 
-What are seeds?
-^^^^^^^^^^^^^^^
-
-Seeds are used during startup to discover the cluster. They are referred by new nodes on bootstrap to learn about other nodes in the ring. When you add a new node to the cluster, you
-must specify one live seed to contact.
-
-In ScyllaDB versions earlier than ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1, a seed node has an additional 
-function: it assists with gossip convergence. See :doc:`ScyllaDB Seed Nodes </kb/seed-nodes/>` for details.
-
-We recommend updating your ScyllaDB to version 4.3 or later (Open Source) or 2021.1 or later (Enterprise).
-
 .. _faq-raid0-required:
 
 Is RAID0 required for ScyllaDB? Why?
