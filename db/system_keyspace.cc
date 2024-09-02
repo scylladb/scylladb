@@ -259,6 +259,7 @@ schema_ptr system_keyspace::topology() {
 }
 
 schema_ptr system_keyspace::topology_requests() {
+    constexpr uint16_t schema_version_offset = 1;   // request_type
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, TOPOLOGY_REQUESTS);
         return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
@@ -270,7 +271,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("error", utf8_type)
             .with_column("end_time", timestamp_type)
             .set_comment("Topology request tracking")
-            .with_version(generate_schema_version(id))
+            .with_version(generate_schema_version(id, schema_version_offset))
             .build();
     }();
     return schema;
