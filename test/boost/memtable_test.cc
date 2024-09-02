@@ -1101,6 +1101,9 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
         }
         t.apply(mt);
 
+        BOOST_REQUIRE_LT(t.min_memtable_timestamp(), api::max_timestamp);
+        BOOST_REQUIRE_LT(t.min_memtable_live_timestamp(), api::max_timestamp);
+
         auto failed_memtables_flushes_count = db.cf_stats()->failed_memtables_flushes_count;
 
         utils::get_local_injector().enable("table_seal_active_memtable_add_memtable", true /* oneshot */);
@@ -1117,12 +1120,15 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 
         // The flush failed, make sure there is still data in memtable.
         BOOST_REQUIRE_LT(t.min_memtable_timestamp(), api::max_timestamp);
+        BOOST_REQUIRE_LT(t.min_memtable_live_timestamp(), api::max_timestamp);
         utils::get_local_injector().disable("table_seal_active_memtable_reacquire_write_permit");
 
         BOOST_REQUIRE(eventually_true([&] {
             // The error above is no longer being injected, so
             // seal_active_memtable retry loop should eventually succeed
-            return t.min_memtable_timestamp() == api::max_timestamp;
+            return t.min_memtable_timestamp() == api::max_timestamp
+                    && t.min_memtable_live_timestamp() == api::max_timestamp
+                    && t.min_memtable_live_row_marker_timestamp() == api::max_timestamp;
         }));
 
         std::move(f).get();

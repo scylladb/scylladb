@@ -379,6 +379,32 @@ api::timestamp_type compaction_group::min_memtable_timestamp() const {
     );
 }
 
+api::timestamp_type compaction_group::min_memtable_live_timestamp() const {
+    if (_memtables->empty()) {
+        return api::max_timestamp;
+    }
+
+    return *boost::range::min_element(
+        *_memtables
+        | boost::adaptors::transformed(
+            [](const shared_memtable& m) { return m->get_min_live_timestamp(); }
+        )
+    );
+}
+
+api::timestamp_type compaction_group::min_memtable_live_row_marker_timestamp() const {
+    if (_memtables->empty()) {
+        return api::max_timestamp;
+    }
+
+    return *boost::range::min_element(
+        *_memtables
+        | boost::adaptors::transformed(
+            [](const shared_memtable& m) { return m->get_min_live_row_marker_timestamp(); }
+        )
+    );
+}
+
 bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
     if (_memtables->empty()) {
         return false;
@@ -391,9 +417,27 @@ api::timestamp_type storage_group::min_memtable_timestamp() const {
     return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_timestamp)));
 }
 
+api::timestamp_type storage_group::min_memtable_live_timestamp() const {
+    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_live_timestamp)));
+}
+
+api::timestamp_type storage_group::min_memtable_live_row_marker_timestamp() const {
+    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_live_row_marker_timestamp)));
+}
+
 api::timestamp_type table::min_memtable_timestamp() const {
     return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
         | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_timestamp)));
+}
+
+api::timestamp_type table::min_memtable_live_timestamp() const {
+    return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
+        | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_live_timestamp)));
+}
+
+api::timestamp_type table::min_memtable_live_row_marker_timestamp() const {
+    return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
+        | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_live_row_marker_timestamp)));
 }
 
 // Not performance critical. Currently used for testing only.
@@ -2161,6 +2205,12 @@ public:
     }
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();
+    }
+    api::timestamp_type min_memtable_live_timestamp() const override {
+        return _cg.min_memtable_live_timestamp();
+    }
+    api::timestamp_type min_memtable_live_row_marker_timestamp() const override {
+        return _cg.min_memtable_live_row_marker_timestamp();
     }
     bool memtable_has_key(const dht::decorated_key& key) const override {
         return _cg.memtable_has_key(key);
