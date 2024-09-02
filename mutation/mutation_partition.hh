@@ -778,8 +778,8 @@ public:
         return _shadowable;
     }
 
-    bool is_shadowable() const {
-        return _shadowable.tomb() > _regular;
+    is_shadowable is_shadowable() const {
+        return ::is_shadowable(_shadowable.tomb() > _regular);
     }
 
     void maybe_shadow(const row_marker& marker) noexcept {

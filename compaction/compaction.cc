@@ -28,7 +28,9 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shard_id.hh>
+#include <seastar/core/on_internal_error.hh>
 
+#include "compaction/compaction_garbage_collector.hh"
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
@@ -53,6 +55,7 @@
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
 #include "replica/database.hh"
+#include "timestamp.hh"
 
 namespace sstables {
 
@@ -137,7 +140,7 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
-        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables) {
+        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         return api::min_timestamp;
     }
@@ -149,8 +152,24 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         return timestamp;
     }
 
-    auto memtable_min_timestamp = table_s.min_memtable_timestamp();
-    // Use memtable timestamp if it contains data older than the sstables being compacted,
+    api::timestamp_type memtable_min_timestamp;
+    if (is_shadowable) {
+        // For shadowable tombstones, check the minimum live row_marker timestamp
+        // as rows with timestamp larger than the tombstone's would shadow the tombstone,
+        // exposing all live cells in the row with timestamps potentially lower than
+        // the shadowable tombstone (and those are tracked in the min_memtable_live_timestamp).
+        // In contrast, a shadowable tombstone applies to rows with row_marker whose timestamp
+        // is less than or equal to the tombstone's timestamp, the same way as a regular tombstone would.
+        // See https://github.com/scylladb/scylladb/issues/20424
+        memtable_min_timestamp = table_s.min_memtable_live_row_marker_timestamp();
+    } else {
+        // For regular tombstones, check the minimum live data timestamp.
+        // Even if purgeable tombstones shadow dead data in the memtable, it's ok to purge them;
+        // since "resurrecting" the already-dead data will no have effect, as they are already dead.
+        // See https://github.com/scylladb/scylladb/issues/20423
+        memtable_min_timestamp = table_s.min_memtable_live_timestamp();
+    }
+    // Use memtable timestamp if it contains live data older than the sstables being compacted,
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
     // First condition helps to not penalize the common scenario where memtable only contains
     // newer data.
@@ -162,9 +181,23 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         if (compacting_set.contains(sst)) {
             continue;
         }
+        api::timestamp_type min_timestamp = sst->get_stats_metadata().min_timestamp;
+        auto ts_stats = sst->get_ext_timestamp_stats();
+        if (!ts_stats.empty()) {
+            auto stat = is_shadowable ?
+                    sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp :
+                    sstables::ext_timestamp_stats_type::min_live_timestamp;
+            auto it = ts_stats.find(stat);
+            if (it != ts_stats.end()) {
+                min_timestamp = it->second;
+            } else {
+                // Do not throw an expection in production, just use the legacy min_timestamp set above
+                on_internal_error_noexcept(clogger, format("Missing extended timestamp statstics: stat={} is_shadowable={}", int(stat), bool(is_shadowable)));
+            }
+        }
         // There's no point in looking up the key in the sstable filter if
         // it does not contain data older than the minimum timestamp.
-        if (sst->get_stats_metadata().min_timestamp >= timestamp) {
+        if (min_timestamp >= timestamp) {
             continue;
         }
         if (!hk) {
@@ -172,7 +205,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         }
         if (sst->filter_has_key(*hk)) {
             bloom_filter_checks++;
-            timestamp = sst->get_stats_metadata().min_timestamp;
+            timestamp = min_timestamp;
         }
     }
     return timestamp;
@@ -893,8 +926,8 @@ private:
         if (!tombstone_expiration_enabled()) {
             return can_never_purge;
         }
-        return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value());
+        return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value(), is_shadowable);
         };
     }
 

@@ -8,17 +8,21 @@
 
 #pragma once
 
+#include <seastar/util/bool_class.hh>
+
 #include "mutation/tombstone.hh"
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner_fwd.hh"
 
+using is_shadowable = bool_class<struct is_shadowable_tag>;
+
 // Determines whether tombstone may be GC-ed.
-using can_gc_fn = std::function<bool(tombstone)>;
+using can_gc_fn = std::function<bool(tombstone, is_shadowable)>;
 
 extern can_gc_fn always_gc;
 extern can_gc_fn never_gc;
 
-using max_purgeable_fn = std::function<api::timestamp_type(const dht::decorated_key&)>;
+using max_purgeable_fn = std::function<api::timestamp_type(const dht::decorated_key&, is_shadowable)>;
 
 extern max_purgeable_fn can_always_purge;
 extern max_purgeable_fn can_never_purge;

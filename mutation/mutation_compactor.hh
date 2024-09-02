@@ -246,23 +246,24 @@ private:
         return deletion_time < get_gc_before();
     }
 
-    bool can_purge_tombstone(const tombstone& t, const gc_clock::time_point deletion_time) {
+    bool can_purge_tombstone(const tombstone& t, is_shadowable is_shadowable, const gc_clock::time_point deletion_time) {
         if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
             // max purgeable timestamp.
-            return satisfy_grace_period(deletion_time) && can_gc(t);
+            return satisfy_grace_period(deletion_time) && can_gc(t, is_shadowable);
         }
-        return can_gc(t) && satisfy_grace_period(deletion_time);
+        return can_gc(t, is_shadowable) && satisfy_grace_period(deletion_time);
     }
 
     bool can_purge_tombstone(const tombstone& t) {
-        return can_purge_tombstone(t, t.deletion_time);
+        // Only row tombstones can be shadowable, regular tombstones aren't
+        return can_purge_tombstone(t, is_shadowable::no, t.deletion_time);
     };
 
     bool can_purge_tombstone(const row_tombstone& t) {
-        return can_purge_tombstone(t.tomb(), t.max_deletion_time());
+        return can_purge_tombstone(t.tomb(), t.is_shadowable(), t.max_deletion_time());
     };
 
     gc_clock::time_point get_gc_before() {
@@ -278,7 +279,7 @@ private:
         }
     }
 
-    bool can_gc(tombstone t) {
+    bool can_gc(tombstone t, is_shadowable is_shadowable) {
         if (!sstable_compaction()) {
             return true;
         }
@@ -286,7 +287,7 @@ private:
             return false;
         }
         if (_max_purgeable == api::missing_timestamp) {
-            _max_purgeable = _get_max_purgeable(*_dk);
+            _max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
         return t.timestamp < _max_purgeable;
     };
@@ -317,7 +318,7 @@ public:
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
-        , _can_gc([this] (tombstone t) { return can_gc(t); })
+        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable); })
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_dk({dht::token(), partition_key::make_empty()})

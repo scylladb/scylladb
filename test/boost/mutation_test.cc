@@ -12,6 +12,7 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
+#include "compaction/compaction_garbage_collector.hh"
 #include "mutation_query.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
@@ -2776,7 +2777,7 @@ public:
         , _mutation(_schema.shared_from_this()) {
     }
     void consume_new_partition(const dht::decorated_key& dk) {
-        _max_purgeable = _get_max_purgeable(dk);
+        _max_purgeable = _get_max_purgeable(dk, is_shadowable::no);
         _mutation.consume_new_partition(dk);
     }
     void consume(tombstone t) {

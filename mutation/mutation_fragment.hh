@@ -18,6 +18,7 @@
 
 #include "reader_permit.hh"
 #include "mutation_fragment_fwd.hh"
+#include "mutation/mutation_partition.hh"
 
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:

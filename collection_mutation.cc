@@ -178,7 +178,7 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
     tombstone purged_tomb;
     if (tomb <= base_tomb.regular()) {
         tomb = tombstone();
-    } else if (tomb.deletion_time < gc_before && can_gc(tomb)) {
+    } else if (tomb.deletion_time < gc_before && can_gc(tomb, is_shadowable::no)) { // The collection tombstone is never shadowable
         purged_tomb = tomb;
         tomb = tombstone();
     }
@@ -188,7 +188,8 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
         auto cannot_erase_cell = [&] {
-            return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
+            // Only row tombstones can be shadowable, (collection) cell tombstones aren't
+            return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
         };
 
         if (cell.is_covered_by(t, false) || cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
