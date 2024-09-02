@@ -795,7 +795,6 @@ void cache_mutation_reader::copy_from_cache_to_buffer() {
             };
 
             if (row_tomb_expired(t) || is_row_dead(row)) {
-                can_gc_fn always_gc = [&](tombstone) { return true; };
                 const schema& row_schema = _next_row.latest_row_schema();
 
                 _read_context.cache()._tracker.on_row_compacted();

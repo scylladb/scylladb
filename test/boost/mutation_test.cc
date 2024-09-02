@@ -1604,8 +1604,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
 // duplicated logic that decides if a row is expired, and this test verifies that they behave the same with respect
 // to TTL.
 SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
-    can_gc_fn never_gc = [] (tombstone) { return false; };
-
     auto must_be_alive = [&] (row_marker mark, gc_clock::time_point t) {
         testlog.trace("must_be_alive({}, {})", mark, t);
         BOOST_REQUIRE(mark.is_live(tombstone(), t));
@@ -1995,7 +1993,6 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             }
         };
         const auto now = gc_clock::now();
-        can_gc_fn never_gc = [] (tombstone) { return false; };
         for_each_mutation_pair([&] (auto m1, auto m2, are_equal eq) {
             mutation_application_stats app_stats;
             auto s = m1.schema();
@@ -2841,7 +2838,6 @@ using purged_compacted_fragments_consumer = basic_compacted_fragments_consumer_b
 
 void run_compaction_data_stream_split_test(const schema& schema, reader_permit permit, gc_clock::time_point query_time,
         std::vector<mutation> mutations) {
-    auto never_gc = std::function<bool(tombstone)>([] (tombstone) { return false; });
     for (auto& mut : mutations) {
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }

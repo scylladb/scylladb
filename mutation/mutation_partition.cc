@@ -203,7 +203,6 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
 
         while (i != end) {
             rows_entry& e = *i;
-            can_gc_fn never_gc = [](tombstone) { return false; };
 
             ++app_stats.rows_compacted_with_tombstones;
             bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
@@ -1423,7 +1422,6 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
 }
 
 void rows_entry::compact(const schema& s, tombstone t) {
-    can_gc_fn never_gc = [] (tombstone) { return false; };
     row().compact_and_expire(s,
                              t + _range_tombstone,
                              gc_clock::time_point::min(),  // no TTL expiration
@@ -2519,5 +2517,6 @@ future<> mutation_cleaner_impl::drain() {
 }
 
 can_gc_fn always_gc = [] (tombstone) { return true; };
+can_gc_fn never_gc = [] (tombstone) { return false; };
 
 logging::logger compound_logger("compound");

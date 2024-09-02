@@ -8,7 +8,14 @@
 
 #pragma once
 
+#include "mutation/tombstone.hh"
 #include "schema/schema_fwd.hh"
+
+// Determines whether tombstone may be GC-ed.
+using can_gc_fn = std::function<bool(tombstone)>;
+
+extern can_gc_fn always_gc;
+extern can_gc_fn never_gc;
 
 class atomic_cell;
 class row_marker;
