@@ -52,7 +52,7 @@ The create Index does **not** include the base partition key. As a result, the f
 
 With GSI, ``dish_type`` acts as the partition key of the index table and the query requires two inter-node hops
 
-.. image:: global-sec-index-example.png
+.. image:: /features/images/global-sec-index-example.png
 
 GSI flow:
 
@@ -75,7 +75,7 @@ Now let's create an LSI, using the base table partition key, in this case ``loca
 
 The same query can be done to one node, as the Index and Base table partitions are guaranteed to be on the same node.
 
-.. image:: local-sec-index-example.png
+.. image:: /features/images/local-sec-index-example.png
 
 LSI flow:
 
@@ -85,7 +85,7 @@ LSI flow:
 
 Both the base table and the underlying materialized view have the same partition keys for corresponding rows. That means that their data resides on the same node and can thus be executed locally, without having to contact another node. When using a **token aware policy**, the entire query will be done with zero inter-node communication.
 
-.. image:: local-sec-index-token-aware-exaple.png
+.. image:: /features/images/local-sec-index-token-aware-exaple.png
 
 LSI with Token Aware driver flow:
 
@@ -110,7 +110,7 @@ When should you use a Local Secondary Index
 More information
 ................
 
-* :doc:`Global Secondary Indexes </using-scylla/secondary-indexes/>`
+* :doc:`Global Secondary Indexes </features/secondary-indexes/>`
 * :doc:`CQL Reference </cql/secondary-indexes/>` - CQL Reference for Secondary Indexes
 
 The following courses are available from ScyllaDB University:

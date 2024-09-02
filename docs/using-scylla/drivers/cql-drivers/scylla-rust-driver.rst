@@ -21,4 +21,4 @@ When writing applications, you can use ScyllaDB's `Rust CDC Library <https://git
 to simplify writing applications that read from ScyllaDB's CDC.
 
 Use `Rust CDC Library <https://github.com/scylladb/scylla-cdc-rust>`_ to read 
-:doc:`ScyllaDB's CDC </using-scylla/cdc/index>` update streams.
+:doc:`ScyllaDB's CDC </features/cdc/index>` update streams.

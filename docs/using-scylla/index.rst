@@ -9,7 +9,6 @@ ScyllaDB for Developers
    Tutorials and Example Projects <https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html>
    Learn to Use ScyllaDB <https://docs.scylladb.com/stable/get-started/learn-resources/index.html>
    ScyllaDB Alternator <alternator/index>
-   ScyllaDB Features <features>
    ScyllaDB Drivers <drivers/index>
 
 

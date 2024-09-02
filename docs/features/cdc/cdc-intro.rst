@@ -70,7 +70,7 @@ You can enable CDC when creating or altering a table using the ``cdc`` option, f
 .. note::
    If you enabled CDC and later decide to disable it, you need to **stop all writes** to the base table before issuing the ``ALTER TABLE ... WITH cdc = {'enabled':false};`` command.
 
-.. include:: /using-scylla/cdc/_common/cdc-params.rst
+.. include:: /features/cdc/_common/cdc-params.rst
 
 Using CDC with Applications
 ---------------------------

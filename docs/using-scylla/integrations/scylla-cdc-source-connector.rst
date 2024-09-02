@@ -16,7 +16,7 @@ ScyllaDB CDC Source Connector seamlessly handles schema changes and topology cha
 The connector has the following capabilities:
 
 * Kafka Connect connector using Debezium framework
-* Replication of row-level changes from ScyllaDB using :doc:`ScyllaDB CDC <../cdc/cdc-intro>`. The connector replicates the following operations: ``INSERT``, ``UPDATE``, ``DELETE`` (single row deletes)
+* Replication of row-level changes from ScyllaDB using :doc:`ScyllaDB CDC </features/cdc/cdc-intro>`. The connector replicates the following operations: ``INSERT``, ``UPDATE``, ``DELETE`` (single row deletes)
 * High scalability - able to split work across multiple Kafka Connect workers
 * Fault tolerant - connector periodically saves its progress and can resume from previously saved offset (with at-least-once semantics)
 * Support for many standard Kafka Connect converters, such as JSON and Avro

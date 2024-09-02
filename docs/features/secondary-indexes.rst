@@ -18,7 +18,7 @@ Secondary indexes provide the following advantages:
 
 What’s more, the size of an index is proportional to the size of the indexed data. As data in ScyllaDB is distributed to multiple nodes, it’s impractical to store the whole index on a single node, as it limits the size of the index to the capacity of a single node, not the capacity of the whole cluster.
 
-For this reason, secondary indexes in ScyllaDB are **global** rather than local. With global indexing, a materialized view is created for each index. This :doc:`materialized view </using-scylla/materialized-views/>` has the indexed column as a partition key and primary key (partition key and clustering keys) of the indexed row as clustering keys.
+For this reason, secondary indexes in ScyllaDB are **global** rather than local. With global indexing, a materialized view is created for each index. This :doc:`materialized view </features/materialized-views/>` has the indexed column as a partition key and primary key (partition key and clustering keys) of the indexed row as clustering keys.
 
 Secondary indexes created globally provide a further advantage: you can use the value of the indexed column to find the corresponding index table row in the cluster so reads are scalable. Note however, that with this approach, writes are slower than with local indexing because of the overhead required to keep the indexed view up to date.
 
@@ -30,7 +30,7 @@ ScyllaDB breaks indexed queries into two parts:
 1. a query on the index table to retrieve partition keys for the indexed table, and
 2. a query to the indexed table using the retrieved partition keys.
 
-.. image:: si_building_example.png
+.. image:: /features/images/si_building_example.png
    :width: 800
    :alt: Secondary Index Flow
 
@@ -131,7 +131,7 @@ Note the Secondary Index is implemented as MATERIALIZED VIEW.
 More information 
 ................
 
-* :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes/>`
+* :doc:`Local Secondary Indexes </features/local-secondary-indexes/>`
 * :doc:`CQL Reference </cql/secondary-indexes/>` - CQL Reference for Secondary Indexes
 
 The following courses are available from ScyllaDB University:

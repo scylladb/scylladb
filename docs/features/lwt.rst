@@ -127,7 +127,7 @@ The statements with an ``IF`` clause use a different write path, employing the P
 
 .. _figure:
 
-.. figure:: /using-scylla/images/lwt.png
+.. figure:: /features/images/lwt.png
     :width: 400pt
 
 In Paxos, in order to persist a change a coordinator first must

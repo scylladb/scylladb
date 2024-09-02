@@ -13,4 +13,4 @@ How is it different?
 * ScyllaDB does not store  hints for lightweight transaction writes, since this is redundant as all such writes are already present in system.paxos table.
 
 
-More on :doc:`Lightweight Transactions (LWT) </using-scylla/lwt>`
+More on :doc:`Lightweight Transactions (LWT) </features/lwt>`

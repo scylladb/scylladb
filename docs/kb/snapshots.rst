@@ -21,7 +21,7 @@ Synopsis
 Snapshots in ScyllaDB are an essential part of the :doc:`backup and restore mechanism </operating-scylla/procedures/backup-restore/index>`. Whereas in other databases a backup starts with creating a copy of a data file (cold backup, hot backup, shadow copy backup), in ScyllaDB the process starts with creating a table or keyspace snapshot. The snapshots are created either automatically (this is described further in this article) or by invoking the :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>` command. 
 To prevent any issues with restoring your data, the backup strategy must include saving copies of the snapshots on a secondary storage. This makes sure the snapshot is available to restore if the primary storage fails.
 
-.. note:: If you come from RDBMS background you should not confuse snapshots with the notion of materialized views (as they are sometimes called snapshots in that area of technology). With ScyllaDB, snapshots are `hard links <https://en.wikipedia.org/wiki/Hard_link>`_ to data files. :doc:`Materialized views </using-scylla/materialized-views>` do exist in ScyllaDB but they are not called snapshots.
+.. note:: If you come from RDBMS background you should not confuse snapshots with the notion of materialized views (as they are sometimes called snapshots in that area of technology). With ScyllaDB, snapshots are `hard links <https://en.wikipedia.org/wiki/Hard_link>`_ to data files. :doc:`Materialized views </features/materialized-views>` do exist in ScyllaDB but they are not called snapshots.
 
 
 How Snapshots Work
