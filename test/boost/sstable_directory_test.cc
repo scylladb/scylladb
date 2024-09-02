@@ -130,12 +130,6 @@ public:
         : _get_mgr([s = &env] { return &s->local().manager(); })
         , _tmpdir_path(env.local().tempdir().path())
     {}
-    // This variant this transportable across shards
-    wrapped_test_env(cql_test_env& env)
-        : _get_mgr([&env] { return &env.db().local().get_user_sstables_manager(); })
-        , tmpdir_opt(tmpdir())
-        , _tmpdir_path(tmpdir_opt->path())
-    {}
     sstables_manager& get_manager() { return *_get_mgr(); }
     const fs::path& tmpdir_path() noexcept { return _tmpdir_path; }
 };
@@ -169,6 +163,16 @@ static void with_sstable_directory(
         wrapped_test_env env_wrap,
         noncopyable_function<void (sharded<sstable_directory>&)> func) {
     with_sstable_directory(env_wrap.tmpdir_path(), sstables::sstable_state::normal, std::move(env_wrap), std::move(func));
+}
+
+static void with_sstable_directory(sharded<replica::database>& db,
+        sstring ks, sstring cf, sstables::sstable_state state,
+        noncopyable_function<void (sharded<sstable_directory>&)> func) {
+    sharded<sstable_directory> sstdir;
+    auto gtable = replica::get_table_on_all_shards(db, ks, cf).get();
+    sstdir.start(gtable.as_sharded_parameter(), state, default_io_error_handler_gen()).get();
+    auto stop_sstdir = defer([&sstdir] { sstdir.stop().get(); });
+    func(sstdir);
 }
 
 SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
@@ -417,7 +421,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             return cf.flush();
         }).get();
 
-        with_sstable_directory(path, sstables::sstable_state::normal, e, [&] (sharded<sstable_directory>& sstdir) {
+        with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::normal, [&] (sharded<sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
 
             // Collect all sstable file names
@@ -505,7 +509,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
-      with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
+      with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
@@ -557,7 +561,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
-      with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
+      with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
@@ -610,7 +614,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
-      with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&e] (sharded<sstables::sstable_directory>& sstdir) {
+      with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&e] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
@@ -660,7 +664,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
-      with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
+      with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
         distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
