@@ -29,8 +29,10 @@ def test_statusbackup(nodetool):
     assert res.stdout == "running\n"
 
 
-@pytest.mark.parametrize("nowait", [False, True])
-def test_backup(nodetool, scylla_only, nowait):
+@pytest.mark.parametrize("nowait,task_state,task_error", [(False, "failed", "error"),
+                                                          (False, "done", ""),
+                                                          (True, "", "")])
+def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     keyspace = "ks"
@@ -42,17 +44,16 @@ def test_backup(nodetool, scylla_only, nowait):
     task_id = "2c4a3e5f"
     start_time = "2024-08-08T14:29:25Z"
     end_time = "2024-08-08T14:30:42Z"
-    state = "done"
     task_status = {
         "id": task_id,
         "type": "backup",
         "kind": "node",
         "scope": "node",
-        "state": state,
+        "state": task_state,
         "is_abortable": False,
         "start_time": start_time,
         "end_time": end_time,
-        "error": "",
+        "error": task_error,
         "sequence_number": 0,
         "shard": 0,
         "progress_total": 1.0,
@@ -73,7 +74,8 @@ def test_backup(nodetool, scylla_only, nowait):
             "--snapshot", snapshot]
     if nowait:
         args.append("--nowait")
-        expected_output = ""
+        res = nodetool(*args, expected_requests=expected_requests)
+        assert task_id in res.stdout
     else:
         # wait for the completion of backup task
         expected_requests.append(
@@ -81,9 +83,18 @@ def test_backup(nodetool, scylla_only, nowait):
                 "GET",
                 f"/task_manager/wait_task/{task_id}",
                 response=task_status))
-        expected_output = f"""{state}
+        res = nodetool(*args, expected_requests=expected_requests, check_return_code=False)
+        if task_state == "done":
+            expected_returncode = 0
+            expected_output = f"""{task_state}
 start: {start_time}
 end: {end_time}
 """
-    res = nodetool(*args, expected_requests=expected_requests)
-    assert res.stdout == expected_output
+        else:
+            expected_returncode = 1
+            expected_output = f"""{task_state}: {task_error}
+start: {start_time}
+end: {end_time}
+"""
+        assert res.returncode == expected_returncode
+        assert res.stdout == expected_output
