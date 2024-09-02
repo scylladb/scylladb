@@ -62,7 +62,8 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
     assert len(files) > 0
 
     print('Backup snapshot')
-    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name)
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name, prefix)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
@@ -72,7 +73,7 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
     objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.all() ])
     for f in files:
         print(f'Check {f} is in backup')
-        assert f'{cf}/backup/{f}' in objects
+        assert f'{prefix}/{f}' in objects
 
     # Check that task runs in the streaming sched group
     log = await manager.server_open_log(server.server_id)
@@ -104,7 +105,8 @@ async def test_backup_is_abortable(manager: ManagerClient, s3_server):
     mark = await log.mark()
 
     print('Backup snapshot')
-    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name)
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for('backup task: waiting', from_mark=mark)
@@ -118,7 +120,7 @@ async def test_backup_is_abortable(manager: ManagerClient, s3_server):
     uploaded_count = 0
     for f in files:
         print(f'Check {f} is in backup')
-        if f'{cf}/backup/{f}' in objects:
+        if f'{prefix}/{f}' in objects:
             uploaded_count += 1
     assert uploaded_count > 0 and uploaded_count < len(files)
 
@@ -151,7 +153,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     orig_res = cql.execute(f"SELECT * FROM {ks}.{cf}")
     orig_rows = { x.name: x.value for x in orig_res }
 
-    tid = await manager.api.backup(server.ip_addr, ks, snap_name, s3_server.address, s3_server.bucket_name)
+    prefix = f'{cf}/{snap_name}'
+    tid = await manager.api.backup(server.ip_addr, ks, snap_name, s3_server.address, s3_server.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 

@@ -35,10 +35,12 @@ def test_statusbackup(nodetool):
 def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
+    prefix = "foo/bar/baz"
     keyspace = "ks"
     snapshot = "ss"
     params = {"endpoint": endpoint,
               "bucket": bucket,
+              "prefix": prefix,
               "keyspace": keyspace,
               "snapshot": snapshot}
     task_id = "2c4a3e5f"
@@ -70,6 +72,7 @@ def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
     args = ["backup",
             "--endpoint", endpoint,
             "--bucket", bucket,
+            "--prefix", prefix,
             "--keyspace", keyspace,
             "--snapshot", snapshot]
     if nowait:

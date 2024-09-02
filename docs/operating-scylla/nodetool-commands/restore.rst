@@ -15,6 +15,13 @@ Syntax
                --keyspace <keyspace> [--table <table>]
                [--nowait]
 
+Example
+-------
+
+.. code-block:: console
+
+   nodetool restore --endpoint s3.us-east-2.amazonaws.com  --bucket bucket-foo --snapshot ss --keyspace ks
+
 Options
 -------
 
@@ -25,5 +32,9 @@ Options
 * ``--keyspace`` - Name of a keyspace to load SSTables into
 * ``--table`` - Name of a table to load SSTables into
 * ``--nowait`` - Don't wait on the restore process
+
+See also
+
+:doc:`Nodetool backup </operating-scylla/nodetool-commands/backup/>`
 
 .. include:: nodetool-index.rst

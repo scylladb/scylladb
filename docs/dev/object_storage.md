@@ -105,8 +105,9 @@ found [here](./api/api-doc/storage_service.json). Accepted parameters are
 * *snapshot*: the snapshot name to copy sstables from
 * *endpoint*: the key in the object storage configuration file
 * *bucket*: bucket name to put sstables' files in
+* *prefix*: prefix to put sstables' files under
 
 Currently only snapshot backup is possible, so first one needs to take [snapshot](docs/kb/snapshots.rst)
 
 All tables in a keyspace are uploaded, the destination object names will look like
-`s3://bucket/table-name-and-uuid/snapshot-name/...`
+`s3://bucket/some/prefix/to/store/data/.../sstable`

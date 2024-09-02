@@ -136,17 +136,18 @@ future<int64_t> snapshot_ctl::true_snapshots_size() {
     }));
 }
 
-future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring bucket, sstring keyspace, sstring snapshot_name) {
+future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring snapshot_name) {
     if (this_shard_id() != 0) {
-        co_return co_await container().invoke_on(0, [&] (auto& local) {
-            return local.start_backup(endpoint, bucket, keyspace, snapshot_name);
+        co_return co_await container().invoke_on(0, [&](auto& local) {
+            return local.start_backup(endpoint, bucket, prefix, keyspace, snapshot_name);
         });
     }
 
     co_await coroutine::switch_to(_config.backup_sched_group);
     auto cln = _storage_manager.get_endpoint_client(endpoint);
     snap_log.info("Backup sstables from {}({}) to {}", keyspace, snapshot_name, endpoint);
-    auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>({}, *this, std::move(cln), std::move(bucket), keyspace, snapshot_name);
+    auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
+        {}, *this, std::move(cln), std::move(bucket), std::move(prefix), keyspace, snapshot_name);
     co_return task->id();
 }
 
