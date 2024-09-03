@@ -7,8 +7,9 @@ case "${CLANG_BUILD}" in
         ;;
     "INSTALL" | "INSTALL_FROM")
         echo "CLANG_BUILD: ${CLANG_BUILD}"
-        if [[ -z "${CLANG_ARCHIVE}" ]]; then
-            echo "CLANG_ARCHIVE not specified"
+        if [[ -z "${CLANG_ARCHIVES}" ]]; then
+            echo "CLANG_ARCHIVES not specified"
+            exit 1
         fi
         ;;
     "")
@@ -22,6 +23,20 @@ case "${CLANG_BUILD}" in
 esac
 
 ARCH="$(arch)"
+
+# deserialize CLANG_ARCHIVES from string
+declare -A CLANG_ARCHIVES_ARRAY=()
+while IFS=":" read -r key val; do
+    CLANG_ARCHIVES_ARRAY["$key"]="$val"
+done < <(echo "$CLANG_ARCHIVES" | tr ' ' '\n')
+
+
+CLANG_ARCHIVE="${CLANG_ARCHIVES_ARRAY[${ARCH}]}"
+if [[ -z ${CLANG_ARCHIVE} ]]; then
+    echo "CLANG_ARCHIVE not detected"
+    exit 1
+fi
+echo "CLANG_ARCHIVE: ${CLANG_ARCHIVE}"
 if [[ "${ARCH}" = "x86_64" ]]; then
     LLVM_TARGET_ARCH=X86
 elif [[ "${ARCH}" = "aarch64" ]]; then
@@ -33,7 +48,7 @@ fi
 
 SCYLLA_DIR=/mnt
 CLANG_ROOT_DIR="${SCYLLA_DIR}"/clang_build
-CLANG_CHECKOUT_NAME=llvm-project
+CLANG_CHECKOUT_NAME=llvm-project-"${ARCH}"
 CLANG_BUILD_DIR="${CLANG_ROOT_DIR}"/"${CLANG_CHECKOUT_NAME}"
 
 SCYLLA_BUILD_DIR=build_profile
