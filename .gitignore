@@ -18,7 +18,7 @@ CMakeLists.txt.user
 *.egg-info
 __pycache__CMakeLists.txt.user
 .gdbinit
-resources
+/resources
 .pytest_cache
 /expressions.tokens
 tags

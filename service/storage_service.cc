@@ -559,19 +559,18 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
                 on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
             }
             assert(existing_ip);
-            const auto replaced_host_id = locator::host_id(replaced_id.uuid());
-            tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
-            update_topology(host_id, ip, rs);
-            tmptr->add_replacing_endpoint(replaced_host_id, host_id);
-            if (t.tstate != service::topology::transition_state::join_group0) {
+            if (rs.ring.has_value()) {
+                const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+                tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+                update_topology(host_id, ip, rs);
+                tmptr->add_replacing_endpoint(replaced_host_id, host_id);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             } else {
-                // Do not update pending ranges in join_group0 state yet. After adding replacing endpoint above the
-                // node will no longer be reported for reads and writes, but it needs to be marked as alive
-                // before it is reported as pending. Otherwise increased CL during bootstrap will not be satisfied
-                // (replaced node cannot be contacted and replacing is reported as dead). So instead mark the node
-                // as UP (the node started report itself as alive already by this point). If it is down it will be
-                // marked as such eventually.
+                // After adding replacing endpoint above the node will no longer be reported for reads and writes,
+                // but it needs to be marked as alive before it is reported as pending. Otherwise increased CL
+                // during bootstrap will not be satisfied (replaced node cannot be contacted and replacing is reported
+                // as dead). So instead mark the node as UP (the node started report itself as alive already by this
+                // point). If it is down it will be marked as such eventually.
                 if (existing_ip == ip && !_gossiper.is_alive(*existing_ip)) {
                     co_await _gossiper.real_mark_alive(*existing_ip);
                 }
