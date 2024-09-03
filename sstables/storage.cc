@@ -683,11 +683,17 @@ future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir, sstable_state state) {
     return std::visit(overloaded_functor {
-        [dir, state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::filesystem_storage>(std::move(dir), state);
+        [state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
+            if (loc.dir.empty()) {
+                on_internal_error(sstlog, "Local storage options is missing 'dir'");
+            }
+            return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
-        [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::move(dir));
+        [&manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
+            if (os.prefix.empty()) {
+                on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+            }
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.prefix);
         }
     }, s_opts.value);
 }
