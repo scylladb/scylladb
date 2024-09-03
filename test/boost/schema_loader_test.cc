@@ -291,8 +291,7 @@ void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_pat
 
     const auto ed = sstables::parse_path(sst_path, "ks", "tbl");
     const auto dir_path = sst_path.parent_path();
-    data_dictionary::storage_options local;
-    auto sst = env.manager().make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
+    auto sst = env.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
     sst->load(schema->get_sharder()).get();
 
