@@ -83,7 +83,7 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
 sstables::shared_sstable
-make_sstable_for_all_shards(replica::database& db, replica::table& table, sstables::sstable_state state, sstables::generation_type generation) {
+make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
     // a thread. We could fix that, but deferring that for now.
@@ -509,7 +509,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
                 return gen(sstables::uuid_identifiers::no);
             }).get();
-            make_sstable_for_all_shards(e.db().local(), cf, sstables::sstable_state::upload, generation);
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
       with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
@@ -562,7 +562,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
             auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
                 return gen(sstables::uuid_identifiers::no);
             }).get();
-            make_sstable_for_all_shards(e.db().local(), cf, sstables::sstable_state::upload, generation);
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
       with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
             auto generation = sharded_gen.invoke_on(0, [] (auto& gen) {
                 return gen(sstables::uuid_identifiers::no);
             }).get();
-            make_sstable_for_all_shards(e.db().local(), cf, sstables::sstable_state::upload, generation);
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
       with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&e] (sharded<sstables::sstable_directory>& sstdir) {
@@ -667,7 +667,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
                 return gen(sstables::uuid_identifiers::no);
             }).get();
-            make_sstable_for_all_shards(e.db().local(), cf, sstables::sstable_state::upload, generation);
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation);
         }
 
       with_sstable_directory(fs::path(cf.dir()), sstables::sstable_state::upload, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
