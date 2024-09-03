@@ -32,11 +32,18 @@ if reg digest $(<tools/toolchain/image) > /dev/null; then
     exit 1
 fi
 
+archs=(amd64 arm64)
+
 # docker arch has a diffrent spelling than uname arch
+declare -A arch_unames=(
+    [amd64]=x86_64
+    [arm64]=aarch64
+)
+current_arch_uname="$(uname -m)"
+
 declare -A docker_arch=(
     [x86_64]=amd64
     [aarch64]=arm64
-    [s390x]=s390x
 )
 
 usage() {
@@ -47,12 +54,16 @@ Options:
                             SKIP: skip building optimized clang
                             INSTALL: build and install an optimized clang compiler binary, and save it as a tarball.
                             INSTALL_FROM: install optimized clang from a tarball.
-  --clang-archive <file>   specify optimized clang tarball path
+  --clang-archive-x86_64 <file>   specify optimized clang x86_64 tarball path
+  --clang-archive-aarch64 <file>  specify optimized clang aarch64 tarball path
+  --disable-multiarch       disable multiarch build
   --help                   this help snippet
 EOF
 }
 
 CLANG_BUILD="SKIP"
+DISABLE_MULTIARCH=false
+declare -A CLANG_ARCHIVES
 while [[ $# -gt 0 ]]; do
     case "$1" in
         "--clang-build-mode")
@@ -63,13 +74,25 @@ while [[ $# -gt 0 ]]; do
             CLANG_BUILD="$2"
             shift 2
             ;;
-        "--clang-archive")
+        "--clang-archive-x86_64")
             if [[ -z "$2" ]]; then
                 usage
                 exit 1
             fi
-            CLANG_ARCHIVE="$(realpath -m --relative-to=. "$2")"
+            CLANG_ARCHIVES[x86_64]="$(realpath -m --relative-to=. "$2")"
             shift 2
+            ;;
+        "--clang-archive-aarch64")
+            if [[ -z "$2" ]]; then
+                usage
+                exit 1
+            fi
+            CLANG_ARCHIVES[aarch64]="$(realpath -m --relative-to=. "$2")"
+            shift 2
+            ;;
+        "--disable-multiarch")
+            DISABLE_MULTIARCH=true
+            shift 1
             ;;
         "--help")
             usage
@@ -91,28 +114,76 @@ case "${CLANG_BUILD}" in
         ;;
 esac
 
-# clang archive file need to be under scylla directory, since we only share
-# scylla directory with the container
-if [[ "${CLANG_ARCHIVE}" = "../"* ]]; then
-    echo "clang archive file need to be under scylla directory"
-    exit 1
+# Force disabling multiarch on INSTALL mode, since building clang on
+# QEMU emulation takes too much time
+if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
+    DISABLE_MULTIARCH=true
+fi
+
+if ! "${DISABLE_MULTIARCH}"; then
+    for arch in "${archs[@]}"; do
+        # translate from docker arch to uname arch
+        arch_uname="${arch_unames[$arch]}"
+        if [[ "${current_arch_uname}" == "${arch_uname}" ]]; then
+            continue
+        fi
+        if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-"${arch_uname}" ]]; then
+            echo install qemu-user-static
+            exit 1
+        fi
+    done
 fi
 
 # set default archive path if not specified
-if [[ -z "${CLANG_ARCHIVE}" ]]; then
+if [[ "${CLANG_BUILD}" = "INSTALL" ]] && [[ -z "${CLANG_ARCHIVES[$current_arch_uname]}" ]]; then
     CURDIR="$(dirname "$0")"
     LLVM_CLANG_TAG="$(sed -n -e 's/^LLVM_CLANG_TAG=\(.*\)/\1/p' "${CURDIR}"/optimized_clang.sh)"
     IMAGE_ID="$(sed -e 's#docker.io/scylladb/scylla-toolchain:##' "${CURDIR}"/image)"
-    CLANG_ARCHIVE="clang_build/optimized_clang_${LLVM_CLANG_TAG}_${IMAGE_ID}.$(arch).tar.gz"
+    CLANG_ARCHIVES[${current_arch_uname}]="clang_build/optimized_clang_${LLVM_CLANG_TAG}_${IMAGE_ID}.${current_arch_uname}.tar.gz"
 fi
 
-if [[ "${CLANG_BUILD}" = "INSTALL_FROM" ]] && [[ ! -f "${CLANG_ARCHIVE}" ]]; then
-    echo "${CLANG_ARCHIVE}" does not exist.
-    echo "Please specify vaild file with --clang-archive"
-    exit 1
+if [[ "${CLANG_BUILD}" = "INSTALL_FROM" ]]; then
+    for arch in "${archs[@]}"; do
+        arch_uname="${arch_unames[$arch]}"
+        if "${DISABLE_MULTIARCH}"; then
+            if [[ "${arch_uname}" != "${current_arch_uname}" ]]; then
+                continue
+            fi
+        fi
+        # clang archive file need to be under scylla directory, since we only
+        # share scylla directory with the container
+        if [[ "${CLANG_ARCHIVES[${arch_uname}]}" = "../"* ]]; then
+            echo "clang archive file need to be under scylla directory"
+            exit 1
+        fi
+        if [[ ! -f "${CLANG_ARCHIVES[${arch_uname}]}" ]]; then
+            echo "${CLANG_ARCHIVES[${arch_uname}]} does not exist."
+            echo "Please specify vaild file with --clang-archive-${arch_uname}"
+            exit 1
+        fi
+    done
 fi
 
-buildah bud --platform="linux/${docker_arch[$(arch)]}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" -v "$(realpath ./):/mnt:Z" --build-arg CLANG_BUILD="${CLANG_BUILD}" --build-arg CLANG_ARCHIVE="${CLANG_ARCHIVE}"
+if "${DISABLE_MULTIARCH}"; then
+    echo "Disabling multiarch build."
+    echo "This will build only ${docker_arch[${current_arch_uname}]} image."
+    PLATFORM=--platform=linux/${docker_arch[${current_arch_uname}]}
+else
+    echo "Enabling multiarch build."
+    PLATFORM=${archs[@]/#/--platform=linux/}
+fi
+
+# serialize CLANG_ARCHIVES to string
+CLANG_ARCHIVES_STR=
+for key in ${!CLANG_ARCHIVES[@]}; do
+    if [[ -n $CLANG_ARCHIVES_STR ]]; then
+        CLANG_ARCHIVES_STR+=" "
+    fi
+    val="${CLANG_ARCHIVES[${key}]}"
+    CLANG_ARCHIVES_STR+="${key}:${val}"
+done
+
+buildah bud ${PLATFORM} --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" -v "$(realpath ./):/mnt:Z" --build-arg CLANG_BUILD="${CLANG_BUILD}" --build-arg CLANG_ARCHIVES="${CLANG_ARCHIVES_STR}"
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
@@ -120,7 +191,5 @@ echo "    podman manifest push --all $(<tools/toolchain/image) docker://$(<tools
 if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     echo ""
     echo "Optimized clang archive saved at:"
-    echo "    ${CLANG_ARCHIVE}"
-    echo "You can rebuild frozen toolchain without rebuilding optimized clang by:"
-    echo "    ./tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive ${CLANG_ARCHIVE}"
+    echo "    ${CLANG_ARCHIVES[$current_arch_name}]}"
 fi

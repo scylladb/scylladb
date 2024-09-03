@@ -1,7 +1,7 @@
 FROM docker.io/fedora:40
 
 ARG CLANG_BUILD="SKIP"
-ARG CLANG_ARCHIVE
+ARG CLANG_ARCHIVES
 
 WORKDIR /mnt
 RUN dnf -y update \
