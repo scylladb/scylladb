@@ -9,6 +9,7 @@ import asyncio
 import logging
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view, wait_for_view_v1
 from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.internal_types import ServerInfo
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
@@ -375,6 +376,51 @@ async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
         return (len(result) == (node_count - 1) * 2) or None
 
     await wait_for(node_rows_removed, time.time() + 60)
+
+# Replace a node and verify that the view_build_status has rows for the new node and
+# no rows for the old node
+@pytest.mark.asyncio
+async def test_view_build_status_with_replace_node(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    await create_keyspace(cql)
+    await create_table(cql)
+    await create_mv(cql, "vt1")
+    await create_mv(cql, "vt2")
+
+    await wait_for_view(cql, "vt1", node_count)
+    await wait_for_view(cql, "vt2", node_count)
+
+    result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+    assert len(result) == node_count * 2
+
+    # replace a node
+    removed_host_id = await manager.get_host_id(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[0].server_id);
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
+    servers.append(await manager.server_add(replace_cfg))
+    servers = servers[1:]
+    added_host_id = await manager.get_host_id(servers[-1].server_id)
+
+    # wait for the old node rows to be removed and new node rows to be added
+    async def node_rows_replaced():
+        result = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE host_id={removed_host_id} ALLOW FILTERING")
+        if len(result) != 0:
+            return None
+
+        result = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE host_id={added_host_id} ALLOW FILTERING")
+        if len(result) != 2:
+            return None
+
+        result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+        if len(result) != node_count * 2:
+            return None
+
+        return True
+
+    await wait_for(node_rows_replaced, time.time() + 60)
 
 # Start with view_build_status v1 mode, and create entries such that
 # some of them correspond to removed nodes or non-existent views.
