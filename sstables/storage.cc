@@ -233,9 +233,7 @@ future<> filesystem_storage::remove_temp_dir() {
     if (!_temp_dir) {
         co_return;
     }
-    std::optional<int> opt;
-    sstlog.debug("Removing temp_dir={}", opt);
-    //sstlog.debug("Removing temp_dir={}", _temp_dir);
+    sstlog.debug("Removing temp_dir={}", _temp_dir);
     try {
         co_await remove_file(_temp_dir->native());
     } catch (...) {
