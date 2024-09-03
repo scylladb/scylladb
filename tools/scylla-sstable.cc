@@ -327,7 +327,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
         const auto dir_path = sst_path.parent_path();
-        data_dictionary::storage_options local;
+        auto local = data_dictionary::make_local_options(dir_path);
         auto sst = sst_man.make_sstable(schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
         try {
@@ -890,7 +890,7 @@ private:
         if (file_exists(sst_name).get()) {
             throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
-        data_dictionary::storage_options local;
+        auto local = data_dictionary::make_local_options(_output_dir);
         return _sst_man.make_sstable(_schema, _output_dir, local, generation, sstables::sstable_state::normal, version, format);
     }
     sstables::sstable_writer_config do_configure_writer(sstring origin) const {
@@ -2572,7 +2572,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto reader = make_generating_reader_v2(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
-    data_dictionary::storage_options local;
+    auto local = data_dictionary::make_local_options(output_dir);
     auto sst = manager.make_sstable(schema, output_dir, local, generation, sstables::sstable_state::normal, version, format);
 
     sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
@@ -2636,7 +2636,7 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
         auto new_sst = sstable_manager.make_sstable(
             schema,
             sst->get_storage().prefix(),
-            data_dictionary::storage_options{},
+            data_dictionary::make_local_options(fs::path(sst->get_storage().prefix())),
             sst->generation(),
             sstable_state::normal,
             sst->get_version());

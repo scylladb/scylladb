@@ -502,7 +502,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
 
     const auto ed = sstables::parse_path(sstable_path, keyspace, table);
     const auto dir_path = sstable_path.parent_path();
-    data_dictionary::storage_options local;
+    auto local = data_dictionary::make_local_options(dir_path);
     auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, dir_path.c_str(), local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
     bootstrap_sst->load_metadata({}, false).get();

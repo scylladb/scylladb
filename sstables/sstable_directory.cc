@@ -117,7 +117,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         manager,
         std::move(schema),
         &sharder,
-        make_lw_shared<data_dictionary::storage_options>(), // local
+        make_lw_shared<const data_dictionary::storage_options>(data_dictionary::make_local_options(fs::path(table_dir))),
         std::move(table_dir),
         state,
         std::move(error_handler_gen)

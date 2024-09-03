@@ -49,4 +49,10 @@ struct storage_options {
     static value_type from_map(std::string_view type, std::map<sstring, sstring> values);
 };
 
+inline storage_options make_local_options(std::filesystem::path dir) {
+    storage_options so;
+    so.value = data_dictionary::storage_options::local { .dir = std::move(dir) };
+    return so;
+}
+
 } // namespace data_dictionary
