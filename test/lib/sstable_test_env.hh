@@ -99,7 +99,7 @@ public:
 
     void maybe_start_compaction_manager(bool enable = true);
 
-    explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr);
+    explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr, tmpdir* tmp = nullptr);
     ~test_env();
     test_env(test_env&&) noexcept;
 

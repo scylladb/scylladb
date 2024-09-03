@@ -185,7 +185,8 @@ std::unique_ptr<db::config> make_db_config(sstring temp_dir, const data_dictiona
 }
 
 struct test_env::impl {
-    tmpdir dir;
+    std::optional<tmpdir> local_dir;
+    tmpdir& dir;
     std::unique_ptr<db::config> db_config;
     directory_semaphore dir_sem;
     ::cache_tracker cache_tracker;
@@ -199,7 +200,7 @@ struct test_env::impl {
     data_dictionary::storage_options storage;
     abort_source abort;
 
-    impl(test_env_config cfg, sstables::storage_manager* sstm);
+    impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tdir);
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
@@ -208,8 +209,9 @@ struct test_env::impl {
     }
 };
 
-test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
-    : dir()
+test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tdir)
+    : local_dir(tdir == nullptr ? std::optional<tmpdir>(std::in_place) : std::optional<tmpdir>(std::nullopt))
+    , dir(tdir == nullptr ? local_dir.value() : *tdir)
     , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
@@ -229,8 +231,9 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     }
 }
 
-test_env::test_env(test_env_config cfg, sstables::storage_manager* sstm)
-        : _impl(std::make_unique<impl>(std::move(cfg), sstm)) {
+test_env::test_env(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tmp)
+        : _impl(std::make_unique<impl>(std::move(cfg), sstm, tmp))
+{
 }
 
 test_env::test_env(test_env&&) noexcept = default;
@@ -451,8 +454,9 @@ test_env::make_table_config() {
 future<>
 test_env::do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
     return seastar::async([func = std::move(func)] {
+        tmpdir tdir;
         sharded<test_env> env;
-        env.start().get();
+        env.start(test_env_config{}, nullptr, &tdir).get();
         auto stop = defer([&] { env.stop().get(); });
         func(env);
     });
