@@ -369,9 +369,8 @@ test_env::make_sst_factory(schema_ptr s, sstable::version_types version) {
 
 future<shared_sstable>
 test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation,
-        sstable::version_types version, sstable::format_types f) {
+        sstable::version_types version, sstable::format_types f, sstable_open_config cfg) {
     auto sst = make_sstable(std::move(schema), dir, generation, version, f);
-    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
     return sst->load(sst->get_schema()->get_sharder(), cfg).then([sst = std::move(sst)] {
         return make_ready_future<shared_sstable>(std::move(sst));
     });

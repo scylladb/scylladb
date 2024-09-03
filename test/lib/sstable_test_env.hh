@@ -136,7 +136,8 @@ public:
     // counting pointer to an sstable - allowing for the returned handle to
     // be passed around until no longer needed.
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation,
-            sstable::version_types version, sstable::format_types f = sstable::format_types::big);
+            sstable::version_types version, sstable::format_types f = sstable::format_types::big,
+            sstable_open_config cfg = { .load_first_and_last_position_metadata = true });
 
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t gen_value,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big);
