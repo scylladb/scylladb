@@ -1252,6 +1252,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
+    _storage_opts = sstables::make_storage_options_for_table(_sstables_manager.config(), *_schema, *_storage_opts);
     co_await coroutine::parallel_for_each(_config.all_datadirs, [this] (sstring cfdir) -> future<> {
         co_await _sstables_manager.init_table_storage(*_storage_opts, cfdir);
     });

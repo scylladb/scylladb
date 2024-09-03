@@ -22,9 +22,13 @@
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 
+class schema;
+
 namespace data_dictionary {
 class storage_options;
 }
+
+namespace db { class config; }
 
 namespace sstables {
 
@@ -76,6 +80,7 @@ public:
 };
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring table_dir, sstable_state state);
+lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_table(const db::config& cfg, const schema& s, const data_dictionary::storage_options& sopts);
 future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
 future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);

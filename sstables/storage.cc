@@ -691,6 +691,23 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
+lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_table(const db::config& cfg, const schema& s, const data_dictionary::storage_options& sopts) {
+    data_dictionary::storage_options nopts;
+    nopts.value = std::visit(overloaded_functor {
+        [&] (const data_dictionary::storage_options::local& o) -> data_dictionary::storage_options::value_type {
+            return data_dictionary::storage_options::local {
+            };
+        },
+        [&] (const data_dictionary::storage_options::s3& o) -> data_dictionary::storage_options::value_type {
+            return data_dictionary::storage_options::s3 {
+                .bucket = o.bucket,
+                .endpoint = o.endpoint,
+            };
+        }
+    }, sopts.value);
+    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+}
+
 future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
     co_await std::visit(overloaded_functor {
         [&dir] (const data_dictionary::storage_options::local&) -> future<> {
