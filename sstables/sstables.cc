@@ -1877,15 +1877,13 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
 
 future<> sstable::seal_sstable(bool backup)
 {
-    return _storage->seal(*this).then([this, backup] {
-        if (_marked_for_deletion == mark_for_deletion::implicit) {
-            _marked_for_deletion = mark_for_deletion::none;
-        }
-        if (backup) {
-            return _storage->snapshot(*this, "backups", storage::absolute_path::no);
-        }
-        return make_ready_future<>();
-    });
+    co_await _storage->seal(*this);
+    if (_marked_for_deletion == mark_for_deletion::implicit) {
+        _marked_for_deletion = mark_for_deletion::none;
+    }
+    if (backup) {
+        co_await _storage->snapshot(*this, "backups", storage::absolute_path::no);
+    }
 }
 
 sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions,
