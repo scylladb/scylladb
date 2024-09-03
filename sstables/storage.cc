@@ -33,6 +33,7 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
+#include "replica/database.hh" // need to move format_table_directory_name here eventually
 
 #include "checked-file-impl.hh"
 
@@ -696,12 +697,14 @@ lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_t
     nopts.value = std::visit(overloaded_functor {
         [&] (const data_dictionary::storage_options::local& o) -> data_dictionary::storage_options::value_type {
             return data_dictionary::storage_options::local {
+                .dir = fs::path(format("{}/{}/{}", cfg.data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()))),
             };
         },
         [&] (const data_dictionary::storage_options::s3& o) -> data_dictionary::storage_options::value_type {
             return data_dictionary::storage_options::s3 {
                 .bucket = o.bucket,
                 .endpoint = o.endpoint,
+                .prefix = format("{}/{}/{}", cfg.data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
             };
         }
     }, sopts.value);
