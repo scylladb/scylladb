@@ -2120,12 +2120,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // No way to really test validation besides observing the log messages.
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
         BOOST_REQUIRE(in_strategy_sstables(ts).empty());
     });
@@ -2142,12 +2143,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // No way to really test validation besides observing the log messages.
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
         BOOST_REQUIRE(!sst->is_quarantined());
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
