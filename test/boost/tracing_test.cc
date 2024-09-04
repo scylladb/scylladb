@@ -6,12 +6,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 
 #include "test/lib/cql_test_env.hh"
+
+BOOST_AUTO_TEST_SUITE(tracing_test)
 
 future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
     return do_with_cql_env_thread([func](auto &env) {
@@ -80,3 +83,5 @@ SEASTAR_TEST_CASE(tracing_slow_query_fast_mode) {
         return make_ready_future<>();
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

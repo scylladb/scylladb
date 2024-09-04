@@ -16,7 +16,8 @@
 #include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -26,6 +27,8 @@
 #include "types/set.hh"
 #include "types/list.hh"
 #include "types/map.hh"
+
+BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -3268,3 +3271,5 @@ SEASTAR_TEST_CASE(test_mv_allow_some_column_drops) {
         BOOST_REQUIRE_THROW(e.execute_cql("alter table cf2 drop d").get(), exceptions::invalid_request_exception);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -28,7 +28,9 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <fmt/ranges.h>
 #include <utility>
@@ -189,6 +191,8 @@ static void require_eventually_empty_caches(distributed<replica::database>& db,
     tests::require(eventually_true(aggregated_population_is_zero));
 }
 
+BOOST_AUTO_TEST_SUITE(multishard_mutation_query_test)
+
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
@@ -221,6 +225,8 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
+
+} // multishard_mutation_query_test namespace
 
 static std::vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
         const query::partition_slice& slice) {
@@ -527,6 +533,8 @@ void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutati
     }
 }
 
+namespace multishard_mutation_query_test {
+
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_all) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
@@ -808,6 +816,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
         return make_ready_future<>();
     }, cql_config_with_extensions()).get();
 }
+
+} // multishard_mutation_query_test namespace
 
 namespace {
 
@@ -1107,6 +1117,8 @@ run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<replica::database>& d
 
 } // namespace
 
+namespace multishard_mutation_query_test {
+
 SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
     auto cql_cfg = cql_config_with_extensions();
     cql_cfg.db_config->enable_commitlog(false);
@@ -1158,3 +1170,5 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
         return make_ready_future<>();
     }, cql_cfg).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

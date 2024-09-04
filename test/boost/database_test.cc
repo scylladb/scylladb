@@ -13,7 +13,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/file.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <utility>
 #include <fmt/ranges.h>
@@ -54,10 +55,10 @@
 using namespace std::chrono_literals;
 using namespace sstables;
 
-class database_test {
+class database_test_wrapper {
     replica::database& _db;
 public:
-    explicit database_test(replica::database& db) : _db(db) { }
+    explicit database_test_wrapper(replica::database& db) : _db(db) { }
 
     reader_concurrency_semaphore& get_user_read_concurrency_semaphore() {
         return _db._read_concurrency_sem;
@@ -98,6 +99,8 @@ future<> do_with_cql_env_and_compaction_groups(std::function<void(cql_test_env&)
         co_await do_with_cql_env_and_compaction_groups_cgs(x_log2_compaction_groups, func, cfg, thread_attr);
     }
 }
+
+BOOST_AUTO_TEST_SUITE(database_test)
 
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
@@ -1125,11 +1128,11 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
         destroy_scheduling_group(unknown_scheduling_group).get();
     });
 
-    const auto user_semaphore = std::mem_fn(&database_test::get_user_read_concurrency_semaphore);
-    const auto system_semaphore = std::mem_fn(&database_test::get_system_read_concurrency_semaphore);
-    const auto streaming_semaphore = std::mem_fn(&database_test::get_streaming_read_concurrency_semaphore);
+    const auto user_semaphore = std::mem_fn(&database_test_wrapper::get_user_read_concurrency_semaphore);
+    const auto system_semaphore = std::mem_fn(&database_test_wrapper::get_system_read_concurrency_semaphore);
+    const auto streaming_semaphore = std::mem_fn(&database_test_wrapper::get_streaming_read_concurrency_semaphore);
 
-    std::vector<std::pair<scheduling_group, std::function<reader_concurrency_semaphore&(database_test&)>>> scheduling_group_and_expected_semaphore{
+    std::vector<std::pair<scheduling_group, std::function<reader_concurrency_semaphore&(database_test_wrapper&)>>> scheduling_group_and_expected_semaphore{
         {default_scheduling_group(), system_semaphore}
     };
 
@@ -1146,7 +1149,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
 
     do_with_cql_env_and_compaction_groups([&scheduling_group_and_expected_semaphore] (cql_test_env& e) {
         auto& db = e.local_db();
-        database_test tdb(db);
+        database_test_wrapper tdb(db);
         for (const auto& [sched_group, expected_sem_getter] : scheduling_group_and_expected_semaphore) {
             with_scheduling_group(sched_group, [&db, sched_group = sched_group, expected_sem_ptr = &expected_sem_getter(tdb)] {
                 auto& sem = db.get_reader_concurrency_semaphore();
@@ -1196,7 +1199,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
 
     do_with_cql_env_and_compaction_groups([&scheduling_group_and_expected_max_result_size] (cql_test_env& e) {
         auto& db = e.local_db();
-        database_test tdb(db);
+        database_test_wrapper tdb(db);
         for (const auto& [sched_group, expected_max_size] : scheduling_group_and_expected_max_result_size) {
             with_scheduling_group(sched_group, [&db, sched_group = sched_group, expected_max_size = expected_max_size] {
                 const auto max_size = db.get_query_max_result_size();
@@ -1418,7 +1421,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
         auto q = query::querier(
                 tbl.as_mutation_source(),
                 tbl.schema(),
-                database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
+                database_test_wrapper(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
                 nullptr);
@@ -1513,3 +1516,5 @@ SEASTAR_TEST_CASE(mutation_dump_generated_schema_deterministic_id_version) {
 
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

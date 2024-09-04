@@ -12,13 +12,16 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include "test/lib/exception_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(cql_query_like_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -178,3 +181,5 @@ SEASTAR_TEST_CASE(test_like_operator_on_token) {
                 exception_predicate::message_contains("token function"));
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

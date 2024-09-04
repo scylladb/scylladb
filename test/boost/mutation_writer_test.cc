@@ -8,7 +8,8 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/bool_class.hh>
 #include <seastar/util/closeable.hh>
@@ -35,6 +36,8 @@
 #include "readers/empty_v2.hh"
 #include "readers/generating_v2.hh"
 #include "readers/combined.hh"
+
+BOOST_AUTO_TEST_SUITE(mutation_writer_test)
 
 using namespace mutation_writer;
 
@@ -590,3 +593,5 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
 
     assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

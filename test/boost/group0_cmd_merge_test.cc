@@ -8,7 +8,8 @@
 
 #include <fmt/ranges.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 
 #include "db/config.hh"
@@ -23,6 +24,8 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "utils/error_injection.hh"
 #include "test/lib/expr_test_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(group0_cmd_merge_test)
 
 const auto OLD_TIMEUUID = utils::UUID_gen::get_time_UUID(std::chrono::system_clock::time_point::min());
 
@@ -120,3 +123,5 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
     }, cfg);
 #endif
 }
+
+BOOST_AUTO_TEST_SUITE_END()

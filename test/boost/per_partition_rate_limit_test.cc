@@ -1,13 +1,16 @@
 #include <chrono>
 #include <cstdint>
 #include <seastar/core/coroutine.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
 #include "mutation/mutation.hh"
 #include "service/storage_proxy.hh"
+
+BOOST_AUTO_TEST_SUITE(per_partition_rate_limit_test)
 
 SEASTAR_TEST_CASE(test_internal_operation_filtering) {
     return do_with_cql_env_thread([] (cql_test_env& e) -> future<> {
@@ -107,3 +110,5 @@ SEASTAR_TEST_CASE(test_internal_operation_filtering) {
         return make_ready_future<>();
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

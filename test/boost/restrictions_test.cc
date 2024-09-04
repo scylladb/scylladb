@@ -8,7 +8,9 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "cql3/cql_config.hh"
 #include "cql3/values.hh"
@@ -20,6 +22,8 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+
+BOOST_AUTO_TEST_SUITE(restrictions_test)
 
 namespace {
 
@@ -1046,3 +1050,5 @@ SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_default_value) {
     auto cfg = make_shared<db::config>();
     BOOST_REQUIRE(cfg->strict_is_not_null_in_views() == db::tri_mode_restriction_t::mode::WARN);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

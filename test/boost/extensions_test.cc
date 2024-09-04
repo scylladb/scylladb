@@ -12,7 +12,8 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
@@ -25,6 +26,8 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/overloaded_functor.hh"
+
+BOOST_AUTO_TEST_SUITE(extensions_test)
 
 class dummy_ext : public schema_extension {
 public:
@@ -206,3 +209,5 @@ SEASTAR_TEST_CASE(test_extension_remove) {
         });
     }, ::make_shared<db::config>(ext));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

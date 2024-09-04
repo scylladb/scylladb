@@ -352,6 +352,12 @@ class UnitTestSuite(TestSuite):
 
     @property
     def pattern(self) -> str:
+        # This should only match individual tests and not combined_tests.cc
+        # file of the combined test.
+        # It is because combined_tests.cc itself does not contain any tests.
+        # To keep the code simple, we have avoided this by renaming
+        # combined test file to “_tests.cc” instead of changing the match
+        # pattern.
         return "*_test.cc"
 
 
@@ -362,11 +368,47 @@ class BoostTestSuite(UnitTestSuite):
     # --list_content. Static to share across all modes.
     _case_cache: Dict[str, List[str]] = dict()
 
+    _exec_name_cache: Dict[str, str] = dict()
+
+    def _generate_cache(self) -> None:
+        # Apply combined test only for test/boost
+        if self.name != 'boost':
+            return
+        exe = path_to(self.mode, "test", self.name, 'combined_tests')
+        res = subprocess.run(
+                [exe, '--list_content'],
+                check=True,
+                capture_output=True,
+                env=dict(os.environ,
+                         **{"ASAN_OPTIONS": "halt_on_error=0"}),
+            )
+        testname = None
+        fqname = None
+        for line in res.stderr.decode().splitlines():
+            if not line.startswith('    '):
+                testname = line.strip().rstrip('*')
+                fqname = os.path.join(self.mode, self.name, testname)
+                self._exec_name_cache[fqname] = 'combined_tests'
+                self._case_cache[fqname] = []
+            else:
+                casename = line.strip().rstrip('*')
+                if casename.startswith('_'):
+                    continue
+                self._case_cache[fqname].append(casename)
+
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
+        self._generate_cache()
 
     async def create_test(self, shortname: str, casename: str, suite, args) -> None:
-        exe = path_to(suite.mode, "test", suite.name, shortname)
+        fqname = os.path.join(self.mode, self.name, shortname)
+        if fqname in self._exec_name_cache:
+            execname = self._exec_name_cache[fqname]
+            combined_test = True
+        else:
+            execname = None
+            combined_test = False
+        exe = path_to(suite.mode, "test", suite.name, execname if combined_test else shortname)
         if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
@@ -374,6 +416,8 @@ class BoostTestSuite(UnitTestSuite):
         allows_compaction_groups = self.all_can_run_compaction_groups_except != None and shortname not in self.all_can_run_compaction_groups_except
         if options.parallel_cases and (shortname not in self.no_parallel_cases) and casename is None:
             fqname = os.path.join(self.mode, self.name, shortname)
+            # since combined tests are preloaded to self._case_cache, this will
+            # only run in non-combined test mode
             if fqname not in self._case_cache:
                 process = await asyncio.create_subprocess_exec(
                     exe, *['--list_content'],
@@ -398,15 +442,35 @@ class BoostTestSuite(UnitTestSuite):
 
             case_list = self._case_cache[fqname]
             if len(case_list) == 1:
-                test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups)
+                test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, None, allows_compaction_groups, execname)
                 self.tests.append(test)
             else:
                 for case in case_list:
-                    test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case, allows_compaction_groups)
+                    test = BoostTest(self.next_id((shortname, self.suite_key, case)), shortname, suite, args, case, allows_compaction_groups, execname)
                     self.tests.append(test)
         else:
-            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, casename, allows_compaction_groups)
+            test = BoostTest(self.next_id((shortname, self.suite_key)), shortname, suite, args, casename, allows_compaction_groups, execname)
             self.tests.append(test)
+
+    async def add_test(self, shortname, casename) -> None:
+        """Create a UnitTest class with possibly custom command line
+        arguments and add it to the list of tests"""
+        fqname = os.path.join(self.mode, self.name, shortname)
+        if fqname in self._exec_name_cache:
+            execname = self._exec_name_cache[fqname]
+            combined_test = True
+        else:
+            combined_test = False
+        # Skip tests which are not configured, and hence are not built
+        if os.path.join("test", self.name, execname if combined_test else shortname) not in self.options.tests:
+                return
+
+        # Default seastar arguments, if not provided in custom test options,
+        # are two cores and 2G of RAM
+        args = self.custom_args.get(shortname, ["-c2 -m2G"])
+        args = merge_cmdline_options(args, self.options.extra_scylla_cmdline_options)
+        for a in args:
+            await self.create_test(shortname, casename, self, a)
 
     def junit_tests(self) -> Iterable['Test']:
         """Boost tests produce an own XML output, so are not included in a junit report"""
@@ -714,16 +778,38 @@ class UnitTest(Test):
 
 TestPath = collections.namedtuple('TestPath', ['suite_name', 'test_name', 'case_name'])
 
-class BoostTest(UnitTest):
+class BoostTest(Test):
     """A unit test which can produce its own XML output"""
 
+    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 "
+                                "--kernel-page-cache 1 "
+                                "--blocked-reactor-notify-ms 2000000 --collectd 0 "
+                                "--max-networking-io-control-blocks=100 ")
+
     def __init__(self, test_no: int, shortname: str, suite, args: str,
-                 casename: Optional[str], allows_compaction_groups : bool) -> None:
+                 casename: Optional[str], allows_compaction_groups : bool, execname: Optional[str]) -> None:
         boost_args = []
+        combined_test = True if execname else False
+        _shortname = shortname
         if casename:
             shortname += '.' + casename
-            boost_args += ['--run_test=' + casename]
-        super().__init__(test_no, shortname, suite, args)
+            if combined_test:
+                boost_args += ['--run_test=' + _shortname + '/' + casename]
+            else:
+                boost_args += ['--run_test=' + casename]
+        else:
+            if combined_test:
+                boost_args += ['--run_test=' + _shortname]
+
+        super().__init__(test_no, shortname, suite)
+        if combined_test:
+            self.path = path_to(self.mode, "test", suite.name, execname)
+        else:
+            self.path = path_to(self.mode, "test", suite.name, shortname.split('.')[0])
+        self.args = shlex.split(args) + UnitTest.standard_args
+        if self.mode == "coverage":
+            self.env.update(coverage.env(self.path))
+
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
@@ -784,11 +870,17 @@ class BoostTest(UnitTest):
             self.args += ['--random-seed', options.random_seed]
         if self.allows_compaction_groups and options.x_log2_compaction_groups:
             self.args += [ "--x-log2-compaction-groups", str(options.x_log2_compaction_groups) ]
-        return await super().run(options)
+        self.success = await run_test(self, options, env=self.env)
+        logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+        return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
         """Does not write junit report for Jenkins legacy reasons"""
         assert False
+
+    def print_summary(self) -> None:
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
 
 
 class CQLApprovalTest(Test):

@@ -20,11 +20,15 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(querier_cache_test)
 
 using namespace std::chrono_literals;
 
@@ -835,3 +839,5 @@ SEASTAR_THREAD_TEST_CASE(test_semaphore_mismatch) {
             .no_evictions();
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

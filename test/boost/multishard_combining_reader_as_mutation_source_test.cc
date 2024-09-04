@@ -12,7 +12,8 @@
 
 #include <seastar/core/thread.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/cql_test_env.hh"
@@ -22,6 +23,8 @@
 
 #include "schema/schema_registry.hh"
 #include "readers/forwardable_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(multishard_combining_reader_as_mutation_source_test)
 
 // It has to be a container that does not invalidate pointers
 static std::list<dummy_sharder> keep_alive_sharder;
@@ -154,3 +157,5 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_rever
         return make_ready_future<>();
     }).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()
