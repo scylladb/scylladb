@@ -3010,9 +3010,12 @@ public:
                     this,
                     compaction_time);
             auto auto_stop_master = defer([&master] {
-                master.stop().handle_exception([] (std::exception_ptr ep) {
+                try {
+                    master.stop().get();
+                } catch (...) {
+                    std::exception_ptr ep = std::current_exception();
                     rlogger.warn("Failed auto-stopping Row Level Repair (Master): {}. Ignored.", ep);
-                }).get();
+                }
             });
 
             rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_size={}",
@@ -3022,20 +3025,22 @@ public:
             std::vector<repair_node_state> nodes_to_stop;
             nodes_to_stop.reserve(master.all_nodes().size());
             try {
-                parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
+                parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
-                    return master.repair_row_level_start(node, _shard_task.get_keyspace(), _cf_name, _range, schema_version, _shard_task.reason(), compaction_time, ns.shard).then([&] () {
+                    co_await master.repair_row_level_start(node, _shard_task.get_keyspace(), _cf_name, _range, schema_version, _shard_task.reason(), compaction_time, ns.shard);
+                    {
                         ns.state = repair_state::row_level_start_finished;
                         nodes_to_stop.push_back(ns);
                         ns.state = repair_state::get_estimated_partitions_started;
-                        return master.repair_get_estimated_partitions(node, ns.shard).then([this, node, &ns] (uint64_t partitions) {
+                        uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
+                        {
                             ns.state = repair_state::get_estimated_partitions_finished;
                             rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                             _estimated_partitions += partitions;
-                        });
-                    });
-                }).get();
+                        }
+                    }
+                })).get();
 
                 if (!master.all_nodes().empty()) {
                     // Use the average number of partitions, instead of the sum
@@ -3058,14 +3063,15 @@ public:
                     _estimated_partitions *= _shard_task.db.local().get_config().repair_partition_count_estimation_ratio();
                 }
 
-                parallel_for_each(master.all_nodes(), [&, this] (repair_node_state& ns) {
+                parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
                     ns.state = repair_state::set_estimated_partitions_started;
-                    return master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard).then([&ns] {
+                    co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
+                    {
                         ns.state = repair_state::set_estimated_partitions_finished;
-                    });
-                }).get();
+                    }
+                })).get();
 
                 while (true) {
                     auto status = negotiate_sync_boundary(master);
@@ -3093,13 +3099,14 @@ public:
                 ex = std::current_exception();
             }
 
-            parallel_for_each(nodes_to_stop, [&] (repair_node_state& ns) {
+            parallel_for_each(nodes_to_stop, coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                 auto node = ns.node;
                 master.set_repair_state(repair_state::row_level_stop_started, node);
-                return master.repair_row_level_stop(node, _shard_task.get_keyspace(), _cf_name, _range, ns.shard).then([node, &master] {
+                co_await master.repair_row_level_stop(node, _shard_task.get_keyspace(), _cf_name, _range, ns.shard);
+                {
                     master.set_repair_state(repair_state::row_level_stop_finished, node);
-                });
-            }).get();
+                }
+            })).get();
 
             _shard_task.update_statistics(master.stats());
             if (_failed) {
