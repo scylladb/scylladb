@@ -3428,13 +3428,15 @@ repair_service::remove_repair_meta(gms::inet_address from) {
             it++;
         }
     }
-    return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-        return rm->stop().then([&rm] {
+    co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
+        co_await rm->stop();
+        {
             rm = {};
-        });
-    }).then([repair_metas, from] {
-        rlogger.debug("Removed all repair_meta for single node {}", from);
+        }
     });
+    {
+        rlogger.debug("Removed all repair_meta for single node {}", from);
+    }
 }
 
 future<>
