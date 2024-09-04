@@ -2054,31 +2054,32 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
     if (row.cmd == repair_stream_cmd::row_data) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data", from);
         current_rows.push_back(std::move(row.row));
-        return make_ready_future<stop_iteration>(stop_iteration::no);
+        co_return stop_iteration::no;
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
-        return repair.invoke_on(dst_cpu_id, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable {
+        co_await repair.invoke_on(dst_cpu_id, [from, repair_meta_id, fp = std::move(fp)] (repair_service& local_repair) mutable -> future<> {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
-                return rm->put_row_diff_handler(std::move(*fp), from).then([rm] {
+                co_await rm->put_row_diff_handler(std::move(*fp), from);
+                {
                     rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
-                });
+                }
             } else {
-                return rm->put_row_diff_handler(*fp, from).then([rm] {
+                co_await rm->put_row_diff_handler(*fp, from);
+                {
                     rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
-                });
+                }
             }
-        }).then([sink] () mutable {
-            return sink(repair_stream_cmd::put_rows_done);
-        }).then([sink] () mutable {
-            return sink.flush();
-        }).then([sink] {
-            return make_ready_future<stop_iteration>(stop_iteration::no);
         });
+        {
+            co_await sink(repair_stream_cmd::put_rows_done);
+            co_await sink.flush();
+            co_return stop_iteration::no;
+        }
     } else {
-        return make_exception_future<stop_iteration>(std::runtime_error("Got unexpected repair_stream_cmd"));
+        throw std::runtime_error("Got unexpected repair_stream_cmd");
     }
 }
 
