@@ -3404,14 +3404,15 @@ repair_service::remove_repair_meta(const gms::inet_address& from,
     auto it = repair_meta_map().find(id);
     if (it == repair_meta_map().end()) {
         rlogger.warn("remove_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip);
-        return make_ready_future<>();
+        co_return;
     } else {
         auto rm = it->second;
         repair_meta_map().erase(it);
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
-        return rm->stop().then([rm, id] {
+        co_await rm->stop();
+        {
             rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
-        });
+        }
     }
 }
 
