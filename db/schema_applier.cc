@@ -621,25 +621,16 @@ static future<affected_tables_and_views> merge_tables_and_views(distributed<serv
         });
     });
     co_await db.invoke_on_all([&](replica::database& db) -> future<> {
-        std::vector<bool> columns_changed;
-        columns_changed.reserve(diff.tables.altered.size() + diff.views.altered.size());
+        if (this_shard_id() == 0) {
+            diff.columns_changed.reserve(diff.tables.altered.size() + diff.views.altered.size());
+        }
         for (auto&& altered : boost::range::join(diff.tables.altered, diff.views.altered)) {
-            columns_changed.push_back(db.update_column_family(altered.new_schema));
+            bool changed = db.update_column_family(altered.new_schema);
+            if (this_shard_id() == 0) {
+                diff.columns_changed.push_back(changed);
+            }
             co_await coroutine::maybe_yield();
         }
-        auto it = columns_changed.begin();
-        auto notify = [&] (auto& r, auto&& f) -> future<> {
-            co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
-        };
-        // View drops are notified first, because a table can only be dropped if its views are already deleted
-        co_await notify(diff.views.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
-        co_await notify(diff.tables.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
-        // Table creations are notified first, in case a view is created right after the table
-        co_await notify(diff.tables.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
-        co_await notify(diff.views.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
-        // Table altering is notified first, in case new base columns appear
-        co_await notify(diff.tables.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
-        co_await notify(diff.views.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -666,6 +657,22 @@ static future<affected_tables_and_views> merge_tables_and_views(distributed<serv
     });
 
     co_return diff;
+}
+
+static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
+    auto it = diff.columns_changed.begin();
+    auto notify = [&] (auto& r, auto&& f) -> future<> {
+        co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
+    };
+    // View drops are notified first, because a table can only be dropped if its views are already deleted
+    co_await notify(diff.views.dropped, [&] (auto&& dt) { return notifier.drop_view(view_ptr(dt.schema)); });
+    co_await notify(diff.tables.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt.schema); });
+    // Table creations are notified first, in case a view is created right after the table
+    co_await notify(diff.tables.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
+    co_await notify(diff.views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
+    // Table altering is notified first, in case new base columns appear
+    co_await notify(diff.tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
+    co_await notify(diff.views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
 }
 
 static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
@@ -802,6 +809,7 @@ future<> schema_applier::update() {
             _before.tables, _after.tables,
             _before.views, _after.views,
             _reload, _tablet_hint);
+    co_await notify();
     co_await merge_functions(_proxy, _before.functions, _after.functions);
     co_await merge_aggregates(_proxy, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates);
@@ -844,6 +852,8 @@ future<> schema_applier::notify() {
         for (auto& type : types.dropped) {
             co_await notifier.drop_user_type(type);
         }
+
+        co_await notify_tables_and_views(notifier, _affected_tables_and_views);
     });
     // TODO: pull out notifications code from update() and place here
     co_return;
@@ -861,7 +871,6 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update();
     ap.commit();
-    co_await ap.notify();
     co_await ap.destroy();
 }
 
