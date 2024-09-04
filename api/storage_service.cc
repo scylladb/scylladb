@@ -1458,12 +1458,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::reload_raft_topology_state.set(r,
             [&ss, &group0_client] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<> {
-            apilog.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
-            auto holder = co_await group0_client.hold_read_apply_mutex();
-            apilog.info("Reloading Raft topology state");
-            // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
-            co_await ss.topology_transition();
-            apilog.info("Reloaded Raft topology state");
+            return ss.reload_raft_topology_state(group0_client);
         });
         co_return json_void();
     });

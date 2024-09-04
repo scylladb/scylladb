@@ -109,6 +109,7 @@ class migration_manager;
 class raft_group0;
 class group0_guard;
 class group0_info;
+class raft_group0_client;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -876,7 +877,6 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
     void set_topology_change_kind(topology_change_kind kind);
 
-public:
     struct state_change_hint {
         std::optional<locator::tablet_metadata_change_hint> tablets_hint;
     };
@@ -884,9 +884,14 @@ public:
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    // Public for `reload_raft_topology_state` REST API.
     future<> topology_transition(state_change_hint hint = {});
 
+public:
+    // Reloads in-memory topology state safely under group 0 read_apply mutex.
+    // Does not modify on-disk state.
+    //
+    // Must be called on shard 0.
+    future<> reload_raft_topology_state(service::raft_group0_client&);
 
     // Service levels cache consists of two levels: service levels cache and effective service levels cache
     // The second one is dependent on the first one.
