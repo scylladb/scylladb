@@ -133,7 +133,7 @@ public:
                               noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
-    shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
+    shared_sstable make_sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
             sstable_state state = sstable_state::normal,

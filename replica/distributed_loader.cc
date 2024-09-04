@@ -193,7 +193,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
             auto generation = sharded_gen.invoke_on(shard, [uuid_sstable_identifiers] (auto& gen) {
                 return gen(sstables::uuid_identifiers{uuid_sstable_identifiers});
             }).get();
-            return sstm.make_sstable(global_table->schema(), global_table->dir(), global_table->get_storage_options(),
+            return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      generation, sstables::sstable_state::upload, sstm.get_highest_supported_format(),
                                      sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
         };
@@ -360,7 +360,7 @@ future<> table_populator::start_subdir(sstables::sstable_state state) {
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), table.dir(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
+    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
 future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {

@@ -355,7 +355,7 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
         [&dir] (data_dictionary::storage_options::s3& o) { o.prefix = dir; },
     }, storage.value);
-    return _impl->mgr.make_sstable(std::move(schema), dir, storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
+    return _impl->mgr.make_sstable(std::move(schema), storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
 
 shared_sstable

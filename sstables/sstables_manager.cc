@@ -123,7 +123,6 @@ bool sstables_manager::uuid_sstable_identifiers() const {
 }
 
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
-        sstring table_dir,
         const data_dictionary::storage_options& storage,
         generation_type generation,
         sstable_state state,
