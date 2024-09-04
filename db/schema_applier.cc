@@ -694,7 +694,6 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
         for (const auto& val : diff.created) {
             batch.add_function(co_await create_func(db, *val));
         }
-        auto events = make_ready_future<>();
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
@@ -703,15 +702,11 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
             // change there is no window between cache removal and declaration removal
             drop_cached_func(db, *val);
             batch.remove_function(name, arg_types);
-            events = events.then([&db, name, arg_types] () {
-                return db.get_notifier().drop_function(std::move(name), std::move(arg_types));
-            });
         }
         for (const auto& val : diff.altered) {
             drop_cached_func(db, *val);
             batch.replace_function(co_await create_func(db, *val));
         }
-        co_await std::move(events);
     }));
 }
 
@@ -726,17 +721,13 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy,
         for (const auto& val : diff.created) {
             batch.add_function(create_aggregate(db, *val.first, val.second, batch));
         }
-        auto events = make_ready_future<>();
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
                 val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
             batch.remove_aggregate(name, arg_types);
-            events = events.then([&db, name, arg_types] () {
-                return db.get_notifier().drop_aggregate(std::move(name), std::move(arg_types));
-            });
         }
-        co_await std::move(events);
+        co_return;
     });
 }
 
@@ -811,7 +802,6 @@ future<> schema_applier::update() {
             _before.views, _after.views,
             _reload, _tablet_hint);
 
-    co_await notify();
     co_await merge_functions(_proxy, _before.functions, _after.functions, _functions_batch);
     co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates);
@@ -820,6 +810,8 @@ future<> schema_applier::update() {
     co_await _functions_batch.invoke_on_all([&] (cql3::functions::change_batch& batch) {
         batch.commit();
     });
+
+    co_await notify();
 
     co_await drop_types(_proxy, _affected_user_types);
 
@@ -861,6 +853,15 @@ future<> schema_applier::notify() {
         }
 
         co_await notify_tables_and_views(notifier, _affected_tables_and_views);
+
+        // notify about user functions and aggregates
+        for (const auto& func : _functions_batch.local().removed_functions) {
+            if (func.aggregate) {
+                co_await notifier.drop_aggregate(func.name, func.arg_types);
+            } else {
+                co_await notifier.drop_function(func.name, func.arg_types);
+            }
+        }
     });
     // TODO: pull out notifications code from update() and place here
     co_return;
