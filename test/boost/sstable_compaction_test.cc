@@ -983,13 +983,16 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
 
         auto make_insert = [&] (partition_key key) {
             mutation m(s, key);
-            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
+            auto timestamp = next_timestamp();
+            testlog.info("make_insert: key={} timestamp={}", dht::decorate_key(*s, key), timestamp);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), timestamp);
             return m;
         };
 
         auto make_expiring = [&] (partition_key key, int ttl) {
             mutation m(s, key);
             auto timestamp = next_timestamp();
+            testlog.info("make_expliring: key={} ttl={} timestamp={}", dht::decorate_key(*s, key), ttl, timestamp);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)),
                 timestamp, gc_clock::duration(ttl));
             return m;
@@ -998,6 +1001,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         auto make_delete = [&] (partition_key key, gc_clock::time_point deletion_time = gc_clock::now()) {
             mutation m(s, key);
             tombstone tomb(next_timestamp(), deletion_time);
+            testlog.info("make_delete: {}", tomb);
             m.partition().apply(tomb);
             return m;
         };
