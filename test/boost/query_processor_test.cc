@@ -14,7 +14,8 @@
 #include <iterator>
 #include <stdint.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/test_utils.hh"
@@ -24,6 +25,8 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+
+BOOST_AUTO_TEST_SUITE(query_processor_test)
 
 SEASTAR_TEST_CASE(test_execute_internal_insert) {
     return do_with_cql_env([] (auto& e) {
@@ -354,3 +357,5 @@ SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
         BOOST_CHECK_EQUAL(stat_ps8, qp.get_cql_stats().select_partition_range_scan);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

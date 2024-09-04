@@ -11,7 +11,8 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/exception_utils.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/select_statement_utils.hh"
 #include "transport/messages/result_message.hh"
 #include "service/pager/paging_state.hh"
@@ -21,6 +22,8 @@
 #include "cql3/statements/select_statement.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+
+BOOST_AUTO_TEST_SUITE(secondary_index_test)
 
 using namespace std::chrono_literals;
 
@@ -2002,3 +2005,5 @@ SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

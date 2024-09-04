@@ -7,7 +7,8 @@
  */
 
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include <vector>
 
@@ -19,6 +20,8 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/test_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(statement_restrictions_test)
 
 using namespace cql3;
 
@@ -515,3 +518,5 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_r3),
         {});
 }
+
+BOOST_AUTO_TEST_SUITE_END()

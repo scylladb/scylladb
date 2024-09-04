@@ -9,7 +9,8 @@
 
 #include <seastar/core/thread.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "data_dictionary/user_types_metadata.hh"
 #include "schema/schema_registry.hh"
@@ -22,6 +23,8 @@
 #include "utils/throttle.hh"
 #include "test/lib/cql_test_env.hh"
 #include "gms/feature_service.hh"
+
+BOOST_AUTO_TEST_SUITE(schema_registry_test)
 
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
@@ -254,3 +257,5 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         BOOST_REQUIRE_THROW(learned_s1->table(), replica::no_such_column_family);
     }).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

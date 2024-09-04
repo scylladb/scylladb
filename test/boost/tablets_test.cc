@@ -9,7 +9,8 @@
 
 
 #include <seastar/core/shard_id.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
@@ -36,6 +37,8 @@
 #include "service/topology_state_machine.hh"
 
 #include <boost/regex.hpp>
+
+BOOST_AUTO_TEST_SUITE(tablets_test)
 
 using namespace locator;
 using namespace replica;
@@ -3649,3 +3652,4 @@ SEASTAR_TEST_CASE(test_recognition_of_deprecated_name_for_resize_transition) {
     BOOST_REQUIRE_EQUAL(service::transition_state_from_string("tablet resize finalization"), transition_state::tablet_resize_finalization);
     return make_ready_future<>();
 }
+BOOST_AUTO_TEST_SUITE_END()

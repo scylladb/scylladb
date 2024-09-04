@@ -14,7 +14,8 @@
 
 #include <fmt/ranges.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -28,6 +29,8 @@
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
 #include "schema/schema_builder.hh"
+
+BOOST_AUTO_TEST_SUITE(cql_query_large_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -195,3 +198,5 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
         });
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

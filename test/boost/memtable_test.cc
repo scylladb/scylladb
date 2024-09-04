@@ -12,7 +12,8 @@
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "schema/schema_builder.hh"
 #include <seastar/util/closeable.hh>
@@ -41,6 +42,8 @@
 #include "db/extensions.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
+
+BOOST_AUTO_TEST_SUITE(memtable_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -1481,3 +1484,5 @@ SEASTAR_TEST_CASE(test_ext_config_exceptions_in_flush_on_sstable_open) {
         [] { throw db::extension_storage_misconfigured(get_name()); }
     );
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -8,7 +8,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "db/virtual_table.hh"
@@ -52,6 +53,8 @@ public:
 };
 
 }
+
+BOOST_AUTO_TEST_SUITE(virtual_table_test)
 
 SEASTAR_TEST_CASE(test_set_cell) {
     auto table = db::test_table();
@@ -100,3 +103,5 @@ SEASTAR_THREAD_TEST_CASE(test_system_config_table_no_live_update) {
         );
     }).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

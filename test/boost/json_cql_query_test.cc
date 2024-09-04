@@ -14,7 +14,8 @@
 
 #include <seastar/net/inet_address.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
@@ -26,6 +27,8 @@
 #include "types/user.hh"
 #include "types/list.hh"
 #include "utils/rjson.hh"
+
+BOOST_AUTO_TEST_SUITE(json_cql_query_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -788,3 +791,5 @@ SEASTAR_TEST_CASE(test_unpack_decimal){
         assert_that(msg).is_rows().with_rows({{int32_type->decompose(1), lt_val}});
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

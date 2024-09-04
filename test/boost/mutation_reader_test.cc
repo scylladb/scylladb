@@ -22,7 +22,8 @@
 #include <seastar/util/closeable.hh>
 
 #include "sstables/generation_type.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/eventually.hh"
 #include "test/lib/mutation_assertions.hh"
@@ -65,6 +66,8 @@
 #include "readers/filtering.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+
+BOOST_AUTO_TEST_SUITE(mutation_reader_test)
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -4623,3 +4626,5 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()
