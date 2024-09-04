@@ -1208,9 +1208,10 @@ private:
     }
 
     future<> clear_working_row_buf() {
-        return utils::clear_gently(_working_row_buf).then([this] {
+        co_await utils::clear_gently(_working_row_buf);
+        {
             _working_row_buf_combined_hash.clear();
-        });
+        }
     }
 
     // Read rows from disk until _max_row_buf_size of rows are filled into _row_buf.
