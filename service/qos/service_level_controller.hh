@@ -42,8 +42,16 @@ namespace qos {
  */
 struct service_level {
      service_level_options slo;
-     bool marked_for_deletion;
-     bool is_static;
+     bool marked_for_deletion = false;
+     bool is_static = false;
+
+     service_level() = default;
+
+     service_level(service_level_options slo, bool marked_for_deletion, bool is_static)
+            : slo(std::move(slo))
+            , marked_for_deletion(marked_for_deletion)
+            , is_static(is_static)
+     {}
 };
 
 using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;

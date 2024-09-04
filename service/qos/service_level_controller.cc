@@ -541,7 +541,7 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
             return make_ready_future();
         }
     } else {
-        return do_with(service_level{.slo = slo, .is_static = is_static}, std::move(name), [this] (service_level& sl, sstring& name) {
+        return do_with(service_level(slo, false, is_static), std::move(name), [this] (service_level& sl, sstring& name) {
             return container().invoke_on_all(&service_level_controller::notify_service_level_added, name, sl);
         });
     }
