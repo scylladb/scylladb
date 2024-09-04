@@ -92,7 +92,6 @@ sstable_directory::sstable_directory(replica::table& table,
         table.schema(),
         std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
         table.get_storage_options_ptr(),
-        table.dir(),
         std::move(state),
         std::move(error_handler_gen)
     )
@@ -107,7 +106,6 @@ sstable_directory::sstable_directory(replica::table& table,
         table.schema(),
         std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
         std::move(storage_opts),
-        table_dir,
         sstable_state::upload,
         std::move(error_handler_gen)
     )
@@ -124,7 +122,6 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         std::move(schema),
         &sharder,
         make_lw_shared<const data_dictionary::storage_options>(data_dictionary::make_local_options(fs::path(table_dir))),
-        std::move(table_dir),
         state,
         std::move(error_handler_gen)
     )
@@ -136,13 +133,11 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         std::variant<unique_sharder_ptr, const dht::sharder*> sharder,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-        sstring table_dir,
         sstable_state state,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
-    , _table_dir(std::move(table_dir))
     , _state(state)
     , _error_handler_gen(error_handler_gen)
     , _storage(make_storage(_manager, *_storage_opts, _state))

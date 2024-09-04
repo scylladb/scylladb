@@ -146,7 +146,6 @@ private:
     sstables_manager& _manager;
     schema_ptr _schema;
     lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
-    sstring _table_dir;
     sstable_state _state;
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<storage> _storage;
@@ -188,7 +187,6 @@ private:
           schema_ptr schema,
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
           lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-          sstring table_dir,
           sstable_state state,
           io_error_handler_gen error_handler_gen);
 public:
