@@ -123,12 +123,7 @@ Download and install the new release
 
         **To upgrade ScyllaDB:**
 
-        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION| and and enable scylla/ppa repo:
-
-            .. code-block:: console
-
-               sudo add-apt-repository -y ppa:scylladb/ppa
-
+        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|
         #. Configure Java 1.8:
 
             .. code-block:: console
