@@ -1517,9 +1517,8 @@ public:
     // RPC handler
     future<repair_hash_set>
     get_full_row_hashes_handler() {
-        return with_gate(_gate, [this] {
-            return working_row_hashes();
-        });
+        auto gate_held = _gate.hold();
+        co_return co_await working_row_hashes();
     }
 
     // RPC API
