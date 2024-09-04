@@ -241,7 +241,7 @@ distributed_loader::get_sstables_from_object_store(distributed<replica::database
                 data_dictionary::storage_options opts;
                 opts.value = data_dictionary::storage_options::s3{bucket, endpoint, prefix};
                 return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
-            }), prefix, &error_handler_gen_for_upload_dir);
+            }), &error_handler_gen_for_upload_dir);
     });
 }
 

@@ -99,7 +99,6 @@ sstable_directory::sstable_directory(replica::table& table,
 
 sstable_directory::sstable_directory(replica::table& table,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-        sstring table_dir,
         io_error_handler_gen error_handler_gen)
     : sstable_directory(
         table.get_sstables_manager(),
