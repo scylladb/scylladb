@@ -469,8 +469,9 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
             cmlog.info("update_history_wait: released");
         });
 
+        std::vector<int64_t> rows_merged;
         co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
-                ended_at.count(), res.stats.start_size, res.stats.end_size, std::unordered_map<int32_t, int64_t>{});
+                ended_at.count(), res.stats.start_size, res.stats.end_size, rows_merged);
     }
 }
 
