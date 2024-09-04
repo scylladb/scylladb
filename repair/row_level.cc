@@ -1612,9 +1612,10 @@ public:
                 rs.my_address(), from, repair_meta_id, ks_name, cf_name, range);
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
-        return rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range)).then([rm] {
+        co_await rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
+        {
             rm->set_repair_state_for_local_node(repair_state::row_level_stop_finished);
-        });
+        }
     }
 
     // RPC API
