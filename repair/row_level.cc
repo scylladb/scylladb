@@ -225,14 +225,14 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
 
 static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const inet_address_vector_replica_set& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
-    parallel_for_each(boost::irange(size_t(0), nodes.size()), [&ms, &nodes_algorithms, &nodes] (size_t idx) {
-        return ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
-                [&nodes_algorithms, &nodes, idx] (std::vector<row_level_diff_detect_algorithm> algorithms) {
+    parallel_for_each(boost::irange(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
+        std::vector<row_level_diff_detect_algorithm> algorithms = co_await ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx]));
+        {
             std::sort(algorithms.begin(), algorithms.end());
             nodes_algorithms[idx] = std::move(algorithms);
             rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
-        });
-    }).get();
+        }
+    })).get();
 
     auto common_algorithms = suportted_diff_detect_algorithms();
     for (auto& algorithms : nodes_algorithms) {
