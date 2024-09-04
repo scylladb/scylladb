@@ -2421,7 +2421,6 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
     }
 
-    input_stream<char> stream;
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
