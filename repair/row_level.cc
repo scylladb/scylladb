@@ -227,11 +227,9 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::me
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
     parallel_for_each(boost::irange(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
         std::vector<row_level_diff_detect_algorithm> algorithms = co_await ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx]));
-        {
-            std::sort(algorithms.begin(), algorithms.end());
-            nodes_algorithms[idx] = std::move(algorithms);
-            rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
-        }
+        std::sort(algorithms.begin(), algorithms.end());
+        nodes_algorithms[idx] = std::move(algorithms);
+        rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
     })).get();
 
     auto common_algorithms = suportted_diff_detect_algorithms();
@@ -1209,9 +1207,7 @@ private:
 
     future<> clear_working_row_buf() {
         co_await utils::clear_gently(_working_row_buf);
-        {
-            _working_row_buf_combined_hash.clear();
-        }
+        _working_row_buf_combined_hash.clear();
     }
 
     // Read rows from disk until _max_row_buf_size of rows are filled into _row_buf.
@@ -1290,15 +1286,11 @@ private:
             co_return get_combined_row_hash_response();
         }
         co_await move_row_buf_to_working_row_buf();
-        {
-            for (repair_row& r : _working_row_buf) {
-                _working_row_buf_combined_hash.add(r.hash());
-                co_await coroutine::maybe_yield();
-            }
-            {
-                co_return get_combined_row_hash_response{_working_row_buf_combined_hash};
-            }
+        for (repair_row& r : _working_row_buf) {
+            _working_row_buf_combined_hash.add(r.hash());
+            co_await coroutine::maybe_yield();
         }
+        co_return get_combined_row_hash_response{_working_row_buf_combined_hash};
     }
 
     future<std::list<repair_row>>
@@ -1409,9 +1401,7 @@ private:
             co_return;
         }
         std::list<repair_row> row_diff = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
-        {
-            co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
-        }
+        co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
@@ -1452,13 +1442,11 @@ public:
         }
         repair_hash_set hashes = co_await _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id, dst_cpu_id);
-        {
-            rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
-            _metrics.rx_hashes_nr += hashes.size();
-            stats().rx_hashes_nr += hashes.size();
-            stats().rpc_call_nr++;
-            co_return hashes;
-        }
+        rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
+        _metrics.rx_hashes_nr += hashes.size();
+        stats().rx_hashes_nr += hashes.size();
+        stats().rpc_call_nr++;
+        co_return hashes;
     }
 
 private:
@@ -1510,11 +1498,9 @@ public:
             [&] { return get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source); },
             [&] { return get_full_row_hashes_sink_op(sink); }
         );
-        {
-            stats().rx_hashes_nr += current_hashes->size();
-            _metrics.rx_hashes_nr += current_hashes->size();
-            co_return std::move(*current_hashes);
-        }
+        stats().rx_hashes_nr += current_hashes->size();
+        _metrics.rx_hashes_nr += current_hashes->size();
+        co_return std::move(*current_hashes);
     }
 
     // RPC handler
@@ -1533,12 +1519,10 @@ public:
         }
         get_combined_row_hash_response resp = co_await _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
                 _repair_meta_id, common_sync_boundary, dst_cpu_id);
-        {
-            stats().rpc_call_nr++;
-            stats().rx_hashes_nr++;
-            _metrics.rx_hashes_nr++;
-            co_return resp;
-        }
+        stats().rpc_call_nr++;
+        stats().rx_hashes_nr++;
+        _metrics.rx_hashes_nr++;
+        co_return resp;
     }
 
     // RPC handler
@@ -1548,11 +1532,9 @@ public:
         // retransmission at messaging_service level, so no message will be retransmitted.
         rlogger.trace("Calling get_combined_row_hash_handler");
         auto gate_held = _gate.hold();
-        {
-            auto& cf = _db.local().find_column_family(_schema->id());
-            cf.update_off_strategy_trigger();
-            co_return co_await request_row_hashes(common_sync_boundary);
-        }
+        auto& cf = _db.local().find_column_family(_schema->id());
+        cf.update_off_strategy_trigger();
+        co_return co_await request_row_hashes(common_sync_boundary);
     }
 
     // RPC API
@@ -1573,12 +1555,10 @@ public:
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
                 remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id);
-        {
-            if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
-                throw replica::no_such_column_family(ks_name, cf_name);
-            } else {
-                co_return;
-            }
+        if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
+            throw replica::no_such_column_family(ks_name, cf_name);
+        } else {
+            co_return;
         }
     }
 
@@ -1616,9 +1596,7 @@ public:
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::row_level_stop_started);
         co_await rs.remove_repair_meta(from, repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
-        {
-            rm->set_repair_state_for_local_node(repair_state::row_level_stop_finished);
-        }
+        rm->set_repair_state_for_local_node(repair_state::row_level_stop_finished);
     }
 
     // RPC API
@@ -1636,10 +1614,8 @@ public:
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_started);
         uint64_t partitions = co_await rm->get_estimated_partitions();
-        {
-            rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_finished);
-            co_return partitions;
-        }
+        rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_finished);
+        co_return partitions;
     }
 
     // RPC API
@@ -1657,9 +1633,7 @@ public:
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
         co_await rm->set_estimated_partitions(estimated_partitions);
-        {
-            rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_finished);
-        }
+        rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_finished);
     }
 
     // RPC API
@@ -1677,11 +1651,9 @@ public:
     future<get_sync_boundary_response>
     get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
         auto gate_held = _gate.hold();
-        {
-            auto& cf = _db.local().find_column_family(_schema->id());
-            cf.update_off_strategy_trigger();
-            co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
-        }
+        auto& cf = _db.local().find_column_family(_schema->id());
+        cf.update_off_strategy_trigger();
+        co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
     }
 
     // RPC API
@@ -2066,21 +2038,15 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
             rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_started);
             if (fp.get_owner_shard() == this_shard_id()) {
                 co_await rm->put_row_diff_handler(std::move(*fp), from);
-                {
-                    rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
-                }
+                rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             } else {
                 co_await rm->put_row_diff_handler(*fp, from);
-                {
-                    rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
-                }
+                rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             }
         });
-        {
-            co_await sink(repair_stream_cmd::put_rows_done);
-            co_await sink.flush();
-            co_return stop_iteration::no;
-        }
+        co_await sink(repair_stream_cmd::put_rows_done);
+        co_await sink.flush();
+        co_return stop_iteration::no;
     } else {
         throw std::runtime_error("Got unexpected repair_stream_cmd");
     }
@@ -3032,17 +2998,13 @@ public:
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
                     co_await master.repair_row_level_start(node, _shard_task.get_keyspace(), _cf_name, _range, schema_version, _shard_task.reason(), compaction_time, ns.shard);
-                    {
-                        ns.state = repair_state::row_level_start_finished;
-                        nodes_to_stop.push_back(ns);
-                        ns.state = repair_state::get_estimated_partitions_started;
-                        uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
-                        {
-                            ns.state = repair_state::get_estimated_partitions_finished;
-                            rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
-                            _estimated_partitions += partitions;
-                        }
-                    }
+                    ns.state = repair_state::row_level_start_finished;
+                    nodes_to_stop.push_back(ns);
+                    ns.state = repair_state::get_estimated_partitions_started;
+                    uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
+                    ns.state = repair_state::get_estimated_partitions_finished;
+                    rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
+                    _estimated_partitions += partitions;
                 })).get();
 
                 if (!master.all_nodes().empty()) {
@@ -3071,9 +3033,7 @@ public:
                     rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
                     ns.state = repair_state::set_estimated_partitions_started;
                     co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
-                    {
-                        ns.state = repair_state::set_estimated_partitions_finished;
-                    }
+                    ns.state = repair_state::set_estimated_partitions_finished;
                 })).get();
 
                 while (true) {
@@ -3106,9 +3066,7 @@ public:
                 auto node = ns.node;
                 master.set_repair_state(repair_state::row_level_stop_started, node);
                 co_await master.repair_row_level_stop(node, _shard_task.get_keyspace(), _cf_name, _range, ns.shard);
-                {
-                    master.set_repair_state(repair_state::row_level_stop_finished, node);
-                }
+                master.set_repair_state(repair_state::row_level_stop_finished, node);
             })).get();
 
             _shard_task.update_statistics(master.stats());
@@ -3348,33 +3306,31 @@ repair_service::insert_repair_meta(
         gc_clock::time_point compaction_time,
         abort_source& as) {
     schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), as);
-    {
-        auto& db = get_db();
-        reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
-        node_repair_meta_id id{from, repair_meta_id};
-        auto rm = seastar::make_shared<repair_meta>(*this,
-                get_db().local().find_column_family(s->id()),
-                s,
-                std::move(permit),
-                range,
-                algo,
-                max_row_buf_size,
-                seed,
-                repair_master::no,
-                repair_meta_id,
-                reason,
-                std::move(master_node_shard_config),
-                inet_address_vector_replica_set{from},
-                compaction_time);
-        rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
-        bool insertion = repair_meta_map().emplace(id, rm).second;
-        if (!insertion) {
-            rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one", id.repair_meta_id, id.ip);
-            repair_meta_map()[id] = rm;
-            rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
-        } else {
-            rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
-        }
+    auto& db = get_db();
+    reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
+    node_repair_meta_id id{from, repair_meta_id};
+    auto rm = seastar::make_shared<repair_meta>(*this,
+            get_db().local().find_column_family(s->id()),
+            s,
+            std::move(permit),
+            range,
+            algo,
+            max_row_buf_size,
+            seed,
+            repair_master::no,
+            repair_meta_id,
+            reason,
+            std::move(master_node_shard_config),
+            inet_address_vector_replica_set{from},
+            compaction_time);
+    rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
+    bool insertion = repair_meta_map().emplace(id, rm).second;
+    if (!insertion) {
+        rlogger.warn("insert_repair_meta: repair_meta_id {} for node {} already exists, replace existing one", id.repair_meta_id, id.ip);
+        repair_meta_map()[id] = rm;
+        rm->set_repair_state_for_local_node(repair_state::row_level_start_finished);
+    } else {
+        rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
     }
 }
 
@@ -3394,9 +3350,7 @@ repair_service::remove_repair_meta(const gms::inet_address& from,
         repair_meta_map().erase(it);
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
         co_await rm->stop();
-        {
-            rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
-        }
+        rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
     }
 }
 
@@ -3414,13 +3368,9 @@ repair_service::remove_repair_meta(gms::inet_address from) {
     }
     co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
         co_await rm->stop();
-        {
-            rm = {};
-        }
+        rm = {};
     });
-    {
-        rlogger.debug("Removed all repair_meta for single node {}", from);
-    }
+    rlogger.debug("Removed all repair_meta for single node {}", from);
 }
 
 future<>
@@ -3432,13 +3382,9 @@ repair_service::remove_repair_meta() {
     repair_meta_map().clear();
     co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
         co_await rm->stop();
-        {
-            rm = {};
-        }
+        rm = {};
     });
-    {
-        rlogger.debug("Removed all repair_meta for all nodes");
-    }
+    rlogger.debug("Removed all repair_meta for all nodes");
 }
 
 future<uint32_t> repair_service::get_next_repair_meta_id() {
