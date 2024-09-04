@@ -1406,11 +1406,12 @@ private:
     future<>
     apply_rows_on_follower(repair_rows_on_wire rows) {
         if (rows.empty()) {
-            return make_ready_future<>();
+            co_return;
         }
-        return to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher).then([this] (std::list<repair_row> row_diff) {
-            return do_apply_rows(std::move(row_diff), update_working_row_buf::no);
-        });
+        std::list<repair_row> row_diff = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
+        {
+            co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
+        }
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
