@@ -3446,13 +3446,15 @@ repair_service::remove_repair_meta() {
             boost::copy_range<utils::chunked_vector<repair_meta_ptr>>(repair_meta_map()
             | boost::adaptors::map_values));
     repair_meta_map().clear();
-    return parallel_for_each(*repair_metas, [repair_metas] (auto& rm) {
-        return rm->stop().then([&rm] {
+    co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
+        co_await rm->stop();
+        {
             rm = {};
-        });
-    }).then([repair_metas] {
-        rlogger.debug("Removed all repair_meta for all nodes");
+        }
     });
+    {
+        rlogger.debug("Removed all repair_meta for all nodes");
+    }
 }
 
 future<uint32_t> repair_service::get_next_repair_meta_id() {
