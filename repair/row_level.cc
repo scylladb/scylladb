@@ -3347,28 +3347,10 @@ repair_service::insert_repair_meta(
         streaming::stream_reason reason,
         gc_clock::time_point compaction_time,
         abort_source& as) {
-    return get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), as).then([this,
-            from,
-            repair_meta_id,
-            range,
-            algo,
-            max_row_buf_size,
-            seed,
-            master_node_shard_config,
-            reason,
-            compaction_time] (schema_ptr s) {
+    schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), as);
+    {
         auto& db = get_db();
-        return db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {}).then([s = std::move(s),
-                this,
-                from,
-                repair_meta_id,
-                range,
-                algo,
-                max_row_buf_size,
-                seed,
-                master_node_shard_config,
-                reason,
-                compaction_time] (reader_permit permit) mutable {
+        reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
         node_repair_meta_id id{from, repair_meta_id};
         auto rm = seastar::make_shared<repair_meta>(*this,
                 get_db().local().find_column_family(s->id()),
@@ -3393,8 +3375,7 @@ repair_service::insert_repair_meta(
         } else {
             rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
         }
-        });
-    });
+    }
 }
 
 future<>
