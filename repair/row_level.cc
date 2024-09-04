@@ -1556,7 +1556,7 @@ public:
     future<>
     repair_row_level_start(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return make_ready_future<>();
+            co_return;
         }
         stats().rpc_call_nr++;
         // Even though remote partitioner name is ignored in the current version of
@@ -1565,16 +1565,18 @@ public:
         // Murmur3 is appropriate because that's the only supported partitioner at
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
-        return _messaging.send_repair_row_level_start(msg_addr(remote_node),
+        rpc::optional<repair_row_level_start_response> resp =
+            co_await _messaging.send_repair_row_level_start(msg_addr(remote_node),
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
-                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id).then([ks_name, cf_name] (rpc::optional<repair_row_level_start_response> resp) {
+                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id);
+        {
             if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
-                return make_exception_future<>(replica::no_such_column_family(ks_name, cf_name));
+                throw replica::no_such_column_family(ks_name, cf_name);
             } else {
-                return make_ready_future<>();
+                co_return;
             }
-        });
+        }
     }
 
     // RPC handler
