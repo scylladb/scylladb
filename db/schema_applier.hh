@@ -85,6 +85,7 @@ struct schema_diff {
 struct affected_tables_and_views {
     schema_diff tables;
     schema_diff views;
+    std::vector<bool> columns_changed;
 };
 
 class schema_applier {
