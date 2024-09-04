@@ -2736,7 +2736,7 @@ private:
         // moved from the `_row_buf` to `_working_row_buf`.
         std::vector<repair_hash> combined_hashes;
         combined_hashes.resize(master.all_nodes().size());
-        parallel_for_each(boost::irange(size_t(0), master.all_nodes().size()), [&, this] (size_t idx) {
+        parallel_for_each(boost::irange(size_t(0), master.all_nodes().size()), coroutine::lambda([&] (size_t idx) -> future<> {
             // Request combined hashes from all nodes between (_last_sync_boundary, _current_sync_boundary]
             // Each node will
             // - Set `_current_sync_boundary` to `_common_sync_boundary`
@@ -2750,17 +2750,19 @@ private:
             // row hashes to the repair master.
             auto& ns = master.all_nodes()[idx];
             ns.state = repair_state::get_combined_row_hash_started;
-            return master.get_combined_row_hash(_common_sync_boundary, ns.node, ns.shard).then([&, idx] (get_combined_row_hash_response resp) {
+            try {
+                get_combined_row_hash_response resp = co_await master.get_combined_row_hash(_common_sync_boundary, ns.node, ns.shard);
                 master.all_nodes()[idx].state = repair_state::get_combined_row_hash_finished;
                 rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, resp);
                 combined_hashes[idx]= std::move(resp);
-            }).handle_exception([this, &master, idx] (std::exception_ptr ep) {
+            } catch (...) {
+                auto ep = std::current_exception();
                 auto& node = master.all_nodes()[idx].node;
                 rlogger.warn("repair[{}]: get_combined_row_hash: got error from node={}, keyspace={}, table={}, range={}, error={}",
                         _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
-                return make_exception_future<>(std::move(ep));
-            });
-        }).get();
+                std::rethrow_exception(ep);
+            }
+        })).get();
 
         // If all the peers has the same combined_hashes. This means they contain
         // the identical rows. So there is no need to sync for this sync boundary.
