@@ -87,6 +87,8 @@ struct affected_tables_and_views {
     std::vector<bool> columns_changed;
 };
 
+using functions_change_batch_all_shards = std::vector<cql3::functions::change_batch>;
+
 class schema_applier {
     using keyspace_name = sstring;
 
@@ -104,6 +106,9 @@ class schema_applier {
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
     affected_tables_and_views _affected_tables_and_views;
+
+    functions_change_batch_all_shards _functions_batch;
+    functions_change_batch_all_shards _aggregates_batch;
 
     future<schema_complete_view> get_schema_complete_view();
 public:
