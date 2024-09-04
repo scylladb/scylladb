@@ -102,6 +102,13 @@ const functions& instance();
 
 class change_batch : public functions {
 public:
+    struct func_name_and_args {
+        function_name name;
+        std::vector<data_type> arg_types;
+        bool aggregate;
+    };
+    std::vector<func_name_and_args> removed_functions;
+
     // Skip init as we copy data from static instance.
     change_batch() : functions(skip_init{}) {
         _declared = instance()._declared;
@@ -112,6 +119,15 @@ public:
 
     // Used only by unittest.
     void clear_functions() noexcept;
+
+    void remove_function(function_name& name, std::vector<data_type>& arg_types, bool aggregate = false) {
+        removed_functions.emplace_back(name, arg_types, aggregate);
+        functions::remove_function(name, arg_types);
+    };
+
+    void remove_aggregate(function_name& name, std::vector<data_type>& arg_types) {
+        remove_function(name, arg_types, true);
+    }
 };
 
 }
