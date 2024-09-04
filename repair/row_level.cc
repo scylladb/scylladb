@@ -2879,7 +2879,7 @@ private:
         for (size_t idx : boost::irange(size_t(0), sz)) {
             set_diffs[idx] = get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
         }
-        parallel_for_each(boost::irange(size_t(0), sz), [&, this] (size_t idx) {
+        parallel_for_each(boost::irange(size_t(0), sz), coroutine::lambda([&] (size_t idx) -> future<> {
             auto& ns = master.all_nodes()[idx + 1];
             auto dst_cpu_id = ns.shard;
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
@@ -2888,25 +2888,29 @@ private:
             auto& node = master.all_nodes()[idx].node;
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
-                return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id).then([&ns] {
+                try {
+                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id);
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
-                }).handle_exception([this, &node] (std::exception_ptr ep) {
+                } catch (...) {
+                    std::exception_ptr ep = std::current_exception();
                     rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
                             _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
-                    return make_exception_future<>(std::move(ep));
-                });
+                    std::rethrow_exception(ep);
+                }
 
             } else {
                 ns.state = repair_state::put_row_diff_started;
-                return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], dst_cpu_id).then([&ns] {
+                try {
+                    co_await master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], dst_cpu_id);
                     ns.state = repair_state::put_row_diff_finished;
-                }).handle_exception([this, &node] (std::exception_ptr ep) {
+                } catch (...) {
+                    std::exception_ptr ep = std::current_exception();
                     rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
                             _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, ep);
-                    return make_exception_future<>(std::move(ep));
-                });
+                    std::rethrow_exception(ep);
+                }
             }
-        }).get();
+        })).get();
         master.stats().round_nr_slow_path++;
     }
 
