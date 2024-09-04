@@ -2352,19 +2352,20 @@ system_keyspace::query(distributed<replica::database>& db, const sstring& ks_nam
     });
 }
 
-static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t, int64_t>& rows_merged) {
+static map_type_impl::native_type prepare_rows_merged(const std::vector<int64_t>& rows_merged) {
     map_type_impl::native_type tmp;
-    for (auto& r: rows_merged) {
-        int32_t first = r.first;
-        int64_t second = r.second;
-        auto map_element = std::make_pair<data_value, data_value>(data_value(first), data_value(second));
+    for (size_t id=0; id<rows_merged.size(); ++id) {
+        if (rows_merged[id] <= 0)
+            continue;
+
+        auto map_element = std::make_pair<data_value, data_value>(data_value(static_cast<int32_t>(id)), data_value(rows_merged[id]));
         tmp.push_back(std::move(map_element));
     }
     return tmp;
 }
 
 future<> system_keyspace::update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
-                                   std::unordered_map<int32_t, int64_t> rows_merged)
+                                   const std::vector<int64_t>& rows_merged)
 {
     // don't write anything when the history table itself is compacted, since that would in turn cause new compactions
     if (ksname == "system" && cfname == COMPACTION_HISTORY) {
