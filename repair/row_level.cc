@@ -1621,10 +1621,10 @@ public:
     // RPC API
     future<uint64_t> repair_get_estimated_partitions(gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return get_estimated_partitions();
+            co_return co_await get_estimated_partitions();
         }
         stats().rpc_call_nr++;
-        return _messaging.send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id, dst_cpu_id);
+        co_return co_await _messaging.send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id, dst_cpu_id);
     }
 
 
