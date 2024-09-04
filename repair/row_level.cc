@@ -1448,16 +1448,17 @@ public:
     future<repair_hash_set>
     get_full_row_hashes(gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return get_full_row_hashes_handler();
+            co_return co_await get_full_row_hashes_handler();
         }
-        return _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
-                _repair_meta_id, dst_cpu_id).then([this, remote_node] (repair_hash_set hashes) {
+        repair_hash_set hashes = co_await _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
+                _repair_meta_id, dst_cpu_id);
+        {
             rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
             _metrics.rx_hashes_nr += hashes.size();
             stats().rx_hashes_nr += hashes.size();
             stats().rpc_call_nr++;
-            return hashes;
-        });
+            co_return hashes;
+        }
     }
 
 private:
