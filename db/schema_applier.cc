@@ -9,6 +9,7 @@
 
 #include "schema_applier.hh"
 
+#include <memory>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>
@@ -685,11 +686,13 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
     }
 }
 
-static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
+static future<functions_change_batch_all_shards> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
     auto diff = diff_rows(before, after);
 
+    functions_change_batch_all_shards batches(smp::count);
     co_await proxy.local().get_db().invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
-        cql3::functions::change_batch batch;
+        batches[this_shard_id()] = make_foreign(std::make_unique<cql3::functions::change_batch>());
+        auto& batch = *batches[this_shard_id()];
         for (const auto& val : diff.created) {
             batch.add_function(co_await create_func(db, *val));
         }
@@ -713,14 +716,17 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
         batch.commit();
         co_await std::move(events);
     }));
+    co_return batches;
 }
 
-static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after,
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy,
+        functions_change_batch_all_shards& functions_batch,
+        const schema_result& before, const schema_result& after,
         const schema_result& scylla_before, const schema_result& scylla_after) {
     auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
 
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db)-> future<> {
-        cql3::functions::change_batch batch;
+        auto& batch = *functions_batch[this_shard_id()];
         for (const auto& val : diff.created) {
             batch.add_function(create_aggregate(db, *val.first, val.second, batch));
         }
@@ -729,7 +735,7 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, con
             cql3::functions::function_name name{
                 val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
-            batch.remove_function(name, arg_types);
+            batch.remove_aggregate(name, arg_types);
             events = events.then([&db, name, arg_types] () {
                 return db.get_notifier().drop_aggregate(std::move(name), std::move(arg_types));
             });
@@ -809,8 +815,8 @@ future<> schema_applier::update() {
             _before.tables, _after.tables,
             _before.views, _after.views,
             _reload, _tablet_hint);
-    co_await merge_functions(_proxy, _before.functions, _after.functions);
-    co_await merge_aggregates(_proxy, _before.aggregates, _after.aggregates,
+    _functions_batch = co_await merge_functions(_proxy, _before.functions, _after.functions);
+    co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates);
 
     co_await drop_types(_proxy, _affected_user_types);
