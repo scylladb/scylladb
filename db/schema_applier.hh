@@ -88,6 +88,10 @@ struct affected_tables_and_views {
     std::vector<bool> columns_changed;
 };
 
+// We wrap it with pointer because change_batch needs to be constructed and destructed
+// on the same shard as it's used for.
+using functions_change_batch_all_shards = std::vector<foreign_ptr<std::unique_ptr<cql3::functions::change_batch>>>;
+
 class schema_applier {
     using keyspace_name = sstring;
 
@@ -105,6 +109,9 @@ class schema_applier {
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
     affected_tables_and_views _affected_tables_and_views;
+
+    functions_change_batch_all_shards _functions_batch;
+    functions_change_batch_all_shards _aggregates_batch;
 
     future<schema_complete_view> get_schema_complete_view();
 public:
