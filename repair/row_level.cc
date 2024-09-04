@@ -1950,7 +1950,7 @@ get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
     return set_diff;
 }
 
-static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
+static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
         sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
@@ -1962,7 +1962,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slo
         repair_hash_set& current_set_diff,
         std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt);
 
-static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
+static future<> repair_get_row_diff_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
@@ -1977,13 +1977,13 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
     rlogger.trace("Got repair_hash_with_cmd from peer={}, hash={}, cmd={}", from, hash_cmd.hash, int(hash_cmd.cmd));
     if (hash_cmd.cmd == repair_stream_cmd::hash_data) {
         current_set_diff.insert(hash_cmd.hash);
-        return make_ready_future<stop_iteration>(stop_iteration::no);
+        return make_ready_future<>();
     } else {
         return repair_get_row_diff_with_rpc_stream_process_op_slow_path(repair, from, src_cpu_id, dst_cpu_id, repair_meta_id, std::move(sink), std::move(source), error, current_set_diff, std::move(hash_cmd_opt));
     }
 }
 
-static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
+static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
         sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
@@ -2024,7 +2024,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op_slo
             co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
         }
         co_await sink.flush();
-        co_return stop_iteration::no;
+        co_return;
     } else {
         throw std::runtime_error("Got unexpected repair_stream_cmd");
     }
