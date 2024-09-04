@@ -139,7 +139,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _table_dir(std::move(table_dir))
     , _state(state)
     , _error_handler_gen(error_handler_gen)
-    , _storage(make_storage(_manager, *_storage_opts, _table_dir, _state))
+    , _storage(make_storage(_manager, *_storage_opts, _state))
     , _lister(make_components_lister())
     , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
     , _sharder(_sharder_ptr ? *_sharder_ptr : *std::get<const dht::sharder*>(sharder))

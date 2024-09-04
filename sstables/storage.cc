@@ -681,7 +681,7 @@ future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs
     co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
 }
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir, sstable_state state) {
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state) {
     return std::visit(overloaded_functor {
         [state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
             if (loc.dir.empty()) {
