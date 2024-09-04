@@ -1526,15 +1526,16 @@ public:
     future<get_combined_row_hash_response>
     get_combined_row_hash(std::optional<repair_sync_boundary> common_sync_boundary, gms::inet_address remote_node, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return get_combined_row_hash_handler(common_sync_boundary);
+            co_return co_await get_combined_row_hash_handler(common_sync_boundary);
         }
-        return _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
-                _repair_meta_id, common_sync_boundary, dst_cpu_id).then([this] (get_combined_row_hash_response resp) {
+        get_combined_row_hash_response resp = co_await _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
+                _repair_meta_id, common_sync_boundary, dst_cpu_id);
+        {
             stats().rpc_call_nr++;
             stats().rx_hashes_nr++;
             _metrics.rx_hashes_nr++;
-            return resp;
-        });
+            co_return resp;
+        }
     }
 
     // RPC handler
