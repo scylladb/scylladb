@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
     node_count = 2
-    config = {'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately'], 'enable_tablets': True}
+    config = {'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'enable_tablets': True}
     servers = await manager.servers_add(node_count, config=config)
     cql, hosts = await manager.get_ready_cql(servers)
     await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
@@ -49,9 +49,11 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
     # To inspect the error message, we need to disable retries, which can't
     # be done in `prepare()` or `run_async()`. Instead, we use `BoundStatement`.
     bnd_stmt = BoundStatement(stmt, retry_policy=FallthroughRetryPolicy())
+    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "never_finish_remote_view_updates", one_shot=False) for s in servers))
     await cql.run_async(bnd_stmt.bind([0, 0, 240000*'a']), host=hosts[0])
     with pytest.raises(Exception, match="View update backlog is too high"):
         await cql.run_async(bnd_stmt.bind([0, 0, 'a']), host=hosts[0])
+    await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "never_finish_remote_view_updates") for s in servers))
 
     await cql.run_async(f"DROP KEYSPACE ks")
 
