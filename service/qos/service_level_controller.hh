@@ -42,14 +42,12 @@ namespace qos {
  */
 struct service_level {
      service_level_options slo;
-     bool marked_for_deletion = false;
      bool is_static = false;
 
      service_level() = default;
 
-     service_level(service_level_options slo, bool marked_for_deletion, bool is_static)
+     service_level(service_level_options slo, bool is_static)
             : slo(std::move(slo))
-            , marked_for_deletion(marked_for_deletion)
             , is_static(is_static)
      {}
 };
@@ -255,7 +253,7 @@ public:
      */
     service_level& get_service_level(sstring service_level_name) {
         auto sl_it = _service_levels_db.find(service_level_name);
-        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
+        if (sl_it == _service_levels_db.end()) {
             sl_it = _service_levels_db.find(default_service_level_name);
         }
         return sl_it->second;
