@@ -1180,6 +1180,68 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto result = compact({sst1}, {sst1});
             BOOST_CHECK_EQUAL(1, sstables_stats::get_shard_stats().capped_tombstone_deletion_time);
         }
+        {
+            // Verify that old live data inhibit tombstone_gc of partition tombstone
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_delete(alpha);
+            auto mut3 = make_insert(beta);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+            assert_that(sstable_reader(result[0], s, env.make_reader_permit()))
+                    .produces(mut3)
+                    .produces(mut2)
+                    .produces_end_of_stream();
+        }
+        {
+            // Verify that old deleted data do not inhibit tombstone_gc of partition tombstone
+            auto mut1 = make_delete(alpha);
+            auto mut2 = make_delete(alpha);
+            auto mut3 = make_insert(beta);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+            assert_that(sstable_reader(result[0], s, env.make_reader_permit()))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+        }
+        {
+            // Verify that old live data inhibit tombstone_gc of expired cell
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_expiring(alpha, ttl);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2});
+
+            forward_jump_clocks(std::chrono::seconds(ttl));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+            assert_that_produces_dead_cell(result[0], alpha);
+        }
+        {
+            // Verify that old deleted data do not inhibit tombstone_gc of expired cell
+            auto mut1 = make_delete(alpha);
+            auto mut2 = make_expiring(alpha, ttl);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2});
+
+            forward_jump_clocks(std::chrono::seconds(ttl));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(0, result.size());
+        }
     });
 }
 
