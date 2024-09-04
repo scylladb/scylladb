@@ -1598,10 +1598,10 @@ public:
     // RPC API
     future<> repair_row_level_stop(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return stop();
+            co_return co_await stop();
         }
         stats().rpc_call_nr++;
-        return _messaging.send_repair_row_level_stop(msg_addr(remote_node),
+        co_return co_await _messaging.send_repair_row_level_stop(msg_addr(remote_node),
                 _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), dst_cpu_id);
     }
 
