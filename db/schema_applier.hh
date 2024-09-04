@@ -14,6 +14,7 @@
 #include "service/storage_proxy.hh"
 #include "query-result-set.hh"
 #include "db/schema_tables.hh"
+#include "schema/schema_registry.hh"
 
 #include <seastar/core/distributed.hh>
 
@@ -60,6 +61,31 @@ struct affected_user_types_per_shard {
 // groups UDTs based on what is happening to them during schema change
 using affected_user_types = std::vector<affected_user_types_per_shard>;
 
+// schema_diff represents what is happening with tables or views during schema merge
+struct schema_diff {
+    struct dropped_schema {
+        global_schema_ptr schema;
+    };
+
+    struct altered_schema {
+        global_schema_ptr old_schema;
+        global_schema_ptr new_schema;
+    };
+
+    std::vector<global_schema_ptr> created;
+    std::vector<altered_schema> altered;
+    std::vector<dropped_schema> dropped;
+
+    size_t size() const {
+        return created.size() + altered.size() + dropped.size();
+    }
+};
+
+struct affected_tables_and_views {
+    schema_diff tables;
+    schema_diff views;
+};
+
 class schema_applier {
     using keyspace_name = sstring;
 
@@ -76,6 +102,7 @@ class schema_applier {
 
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
+    affected_tables_and_views _affected_tables_and_views;
 
     future<schema_complete_view> get_schema_complete_view();
 public:
