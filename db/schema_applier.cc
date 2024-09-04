@@ -41,7 +41,6 @@
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
 #include "frozen_schema.hh"
-#include "schema/schema_registry.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -481,25 +480,6 @@ static future<> drop_types(distributed<service::storage_proxy>& proxy, affected_
     });
 }
 
-struct schema_diff {
-    struct dropped_schema {
-        global_schema_ptr schema;
-    };
-
-    struct altered_schema {
-        global_schema_ptr old_schema;
-        global_schema_ptr new_schema;
-    };
-
-    std::vector<global_schema_ptr> created;
-    std::vector<altered_schema> altered;
-    std::vector<dropped_schema> dropped;
-
-    size_t size() const {
-        return created.size() + altered.size() + dropped.size();
-    }
-};
-
 // Which side of the diff this schema is on?
 // Helps ensuring that when creating schema for altered views, we match "before"
 // version of view to "before" version of base table and "after" to "after"
@@ -555,7 +535,7 @@ constexpr size_t max_concurrent = 8;
 // that when a base schema and a subset of its views are modified together (i.e.,
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
-static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+static future<affected_tables_and_views> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     sharded<db::system_keyspace>& sys_ks,
     const std::map<table_id, schema_mutations>& tables_before,
     const std::map<table_id, schema_mutations>& tables_after,
@@ -564,10 +544,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     bool reload,
     locator::tablet_metadata_change_hint tablet_hint)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
+    affected_tables_and_views diff;
+    diff.tables = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
+    diff.views = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -577,7 +558,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         //    the database object.
         view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
         schema_ptr base_schema;
-        for (auto&& altered : tables_diff.altered) {
+        for (auto&& altered : diff.tables.altered) {
             // Chose the appropriate version of the base table schema: old -> old, new -> new.
             schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
             if (s->ks_name() == vp->ks_name() && s->cf_name() == vp->view_info()->base_name() ) {
@@ -586,7 +567,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             }
         }
         if (!base_schema) {
-            for (auto&& s : tables_diff.created) {
+            for (auto&& s : diff.tables.created) {
                 if (s.get()->ks_name() == vp->ks_name() && s.get()->cf_name() == vp->view_info()->base_name() ) {
                     base_schema = s;
                     break;
@@ -610,11 +591,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     // to a mv not finding its schema when snapshotting since the main table
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     auto& db = proxy.local().get_db();
-    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
+    co_await max_concurrent_for_each(diff.views.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
         auto& s = *dt.schema.get();
         return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
+    co_await max_concurrent_for_each(diff.tables.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
         auto& s = *dt.schema.get();
         return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
@@ -632,17 +613,17 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guaranteed to find it.
-        co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
+        co_await max_concurrent_for_each(diff.tables.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
-        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
+        co_await max_concurrent_for_each(diff.views.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
     });
     co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
-        columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
-        for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
+        columns_changed.reserve(diff.tables.altered.size() + diff.views.altered.size());
+        for (auto&& altered : boost::range::join(diff.tables.altered, diff.views.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
             co_await coroutine::maybe_yield();
         }
@@ -651,14 +632,14 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
         };
         // View drops are notified first, because a table can only be dropped if its views are already deleted
-        co_await notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
-        co_await notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
+        co_await notify(diff.views.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
+        co_await notify(diff.tables.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
         // Table creations are notified first, in case a view is created right after the table
-        co_await notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
-        co_await notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
+        co_await notify(diff.tables.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
+        co_await notify(diff.views.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
         // Table altering is notified first, in case new base columns appear
-        co_await notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
-        co_await notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
+        co_await notify(diff.tables.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
+        co_await notify(diff.views.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -671,18 +652,20 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     //
     // Drop column mapping entries for dropped tables since these will not be TTLed automatically
     // and will stay there forever if we don't clean them up manually
-    co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&proxy] (global_schema_ptr& gs) -> future<> {
+    co_await max_concurrent_for_each(diff.tables.created, max_concurrent, [&proxy] (global_schema_ptr& gs) -> future<> {
         co_await store_column_mapping(proxy, gs.get(), false);
     });
-    co_await max_concurrent_for_each(tables_diff.altered, max_concurrent, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
+    co_await max_concurrent_for_each(diff.tables.altered, max_concurrent, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
         co_await when_all_succeed(
             store_column_mapping(proxy, altered.old_schema.get(), true),
             store_column_mapping(proxy, altered.new_schema.get(), false));
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&sys_ks] (schema_diff::dropped_schema& dropped) -> future<> {
+    co_await max_concurrent_for_each(diff.tables.dropped, max_concurrent, [&sys_ks] (schema_diff::dropped_schema& dropped) -> future<> {
         schema_ptr s = dropped.schema.get();
         co_await drop_column_mapping(sys_ks.local(), s->id(), s->version());
     });
+
+    co_return diff;
 }
 
 static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
@@ -815,7 +798,7 @@ future<> schema_applier::update() {
 
     _affected_keyspaces = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
     co_await merge_types(_proxy, _before.types, _after.types, _affected_user_types);
-    co_await merge_tables_and_views(_proxy, _sys_ks,
+    _affected_tables_and_views = co_await merge_tables_and_views(_proxy, _sys_ks,
             _before.tables, _after.tables,
             _before.views, _after.views,
             _reload, _tablet_hint);
