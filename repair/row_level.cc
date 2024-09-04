@@ -1587,11 +1587,12 @@ public:
             gc_clock::time_point compaction_time, abort_source& as) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
-        return repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as).then([] {
-            return repair_row_level_start_response{repair_row_level_start_status::ok};
-        }).handle_exception_type([] (replica::no_such_column_family&) {
-            return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
-        });
+        try {
+            co_await repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as);
+            co_return repair_row_level_start_response{repair_row_level_start_status::ok};
+        } catch (replica::no_such_column_family&) {
+            co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
+        }
     }
 
     // RPC API
