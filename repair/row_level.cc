@@ -1664,10 +1664,10 @@ public:
     future<get_sync_boundary_response>
     get_sync_boundary(gms::inet_address remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
         if (remote_node == myip()) {
-            return get_sync_boundary_handler(skipped_sync_boundary);
+            co_return co_await get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
-        return _messaging.send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
+        co_return co_await _messaging.send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
     }
 
     // RPC handler
