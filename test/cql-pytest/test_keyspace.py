@@ -76,6 +76,16 @@ def test_create_keyspace_nonexistent_dc(cql):
         ks = unique_name()
         cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'nonexistentdc' : 1 }}")
 
+# Reproduces #20097
+def test_create_table_in_nonexistent_keyspace(cql):
+    no_ks = "nonexistent_keyspace"
+    table = unique_name()
+    with pytest.raises(InvalidRequest, match=no_ks):
+        cql.execute(f"CREATE TABLE {no_ks}.{table} (p int PRIMARY KEY)")
+    # reassert table doesn't exist
+    with pytest.raises(InvalidRequest, match=no_ks):
+        cql.execute(f"DROP TABLE {no_ks}.{table}")
+
 # Test that attempts to reproduce an issue with double WITH keyword in CREATE
 # KEYSPACE statement -- CASSANDRA-9565.
 def test_create_keyspace_double_with(cql):

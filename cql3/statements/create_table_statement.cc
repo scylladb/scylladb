@@ -193,6 +193,13 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 
+    bool ks_uses_tablets;
+    try {
+        ks_uses_tablets = db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets();
+    } catch (const data_dictionary::no_such_keyspace& e) {
+        throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
+    }
+
     std::optional<std::map<bytes, data_type>> defined_multi_cell_columns;
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
@@ -202,7 +209,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
 
-        if (db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets() && pt.is_counter()) {
+        if (ks_uses_tablets && pt.is_counter()) {
             throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), cf_name));
         }
 
