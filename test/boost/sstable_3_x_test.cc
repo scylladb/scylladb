@@ -16,7 +16,8 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -184,6 +185,8 @@ static schema_ptr make_uncompressed_filtering_and_forwarding_schema() {
 
 static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA =
         make_uncompressed_filtering_and_forwarding_schema();
+
+BOOST_AUTO_TEST_SUITE(sstable_3_x_test)
 
 SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
   return test_env::do_with_async([] (test_env& env) {
@@ -5688,3 +5691,5 @@ SEASTAR_TEST_CASE(test_alter_compression_during_write) {
         assertions.produces_end_of_stream();
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -5,9 +5,10 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-#define BOOST_TEST_MODULE raft
 #include "test/raft/helpers.hh"
 #include "service/raft/discovery.hh"
+
+BOOST_AUTO_TEST_SUITE(discovery_test)
 
 using namespace raft;
 
@@ -101,3 +102,5 @@ BOOST_AUTO_TEST_CASE(test_discovery_fullmesh) {
 
     BOOST_CHECK(d1.is_leader() ^ d2.is_leader() ^ d3.is_leader());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

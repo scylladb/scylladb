@@ -19,7 +19,8 @@
 
 #include <fmt/ranges.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
@@ -46,6 +47,8 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(commitlog_test)
 
 using namespace db;
 
@@ -2056,3 +2059,5 @@ SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -6,14 +6,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE alternator
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
+
+BOOST_AUTO_TEST_SUITE(alternator_unit_test)
 
 static std::map<std::string, std::string> strings {
     {"", ""},
@@ -166,3 +167,5 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
     res = alternator::internal::get_magnitude_and_precision("1e-1000000000000");
     BOOST_CHECK(res.magnitude < -1000);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -19,7 +19,8 @@
 
 #include <seastar/net/inet_address.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -53,6 +54,7 @@
 #include "replica/schema_describe_helper.hh"
 
 
+BOOST_AUTO_TEST_SUITE(cql_query_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -4828,7 +4830,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
                                         expected_rows.begin() + next_expected_row_idx,
                                         expected_rows.begin() + next_expected_row_idx + rows_fetched});
 
-                            has_more_pages = ::has_more_pages(result);
+                            has_more_pages = cql_query_test::has_more_pages(result);
                             paging_state = extract_paging_state(result);
                             BOOST_REQUIRE(!has_more_pages || paging_state);
                             next_expected_row_idx += rows_fetched;
@@ -5921,3 +5923,5 @@ SEASTAR_TEST_CASE(test_schema_change_events) {
         BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
      });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

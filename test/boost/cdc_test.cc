@@ -8,7 +8,9 @@
 
 #include <fmt/core.h>
 #include <seastar/util/defer.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <string>
 #include <boost/range/adaptor/map.hpp>
 #include <fmt/ranges.h>
@@ -41,6 +43,42 @@ namespace cdc {
 api::timestamp_type find_timestamp(const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
 }
+
+static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
+    auto rs = rows.rs().result_set().rows();
+    std::vector<std::vector<bytes_opt>> results;
+    for (auto it = rs.begin(); it != rs.end(); ++it) {
+        results.push_back(*it | std::views::transform([] (const managed_bytes_opt& x) { return to_bytes_opt(x); }) | std::ranges::to<std::vector<bytes_opt>>());
+    }
+    return results;
+}
+
+static std::vector<std::vector<data_value>> get_result(cql_test_env& e,
+        const std::vector<data_type>& col_types, const sstring& query) {
+    auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
+        if (!b) {
+            return data_value::make_null(t);
+        }
+        return t->deserialize(*b);
+    };
+
+    auto msg = e.execute_cql(query).get();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+
+    std::vector<std::vector<data_value>> res;
+    for (auto&& r: to_bytes(*rows)) {
+        BOOST_REQUIRE_LE(col_types.size(), r.size());
+        std::vector<data_value> res_r;
+        for (size_t i = 0; i < col_types.size(); ++i) {
+            res_r.push_back(deser(col_types[i], r[i]));
+        }
+        res.push_back(std::move(res_r));
+    }
+    return res;
+}
+
+BOOST_AUTO_TEST_SUITE(cdc_test)
 
 SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
     do_with_cql_env_thread([] (cql_test_env& e) {
@@ -371,15 +409,6 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
         // Check if we missed something
         BOOST_REQUIRE_EQUAL(required_column_count, log_schema->all_columns_count());
     }).get();
-}
-
-static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
-    auto rs = rows.rs().result_set().rows();
-    std::vector<std::vector<bytes_opt>> results;
-    for (auto it = rs.begin(); it != rs.end(); ++it) {
-        results.push_back(*it | std::views::transform([] (const managed_bytes_opt& x) { return to_bytes_opt(x); }) | std::ranges::to<std::vector<bytes_opt>>());
-    }
-    return results;
 }
 
 static size_t column_index(const cql_transport::messages::result_message::rows& rows, const sstring& name) {
@@ -1305,31 +1334,6 @@ SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
     }).get();
 }
 
-static std::vector<std::vector<data_value>> get_result(cql_test_env& e,
-        const std::vector<data_type>& col_types, const sstring& query) {
-    auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
-        if (!b) {
-            return data_value::make_null(t);
-        }
-        return t->deserialize(*b);
-    };
-
-    auto msg = e.execute_cql(query).get();
-    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-    BOOST_REQUIRE(rows);
-
-    std::vector<std::vector<data_value>> res;
-    for (auto&& r: to_bytes(*rows)) {
-        BOOST_REQUIRE_LE(col_types.size(), r.size());
-        std::vector<data_value> res_r;
-        for (size_t i = 0; i < col_types.size(); ++i) {
-            res_r.push_back(deser(col_types[i], r[i]));
-        }
-        res.push_back(std::move(res_r));
-    }
-    return res;
-}
-
 SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
     do_with_cql_env_thread([](cql_test_env& e) {
         using oper_ut = std::underlying_type_t<cdc::operation>;
@@ -2077,3 +2081,5 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
         perform_test(true);
     }).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

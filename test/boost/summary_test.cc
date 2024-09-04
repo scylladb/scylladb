@@ -7,12 +7,12 @@
  */
 
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "utils/histogram.hh"
 #include <algorithm>
 #include <sstream>
+
+BOOST_AUTO_TEST_SUITE(summary_test)
 
 using duration = utils::time_estimated_histogram::duration;
 
@@ -59,3 +59,5 @@ BOOST_AUTO_TEST_CASE(test_summary_calculation) {
     summary.update();
     BOOST_CHECK_EQUAL(vector_to_string(summary.summary()), vector_to_string({0,0,0}));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

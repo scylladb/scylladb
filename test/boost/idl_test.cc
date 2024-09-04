@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 
@@ -166,6 +164,8 @@ struct const_template_arg_test_object {
 
 #include "idl/idl_test.dist.hh"
 #include "idl/idl_test.dist.impl.hh"
+
+BOOST_AUTO_TEST_SUITE(idl_test)
 
 BOOST_AUTO_TEST_CASE(test_simple_compound)
 {
@@ -484,3 +484,5 @@ BOOST_AUTO_TEST_CASE(test_const_template_arg)
     auto deser_obj = ser::deserialize(in, std::type_identity<const_template_arg_test_object>());
     BOOST_REQUIRE(obj == deser_obj);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

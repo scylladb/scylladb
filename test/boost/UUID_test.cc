@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include <utility>
 #include "utils/UUID_gen.hh"
 #include "marshal_exception.hh"
+
+BOOST_AUTO_TEST_SUITE(UUID_test)
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
     auto uuid = utils::UUID_gen::get_name_UUID("systembatchlog");
@@ -286,3 +286,5 @@ BOOST_AUTO_TEST_CASE(test_null_uuid) {
     BOOST_CHECK(!uuid.is_null());
     BOOST_CHECK(uuid);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

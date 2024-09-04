@@ -8,7 +8,9 @@
 
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/exceptions.hh"
@@ -18,6 +20,8 @@
 #include <seastar/core/units.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/util/closeable.hh>
+
+BOOST_AUTO_TEST_SUITE(aws_error_injection_test)
 
 using namespace seastar;
 using namespace std::string_view_literals;
@@ -187,3 +191,5 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
         return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

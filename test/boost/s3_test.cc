@@ -19,7 +19,9 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
@@ -32,6 +34,8 @@
 #include "gc_clock.hh"
 
 using namespace std::string_view_literals;
+
+BOOST_AUTO_TEST_SUITE(s3_test)
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
 // permissive enough policy and then run the test with env set respectively
@@ -630,3 +634,4 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
         }
     }
 }
+BOOST_AUTO_TEST_SUITE_END()

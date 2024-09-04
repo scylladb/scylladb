@@ -14,12 +14,15 @@
 #include "db/view/view_builder.hh"
 #include "compaction/compaction_manager.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -1748,3 +1751,5 @@ SEASTAR_TEST_CASE(test_3362_row_deletion_2) {
         });
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

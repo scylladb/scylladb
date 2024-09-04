@@ -11,7 +11,8 @@
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/sstable_utils.hh"
@@ -26,6 +27,8 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/compaction_group.hh"
+
+BOOST_AUTO_TEST_SUITE(compaction_group_test)
 
 using namespace sstables;
 
@@ -201,3 +204,5 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -9,7 +9,8 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -42,6 +43,8 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
     fmt::print(os, "{}", p);
     return os;
 }
+
+BOOST_AUTO_TEST_SUITE(frozen_mutation_test)
 
 SEASTAR_THREAD_TEST_CASE(test_writing_and_reading) {
     for (auto do_freeze_gently : {false, true}) {
@@ -206,3 +209,5 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
     validate_consume(s, fm, m);
     co_await validate_consume_gently(s, fm, m);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

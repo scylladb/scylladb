@@ -7,7 +7,8 @@
  */
 
 #include <string_view>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/net/inet_address.hh>
 #include "utils/UUID_gen.hh"
 #include <seastar/net/ip.hh>
@@ -24,6 +25,8 @@
 #include "types/set.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/test_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(types_test)
 
 using namespace std::literals::chrono_literals;
 using namespace std::literals::string_view_literals;
@@ -977,3 +980,5 @@ SEASTAR_TEST_CASE(test_list_type_serialization) {
     BOOST_REQUIRE_EQUAL(list, list_type->deserialize_value(managed_bytes_view(*ser)));
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

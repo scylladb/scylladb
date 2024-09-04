@@ -6,13 +6,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include <seastar/core/thread.hh>
 
 #include "cell_locking.hh"
 #include "mutation/mutation.hh"
 #include "schema/schema_builder.hh"
+
+BOOST_AUTO_TEST_SUITE(cell_locker_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -270,3 +273,5 @@ SEASTAR_TEST_CASE(test_locker_stats) {
         BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

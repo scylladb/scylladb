@@ -10,11 +10,14 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/semaphore.hh>
 #include "utils/serialized_action.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/phased_barrier.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>
+
+BOOST_AUTO_TEST_SUITE(serialized_action_test)
 
 using namespace std::chrono_literals;
 
@@ -183,3 +186,5 @@ SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
     bar2.advance_and_await().get();
     completion_timer.cancel();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

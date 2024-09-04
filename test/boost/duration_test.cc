@@ -6,14 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "duration.hh"
 
 #include <boost/test/unit_test.hpp>
 
 #include <string_view>
 #include "test/lib/exception_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(duration_test)
 
 namespace {
 
@@ -147,3 +147,5 @@ BOOST_AUTO_TEST_CASE(equality) {
     BOOST_REQUIRE_EQUAL(make_duration(1, 2, 3), make_duration(1, 2, 3));
     BOOST_REQUIRE_NE(make_duration(1, 2, 3), make_duration(1, 2, 4));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

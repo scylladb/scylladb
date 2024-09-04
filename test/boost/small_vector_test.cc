@@ -6,15 +6,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE small_vector
-
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include <algorithm>
 #include <functional>
 #include <sstream>
 
 #include "utils/small_vector.hh"
+
+BOOST_AUTO_TEST_SUITE(small_vector_test)
 
 template<typename T, size_t N>
 void check_equivalent(const utils::small_vector<T, N>& a, const std::vector<T>& b) {
@@ -492,3 +492,5 @@ BOOST_AUTO_TEST_CASE(from_range) {
     // Verify that copies are needed if the range is (only) an input_range.
     BOOST_REQUIRE_GT(do_test_from_range(stream_view, iota_view), 10);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -15,13 +15,17 @@
 #include <seastar/util/defer.hh>
 
 #include "locator/types.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/test_utils.hh"
 
 #include "locator/host_id.hh"
 #include "locator/topology.hh"
 #include "locator/load_sketch.hh"
 #include "utils/log.hh"
+
+BOOST_AUTO_TEST_SUITE(locator_topology_test)
 
 extern logging::logger testlog;
 
@@ -439,3 +443,5 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
 
     topo.clear_gently().get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

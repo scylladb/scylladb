@@ -18,9 +18,13 @@
 #include <seastar/testing/random.hh>
 
 #include "seastarx.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/core/print.hh>
 #include <seastar/core/format.hh>
 #include "utils/flush_queue.hh"
+
+BOOST_AUTO_TEST_SUITE(flush_queue_test)
 
 SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
     struct env {
@@ -192,3 +196,5 @@ SEASTAR_TEST_CASE(test_no_propagate_exception_in_post) {
                     false
                     );
 }
+
+BOOST_AUTO_TEST_SUITE_END()

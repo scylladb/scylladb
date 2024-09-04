@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE observable_test
-
 #include <boost/test/unit_test.hpp>
 #include <variant>
 #include <numeric>
 
 #include "utils/observable.hh"
+
+BOOST_AUTO_TEST_SUITE(observable_test)
 
 using namespace utils;
 
@@ -72,3 +72,4 @@ BOOST_AUTO_TEST_CASE(test_disconnect_fully_disconnects) {
     sub.disconnect();
 }
 
+BOOST_AUTO_TEST_SUITE_END()

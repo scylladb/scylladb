@@ -20,7 +20,8 @@
 
 #include "seastarx.hh"
 #include "test/lib/eventually.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
@@ -30,6 +31,8 @@
 #include <vector>
 #include <numeric>
 #include <random>
+
+BOOST_AUTO_TEST_SUITE(loading_cache_test)
 
 /// Get a random integer in the [0, max) range.
 /// \param max bound of the random value range
@@ -851,3 +854,5 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
         }        
     }, small_cache_config);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

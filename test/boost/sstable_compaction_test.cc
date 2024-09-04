@@ -20,7 +20,8 @@
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
 #include "compaction/compaction.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
@@ -57,7 +58,6 @@
 #include <ftw.h>
 #include <unistd.h>
 #include <boost/icl/interval_map.hpp>
-#include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -71,6 +71,8 @@
 #include "readers/combined.hh"
 #include "utils/assert.hh"
 #include "utils/pretty_printers.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_compaction_test)
 
 namespace fs = std::filesystem;
 
@@ -6090,3 +6092,5 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
                             std::runtime_error);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

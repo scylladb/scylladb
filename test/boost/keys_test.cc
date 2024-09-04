@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include "keys.hh"
@@ -18,6 +16,8 @@
 #include "idl/keys.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/keys.dist.impl.hh"
+
+BOOST_AUTO_TEST_SUITE(keys_test)
 
 BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
     auto s_ptr = schema_builder("", "")
@@ -188,3 +188,5 @@ BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string) {
     auto key4 = partition_key::from_nodetool_style_string(s2, "value1:value2");
     BOOST_REQUIRE(key3.equal(*s1, key4));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

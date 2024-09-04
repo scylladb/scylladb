@@ -22,7 +22,8 @@
 #include "sstables/version.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_utils.hh"
 #include "schema/schema.hh"
 #include "compress.hh"
@@ -34,6 +35,8 @@
 #include "sstables/binary_search.hh"
 
 #include <boost/range/combine.hpp>
+
+BOOST_AUTO_TEST_SUITE(sstable_test)
 
 using namespace sstables;
 
@@ -857,3 +860,5 @@ BOOST_AUTO_TEST_CASE(test_parse_path_bad) {
         BOOST_CHECK_THROW(parse_path(path), std::exception);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

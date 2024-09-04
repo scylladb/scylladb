@@ -12,7 +12,11 @@
 
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/sstable_utils.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+
+BOOST_AUTO_TEST_SUITE(virtual_table_mutation_source_test)
 
 class memtable_filling_test_vt : public db::memtable_filling_virtual_table {
     std::vector<mutation> _mutations;
@@ -72,3 +76,5 @@ SEASTAR_THREAD_TEST_CASE(test_streaming_vt_as_mutation_source) {
         });
     }, false /* with_partition_range_forwarding */);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

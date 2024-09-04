@@ -6,9 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/log.hh"
 #include "utils/sorting.hh"
+
+BOOST_AUTO_TEST_SUITE(sorting_test)
 
 struct sorting_test_data {
     std::multimap<int, int> adjacent_map;
@@ -87,3 +90,5 @@ SEASTAR_TEST_CASE(test_topological_sorting) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -11,7 +11,8 @@
 #include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/thread.hh>
 #include "schema/schema_builder.hh"
 #include "keys.hh"
@@ -286,6 +287,8 @@ static expected_row before_cont(int ck) {
 static expected_row before_notc(int ck) {
     return expected_row(position_in_partition::before_key(make_ck(ck)), is_continuous::no, is_dummy::yes);
 }
+
+BOOST_AUTO_TEST_SUITE(cache_mutation_reader_test)
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_full_range) {
     return seastar::async([] {
@@ -1386,3 +1389,5 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range4) {
         }, {});
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

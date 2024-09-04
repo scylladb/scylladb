@@ -14,10 +14,13 @@
 #include "utils/assert.hh"
 #include "utils/reusable_buffer.hh"
 #include <seastar/core/manual_clock.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/later.hh>
 #include <seastar/core/coroutine.hh>
 #include <bit>
+
+BOOST_AUTO_TEST_SUITE(reusable_buffer_test)
 
 using namespace seastar;
 
@@ -152,3 +155,5 @@ SEASTAR_TEST_CASE(test_decay) {
     BOOST_REQUIRE_EQUAL(buffer.reallocs(), 3);
     BOOST_REQUIRE_EQUAL(buffer.size(), 0);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

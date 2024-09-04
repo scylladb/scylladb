@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "vint-serialization.hh"
 
 #include "bytes.hh"
@@ -17,6 +15,8 @@
 #include <array>
 #include <cstdint>
 #include <random>
+
+BOOST_AUTO_TEST_SUITE(vint_serialization_test)
 
 using namespace seastar;
 
@@ -137,3 +137,5 @@ BOOST_AUTO_TEST_CASE(sanity_signed_examples) {
 BOOST_AUTO_TEST_CASE(sanity_signed_sweep) {
     check_roundtrip_sweep<signed_vint>(100'000, random_engine());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -14,9 +14,13 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <seastar/core/thread.hh>
+
+BOOST_AUTO_TEST_SUITE(canonical_mutation_test)
 
 SEASTAR_THREAD_TEST_CASE(test_conversion_back_and_forth) {
     for (auto do_make_canonical_mutation_gently : {false, true}) {
@@ -54,3 +58,5 @@ SEASTAR_TEST_CASE(test_reading_with_different_schemas) {
         });
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

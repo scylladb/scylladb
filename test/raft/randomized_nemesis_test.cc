@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/reactor.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
@@ -51,7 +52,7 @@ std::ostream& operator<<(std::ostream& os, const std::variant<T, Ts...>& v) {
 using namespace seastar;
 using namespace std::chrono_literals;
 
-seastar::logger tlogger("randomized_nemesis_test");
+seastar::logger tlogger_randomized_nemesis("randomized_nemesis_test");
 
 // A direct translaction of a mathematical definition of a state machine
 // (see e.g. Wikipedia) as a C++ concept. Implementations of this concept
@@ -161,7 +162,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         auto id = raft::snapshot_id::create_random_id();
         SCYLLA_ASSERT(_snapshots.emplace(id, _val).second);
-        tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
+        tlogger_randomized_nemesis.trace("{}: took snapshot id {} val {}", _id, id, _val);
         co_return id;
     }
 
@@ -172,7 +173,7 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override {
         auto it = _snapshots.find(id);
         SCYLLA_ASSERT(it != _snapshots.end()); // dunno if the snapshot can actually be missing
-        tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
+        tlogger_randomized_nemesis.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
         _val = it->second;
         co_return;
     }
@@ -274,7 +275,7 @@ with_timeout(logical_timer& t, raft::logical_clock::time_point tp, F&& fun) {
         } catch (...) {
             // There should be no other exceptions, but just in case... log it and discard,
             // we want to propagate exceptions from `f`, not from sleep.
-            tlogger.error("unexpected exception from sleep_and_abort", std::current_exception());
+            tlogger_randomized_nemesis.error("unexpected exception from sleep_and_abort", std::current_exception());
         }
 
         // The future is available but cannot use `f.get()` as it doesn't handle void futures.
@@ -344,7 +345,7 @@ future<call_result_t<M>> call(
             // FIXME: workaround for #9688
             return make_ready_future<call_result_t<M>>(raft::stopped_error{});
         } catch (...) {
-            tlogger.error("unexpected exception from call: {}", std::current_exception());
+            tlogger_randomized_nemesis.error("unexpected exception from call: {}", std::current_exception());
             SCYLLA_ASSERT(false);
         }
     });
@@ -378,7 +379,7 @@ future<read_result_t<M>> read(
         } catch (raft::request_aborted&) {
             co_return timed_out_error{};
         } catch (...) {
-            tlogger.error("unexpected exception from `read`: {}", std::current_exception());
+            tlogger_randomized_nemesis.error("unexpected exception from `read`: {}", std::current_exception());
             SCYLLA_ASSERT(false);
         }
     };
@@ -529,7 +530,7 @@ public:
         [&] (snapshot_message m) {
             static const size_t max_concurrent_snapshot_applications = 5; // TODO: configurable
             if (_snapshot_applications >= max_concurrent_snapshot_applications) {
-                tlogger.warn(
+                tlogger_randomized_nemesis.warn(
                     "{}: cannot apply snapshot from {} (id: {}) due to too many concurrent requests, dropping it",
                     _id, src, m.ins.snp.id);
                 // Should we send some message back instead?
@@ -547,7 +548,7 @@ public:
                         .reply_id = m.reply_id
                     });
                 } catch (...) {
-                    tlogger.warn("{}: exception when applying snapshot from {}: {}", self._id, src, std::current_exception());
+                    tlogger_randomized_nemesis.warn("{}: exception when applying snapshot from {}: {}", self._id, src, std::current_exception());
                 }
 
                 --self._snapshot_applications;
@@ -583,7 +584,7 @@ public:
         [&] (execute_barrier_on_leader m) {
             static const size_t max_concurrent_read_barrier_executions = 100; // TODO: configurable
             if (_read_barrier_executions >= max_concurrent_read_barrier_executions) {
-                tlogger.warn(
+                tlogger_randomized_nemesis.warn(
                     "{}: cannot execute read barrier for {} due to too many concurrent requests, dropping it",
                     _id, src);
                 // Should we send some message back instead?
@@ -600,7 +601,7 @@ public:
                         .reply_id = m.reply_id
                     });
                 } catch (...) {
-                    tlogger.warn("{}: exception when executing read barrier for {}: {}", self._id, src, std::current_exception());
+                    tlogger_randomized_nemesis.warn("{}: exception when executing read barrier for {}: {}", self._id, src, std::current_exception());
                 }
 
                 --self._read_barrier_executions;
@@ -615,7 +616,7 @@ public:
         [&] (add_entry_message m) {
             static const size_t max_concurrent_add_entry_executions = 100; // TODO: configurable
             if (_add_entry_executions >= max_concurrent_add_entry_executions) {
-                tlogger.warn(
+                tlogger_randomized_nemesis.warn(
                     "{}: cannot execute add_entry for {} due to too many concurrent requests, dropping it",
                     _id, src);
                 // Should we send some message back instead?
@@ -632,7 +633,7 @@ public:
                         .reply_id = m.reply_id
                     });
                 } catch (...) {
-                    tlogger.warn("{}: exception when executing add_entry for {}: {}", self._id, src, std::current_exception());
+                    tlogger_randomized_nemesis.warn("{}: exception when executing add_entry for {}: {}", self._id, src, std::current_exception());
                 }
 
                 --self._add_entry_executions;
@@ -647,7 +648,7 @@ public:
         [&] (modify_config_message m) {
             static const size_t max_concurrent_modify_config_executions = 100; // TODO: configurable
             if (_modify_config_executions >= max_concurrent_modify_config_executions) {
-                tlogger.warn(
+                tlogger_randomized_nemesis.warn(
                     "{}: cannot execute modify_config for {} due to too many concurrent requests, dropping it",
                     _id, src);
                 // Should we send some message back instead?
@@ -664,7 +665,7 @@ public:
                         .reply_id = m.reply_id
                     });
                 } catch (...) {
-                    tlogger.warn("{}: exception when executing modify_config for {}: {}", self._id, src, std::current_exception());
+                    tlogger_randomized_nemesis.warn("{}: exception when executing modify_config for {}: {}", self._id, src, std::current_exception());
                 }
 
                 --self._modify_config_executions;
@@ -1140,14 +1141,14 @@ public:
 
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id ep) override {
         auto id = raft::server_id{ep};
-        tlogger.trace("failure detector ({}): mark {} alive", _id, id);
+        tlogger_randomized_nemesis.trace("failure detector ({}): mark {} alive", _id, id);
         _alive_set.insert(id);
         return make_ready_future<>();
     }
 
     future<> mark_dead(direct_failure_detector::pinger::endpoint_id ep) override {
         auto id = raft::server_id{ep};
-        tlogger.trace("failure detector ({}): mark {} dead", _id, id);
+        tlogger_randomized_nemesis.trace("failure detector ({}): mark {} dead", _id, id);
         _alive_set.erase(id);
         return make_ready_future<>();
     }
@@ -1279,7 +1280,7 @@ future<reconfigure_result_t> reconfigure(
     } catch (raft::request_aborted&) {
         co_return timed_out_error{};
     } catch (...) {
-        tlogger.error("unexpected exception from set_configuration: {}", std::current_exception());
+        tlogger_randomized_nemesis.error("unexpected exception from set_configuration: {}", std::current_exception());
         SCYLLA_ASSERT(false);
     }
 }
@@ -1317,7 +1318,7 @@ future<reconfigure_result_t> modify_config(
     } catch (seastar::timed_out_error e) {
         co_return e;
     } catch (...) {
-        tlogger.error("unexpected exception from modify_config: {}", std::current_exception());
+        tlogger_randomized_nemesis.error("unexpected exception from modify_config: {}", std::current_exception());
         SCYLLA_ASSERT(false);
     }
 }
@@ -1802,9 +1803,9 @@ public:
         _crashing_servers.insert(srv.get());
 
         auto f = std::bind_front([] (environment<M>& self, std::unique_ptr<raft_server<M>> srv) -> future<> {
-            tlogger.trace("crash fiber: aborting {}", srv->id());
+            tlogger_randomized_nemesis.trace("crash fiber: aborting {}", srv->id());
             co_await srv->abort();
-            tlogger.trace("crash fiber: finished aborting {}", srv->id());
+            tlogger_randomized_nemesis.trace("crash fiber: finished aborting {}", srv->id());
             self._crashing_servers.erase(srv.get());
             // abort() ensures there are no in-progress calls on the server, so we can destroy it.
         }, std::ref(*this), std::move(srv));
@@ -1973,7 +1974,7 @@ public:
 
 template <PureStateMachine M, std::invocable<environment<M>&, ticker&> F>
 auto with_env_and_ticker(environment_config cfg, F f) {
-    return do_with(std::move(f), std::make_unique<environment<M>>(std::move(cfg)), std::make_unique<ticker>(tlogger),
+    return do_with(std::move(f), std::make_unique<environment<M>>(std::move(cfg)), std::make_unique<ticker>(tlogger_randomized_nemesis),
             [] (F& f, std::unique_ptr<environment<M>>& env, std::unique_ptr<ticker>& t) {
         return f(*env, *t).finally([&env_ = env, &t_ = t] () mutable -> future<> {
             // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
@@ -1982,11 +1983,11 @@ auto with_env_and_ticker(environment_config cfg, F f) {
 
             // We abort the environment before the ticker as the environment may require time to advance
             // in order to finish (e.g. some operations may need to timeout).
-            tlogger.info("aborting environment");
+            tlogger_randomized_nemesis.info("aborting environment");
             co_await env->abort();
-            tlogger.info("environment aborted, aborting ticker");
+            tlogger_randomized_nemesis.info("environment aborted, aborting ticker");
             co_await t->abort();
-            tlogger.info("ticker aborted");
+            tlogger_randomized_nemesis.info("ticker aborted");
         });
     });
 }
@@ -2101,392 +2102,6 @@ struct wait_for_leader {
     }
 };
 
-future<> ping_shards() {
-    if (smp::count == 1) {
-        return seastar::yield();
-    }
-
-    return parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
-        return smp::submit_to(s, [](){});
-    });
-}
-
-SEASTAR_TEST_CASE(basic_test) {
-    logical_timer timer;
-    environment_config cfg {
-        .rnd{0},
-        .network_delay{5, 5},
-        .fd_convict_threshold = 50_t,
-    };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        using output_t = typename ExReg::output_t;
-
-        t.start([&] (uint64_t tick) -> future<> {
-            env.tick_network();
-            timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
-            return ping_shards();
-        }, 10'000);
-
-        auto leader_id = co_await env.new_server(true);
-
-        // Wait at most 1000 ticks for the server to elect itself as a leader.
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
-
-        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
-            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
-        };
-
-        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
-            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
-        };
-
-        for (int i = 1; i <= 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
-        }
-
-        tlogger.debug("100 exchanges - single server - passed");
-
-        auto id2 = co_await env.new_server(false);
-        auto id3 = co_await env.new_server(false);
-
-        tlogger.debug("Started 2 more servers, changing configuration");
-
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
-
-        tlogger.debug("Configuration changed");
-
-        co_await call(ExReg::exchange{0}, 100_t);
-        for (int i = 1; i <= 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
-        }
-
-        tlogger.debug("100 exchanges - three servers - passed");
-
-        // concurrent calls
-        std::vector<future<call_result_t<ExReg>>> futs;
-        for (int i = 0; i < 100; ++i) {
-            futs.push_back(call(ExReg::read{}, 100_t));
-            co_await timer.sleep(2_t);
-        }
-        for (int i = 0; i < 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await std::move(futs[i]), ExReg::ret{100}));
-        }
-
-        tlogger.debug("100 concurrent reads - three servers - passed");
-    });
-
-    tlogger.debug("Finished");
-}
-
-SEASTAR_TEST_CASE(test_frequent_snapshotting) {
-    auto seed = tests::random::get_int<int32_t>();
-    std::mt19937 random_engine{seed};
-
-    logical_timer timer;
-    environment_config cfg {
-        .rnd{random_engine},
-        .network_delay{0, 6},
-        .fd_convict_threshold = 50_t,
-    };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        using output_t = typename ExReg::output_t;
-
-        t.start([&] (uint64_t tick) -> future<> {
-            env.tick_network();
-            timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
-            return ping_shards();
-        }, 10'000);
-        const auto server_config = raft::server::configuration {
-            .snapshot_threshold = 1,
-            .snapshot_threshold_log_size = 150,
-            .snapshot_trailing = 5,
-            .snapshot_trailing_size= 75,
-            .max_log_size = 300,
-            .enable_forwarding = true,
-            .max_command_size = 30
-        };
-
-        auto leader_id = co_await env.new_server(true, server_config);
-
-        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
-            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
-        };
-
-        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
-            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
-        };
-
-        // Wait at most 1000 ticks for the server to elect itself as a leader.
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
-
-        auto id2 = co_await env.new_server(false, server_config);
-        auto id3 = co_await env.new_server(false, server_config);
-
-        env.for_each_server([](raft::server_id, raft_server<ExReg>* srv) {
-            srv->get_server()->set_applier_queue_max_size(1);
-        });
-
-        tlogger.debug("Started 2 more servers, changing configuration");
-
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-                co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
-
-        tlogger.debug("Configuration changed");
-
-        co_await call(ExReg::exchange{0}, 100_t);
-        for (int i = 1; i <= 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
-        }
-
-        tlogger.debug("100 exchanges - three servers - passed");
-
-        // concurrent calls
-        std::vector<future<call_result_t<ExReg>>> futs;
-        for (int i = 0; i < 100; ++i) {
-            futs.push_back(call(ExReg::read{}, 100_t));
-            co_await timer.sleep(2_t);
-        }
-        for (int i = 0; i < 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await std::move(futs[i]), ExReg::ret{100}));
-        }
-
-        tlogger.debug("100 concurrent reads - three servers - passed");
-    });
-
-    tlogger.debug("Finished");
-}
-
-// A snapshot was being taken with the wrong term (current term instead of the term at the snapshotted index).
-// This is a regression test for that bug.
-SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
-    logical_timer timer;
-    environment_config cfg {
-        .rnd{0},
-        .network_delay{1, 1},
-        .fd_convict_threshold = 10_t,
-    };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start([&] (uint64_t tick) {
-            env.tick_network();
-            timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
-            return ping_shards();
-        }, 10'000);
-
-        auto id1 = co_await env.new_server(true,
-                raft::server::configuration{
-        // It's easier to catch the problem when we send entries one by one, not in batches.
-                    .append_request_threshold = 1,
-                });
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
-
-        auto id2 = co_await env.new_server(false,
-                raft::server::configuration{
-                    .append_request_threshold = 1,
-                });
-
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
-
-        // Append a bunch of entries
-        for (int i = 1; i <= 10; ++i) {
-            SCYLLA_ASSERT(std::holds_alternative<typename ExReg::ret>(
-                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
-        }
-
-        SCYLLA_ASSERT(env.is_leader(id1));
-
-        // Force a term increase by partitioning the network and waiting for the leader to step down
-        tlogger.trace("add grudge");
-        env.get_network().add_grudge(id2, id1);
-        env.get_network().add_grudge(id1, id2);
-
-        while (env.is_leader(id1)) {
-            co_await seastar::yield();
-        }
-
-        tlogger.trace("remove grudge");
-        env.get_network().remove_grudge(id2, id1);
-        env.get_network().remove_grudge(id1, id2);
-
-        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
-        tlogger.trace("last leader: {}", l);
-
-        // Now the current term is greater than the term of the first couple of entries.
-        // Join another server with a small snapshot_threshold.
-        // The leader will send entries to this server one by one (due to small append_request_threshold),
-        // so the joining server will apply entries one by one or in small batches (depends on the timing),
-        // making it likely that it decides to take a snapshot at an entry with term lower than the current one.
-        // If we are (un)lucky and we take a snapshot at the last appended entry, the node will refuse all
-        // later append_entries requests due to non-matching term at the last appended entry. Note: due to this
-        // requirement, the test is nondeterministic and doesn't always catch the bug (it depends on a race
-        // between applier_fiber and io_fiber), but it does catch it in a significant number of runs.
-        // It's also a lot easier to catch this in dev than in debug, for instance.
-        // If we catch the bug, the reconfigure request below will time out.
-
-        auto id3 = co_await env.new_server(false,
-                raft::server::configuration{
-                    .snapshot_threshold = 5,
-                    .snapshot_trailing = 2,
-                });
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.reconfigure(l, {l, id3}, timer.now() + 1000_t, timer)));
-    });
-}
-
-// Regression test for the following bug: when we took a snapshot, we forgot to save the configuration.
-// This caused each node in the cluster to eventually forget the cluster configuration.
-SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
-    logical_timer timer;
-    environment_config cfg {
-        .rnd{0},
-        .network_delay{1, 1},
-        .fd_convict_threshold = 10_t,
-    };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start([&] (uint64_t tick) {
-            env.tick_network();
-            timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
-            return ping_shards();
-        }, 10'000);
-
-        auto id1 = co_await env.new_server(true,
-                raft::server::configuration{
-                    .snapshot_threshold = 5,
-                    .snapshot_trailing = 1,
-                });
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
-
-        auto id2 = co_await env.new_server(false,
-                raft::server::configuration{
-                    .snapshot_threshold = 5,
-                    .snapshot_trailing = 1,
-                });
-
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
-
-        // Append a bunch of entries
-        for (int i = 1; i <= 10; ++i) {
-            SCYLLA_ASSERT(std::holds_alternative<typename ExReg::ret>(
-                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
-        }
-
-        SCYLLA_ASSERT(env.is_leader(id1));
-
-        // Partition the network, forcing the leader to step down.
-        tlogger.trace("add grudge");
-        env.get_network().add_grudge(id2, id1);
-        env.get_network().add_grudge(id1, id2);
-
-        while (env.is_leader(id1)) {
-            co_await seastar::yield();
-        }
-
-        tlogger.trace("remove grudge");
-        env.get_network().remove_grudge(id2, id1);
-        env.get_network().remove_grudge(id1, id2);
-
-        // With the bug this would timeout, the cluster is unable to elect a leader without the configuration.
-        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
-        tlogger.trace("last leader: {}", l);
-    });
-}
-
-// Regression test for #9981.
-SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
-    logical_timer timer;
-    environment_config cfg {
-        .rnd{0},
-        .network_delay{1, 1},
-        .fd_convict_threshold = 10_t,
-    };
-    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start([&] (uint64_t tick) {
-            env.tick_network();
-            timer.tick();
-            if (tick % 10 == 0) {
-                env.tick_servers();
-            }
-            return ping_shards();
-        }, 10'000);
-
-        raft::server::configuration cfg {
-            .enable_forwarding = true,
-        };
-
-        auto id1 = co_await env.new_server(true, cfg);
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
-
-        auto id2 = co_await env.new_server(false, cfg);
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
-
-        // Server 2 forwards the entry that removes it to server 1.
-        // We want server 2 to eventually learn from server 1 that it was removed,
-        // so the call finishes (no timeout).
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-            co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id2}, timer.now() + 100_t, timer)));
-    });
-}
-
-// Regression test for #10010, #11235.
-SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
-    auto seed = tests::random::get_int<int32_t>();
-    std::mt19937 random_engine{seed};
-
-    logical_timer timer;
-    environment_config cfg {
-            .rnd{seed},
-            .network_delay{0, 6},
-            .fd_convict_threshold = 50_t,
-    };
-
-    co_await with_env_and_ticker<ExReg>(cfg, [&] (environment<ExReg>& env, ticker& t) -> future<> {
-        t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
-            env.tick_network();
-            timer.tick();
-            env.for_each_server([&] (raft::server_id, raft_server<ExReg>* srv) {
-                // Tick each server with probability 1/10.
-                // Thus each server is ticked, on average, once every 10 timer/network ticks.
-                // On the other hand, we now have servers running at different speeds.
-                if (srv && dist(random_engine) == 0) {
-                    srv->tick();
-                }
-            });
-            return ping_shards();
-        }, 20'000);
-
-        raft::server::configuration cfg {
-                .enable_forwarding = true,
-        };
-
-        auto id1 = co_await env.new_server(true, cfg);
-        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
-        auto id2 = co_await env.new_server(false, cfg);
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
-                co_await env.reconfigure(id1, {id1, id2}, timer.now() + 200_t, timer)));
-        // Server 2 forwards the entry that removes server 1 to server 1.
-        // We want server 2 to either learn from server 1 about the removal,
-        // or become a leader and learn from itself; in both cases the call should finish (no timeout).
-        auto result = co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id1}, timer.now() + 200_t, timer);
-        tlogger.info("env.modify_config result {}", result);
-        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(result));
-    });
-}
-
 // Given a function `F` which takes a `raft::server_id` argument and returns a variant type
 // which contains `not_a_leader`, repeatedly calls `F` until it returns something else than
 // `not_a_leader` or until we reach a limit, whichever happens first.
@@ -2519,7 +2134,7 @@ struct bouncing {
             raft::logical_clock::duration known_leader_delay,
             raft::logical_clock::duration unknown_leader_delay
             ) {
-        tlogger.trace("bouncing call: starting with {}", srv_id);
+        tlogger_randomized_nemesis.trace("bouncing call: starting with {}", srv_id);
         std::unordered_set<raft::server_id> tried;
         while (true) {
             auto res = co_await _f(srv_id);
@@ -2532,7 +2147,7 @@ struct bouncing {
                 if (n_a_l->leader) {
                     if (n_a_l->leader == srv_id || !tried.contains(n_a_l->leader)) {
                         co_await timer.sleep(known_leader_delay);
-                        tlogger.trace("bouncing call: got `not_a_leader` from {}, rerouting to {}", srv_id, n_a_l->leader);
+                        tlogger_randomized_nemesis.trace("bouncing call: got `not_a_leader` from {}, rerouting to {}", srv_id, n_a_l->leader);
                         srv_id = n_a_l->leader;
                         continue;
                     }
@@ -2542,10 +2157,10 @@ struct bouncing {
                     auto prev = srv_id;
                     srv_id = *known.begin();
                     if (n_a_l->leader) {
-                        tlogger.trace("bouncing call: got `not_a_leader` from {}, rerouted to {}, but already tried it; trying {}",
+                        tlogger_randomized_nemesis.trace("bouncing call: got `not_a_leader` from {}, rerouted to {}, but already tried it; trying {}",
                                 prev, n_a_l->leader, srv_id);
                     } else {
-                        tlogger.trace("bouncing call: got `not_a_leader` from {}, no reroute, trying {}", prev, srv_id);
+                        tlogger_randomized_nemesis.trace("bouncing call: got `not_a_leader` from {}, no reroute, trying {}", prev, srv_id);
                     }
                     continue;
                 }
@@ -2586,12 +2201,12 @@ struct raft_call {
         std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(engine));
         auto contact = *it;
 
-        tlogger.debug("db call start inp {} tid {} start time {} current time {} contact {}", input, ctx.thread, ctx.start, s.timer.now(), contact);
+        tlogger_randomized_nemesis.debug("db call start inp {} tid {} start time {} current time {} contact {}", input, ctx.thread, ctx.start, s.timer.now(), contact);
 
         auto [res, last] = co_await bouncing{[input = input, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
             return env.call(id, input, timeout, timer);
         }}(s.timer, s.known, contact, 6, 10_t, 10_t);
-        tlogger.debug("db call end inp {} tid {} start time {} current time {} last contact {}", input, ctx.thread, ctx.start, s.timer.now(), last);
+        tlogger_randomized_nemesis.debug("db call end inp {} tid {} start time {} current time {} last contact {}", input, ctx.thread, ctx.start, s.timer.now(), last);
 
         co_return res;
     }
@@ -2627,9 +2242,9 @@ struct raft_read {
         std::advance(it, std::uniform_int_distribution<size_t>{0, s.known.size() - 1}(engine));
         auto contact = *it;
 
-        tlogger.debug("read start tid {} start time {} current time {} contact {}", ctx.thread, ctx.start, s.timer.now(), contact);
+        tlogger_randomized_nemesis.debug("read start tid {} start time {} current time {} contact {}", ctx.thread, ctx.start, s.timer.now(), contact);
         auto res = co_await s.env.read(contact, s.timer.now() + timeout, s.timer);
-        tlogger.debug("read end tid {} start time {} current time {} contact {}", ctx.thread, ctx.start, s.timer.now(), contact);
+        tlogger_randomized_nemesis.debug("read end tid {} start time {} current time {} contact {}", ctx.thread, ctx.start, s.timer.now(), contact);
 
         co_return result_type{read_id, std::move(res)};
     }
@@ -2686,7 +2301,7 @@ public:
             }
         }
 
-        tlogger.debug("network_majority_grudge start tid {} start time {} current time {} duration {} grudge: {} vs {}",
+        tlogger_randomized_nemesis.debug("network_majority_grudge start tid {} start time {} current time {} duration {} grudge: {} vs {}",
                 ctx.thread, ctx.start, s.timer.now(),
                 _duration,
                 std::vector<raft::server_id>{nodes.begin(), mid},
@@ -2694,7 +2309,7 @@ public:
 
         co_await s.timer.sleep(_duration);
 
-        tlogger.debug("network_majority_grudge end tid {} start time {} current time {}", ctx.thread, ctx.start, s.timer.now());
+        tlogger_randomized_nemesis.debug("network_majority_grudge end tid {} start time {} current time {}", ctx.thread, ctx.start, s.timer.now());
 
         // Some servers in `nodes` may already be gone at this point but network doesn't care.
         // It's safe to call `remove_grudge`.
@@ -2748,7 +2363,7 @@ struct reconfiguration {
         std::vector<raft::server_id> removed {nodes.begin() + members_end, nodes.end()};
         auto contact = *s.known.begin();
 
-        tlogger.debug("reconfig modify_config start add {} remove {} start tid {} start time {} current time {} contact {}",
+        tlogger_randomized_nemesis.debug("reconfig modify_config start add {} remove {} start tid {} start time {} current time {} contact {}",
                 added, removed, ctx.thread, ctx.start, s.timer.now(), contact);
 
         SCYLLA_ASSERT(s.known.size() > 0);
@@ -2759,22 +2374,22 @@ struct reconfiguration {
 
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
-            tlogger.debug("reconfig successful known {} added {} removed {} by {}", s.known, added, removed, last);
+            tlogger_randomized_nemesis.debug("reconfig successful known {} added {} removed {} by {}", s.known, added, removed, last);
             s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
             for (auto id: removed) {
                 s.known.erase(id);
             }
         },
         [&, last = last] (raft::not_a_leader& e) {
-            tlogger.debug("reconfig failed, not a leader: {} tried to add {}, remove {} by {}", e, added, removed, last);
+            tlogger_randomized_nemesis.debug("reconfig failed, not a leader: {} tried to add {}, remove {} by {}", e, added, removed, last);
         },
         [&, last = last] (auto& e) {
             s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
-            tlogger.debug("reconfig failed: {}, tried to add {}, remove {}, after merge {} by {}", e, added, removed, s.known, last);
+            tlogger_randomized_nemesis.debug("reconfig failed: {}, tried to add {}, remove {}, after merge {} by {}", e, added, removed, s.known, last);
         }
         ), res);
 
-        tlogger.debug("reconfig modify_config end add {} remove {} start tid {} start time {} current time {} last contact {}",
+        tlogger_randomized_nemesis.debug("reconfig modify_config end add {} remove {} start tid {} start time {} current time {} last contact {}",
                 added, removed, ctx.thread, ctx.start, s.timer.now(), last);
 
         co_return res;
@@ -2793,7 +2408,7 @@ struct reconfiguration {
 
         auto contact = *s.known.begin();
 
-        tlogger.debug("reconfig set_configuration start nodes {} start tid {} start time {} current time {} contact {}",
+        tlogger_randomized_nemesis.debug("reconfig set_configuration start nodes {} start tid {} start time {} current time {} contact {}",
                 nodes_voters, ctx.thread, ctx.start, s.timer.now(), contact);
 
         SCYLLA_ASSERT(s.known.size() > 0);
@@ -2803,21 +2418,21 @@ struct reconfiguration {
 
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
-            tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes_voters, last);
+            tlogger_randomized_nemesis.debug("reconfig successful from {} to {} by {}", s.known, nodes_voters, last);
             s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end};
             // TODO: include the old leader as well in case it's not part of the new config?
             // it may remain a leader for some time...
         },
         [&, last = last] (raft::not_a_leader& e) {
-            tlogger.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes_voters, last);
+            tlogger_randomized_nemesis.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes_voters, last);
         },
         [&, last = last] (auto& e) {
             s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
-            tlogger.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes_voters, s.known, last);
+            tlogger_randomized_nemesis.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes_voters, s.known, last);
         }
         ), res);
 
-        tlogger.debug("reconfig set_configuration end nodes {} start tid {} start time {} current time {} last contact {}",
+        tlogger_randomized_nemesis.debug("reconfig set_configuration end nodes {} start tid {} start time {} current time {} last contact {}",
                 nodes_voters, ctx.thread, ctx.start, s.timer.now(), last);
 
         co_return res;
@@ -2880,15 +2495,15 @@ struct stop_crash {
 
         static std::bernoulli_distribution bdist{0.5};
         if (bdist(s.rnd)) {
-            tlogger.debug("Crashing server {}", srv);
+            tlogger_randomized_nemesis.debug("Crashing server {}", srv);
             s.env.crash(srv);
         } else {
-            tlogger.debug("Stopping server {}...", srv);
+            tlogger_randomized_nemesis.debug("Stopping server {}...", srv);
             co_await s.env.stop(srv);
-            tlogger.debug("Server {} stopped", srv);
+            tlogger_randomized_nemesis.debug("Server {} stopped", srv);
         }
         co_await s.timer.sleep(restart_delay);
-        tlogger.debug("Restarting server {}", srv);
+        tlogger_randomized_nemesis.debug("Restarting server {}", srv);
         co_await s.env.start_server(srv);
 
         co_return result_type{};
@@ -3225,6 +2840,394 @@ template <> struct fmt::formatter<AppendReg::ret> : fmt::formatter<string_view> 
     }
 };
 
+BOOST_AUTO_TEST_SUITE(randomized_nemesis_test)
+
+future<> ping_shards() {
+    if (smp::count == 1) {
+        return seastar::yield();
+    }
+
+    return parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
+        return smp::submit_to(s, [](){});
+    });
+}
+
+SEASTAR_TEST_CASE(basic_test) {
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{0},
+        .network_delay{5, 5},
+        .fd_convict_threshold = 50_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        using output_t = typename ExReg::output_t;
+
+        t.start([&] (uint64_t tick) -> future<> {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+
+        auto leader_id = co_await env.new_server(true);
+
+        // Wait at most 1000 ticks for the server to elect itself as a leader.
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
+
+        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
+            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
+        };
+
+        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
+            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
+        };
+
+        for (int i = 1; i <= 100; ++i) {
+            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger_randomized_nemesis.debug("100 exchanges - single server - passed");
+
+        auto id2 = co_await env.new_server(false);
+        auto id3 = co_await env.new_server(false);
+
+        tlogger_randomized_nemesis.debug("Started 2 more servers, changing configuration");
+
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
+
+        tlogger_randomized_nemesis.debug("Configuration changed");
+
+        co_await call(ExReg::exchange{0}, 100_t);
+        for (int i = 1; i <= 100; ++i) {
+            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger_randomized_nemesis.debug("100 exchanges - three servers - passed");
+
+        // concurrent calls
+        std::vector<future<call_result_t<ExReg>>> futs;
+        for (int i = 0; i < 100; ++i) {
+            futs.push_back(call(ExReg::read{}, 100_t));
+            co_await timer.sleep(2_t);
+        }
+        for (int i = 0; i < 100; ++i) {
+            SCYLLA_ASSERT(eq(co_await std::move(futs[i]), ExReg::ret{100}));
+        }
+
+        tlogger_randomized_nemesis.debug("100 concurrent reads - three servers - passed");
+    });
+
+    tlogger_randomized_nemesis.debug("Finished");
+}
+
+SEASTAR_TEST_CASE(test_frequent_snapshotting) {
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{random_engine},
+        .network_delay{0, 6},
+        .fd_convict_threshold = 50_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        using output_t = typename ExReg::output_t;
+
+        t.start([&] (uint64_t tick) -> future<> {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+        const auto server_config = raft::server::configuration {
+            .snapshot_threshold = 1,
+            .snapshot_threshold_log_size = 150,
+            .snapshot_trailing = 5,
+            .snapshot_trailing_size= 75,
+            .max_log_size = 300,
+            .enable_forwarding = true,
+            .max_command_size = 30
+        };
+
+        auto leader_id = co_await env.new_server(true, server_config);
+
+        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
+            return env.call(leader_id, std::move(input),  timer.now() + timeout, timer);
+        };
+
+        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
+            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
+        };
+
+        // Wait at most 1000 ticks for the server to elect itself as a leader.
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {leader_id}, timer, timer.now() + 1000_t) == leader_id);
+
+        auto id2 = co_await env.new_server(false, server_config);
+        auto id3 = co_await env.new_server(false, server_config);
+
+        env.for_each_server([](raft::server_id, raft_server<ExReg>* srv) {
+            srv->get_server()->set_applier_queue_max_size(1);
+        });
+
+        tlogger_randomized_nemesis.debug("Started 2 more servers, changing configuration");
+
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+                co_await env.reconfigure(leader_id, {leader_id, id2, id3}, timer.now() + 100_t, timer)));
+
+        tlogger_randomized_nemesis.debug("Configuration changed");
+
+        co_await call(ExReg::exchange{0}, 100_t);
+        for (int i = 1; i <= 100; ++i) {
+            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger_randomized_nemesis.debug("100 exchanges - three servers - passed");
+
+        // concurrent calls
+        std::vector<future<call_result_t<ExReg>>> futs;
+        for (int i = 0; i < 100; ++i) {
+            futs.push_back(call(ExReg::read{}, 100_t));
+            co_await timer.sleep(2_t);
+        }
+        for (int i = 0; i < 100; ++i) {
+            SCYLLA_ASSERT(eq(co_await std::move(futs[i]), ExReg::ret{100}));
+        }
+
+        tlogger_randomized_nemesis.debug("100 concurrent reads - three servers - passed");
+    });
+
+    tlogger_randomized_nemesis.debug("Finished");
+}
+
+// A snapshot was being taken with the wrong term (current term instead of the term at the snapshotted index).
+// This is a regression test for that bug.
+SEASTAR_TEST_CASE(snapshot_uses_correct_term_test) {
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{0},
+        .network_delay{1, 1},
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+
+        auto id1 = co_await env.new_server(true,
+                raft::server::configuration{
+        // It's easier to catch the problem when we send entries one by one, not in batches.
+                    .append_request_threshold = 1,
+                });
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(false,
+                raft::server::configuration{
+                    .append_request_threshold = 1,
+                });
+
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+
+        // Append a bunch of entries
+        for (int i = 1; i <= 10; ++i) {
+            SCYLLA_ASSERT(std::holds_alternative<typename ExReg::ret>(
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
+        }
+
+        SCYLLA_ASSERT(env.is_leader(id1));
+
+        // Force a term increase by partitioning the network and waiting for the leader to step down
+        tlogger_randomized_nemesis.trace("add grudge");
+        env.get_network().add_grudge(id2, id1);
+        env.get_network().add_grudge(id1, id2);
+
+        while (env.is_leader(id1)) {
+            co_await seastar::yield();
+        }
+
+        tlogger_randomized_nemesis.trace("remove grudge");
+        env.get_network().remove_grudge(id2, id1);
+        env.get_network().remove_grudge(id1, id2);
+
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
+        tlogger_randomized_nemesis.trace("last leader: {}", l);
+
+        // Now the current term is greater than the term of the first couple of entries.
+        // Join another server with a small snapshot_threshold.
+        // The leader will send entries to this server one by one (due to small append_request_threshold),
+        // so the joining server will apply entries one by one or in small batches (depends on the timing),
+        // making it likely that it decides to take a snapshot at an entry with term lower than the current one.
+        // If we are (un)lucky and we take a snapshot at the last appended entry, the node will refuse all
+        // later append_entries requests due to non-matching term at the last appended entry. Note: due to this
+        // requirement, the test is nondeterministic and doesn't always catch the bug (it depends on a race
+        // between applier_fiber and io_fiber), but it does catch it in a significant number of runs.
+        // It's also a lot easier to catch this in dev than in debug, for instance.
+        // If we catch the bug, the reconfigure request below will time out.
+
+        auto id3 = co_await env.new_server(false,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 2,
+                });
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(l, {l, id3}, timer.now() + 1000_t, timer)));
+    });
+}
+
+// Regression test for the following bug: when we took a snapshot, we forgot to save the configuration.
+// This caused each node in the cluster to eventually forget the cluster configuration.
+SEASTAR_TEST_CASE(snapshotting_preserves_config_test) {
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{0},
+        .network_delay{1, 1},
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+
+        auto id1 = co_await env.new_server(true,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 1,
+                });
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(false,
+                raft::server::configuration{
+                    .snapshot_threshold = 5,
+                    .snapshot_trailing = 1,
+                });
+
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+
+        // Append a bunch of entries
+        for (int i = 1; i <= 10; ++i) {
+            SCYLLA_ASSERT(std::holds_alternative<typename ExReg::ret>(
+                co_await env.call(id1, ExReg::exchange{0}, timer.now() + 100_t, timer)));
+        }
+
+        SCYLLA_ASSERT(env.is_leader(id1));
+
+        // Partition the network, forcing the leader to step down.
+        tlogger_randomized_nemesis.trace("add grudge");
+        env.get_network().add_grudge(id2, id1);
+        env.get_network().add_grudge(id1, id2);
+
+        while (env.is_leader(id1)) {
+            co_await seastar::yield();
+        }
+
+        tlogger_randomized_nemesis.trace("remove grudge");
+        env.get_network().remove_grudge(id2, id1);
+        env.get_network().remove_grudge(id1, id2);
+
+        // With the bug this would timeout, the cluster is unable to elect a leader without the configuration.
+        auto l = co_await wait_for_leader<ExReg>{}(env, {id1, id2}, timer, timer.now() + 1000_t);
+        tlogger_randomized_nemesis.trace("last leader: {}", l);
+    });
+}
+
+// Regression test for #9981.
+SEASTAR_TEST_CASE(removed_follower_with_forwarding_learns_about_removal) {
+    logical_timer timer;
+    environment_config cfg {
+        .rnd{0},
+        .network_delay{1, 1},
+        .fd_convict_threshold = 10_t,
+    };
+    co_await with_env_and_ticker<ExReg>(cfg, [&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&] (uint64_t tick) {
+            env.tick_network();
+            timer.tick();
+            if (tick % 10 == 0) {
+                env.tick_servers();
+            }
+            return ping_shards();
+        }, 10'000);
+
+        raft::server::configuration cfg {
+            .enable_forwarding = true,
+        };
+
+        auto id1 = co_await env.new_server(true, cfg);
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+
+        auto id2 = co_await env.new_server(false, cfg);
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.reconfigure(id1, {id1, id2}, timer.now() + 100_t, timer)));
+
+        // Server 2 forwards the entry that removes it to server 1.
+        // We want server 2 to eventually learn from server 1 that it was removed,
+        // so the call finishes (no timeout).
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+            co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id2}, timer.now() + 100_t, timer)));
+    });
+}
+
+// Regression test for #10010, #11235.
+SEASTAR_TEST_CASE(remove_leader_with_forwarding_finishes) {
+    auto seed = tests::random::get_int<int32_t>();
+    std::mt19937 random_engine{seed};
+
+    logical_timer timer;
+    environment_config cfg {
+            .rnd{seed},
+            .network_delay{0, 6},
+            .fd_convict_threshold = 50_t,
+    };
+
+    co_await with_env_and_ticker<ExReg>(cfg, [&] (environment<ExReg>& env, ticker& t) -> future<> {
+        t.start([&, dist = std::uniform_int_distribution<size_t>(0, 9)] (uint64_t tick) mutable {
+            env.tick_network();
+            timer.tick();
+            env.for_each_server([&] (raft::server_id, raft_server<ExReg>* srv) {
+                // Tick each server with probability 1/10.
+                // Thus each server is ticked, on average, once every 10 timer/network ticks.
+                // On the other hand, we now have servers running at different speeds.
+                if (srv && dist(random_engine) == 0) {
+                    srv->tick();
+                }
+            });
+            return ping_shards();
+        }, 20'000);
+
+        raft::server::configuration cfg {
+                .enable_forwarding = true,
+        };
+
+        auto id1 = co_await env.new_server(true, cfg);
+        SCYLLA_ASSERT(co_await wait_for_leader<ExReg>{}(env, {id1}, timer, timer.now() + 1000_t) == id1);
+        auto id2 = co_await env.new_server(false, cfg);
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(
+                co_await env.reconfigure(id1, {id1, id2}, timer.now() + 200_t, timer)));
+        // Server 2 forwards the entry that removes server 1 to server 1.
+        // We want server 2 to either learn from server 1 about the removal,
+        // or become a leader and learn from itself; in both cases the call should finish (no timeout).
+        auto result = co_await env.modify_config(id2, std::vector<raft::server_id>{}, {id1}, timer.now() + 200_t, timer);
+        tlogger_randomized_nemesis.info("env.modify_config result {}", result);
+        SCYLLA_ASSERT(std::holds_alternative<std::monostate>(result));
+    });
+}
+
 SEASTAR_TEST_CASE(basic_generator_test) {
     using op_type = operation::invocable<operation::either_of<
             raft_call<AppendReg>,
@@ -3294,7 +3297,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 .enable_forwarding = forwarding,
             };
 
-        tlogger.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
+        tlogger_randomized_nemesis.info("basic_generator_test: forwarding: {}, frequent snapshotting: {}", forwarding, frequent_snapshotting);
 
         auto leader_id = co_await env.new_server(true, srv_cfg);
 
@@ -3455,7 +3458,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
             consistency_checker(statistics& s) : _model{}, _stats(s) {}
 
             void operator()(op_type o) {
-                tlogger.debug("invocation {}", o);
+                tlogger_randomized_nemesis.debug("invocation {}", o);
 
                 if (auto call_op = std::get_if<raft_call<AppendReg>>(&o.op)) {
                     ++_stats.invocations;
@@ -3473,7 +3476,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 if (auto call_res = std::get_if<raft_call<AppendReg>::result_type>(res)) {
                     std::visit(make_visitor(
                     [this] (AppendReg::output_t& out) {
-                        tlogger.debug("completion x: {} prev digest: {}", out.x, out.prev.digest());
+                        tlogger_randomized_nemesis.debug("completion x: {} prev digest: {}", out.x, out.prev.digest());
 
                         ++_stats.successes;
                         _model.return_success(out.x, std::move(out.prev));
@@ -3495,7 +3498,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                 } else if (auto read_res = std::get_if<raft_read<AppendReg>::result_type>(res)) {
                     std::visit(make_visitor(
                     [this, id = read_res->first] (AppendReg::state_t& s) {
-                        tlogger.debug("read completion id: {} digest: {}", id, s.digest());
+                        tlogger_randomized_nemesis.debug("read completion id: {} digest: {}", id, s.digest());
 
                         ++_stats.successes;
                         _model.read_success(id, std::move(s));
@@ -3505,7 +3508,7 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                     }
                     ), read_res->second);
                 } else {
-                    tlogger.debug("completion {}", c);
+                    tlogger_randomized_nemesis.debug("completion {}", c);
                 }
 
                 // TODO: check consistency of reconfiguration completions
@@ -3522,19 +3525,19 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         try {
             co_await interp.run();
         } catch (inconsistency& e) {
-            tlogger.error("inconsistency: {}", e.what);
+            tlogger_randomized_nemesis.error("inconsistency: {}", e.what);
             env.for_each_server([&] (raft::server_id id, raft_server<AppendReg>* srv) {
                 if (srv) {
-                    tlogger.info("server {} state machine state: {}", id, srv->state());
+                    tlogger_randomized_nemesis.info("server {} state machine state: {}", id, srv->state());
                 } else {
-                    tlogger.info("node {} currently missing server", id);
+                    tlogger_randomized_nemesis.info("node {} currently missing server", id);
                 }
             });
 
             SCYLLA_ASSERT(false);
         }
 
-        tlogger.info("Finished generator run, time: {}, invocations: {}, successes: {}, failures: {}, total: {}",
+        tlogger_randomized_nemesis.info("Finished generator run, time: {}, invocations: {}, successes: {}, failures: {}, total: {}",
                 timer.now(), stats.invocations, stats.successes, stats.failures, stats.successes + stats.failures);
 
         // Liveness check: we must be able to obtain a final response after all the nemeses have stopped.
@@ -3545,51 +3548,53 @@ SEASTAR_TEST_CASE(basic_generator_test) {
         auto limit = timer.now() + 10000_t;
         size_t cnt = 0;
         for (; timer.now() < limit; ++cnt) {
-            tlogger.info("Trying to obtain last result: attempt number {}", cnt + 1);
+            tlogger_randomized_nemesis.info("Trying to obtain last result: attempt number {}", cnt + 1);
 
             auto now = timer.now();
             auto leader = co_await wait_for_leader<AppendReg>{}(env,
                         std::vector<raft::server_id>{all_servers.begin(), all_servers.end()}, timer, limit)
                     .handle_exception_type([&timer, now] (logical_timer::timed_out<raft::server_id>) -> raft::server_id {
-                tlogger.error("Failed to find a leader after {} ticks at the end of test.", timer.now() - now);
+                tlogger_randomized_nemesis.error("Failed to find a leader after {} ticks at the end of test.", timer.now() - now);
                 SCYLLA_ASSERT(false);
             });
 
             if (env.is_leader(leader)) {
-                tlogger.info("Leader {} found after {} ticks", leader, timer.now() - now);
+                tlogger_randomized_nemesis.info("Leader {} found after {} ticks", leader, timer.now() - now);
             } else {
-                tlogger.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
+                tlogger_randomized_nemesis.warn("Leader {} found after {} ticks, but suddenly lost leadership", leader, timer.now() - now);
                 continue;
             }
 
             auto config = env.get_configuration(leader);
             SCYLLA_ASSERT(config);
-            tlogger.info("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
+            tlogger_randomized_nemesis.info("Leader {} configuration: current {} previous {}", leader, config->current, config->previous);
 
             for (auto& s: all_servers) {
                 if (env.is_leader(s) && s != leader) {
                     auto conf = env.get_configuration(s);
                     SCYLLA_ASSERT(conf);
-                    tlogger.info("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
+                    tlogger_randomized_nemesis.info("There is another leader: {}, configuration: current {} previous {}", s, conf->current, conf->previous);
                 }
             }
 
-            tlogger.info("From the clients' point of view, the possible cluster members are: {}", known_config);
+            tlogger_randomized_nemesis.info("From the clients' point of view, the possible cluster members are: {}", known_config);
 
             auto [res, last_attempted_server] = co_await bouncing{[&timer, &env] (raft::server_id id) {
                 return env.call(id, AppendReg::append{-1}, timer.now() + 200_t, timer);
             }}(timer, known_config, leader, known_config.size() + 1, 10_t, 10_t);
 
             if (std::holds_alternative<typename AppendReg::ret>(res)) {
-                tlogger.info("Obtained last result");
-                tlogger.debug("Last result: {}", res);
+                tlogger_randomized_nemesis.info("Obtained last result");
+                tlogger_randomized_nemesis.debug("Last result: {}", res);
                 co_return;
             }
 
-            tlogger.warn("Failed to obtain last result at end of test: {} returned by {}", res, last_attempted_server);
+            tlogger_randomized_nemesis.warn("Failed to obtain last result at end of test: {} returned by {}", res, last_attempted_server);
         }
 
-        tlogger.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
+        tlogger_randomized_nemesis.error("Failed to obtain a final successful response at the end of the test. Number of attempts: {}", cnt);
         SCYLLA_ASSERT(false);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

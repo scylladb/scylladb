@@ -9,12 +9,15 @@
 
 #include <limits>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "utils/tagged_integer.hh"
 #include "gms/generation-number.hh"
 #include "gms/version_generator.hh"
+
+BOOST_AUTO_TEST_SUITE(tagged_integer_test)
 
 using namespace seastar;
 
@@ -55,3 +58,5 @@ SEASTAR_THREAD_TEST_CASE(test_gms_version_type_numeric_limits) {
     BOOST_REQUIRE_EQUAL(std::numeric_limits<gms::version_type>::min().value(), std::numeric_limits<gms::version_type::value_type>::min());
     BOOST_REQUIRE_EQUAL(std::numeric_limits<gms::version_type>::max().value(), std::numeric_limits<gms::version_type::value_type>::max());
 }
+
+BOOST_AUTO_TEST_SUITE_END()
