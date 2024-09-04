@@ -1673,11 +1673,12 @@ public:
     // RPC handler
     future<get_sync_boundary_response>
     get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
-        return with_gate(_gate, [this, skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
+        auto gate_held = _gate.hold();
+        {
             auto& cf = _db.local().find_column_family(_schema->id());
             cf.update_off_strategy_trigger();
-            return get_sync_boundary(std::move(skipped_sync_boundary));
-        });
+            co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
+        }
     }
 
     // RPC API
