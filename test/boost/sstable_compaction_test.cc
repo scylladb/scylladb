@@ -989,8 +989,9 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
 
         auto make_expiring = [&] (partition_key key, int ttl) {
             mutation m(s, key);
+            auto timestamp = next_timestamp();
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)),
-                gc_clock::now().time_since_epoch().count(), gc_clock::duration(ttl));
+                timestamp, gc_clock::duration(ttl));
             return m;
         };
 
