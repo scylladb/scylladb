@@ -89,6 +89,10 @@ struct affected_tables_and_views {
     std::vector<bool> columns_changed;
 };
 
+// We wrap it with pointer because change_batch needs to be constructed and destructed
+// on the same shard as it's used for.
+using functions_change_batch_all_shards = sharded<cql3::functions::change_batch>;
+
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
@@ -109,6 +113,8 @@ class schema_applier {
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
     affected_tables_and_views _affected_tables_and_views;
+
+    functions_change_batch_all_shards _functions_batch; // includes aggregates
 
     future<schema_persisted_state> get_schema_persisted_state();
 public:
