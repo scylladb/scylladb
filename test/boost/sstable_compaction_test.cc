@@ -4123,9 +4123,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         }
 
         auto sst_gen = [&] (size_t idx) mutable {
-            auto s = schemas[idx];
             auto t = tables[idx];
-            return env.make_sstable(s, t->dir());
+            return t->make_sstable();
         };
 
         auto add_single_fully_expired_sstable_to_table = [&] (auto idx) {
