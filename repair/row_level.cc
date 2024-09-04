@@ -1286,16 +1286,18 @@ private:
         _working_row_buf_combined_hash.clear();
 
         if (_row_buf.empty()) {
-            return make_ready_future<get_combined_row_hash_response>(get_combined_row_hash_response());
+            co_return get_combined_row_hash_response();
         }
-        return move_row_buf_to_working_row_buf().then([this] {
-            return do_for_each(_working_row_buf, [this] (repair_row& r) {
+        co_await move_row_buf_to_working_row_buf();
+        {
+            for (repair_row& r : _working_row_buf) {
                 _working_row_buf_combined_hash.add(r.hash());
-                return make_ready_future<>();
-            }).then([this] {
-                return get_combined_row_hash_response{_working_row_buf_combined_hash};
-            });
-        });
+                co_await coroutine::maybe_yield();
+            }
+            {
+                co_return get_combined_row_hash_response{_working_row_buf_combined_hash};
+            }
+        }
     }
 
     future<std::list<repair_row>>
