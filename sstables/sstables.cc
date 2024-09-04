@@ -1855,6 +1855,22 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     build_id.value = bytes(to_bytes_view(sstring_view(get_build_id())));
     _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaBuildId>(std::move(build_id));
     if (ts_stats) {
+        if (sstlog.is_enabled(log_level::debug)) {
+            std::optional<api::timestamp_type> min_live_timestamp;
+            std::optional<api::timestamp_type> min_live_row_marker_timestamp;
+            if (auto it = ts_stats->map.find(sstables::ext_timestamp_stats_type::min_live_timestamp); it != ts_stats->map.end()) {
+                min_live_timestamp = it->second;
+            }
+            if (auto it = ts_stats->map.find(sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp); it != ts_stats->map.end()) {
+                min_live_row_marker_timestamp = it->second;
+            }
+            sstlog.debug("Storing sstable {}: min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}",
+                    get_filename(),
+                    get_stats_metadata().min_timestamp,
+                    min_live_timestamp,
+                    min_live_row_marker_timestamp);
+        }
+
         _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
     }
 

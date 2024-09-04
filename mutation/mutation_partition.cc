@@ -33,6 +33,7 @@
 #include "utils/unconst.hh"
 #include "mutation/async_utils.hh"
 
+logging::logger mclog("mutation_compactor");
 logging::logger mplog("mutation_partition");
 
 mutation_partition::mutation_partition(const schema& s, const mutation_partition& x)

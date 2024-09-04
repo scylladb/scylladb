@@ -14,6 +14,9 @@
 #include "tombstone_gc.hh"
 #include "full_position.hh"
 #include <type_traits>
+#include "log.hh"
+
+extern logging::logger mclog;
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction
@@ -289,7 +292,9 @@ private:
         if (_max_purgeable == api::missing_timestamp) {
             _max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
-        return t.timestamp < _max_purgeable;
+        auto ret = t.timestamp < _max_purgeable;
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, _max_purgeable, ret);
+        return ret;
     };
 
 public:

@@ -169,6 +169,8 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         // See https://github.com/scylladb/scylladb/issues/20423
         memtable_min_timestamp = table_s.min_memtable_live_timestamp();
     }
+    clogger.trace("memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
+            memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
     // Use memtable timestamp if it contains live data older than the sstables being compacted,
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
     // First condition helps to not penalize the common scenario where memtable only contains
@@ -194,6 +196,18 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
                 // Do not throw an expection in production, just use the legacy min_timestamp set above
                 on_internal_error_noexcept(clogger, format("Missing extended timestamp statstics: stat={} is_shadowable={}", int(stat), bool(is_shadowable)));
             }
+        }
+        if (clogger.is_enabled(log_level::trace)) {
+            if (!hk) {
+                hk = sstables::sstable::make_hashed_key(*table_s.schema(), dk.key());
+            }
+            clogger.trace("get_max_purgeable_timestamp={}: min_timestamp={} timestamp={} filter_has_key={} is_shadowable={} stats.min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}: sst={}",
+                    min_timestamp >= timestamp || !sst->filter_has_key(*hk) ? timestamp : min_timestamp,
+                    min_timestamp, timestamp, sst->filter_has_key(*hk), is_shadowable,
+                    sst->get_stats_metadata().min_timestamp,
+                    ts_stats[sstables::ext_timestamp_stats_type::min_live_timestamp],
+                    ts_stats[sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp],
+                    sst->get_filename());
         }
         // There's no point in looking up the key in the sstable filter if
         // it does not contain data older than the minimum timestamp.
