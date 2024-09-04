@@ -1544,11 +1544,12 @@ public:
         // We can not call this function twice. The good thing is we do not use
         // retransmission at messaging_service level, so no message will be retransmitted.
         rlogger.trace("Calling get_combined_row_hash_handler");
-        return with_gate(_gate, [this, common_sync_boundary = std::move(common_sync_boundary)] () mutable {
+        auto gate_held = _gate.hold();
+        {
             auto& cf = _db.local().find_column_family(_schema->id());
             cf.update_off_strategy_trigger();
-            return request_row_hashes(common_sync_boundary);
-        });
+            co_return co_await request_row_hashes(common_sync_boundary);
+        }
     }
 
     // RPC API
