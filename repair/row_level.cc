@@ -1653,9 +1653,10 @@ public:
     static future<> repair_set_estimated_partitions_handler(repair_service& rs, gms::inet_address from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
-        return rm->set_estimated_partitions(estimated_partitions).then([rm] {
+        co_await rm->set_estimated_partitions(estimated_partitions);
+        {
             rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_finished);
-        });
+        }
     }
 
     // RPC API
