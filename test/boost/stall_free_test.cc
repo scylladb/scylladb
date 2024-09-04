@@ -8,10 +8,14 @@
 
 #include <random>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "utils/stall_free.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
+
+BOOST_AUTO_TEST_SUITE(stall_free_test)
 
 SEASTAR_THREAD_TEST_CASE(test_merge1) {
     std::list<int> l1{1, 2, 5, 8};
@@ -544,3 +548,5 @@ SEASTAR_THREAD_TEST_CASE(test_reserve_gently_with_chunked_vector) {
         BOOST_REQUIRE_EQUAL(v.capacity(), size);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

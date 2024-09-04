@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "boost/icl/interval_map.hpp"
 #include <fmt/ranges.h>
@@ -27,6 +25,8 @@ operator<<(ostream& os, const std::nullopt_t&) {
 }
 
 }
+
+BOOST_AUTO_TEST_SUITE(wrapping_interval_test)
 
 static
 bool includes_token(const schema& s, const dht::partition_range& r, const dht::token& tok) {
@@ -495,3 +495,5 @@ BOOST_AUTO_TEST_CASE(test_before_interval) {
         check(i, r::make(b{1, false}, b{10, false}), true);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

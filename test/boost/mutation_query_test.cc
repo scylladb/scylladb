@@ -18,7 +18,8 @@
 #include "query-result-set.hh"
 #include "query-result-writer.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/result_set_assertions.hh"
@@ -35,6 +36,8 @@
 #include "readers/from_mutations_v2.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "readers/mutation_source.hh"
+
+BOOST_AUTO_TEST_SUITE(mutation_query_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -606,3 +609,5 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_range_tombstones) {
     reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, query::max_rows, query::max_partitions, now);
     assert_that(result.partitions().at(0).mut().unfreeze(query_schema)).is_equal_to(reverse(m));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

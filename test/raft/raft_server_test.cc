@@ -1,6 +1,9 @@
+#undef SEASTAR_TESTING_MAIN
 #include "replication.hh"
 #include "utils/error_injection.hh"
 #include <seastar/util/defer.hh>
+
+BOOST_AUTO_TEST_SUITE(raft_server_test)
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
@@ -67,3 +70,5 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
     cluster.read(read_value{0, 1}).get();
 #endif
 }
+
+BOOST_AUTO_TEST_SUITE_END()

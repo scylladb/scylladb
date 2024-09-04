@@ -20,7 +20,8 @@
 #include "partition_snapshot_reader.hh"
 #include "clustering_interval_set.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
@@ -30,6 +31,8 @@
 #include "test/lib/log.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "real_dirty_memory_accounter.hh"
+
+BOOST_AUTO_TEST_SUITE(mvcc_test)
 
 using namespace std::chrono_literals;
 
@@ -2136,3 +2139,5 @@ SEASTAR_TEST_CASE(test_gentle_schema_upgrades) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

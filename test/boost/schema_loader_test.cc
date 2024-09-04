@@ -7,7 +7,9 @@
  */
 
 #include "test/lib/log.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
@@ -19,6 +21,8 @@
 #include "readers/from_mutations_v2.hh"
 #include "tools/schema_loader.hh"
 #include "view_info.hh"
+
+BOOST_AUTO_TEST_SUITE(schema_loader_test)
 
 SEASTAR_THREAD_TEST_CASE(test_empty) {
     db::config dbcfg;
@@ -333,3 +337,5 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

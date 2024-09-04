@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include "utils/like_matcher.hh"
+
+BOOST_AUTO_TEST_SUITE(like_matcher_test)
 
 auto matcher(const char* s) { return like_matcher(bytes(s)); }
 
@@ -443,3 +443,5 @@ BOOST_AUTO_TEST_CASE(test_reset) {
     BOOST_TEST(matches(m, u8"alpha"));
     BOOST_TEST(!matches(m, u8"omega"));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

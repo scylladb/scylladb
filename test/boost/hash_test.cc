@@ -11,8 +11,11 @@
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "utils/hash.hh"
+
+BOOST_AUTO_TEST_SUITE(hash_test)
 
 SEASTAR_TEST_CASE(test_pair_hash){
     auto hash_compare = [](auto p) {
@@ -59,3 +62,5 @@ SEASTAR_TEST_CASE(test_tuple_hash){
 
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

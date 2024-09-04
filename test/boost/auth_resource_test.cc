@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "auth/resource.hh"
 #include "test/lib/test_utils.hh"
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
+
+BOOST_AUTO_TEST_SUITE(auth_resource_test)
 
 BOOST_AUTO_TEST_CASE(root_of) {
     //
@@ -191,3 +191,5 @@ BOOST_AUTO_TEST_CASE(expand) {
     BOOST_REQUIRE_EQUAL(auth::expand_resource_family(r2), (auth::resource_set{r1, r2}));
     BOOST_REQUIRE_EQUAL(auth::expand_resource_family(r3), (auth::resource_set{r1, r2, r3}));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

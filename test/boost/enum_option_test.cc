@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include <boost/program_options.hpp>
@@ -18,6 +16,14 @@
 #include <unordered_map>
 
 #include "utils/enum_option.hh"
+
+BOOST_AUTO_TEST_SUITE(enum_option_test)
+
+int global_variable_test1 = 100;
+
+void set_global_variable_test1(int newval) {
+    global_variable_test1 = newval;
+}
 
 namespace po = boost::program_options;
 
@@ -48,6 +54,12 @@ std::string format(typename T::enumeration d) {
 }
 
 } // anonymous namespace
+
+BOOST_AUTO_TEST_CASE(test_global_variable_test1) {
+    BOOST_CHECK_EQUAL(global_variable_test1, 100);
+    set_global_variable_test1(200);
+    BOOST_CHECK_EQUAL(global_variable_test1, 200);
+}
 
 BOOST_AUTO_TEST_CASE(test_parsing) {
     BOOST_CHECK_EQUAL(parse<days>("Sun"), days::Su);
@@ -159,3 +171,5 @@ BOOST_AUTO_TEST_CASE(test_non_string) {
     BOOST_CHECK_EQUAL(format<numbers>(numbers::TWO), "2");
     BOOST_CHECK_EQUAL(format<numbers>(static_cast<numbers::enumeration>(77)), "?unknown");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

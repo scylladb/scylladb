@@ -15,7 +15,8 @@
 
 #include "seastar/core/future.hh"
 #include "seastarx.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
@@ -99,6 +100,8 @@ template <> struct fmt::formatter<service_level_op> : fmt::formatter<string_view
     }
 };
 
+BOOST_AUTO_TEST_SUITE(service_level_controller_test)
+
 SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
     sharded<auth::service> auth_service;
@@ -128,3 +131,5 @@ SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     as.invoke_on_all([] (auto& as) { as.request_abort(); }).get();
     sl_controller.stop().get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

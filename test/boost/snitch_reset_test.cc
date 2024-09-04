@@ -12,8 +12,11 @@
 #include <boost/test/unit_test.hpp>
 #include "locator/snitch_base.hh"
 #include "gms/inet_address.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "seastarx.hh"
+
+BOOST_AUTO_TEST_SUITE(snitch_reset_test)
 
 namespace fs = std::filesystem;
 
@@ -142,3 +145,5 @@ SEASTAR_TEST_CASE(tag2) { \
 RESET_SNITCH_TEST_CASE(good_2, bad_format_1,   false);
 RESET_SNITCH_TEST_CASE(good_1, good_2,         true);
 
+
+BOOST_AUTO_TEST_SUITE_END()

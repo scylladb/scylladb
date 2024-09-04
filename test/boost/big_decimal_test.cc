@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE big_decimal
-
 #include <boost/test/unit_test.hpp>
 #include "utils/big_decimal.hh"
 #include "marshal_exception.hh"
+
+BOOST_AUTO_TEST_SUITE(big_decimal_test)
 
 namespace {
 
@@ -203,3 +203,5 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_sub) {
     test_sub("9999999999999999999999999999999999999", "-1.000e0", "10000000000000000000000000000000000000.000");
     test_sub("+10.", "1.e+1", "0");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

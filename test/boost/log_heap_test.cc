@@ -7,8 +7,6 @@
  */
 
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include "utils/assert.hh"
@@ -82,9 +80,13 @@ size_t hist_key<node<opts3>>(const node<opts3>& n) { return n.v; }
 template<>
 size_t hist_key<node<opts4>>(const node<opts4>& n) { return n.v; }
 
+BOOST_AUTO_TEST_SUITE(log_heap_test)
+
 BOOST_AUTO_TEST_CASE(test_log_heap) {
     test_with_options<opts1>();
     test_with_options<opts2>();
     test_with_options<opts3>();
     test_with_options<opts4>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

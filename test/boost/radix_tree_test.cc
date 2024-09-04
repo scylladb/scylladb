@@ -8,7 +8,8 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <fmt/core.h>
 
@@ -43,6 +44,56 @@ std::ostream& operator<<(std::ostream& out, const test_data& d) {
 }
 
 using test_tree = tree<test_data>;
+
+class stress_test_data {
+    unsigned long *_data;
+    unsigned long _val;
+public:
+    stress_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
+    stress_test_data(const stress_test_data&) = delete;
+    stress_test_data(stress_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
+    ~stress_test_data() {
+        if (_data != nullptr) {
+            delete _data;
+        }
+    }
+
+    unsigned long value() const {
+        return _data == nullptr ? _val + 0x80000000 : *_data;
+    }
+};
+
+template <> struct fmt::formatter<stress_test_data> : fmt::formatter<string_view> {
+    auto format(const stress_test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
+
+class compaction_test_data {
+    unsigned long *_data;
+    unsigned long _val;
+public:
+    compaction_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
+    compaction_test_data(const compaction_test_data&) = delete;
+    compaction_test_data(compaction_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
+    ~compaction_test_data() {
+        if (_data != nullptr) {
+            delete _data;
+        }
+    }
+
+    unsigned long value() const {
+        return _data == nullptr ? _val + 0x80000000 : *_data;
+    }
+};
+
+template <> struct fmt::formatter<compaction_test_data> : fmt::formatter<string_view> {
+    auto format(const compaction_test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
+
+BOOST_AUTO_TEST_SUITE(radix_tree_test)
 
 SEASTAR_TEST_CASE(test_exception_safety_of_emplace) {
     return seastar::async([] {
@@ -157,30 +208,6 @@ BOOST_AUTO_TEST_CASE(test_clone) {
     do_test_clone(333333);
 }
 
-class stress_test_data {
-    unsigned long *_data;
-    unsigned long _val;
-public:
-    stress_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
-    stress_test_data(const stress_test_data&) = delete;
-    stress_test_data(stress_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
-    ~stress_test_data() {
-        if (_data != nullptr) {
-            delete _data;
-        }
-    }
-
-    unsigned long value() const {
-        return _data == nullptr ? _val + 0x80000000 : *_data;
-    }
-};
-
-template <> struct fmt::formatter<stress_test_data> : fmt::formatter<string_view> {
-    auto format(const stress_test_data& d, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", d.value());
-    }
-};
-
 BOOST_AUTO_TEST_CASE(stress_test) {
     using test_tree = tree<stress_test_data>;
 
@@ -293,30 +320,6 @@ SEASTAR_TEST_CASE(test_exception_safety_of_clone) {
     });
 }
 
-class compaction_test_data {
-    unsigned long *_data;
-    unsigned long _val;
-public:
-    compaction_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
-    compaction_test_data(const compaction_test_data&) = delete;
-    compaction_test_data(compaction_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
-    ~compaction_test_data() {
-        if (_data != nullptr) {
-            delete _data;
-        }
-    }
-
-    unsigned long value() const {
-        return _data == nullptr ? _val + 0x80000000 : *_data;
-    }
-};
-
-template <> struct fmt::formatter<compaction_test_data> : fmt::formatter<string_view> {
-    auto format(const compaction_test_data& d, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", d.value());
-    }
-};
-
 SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
     using test_tree = tree<compaction_test_data>;
 
@@ -363,3 +366,5 @@ SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
         cfg.count /= 2;
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

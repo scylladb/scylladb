@@ -9,7 +9,8 @@
 #include "db/timeout_clock.hh"
 
 #include <seastar/util/closeable.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
@@ -17,6 +18,8 @@
 #include "gc_clock.hh"
 #include "test/lib/simple_schema.hh"
 #include "reader_concurrency_semaphore.hh"
+
+BOOST_AUTO_TEST_SUITE(hashers_test)
 
 bytes text_part1("sanity");
 bytes text_part2("check");
@@ -117,3 +120,5 @@ BOOST_AUTO_TEST_CASE(basic_xx_hasher_sanity_check) {
 
     BOOST_CHECK_EQUAL(hash1, hash2);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

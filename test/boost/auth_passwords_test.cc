@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <array>
 #include <random>
 #include <unordered_set>
@@ -18,6 +16,8 @@
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
+
+BOOST_AUTO_TEST_SUITE(auth_passwords_test)
 
 static auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
@@ -58,3 +58,5 @@ BOOST_AUTO_TEST_CASE(incorrect_passwords_do_not_authenticate) {
     const sstring hashed_password = auth::passwords::hash("actual_password", rng_for_salt);
     BOOST_REQUIRE(!auth::passwords::check("password_guess", hashed_password));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

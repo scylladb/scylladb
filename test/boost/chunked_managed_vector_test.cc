@@ -7,7 +7,9 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include <deque>
 #include <random>
@@ -20,6 +22,8 @@
 
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
+
+BOOST_AUTO_TEST_SUITE(chunked_managed_vector_test)
 
 using namespace logalloc;
 
@@ -367,3 +371,5 @@ SEASTAR_TEST_CASE(test_push_back_using_existing_element) {
     do_test_push_back_using_existing_element<chunked_managed_vector_type>([] (chunked_managed_vector_type& v, const managed_ref<push_back_item>& x) { v.emplace_back(make_managed<push_back_item>(*x)); });
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

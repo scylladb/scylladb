@@ -10,12 +10,34 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "collection_stress.hh"
 #include "bptree_validation.hh"
 #include "tree_test_key.hh"
+
+using test_key = tree_test_key_base;
+
+class test_data {
+    int _value;
+public:
+    test_data() : _value(0) {}
+    test_data(test_key& k) : _value((int)k + 10) {}
+
+    operator unsigned long() const { return _value; }
+    bool match_key(const test_key& k) const { return _value == (int)k + 10; }
+};
+
+template <> struct fmt::formatter<test_data> : fmt::formatter<string_view> {
+    auto format(test_data d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", static_cast<unsigned long>(d));
+    }
+};
+
+BOOST_AUTO_TEST_SUITE(bptree_test)
 
 struct int_compare {
     bool operator()(const int& a, const int& b) const noexcept { return a < b; }
@@ -358,24 +380,6 @@ BOOST_AUTO_TEST_CASE(test_avx_search) {
     check_conversions();
 }
 
-using test_key = tree_test_key_base;
-
-class test_data {
-    int _value;
-public:
-    test_data() : _value(0) {}
-    test_data(test_key& k) : _value((int)k + 10) {}
-
-    operator unsigned long() const { return _value; }
-    bool match_key(const test_key& k) const { return _value == (int)k + 10; }
-};
-
-template <> struct fmt::formatter<test_data> : fmt::formatter<string_view> {
-    auto format(test_data d, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", static_cast<unsigned long>(d));
-    }
-};
-
 BOOST_AUTO_TEST_CASE(stress_test) {
     constexpr int TEST_NODE_SIZE = 16;
     using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
@@ -524,3 +528,5 @@ SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
         }
     );
 }
+
+BOOST_AUTO_TEST_SUITE_END()

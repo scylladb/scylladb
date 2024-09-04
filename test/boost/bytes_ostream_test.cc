@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "utils/assert.hh"
 #include <boost/range/algorithm/for_each.hpp>
 
@@ -19,6 +17,8 @@
 
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
+
+BOOST_AUTO_TEST_SUITE(bytes_ostream_test)
 
 void append_sequence(bytes_ostream& buf, int count) {
     for (int i = 0; i < count; i++) {
@@ -335,3 +335,5 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_managed_bytes) {
     buf2.write(to_bytes(mb));
     assert_sequence(buf2, 1024);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

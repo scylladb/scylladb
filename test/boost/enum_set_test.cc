@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "enum_set.hh"
 
 #include <iterator>
@@ -45,6 +43,20 @@ using fruit_enum = super_enum<fruit, fruit::apple, fruit::pear, fruit::banana>;
 //
 // `super_enum`
 //
+
+BOOST_AUTO_TEST_SUITE(enum_set_test)
+
+int global_variable_test1 = 100;
+
+void set_global_variable_test1(int newval) {
+    global_variable_test1 = newval;
+}
+
+BOOST_AUTO_TEST_CASE(test_global_variable_test1) {
+    BOOST_CHECK_EQUAL(global_variable_test1, 100);
+    set_global_variable_test1(200);
+    BOOST_CHECK_EQUAL(global_variable_test1, 200);
+}
 
 BOOST_AUTO_TEST_CASE(enum_max_sequence) {
     BOOST_REQUIRE_EQUAL(fruit_enum::max_sequence, 8);
@@ -204,3 +216,5 @@ BOOST_AUTO_TEST_CASE(set_toggle) {
     BOOST_REQUIRE(fs.contains<fruit::pear>());
     BOOST_REQUIRE(!fs.contains<fruit::banana>());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

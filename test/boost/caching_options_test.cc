@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "schema/caching_options.hh"
+
+BOOST_AUTO_TEST_SUITE(caching_options_test)
 
 BOOST_AUTO_TEST_CASE(test_caching_options) {
     using string_map = std::map<sstring, sstring>;
@@ -34,3 +34,5 @@ BOOST_AUTO_TEST_CASE(test_caching_options) {
         BOOST_REQUIRE_THROW(caching_options::from_sstring(in_str), std::exception);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

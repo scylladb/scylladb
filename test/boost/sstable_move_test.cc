@@ -7,13 +7,16 @@
  */
 
 #include <filesystem>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "utils/lister.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "sstable_test.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_move_test)
 
 using namespace sstables;
 namespace fs = std::filesystem;
@@ -134,3 +137,5 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
     dst_sst->close_files().get();
     BOOST_REQUIRE_THROW(test(src_sst).move_to_new_dir(new_dir, gen_2).get(), malformed_sstable_exception);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

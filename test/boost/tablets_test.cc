@@ -9,7 +9,8 @@
 
 
 #include "seastar/core/shard_id.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
@@ -35,6 +36,8 @@
 #include "service/topology_coordinator.hh"
 
 #include <boost/regex.hpp>
+
+BOOST_AUTO_TEST_SUITE(tablets_test)
 
 using namespace locator;
 using namespace replica;
@@ -3316,3 +3319,5 @@ SEASTAR_TEST_CASE(test_explicit_tablets_disable) {
     co_await test_create_keyspace("test_explictly_enabled_0", true, cfg, 0);
     co_await test_create_keyspace("test_explictly_enabled_128", true, cfg, 128);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

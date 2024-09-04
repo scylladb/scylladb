@@ -12,7 +12,8 @@
 #include <iostream>
 #include <fmt/ranges.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
@@ -20,6 +21,33 @@
 #include "utils/updateable_value.hh"
 
 using namespace db;
+
+namespace utils {
+template<typename... Args>
+inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const utils::config_file::config_source & v) {
+    typedef std::underlying_type<utils::config_file::config_source>::type type;
+    return os << type(v);
+}
+}
+
+namespace db {
+template<typename... T, typename... Args>
+inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::named_value<T...> & v) {
+    return os << v();
+}
+}
+
+namespace {
+
+void throw_on_error(const sstring& opt, const sstring& msg, std::optional<utils::config_file::value_status> status) {
+    if (status != config::value_status::Invalid) {
+        throw std::invalid_argument(msg + " : " + opt);
+    }
+}
+
+} // anonymous namespace
+
+BOOST_AUTO_TEST_SUITE(config_test)
 
 SEASTAR_THREAD_TEST_CASE(test_updateable_value_basics) {
     using namespace utils;
@@ -769,31 +797,6 @@ inter_dc_tcp_nodelay: false
     
 )apa";
 
-namespace utils {
-template<typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const utils::config_file::config_source & v) {
-    typedef std::underlying_type<utils::config_file::config_source>::type type;
-    return os << type(v);
-}
-}
-
-namespace db {
-template<typename... T, typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::named_value<T...> & v) {
-    return os << v();
-}
-}
-
-namespace {
-
-void throw_on_error(const sstring& opt, const sstring& msg, std::optional<utils::config_file::value_status> status) {
-    if (status != config::value_status::Invalid) {
-        throw std::invalid_argument(msg + " : " + opt);
-    }
-}
-
-} // anonymous namespace
-
 SEASTAR_TEST_CASE(test_parse_yaml) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
@@ -969,3 +972,5 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                        });
     return make_ready_future();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

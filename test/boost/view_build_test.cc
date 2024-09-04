@@ -17,7 +17,8 @@
 #include "db/config.hh"
 #include "cql3/query_options.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -37,6 +38,8 @@
 
 #include "readers/from_mutations_v2.hh"
 #include "readers/evictable.hh"
+
+BOOST_AUTO_TEST_SUITE(view_build_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -1007,3 +1010,5 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
 
     vuc.consume_end_of_stream();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -20,9 +20,12 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <random>
+
+BOOST_AUTO_TEST_SUITE(continuous_data_consumer_test)
 
 namespace {
 
@@ -186,3 +189,5 @@ SEASTAR_THREAD_TEST_CASE(test_skip_at_end) {
         consumer.run();
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

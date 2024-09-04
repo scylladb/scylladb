@@ -8,11 +8,14 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "sstables/partition_index_cache.hh"
 #include "test/lib/simple_schema.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_partition_index_cache_test)
 
 using namespace sstables;
 
@@ -272,3 +275,5 @@ SEASTAR_THREAD_TEST_CASE(test_evict_gently) {
 
     cache.evict_gently().get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

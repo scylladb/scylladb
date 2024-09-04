@@ -23,11 +23,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include "cartesian_product.hh"
+
+BOOST_AUTO_TEST_SUITE(cartesian_product_test)
 
 template<typename Range>
 auto to_vec(Range&& r) {
@@ -45,3 +45,5 @@ BOOST_AUTO_TEST_CASE(test_cartesian_product) {
         {2, 3, 5}
     }));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

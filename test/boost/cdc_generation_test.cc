@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
 #include <vector>
@@ -88,6 +86,8 @@ static void assert_random_tokens_mapped_to_streams_with_tokens_in_the_same_token
     }
 }
 
+BOOST_AUTO_TEST_SUITE(cdc_generation_test)
+
 BOOST_AUTO_TEST_CASE(test_cdc_generation_limitting_single_vnode_should_not_limit) {
     cdc::topology_description given = create_description({cdc::limit_of_streams_in_topology_description()});
 
@@ -151,3 +151,4 @@ BOOST_AUTO_TEST_CASE(test_cdc_generation_limitting_multiple_vnodes_should_limit)
     assert_random_tokens_mapped_to_streams_with_tokens_in_the_same_token_range(result);
 }
 
+BOOST_AUTO_TEST_SUITE_END()

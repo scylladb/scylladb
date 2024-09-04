@@ -37,7 +37,8 @@
 #include "test/lib/tmpdir.hh"
 #include "compaction/compaction_manager.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
@@ -63,6 +64,8 @@
 #include "clustering_key_filter.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(mutation_test)
 
 using namespace std::chrono_literals;
 
@@ -3963,3 +3966,5 @@ SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
 
     return make_ready_future();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

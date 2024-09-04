@@ -10,12 +10,15 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "collection_stress.hh"
 #include "btree_validation.hh"
 #include "tree_test_key.hh"
 #include "utils/intrusive_btree.hh"
+
+BOOST_AUTO_TEST_SUITE(btree_test)
 
 using namespace intrusive_b;
 using namespace seastar;
@@ -718,3 +721,5 @@ SEASTAR_THREAD_TEST_CASE(stress_compaction_test_large) {
 SEASTAR_THREAD_TEST_CASE(stress_compaction_test_small) {
     stress_compaction_test(17, 3);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

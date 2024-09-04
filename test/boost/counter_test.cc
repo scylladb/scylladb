@@ -16,12 +16,15 @@
 
 #include <boost/range/adaptor/transformed.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_utils.hh"
 #include "schema/schema_builder.hh"
 #include "keys.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
+
+BOOST_AUTO_TEST_SUITE(counter_test)
 
 void verify_shard_order(counter_cell_view ccv) {
     if (ccv.shards().begin() == ccv.shards().end()) {
@@ -570,3 +573,5 @@ SEASTAR_TEST_CASE(test_counter_id_ordering) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

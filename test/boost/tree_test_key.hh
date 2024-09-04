@@ -104,7 +104,7 @@ public:
     }
 };
 
-tree_test_key_base copy_key(const tree_test_key_base& other) { return tree_test_key_base(other); }
+tree_test_key_base copy_key(const tree_test_key_base& other);
 
 struct test_key_compare {
     bool operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.less(b); }

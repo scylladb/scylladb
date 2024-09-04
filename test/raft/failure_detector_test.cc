@@ -10,11 +10,14 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 
 #include "direct_failure_detector/failure_detector.hh"
 
 #include "test/raft/helpers.hh"
+
+BOOST_AUTO_TEST_SUITE(failure_detector_test)
 
 future<> ping_shards() {
     if (smp::count == 1) {
@@ -123,7 +126,6 @@ struct test_listener : public direct_failure_detector::listener {
         return _cond.wait([this, alive, ep] { return alive == is_alive(ep); });
     }
 };
-
 
 SEASTAR_TEST_CASE(failure_detector_test) {
     test_pinger pinger;
@@ -271,3 +273,5 @@ SEASTAR_TEST_CASE(failure_detector_test) {
 
     co_await fd.stop();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

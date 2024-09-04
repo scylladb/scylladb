@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE test-serialization
 #include <boost/test/unit_test.hpp>
 
 #include <iostream>
@@ -21,6 +20,8 @@
 #include "gms/inet_address_serializer.hh"
 #include "test/lib/test_utils.hh"
 #include "serializer_impl.hh"
+
+BOOST_AUTO_TEST_SUITE(serialization_test)
 
 void show(std::stringstream &ss) {
 	char c;
@@ -324,3 +325,5 @@ BOOST_AUTO_TEST_CASE(vector_deserializer) {
     test_vector_deserializer(opt_bool_vect);
     test_reverse_vector_deserializer(opt_bool_vect);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

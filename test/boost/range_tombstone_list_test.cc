@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include <random>
 #include <iostream>
@@ -83,6 +81,8 @@ static range_tombstone less_than(int32_t end, api::timestamp_type timestamp) {
 static range_tombstone greater_than(int32_t start, api::timestamp_type timestamp) {
     return range_tombstone(bound_view(key({start}), bound_kind::excl_start), bound_view::top(), {timestamp, gc_now});
 }
+
+BOOST_AUTO_TEST_SUITE(range_tombstone_list_test)
 
 BOOST_AUTO_TEST_CASE(test_sorted_addition) {
     range_tombstone_list l(*s);
@@ -942,3 +942,5 @@ BOOST_AUTO_TEST_CASE(test_accumulator) {
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 14 })), tombstone());
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 15 })), tombstone());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

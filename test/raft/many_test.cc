@@ -10,8 +10,11 @@
 //
 // Using slower but precise clock
 
+#undef SEASTAR_TESTING_MAIN
 #include "replication.hh"
 #include "utils/to_string.hh"
+
+BOOST_AUTO_TEST_SUITE(many_test)
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages
@@ -21,7 +24,7 @@ const auto tick_delay = 100ms;
 #endif
 
 SEASTAR_THREAD_TEST_CASE(test_many_100) {
-    replication_test<steady_clock_type>(
+    run_replication_test<steady_clock_type>(
         {.nodes = 100, .total_values = 10,
          .updates = {entries{1},
                      isolate{0},    // drop leader, free election
@@ -33,7 +36,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_100) {
 
 #ifndef SEASTAR_DEBUG
 SEASTAR_THREAD_TEST_CASE(test_many_400) {
-    replication_test<steady_clock_type>(
+    run_replication_test<steady_clock_type>(
         {.nodes = 400, .total_values = 10,
          .updates = {entries{1},
                      isolate{0},    // drop leader, free election
@@ -45,7 +48,7 @@ SEASTAR_THREAD_TEST_CASE(test_many_400) {
 
 // Expected to work for release and dev builds
 SEASTAR_THREAD_TEST_CASE(test_many_1000) {
-    replication_test<steady_clock_type>(
+    run_replication_test<steady_clock_type>(
         {.nodes = 1000, .total_values = 10,
          .updates = {entries{1},
                      isolate{0},              // drop leader, free election
@@ -57,3 +60,5 @@ SEASTAR_THREAD_TEST_CASE(test_many_1000) {
     rpc_config{ .network_delay = 20ms, .local_delay = 1ms });
 }
 #endif
+
+BOOST_AUTO_TEST_SUITE_END()

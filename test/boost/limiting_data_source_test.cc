@@ -10,12 +10,15 @@
 #include "utils/limiting_data_source.hh"
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/thread.hh>
 #include <cstdint>
+
+BOOST_AUTO_TEST_SUITE(limiting_data_source_test)
 
 using namespace seastar;
 
@@ -112,3 +115,5 @@ SEASTAR_THREAD_TEST_CASE(test_skip_bigger_than_buffered_data) {
     BOOST_REQUIRE_EQUAL(1, buf.size());
     BOOST_REQUIRE_EQUAL(11, buf[0]);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

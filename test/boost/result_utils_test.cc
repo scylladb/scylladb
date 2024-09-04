@@ -13,12 +13,15 @@
 #include "utils/result_loop.hh"
 #include "utils/result_try.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/util/later.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/later.hh>
+
+BOOST_AUTO_TEST_SUITE(result_utils_test)
 
 using namespace seastar;
 
@@ -621,3 +624,5 @@ SEASTAR_THREAD_TEST_CASE(test_result_try_catch_forward_to_promise) {
         BOOST_CHECK_THROW((void)handle([&] { return policy.exception(bar_exception()); }), bar_exception);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

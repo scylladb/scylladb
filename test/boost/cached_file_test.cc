@@ -7,7 +7,10 @@
  */
 
 #include <boost/range/irange.hpp>
-#include "test/lib/scylla_test_case.hh"
+
+#undef SEASTAR_TESTING_MAIN
+
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/when_all.hh>
@@ -21,6 +24,8 @@
 #include "test/lib/tmpdir.hh"
 
 #include "utils/cached_file.hh"
+
+BOOST_AUTO_TEST_SUITE(cached_file_test)
 
 using namespace seastar;
 
@@ -502,3 +507,5 @@ SEASTAR_THREAD_TEST_CASE(test_page_view_as_contiguous_shared_buffer) {
     // p should not affect p2
     BOOST_REQUIRE_EQUAL(tf.contents.substr(5, 2), sstring(p2.begin(), p2.end()));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

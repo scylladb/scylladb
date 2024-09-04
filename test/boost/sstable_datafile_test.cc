@@ -18,7 +18,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
 #include "sstables/metadata_collector.hh"
-#include <seastar/testing/thread_test_case.hh>
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
@@ -27,7 +26,9 @@
 #include "test/boost/sstable_test.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/do_with.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "dht/i_partitioner.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
@@ -52,6 +53,8 @@
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_datafile_test)
 
 namespace fs = std::filesystem;
 
@@ -3199,3 +3202,5 @@ SEASTAR_TEST_CASE(sstable_identifier_correctness) {
         BOOST_REQUIRE_EQUAL(sst->sstable_identifier()->uuid(), sst->generation().as_uuid());
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

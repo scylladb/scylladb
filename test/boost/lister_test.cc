@@ -13,7 +13,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/file.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "test/lib/tmpdir.hh"
@@ -22,6 +23,8 @@
 
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+
+BOOST_AUTO_TEST_SUITE(lister_test)
 
 class expected_exception : public std::exception {
 public:
@@ -185,3 +188,5 @@ SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
 
     BOOST_REQUIRE_THROW(co_await dl.get(), seastar::broken_pipe_exception);
 }
+
+BOOST_AUTO_TEST_SUITE_END()
