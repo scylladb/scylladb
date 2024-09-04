@@ -50,6 +50,7 @@
 #include "compaction/table_state.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "mutation/mutation_source_metadata.hh"
+#include "mutation/mutation_partition.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1241,6 +1242,103 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
 
             auto result = compact({sst1, sst2}, {sst2});
             BOOST_REQUIRE_EQUAL(0, result.size());
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(mv_tombstone_purge_test) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        // In a column family with gc_grace_seconds set to 0, check that a tombstone
+        // is purged after compaction.
+        auto builder = schema_builder("tests", "tombstone_purge")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto compact = [&, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
+            auto cf = env.make_table_for_tests(s);
+            auto stop_cf = deferred_stop(cf);
+            for (auto&& sst : all) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            return compact_sstables(env, sstables::compaction_descriptor(to_compact), cf, sst_gen).get().new_sstables;
+        };
+
+        auto next_timestamp = [] {
+            static thread_local api::timestamp_type next = 1;
+            return next++;
+        };
+
+        auto make_insert = [&] (partition_key key, int32_t ck = 0, int32_t value = 1, std::optional<api::timestamp_type> timestamp = std::nullopt, std::optional<api::timestamp_type> created_at = std::nullopt) {
+            mutation m(s, key);
+            if (!timestamp) {
+                created_at = timestamp = next_timestamp();
+            } else if (!created_at) {
+                created_at = next_timestamp();
+            }
+            auto c_key = clustering_key::from_single_value(*s, int32_type->decompose(data_value(ck)));
+            testlog.info("make_insert: key={} ck={} timestamp={} created_at={}", dht::decorate_key(*s, key), ck, *timestamp, *created_at);
+            m.set_clustered_cell(
+                    c_key,
+                    bytes("value"),
+                    data_value(value),
+                    *timestamp);
+            m.partition().clustered_row(*s, c_key).apply(row_marker(*created_at));
+            return m;
+        };
+
+        auto make_delete_row = [&] (partition_key key, int32_t ck = 0, gc_clock::time_point deletion_time = gc_clock::now(), std::optional<api::timestamp_type> deleted_at = std::nullopt) {
+            mutation m(s, key);
+            if (!deleted_at) {
+                deleted_at = next_timestamp();
+            }
+            shadowable_tombstone shadowable(*deleted_at, deletion_time);
+            auto c_key = clustering_key::from_single_value(*s, int32_type->decompose(data_value(ck)));
+            testlog.info("make_delete_row: key={} ck={} shadowable_tombstone={}", dht::decorate_key(*s, key), ck, shadowable);
+            m.partition().clustered_row(*s, c_key).apply(shadowable);
+            return m;
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+
+        {
+            // Simulate materialized views update
+            // We expect mut2 to delete mut1, and be purged
+            // Since the shadowable tombstone in mut4 is ignored as it is dead
+            // and insert in mut5 has higher timestamp.
+            // This will leave only the insert in mut3 when compacting mut1-3 together.
+            //
+            // cql commands that reproduce the following mutation:
+            //  create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+            //  use ks;
+            //  create table base_table (id text primary key, ck int, value int);
+            //  create materialized view mv as select id, ck, value from base_table where id is not null and ck is not null primary key (id, ck);
+            //
+            //  insert into base_table (id, ck, value) values ('alpha', 1, 1) using timestamp 1;
+            auto mut1 = make_insert(alpha, 1, 1, api::timestamp_type(1), api::timestamp_type(1));
+            //  insert into base_table (id, ck) values ('alpha', 2) using timestamp 2;
+            auto mut2 = make_delete_row(alpha, 1, gc_clock::now(), api::timestamp_type(1));
+            auto mut3 = make_insert(alpha, 2, 1, api::timestamp_type(1), api::timestamp_type(2));
+            //  insert into base_table (id, ck) values ('alpha', 3) using timestamp 3;
+            auto mut4 = make_delete_row(alpha, 2, gc_clock::now(), api::timestamp_type(2));
+            auto mut5 = make_insert(alpha, 3, 1, api::timestamp_type(1), api::timestamp_type(3));
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+            auto sst3 = make_sstable_containing(sst_gen, {mut4, mut5});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2, sst3}, {sst1, sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+            assert_that(sstable_reader(result[0], s, env.make_reader_permit()))
+                    .produces(mut3)
+                    .produces_end_of_stream();
         }
     });
 }
