@@ -65,15 +65,21 @@ std::unique_ptr<sstable_directory::components_lister>
 sstable_directory::make_components_lister() {
     return std::visit(overloaded_functor {
         [this] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(_table_dir, _state));
+            if (loc.dir.empty()) {
+                on_internal_error(dirlog, "Local storage options is missing 'dir'");
+            }
+            return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            if (os.prefix.empty()) {
+                on_internal_error(dirlog, "S3 storage options is missing 'prefix'");
+            }
             if (_state == sstable_state::upload) {
                 // Sstables in this state are not tracked in registry, so the only way to
                 // collect and process them is by listing the bucket
-                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(_table_dir), _manager, os);
+                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(os.prefix), _manager, os);
             }
-            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), _table_dir);
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), os.prefix);
         }
     }, _storage_opts->value);
 }
