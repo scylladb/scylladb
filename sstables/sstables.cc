@@ -1312,16 +1312,16 @@ future<> sstable::read_summary() noexcept {
 
     co_await read_toc();
 
+    if (has_component(component_type::Summary)) {
         // We'll try to keep the main code path exception free, but if an exception does happen
         // we can try to regenerate the Summary.
-        if (has_component(component_type::Summary)) {
-          try {
+        try {
             co_return co_await read_simple<component_type::Summary>(_components->summary);
-          } catch (...) {
+        } catch (...) {
             auto ep = std::current_exception();
-                sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
-          }
+            sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
         }
+    }
 
     co_await generate_summary();
 }
