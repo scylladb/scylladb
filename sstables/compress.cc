@@ -14,6 +14,7 @@
 #include <seastar/core/bitops.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "../compress.hh"
 #include "compress.hh"
@@ -387,7 +388,7 @@ public:
         // Uncompress the next chunk. We need to skip part of the first
         // chunk, but then continue to read from beginning of chunks.
         if (_pos != _beg_pos && addr.offset != 0) {
-            throw std::runtime_error("compressed reader out of sync");
+            throw std::runtime_error(format("compressed reader not aligned to chunk boundary: pos={} offset={}", _pos, addr.offset));
         }
         if (!addr.chunk_len) {
             throw sstables::malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
@@ -436,8 +437,10 @@ public:
     }
 
     virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        if (_pos + n > _end_pos) {
+            on_internal_error(sstables::sstlog, format("Skipping over the end position is disallowed: current pos={}, end pos={}, skip len={}", _pos, _end_pos, n));
+        }
         _pos += n;
-        SCYLLA_ASSERT(_pos <= _end_pos);
         if (_pos == _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
