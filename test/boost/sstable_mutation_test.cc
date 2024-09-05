@@ -52,12 +52,13 @@ SEASTAR_TEST_CASE(nonexistent_key) {
   });
 }
 
-future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_map<bytes, data_value> &&map) {
-    return env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env, k = std::move(key), map = std::move(map)] (auto sstp) mutable {
-        return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), std::move(k))), [&env, sstp, map = std::move(map)] (auto& pr) {
-            auto s = uncompressed_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s, map = std::move(map)] (auto& rd) mutable {
-              return read_mutation_from_mutation_reader(rd).then([sstp, s, map = std::move(map)] (auto mutation) {
+void test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_map<bytes, data_value> &&map) {
+    auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir()).get();
+    auto pr = dht::partition_range::make_singular(make_dkey(uncompressed_schema(), std::move(key)));
+    auto s = uncompressed_schema();
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+    auto close_rd = deferred_close(rd);
+    auto mutation = read_mutation_from_mutation_reader(rd).get();
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 for (auto&& e : mp.range(*s, interval<clustering_key_prefix>())) {
@@ -69,34 +70,29 @@ future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_
                         match_live_cell(row, *s, c.first, c.second);
                     }
                 }
-                return make_ready_future<>();
-              });
-            });
-        });
-    });
 }
 
 SEASTAR_TEST_CASE(uncompressed_1) {
   return test_env::do_with_async([] (test_env& env) {
-    test_no_clustered(env, "vinna", {{ "col1", to_sstring("daughter") }, { "col2", 3 }}).get();
+    test_no_clustered(env, "vinna", {{ "col1", to_sstring("daughter") }, { "col2", 3 }});
   });
 }
 
 SEASTAR_TEST_CASE(uncompressed_2) {
   return test_env::do_with_async([] (test_env& env) {
-    test_no_clustered(env, "gustaf", {{ "col1", to_sstring("son") }, { "col2", 0 }}).get();
+    test_no_clustered(env, "gustaf", {{ "col1", to_sstring("son") }, { "col2", 0 }});
   });
 }
 
 SEASTAR_TEST_CASE(uncompressed_3) {
   return test_env::do_with_async([] (test_env& env) {
-    test_no_clustered(env, "isak", {{ "col1", to_sstring("son") }, { "col2", 1 }}).get();
+    test_no_clustered(env, "isak", {{ "col1", to_sstring("son") }, { "col2", 1 }});
   });
 }
 
 SEASTAR_TEST_CASE(uncompressed_4) {
   return test_env::do_with_async([] (test_env& env) {
-    test_no_clustered(env, "finna", {{ "col1", to_sstring("daughter") }, { "col2", 2 }}).get();
+    test_no_clustered(env, "finna", {{ "col1", to_sstring("daughter") }, { "col2", 2 }});
   });
 }
 
