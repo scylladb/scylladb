@@ -642,13 +642,14 @@ static schema_ptr tombstone_overlap_schema2() {
 }
 SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
   return test_env::do_with_async([] (test_env& env) {
-    ka_sst(env, tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([&env] (auto sstp) {
+        auto sstp = ka_sst(env, tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).get();
         auto s = tombstone_overlap_schema2();
-        return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
-            return repeat([sstp, s, &reader] {
-                return read_mutation_from_mutation_reader(reader).then([s] (mutation_opt mut) {
+        auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+        auto close_r = deferred_close(reader);
+        while (true) {
+            mutation_opt mut = read_mutation_from_mutation_reader(reader).get();
                     if (!mut) {
-                        return stop_iteration::yes;
+                        break;
                     }
                     auto make_pkey = [s] (sstring b) {
                         return partition_key::from_deeply_exploded(*s, { data_value(b) });
@@ -692,12 +693,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
                         BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb", "ccc")));
                         BOOST_REQUIRE(e.row().deleted_at().tomb().timestamp == 1459438519958850LL);
                     }
-
-                    return stop_iteration::no;
-                });
-            });
-        });
-    }).get();
+        }
   });
 }
 
