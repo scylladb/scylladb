@@ -300,59 +300,52 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
   });
 }
 
-future<> test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
-    return env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env, min, max, &expected] (auto sstp) mutable {
+void test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
+    auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir()).get();
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
         auto stop = make_lw_shared<bool>(false);
-        return do_with(dht::partition_range::make(dht::ring_position::starting_at(min),
-                                                              dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
-          return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [&, sstp] (auto& mutations) {
-            return do_until([stop] { return *stop; },
+        auto pr = dht::partition_range::make(dht::ring_position::starting_at(min), dht::ring_position::ending_at(max));
+        auto mutations = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+        auto close_m = deferred_close(mutations);
+        while (!*stop) {
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
-                [sstp, &mutations, &expected, expected_size, count, stop] () mutable {
-                    return mutations().then([&expected, expected_size, count, stop, &mutations] (mutation_fragment_v2_opt mfopt) mutable {
+                    mutation_fragment_v2_opt mfopt = mutations().get();
                         if (mfopt) {
                             BOOST_REQUIRE(mfopt->is_partition_start());
                             BOOST_REQUIRE(*count < expected_size);
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mfopt->as_partition_start().key().key().explode());
                             expected.pop_back();
                             (*count)++;
-                            return mutations.next_partition();
+                            mutations.next_partition().get();
                         } else {
                             *stop = true;
-                            return make_ready_future<>();
                         }
-                    });
-            }).then([count, expected_size] {
+        }
                 BOOST_REQUIRE(*count == expected_size);
-            });
-          });
-        });
-    });
 }
 
 SEASTAR_TEST_CASE(read_range) {
   return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak"), to_bytes("gustaf"), to_bytes("vinna") };
-    test_range_reads(env, dht::minimum_token(), dht::maximum_token(), expected).get();
+    test_range_reads(env, dht::minimum_token(), dht::maximum_token(), expected);
   });
 }
 
 SEASTAR_TEST_CASE(read_partial_range) {
   return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak") };
-    test_range_reads(env, uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected).get();
+    test_range_reads(env, uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected);
   });
 }
 
 SEASTAR_TEST_CASE(read_partial_range_2) {
   return test_env::do_with_async([] (test_env& env) {
     std::vector<bytes> expected = { to_bytes("gustaf"), to_bytes("vinna") };
-    test_range_reads(env, dht::minimum_token(), uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.front()))), expected).get();
+    test_range_reads(env, dht::minimum_token(), uncompressed_schema()->get_partitioner().get_token(key_view(bytes_view(expected.front()))), expected);
   });
 }
 
