@@ -421,11 +421,12 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
 
 SEASTAR_TEST_CASE(compact_storage_dense_read) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense").then([&env] (auto sstp) {
-        return do_with(dht::partition_range::make_singular(make_dkey(compact_dense_schema(), "first_row")), [&env, sstp] (auto& pr) {
-            auto s = compact_dense_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
-              return read_mutation_from_mutation_reader(rd).then([sstp, s] (auto mutation) {
+        auto sstp = env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense").get();
+        auto pr = dht::partition_range::make_singular(make_dkey(compact_dense_schema(), "first_row"));
+        auto s = compact_dense_schema();
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+        auto close_rd = deferred_close(rd);
+        auto mutation = read_mutation_from_mutation_reader(rd).get();
                 auto& mp = mutation->partition();
 
                 auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
@@ -433,11 +434,6 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 
                 auto& row = mp.clustered_row(*s, clustering);
                 match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
-                return make_ready_future<>();
-              });
-            });
-        });
-    }).get();
   });
 }
 
