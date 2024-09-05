@@ -184,8 +184,9 @@ public:
         _sst->_shards.push_back(this_shard_id());
     }
 
-    void rewrite_toc_without_scylla_component() {
-        _sst->_recognized_components.erase(component_type::Scylla);
+    void rewrite_toc_without_component(component_type component) {
+        SCYLLA_ASSERT(component != component_type::TOC);
+        _sst->_recognized_components.erase(component);
         remove_file(_sst->filename(component_type::TOC)).get();
         _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();

@@ -2842,6 +2842,13 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
                 res = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(res == validate_checksums_result::invalid);
+
+                if (compression_params == no_compression_params) {
+                    testlog.info("Validating with no checksums {}", sst->get_filename());
+                    sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
+                    auto res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                }
             }
         }
     });
