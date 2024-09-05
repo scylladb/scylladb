@@ -695,7 +695,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
-        auto ksm = co_await create_keyspace_from_schema_partition(proxy, v, scylla_specific_rs);
+        auto ksm = co_await create_keyspace_metadata(proxy, v, scylla_specific_rs);
         co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
