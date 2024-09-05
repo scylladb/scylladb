@@ -123,18 +123,15 @@ SEASTAR_TEST_CASE(uncompressed_4) {
  */
 
 // FIXME: we are lacking a full deletion test
-static future<mutation> generate_clustered(sstables::test_env& env, bytes&& key, generation_type gen) {
-    return env.reusable_sst(complex_schema(), "test/resource/sstables/complex", gen).then([&env, k = std::move(key)] (auto sstp) mutable {
-        return do_with(dht::partition_range::make_singular(make_dkey(complex_schema(), std::move(k))), [&env, sstp] (auto& pr) {
-            auto s = complex_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
-              return read_mutation_from_mutation_reader(rd).then([sstp, s] (auto mutation) {
-                BOOST_REQUIRE(mutation);
-                return std::move(*mutation);
-              });
-            });
-        });
-    });
+static mutation generate_clustered(sstables::test_env& env, bytes&& key, generation_type gen) {
+    auto sstp = env.reusable_sst(complex_schema(), "test/resource/sstables/complex", gen).get();
+    auto pr = dht::partition_range::make_singular(make_dkey(complex_schema(), std::move(key)));
+    auto s = complex_schema();
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+    auto close_rd = deferred_close(rd);
+    auto mutation = read_mutation_from_mutation_reader(rd).get();
+    BOOST_REQUIRE(mutation);
+    return std::move(*mutation);
 }
 
 inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes>&& v) {
@@ -145,7 +142,7 @@ inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes
 
 SEASTAR_TEST_CASE(complex_sst1_k1) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key1", generation_type{1}).get();
+        auto mutation = generate_clustered(env, "key1", generation_type{1});
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -173,7 +170,7 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
 
 SEASTAR_TEST_CASE(complex_sst1_k2) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key2", generation_type{1}).get();
+        auto mutation = generate_clustered(env, "key2", generation_type{1});
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -203,7 +200,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
 
 SEASTAR_TEST_CASE(complex_sst2_k1) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key1", generation_type{2}).get();
+        auto mutation = generate_clustered(env, "key1", generation_type{2});
         auto s = complex_schema();
 
         auto exploded = exploded_clustering_prefix({"cl1.1", "cl2.1"});
@@ -221,7 +218,7 @@ SEASTAR_TEST_CASE(complex_sst2_k1) {
 
 SEASTAR_TEST_CASE(complex_sst2_k2) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key2", generation_type{2}).get();
+        auto mutation = generate_clustered(env, "key2", generation_type{2});
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -249,7 +246,7 @@ SEASTAR_TEST_CASE(complex_sst2_k2) {
 
 SEASTAR_TEST_CASE(complex_sst2_k3) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key3", generation_type{2}).get();
+        auto mutation = generate_clustered(env, "key3", generation_type{2});
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -267,7 +264,7 @@ SEASTAR_TEST_CASE(complex_sst2_k3) {
 
 SEASTAR_TEST_CASE(complex_sst3_k1) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key1", generation_type{3}).get();
+        auto mutation = generate_clustered(env, "key1", generation_type{3});
         auto s = complex_schema();
 
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
@@ -287,7 +284,7 @@ SEASTAR_TEST_CASE(complex_sst3_k1) {
 
 SEASTAR_TEST_CASE(complex_sst3_k2) {
   return test_env::do_with_async([] (test_env& env) {
-        auto mutation = generate_clustered(env, "key2", generation_type{3}).get();
+        auto mutation = generate_clustered(env, "key2", generation_type{3});
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
