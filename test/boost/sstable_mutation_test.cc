@@ -305,25 +305,23 @@ void test_range_reads(sstables::test_env& env, const dht::token& min, const dht:
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
-        auto stop = make_lw_shared<bool>(false);
         auto pr = dht::partition_range::make(dht::ring_position::starting_at(min), dht::ring_position::ending_at(max));
         auto mutations = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
         auto close_m = deferred_close(mutations);
-        while (!*stop) {
+        while (true) {
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
                     mutation_fragment_v2_opt mfopt = mutations().get();
-                        if (mfopt) {
+                        if (!mfopt) {
+                            break;
+                        }
                             BOOST_REQUIRE(mfopt->is_partition_start());
                             BOOST_REQUIRE(*count < expected_size);
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mfopt->as_partition_start().key().key().explode());
                             expected.pop_back();
                             (*count)++;
                             mutations.next_partition().get();
-                        } else {
-                            *stop = true;
-                        }
         }
                 BOOST_REQUIRE(*count == expected_size);
 }
