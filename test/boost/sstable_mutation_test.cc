@@ -303,7 +303,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 void test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
     auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir()).get();
         auto s = uncompressed_schema();
-        auto count = make_lw_shared<size_t>(0);
+        size_t count = 0;
         auto expected_size = expected.size();
         auto pr = dht::partition_range::make(dht::ring_position::starting_at(min), dht::ring_position::ending_at(max));
         auto mutations = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
@@ -317,13 +317,13 @@ void test_range_reads(sstables::test_env& env, const dht::token& min, const dht:
                             break;
                         }
                             BOOST_REQUIRE(mfopt->is_partition_start());
-                            BOOST_REQUIRE(*count < expected_size);
+                            BOOST_REQUIRE(count < expected_size);
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mfopt->as_partition_start().key().key().explode());
                             expected.pop_back();
-                            (*count)++;
+                            count++;
                             mutations.next_partition().get();
         }
-                BOOST_REQUIRE(*count == expected_size);
+                BOOST_REQUIRE(count == expected_size);
 }
 
 SEASTAR_TEST_CASE(read_range) {
