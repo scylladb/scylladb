@@ -33,6 +33,8 @@ remove_scylla_options = []
 if '--vnodes' in sys.argv:
     sys.argv.remove('--vnodes')
     remove_scylla_options.append('--enable-tablets=true')
+    # Tablets are now enabled by default on some releases, it is not enough to remove the enable above.
+    extra_scylla_options.append('--enable-tablets=false')
 
 if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)

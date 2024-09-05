@@ -23,6 +23,8 @@ if '--vnodes' in sys.argv:
     def run_without_tablets(pid, dir):
         (c, e) = run_without_tablets.orig_cmd(pid, dir)
         c.remove('--enable-tablets=true')
+        # Tablets are now enabled by default on some releases, it is not enough to remove the enable above.
+        c.append('--enable-tablets=false')
         return (c, e)
     run_without_tablets.orig_cmd = cmd
     cmd = run_without_tablets
