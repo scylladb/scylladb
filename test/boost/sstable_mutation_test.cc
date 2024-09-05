@@ -387,21 +387,17 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
 
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse").then([&env] (auto sstp) {
-        return do_with(dht::partition_range::make_singular(make_dkey(compact_sparse_schema(), "first_row")), [&env, sstp] (auto& pr) {
-            auto s = compact_sparse_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
-              return read_mutation_from_mutation_reader(rd).then([sstp, s] (auto mutation) {
+        auto sstp = env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse").get();
+        auto pr = dht::partition_range::make_singular(make_dkey(compact_sparse_schema(), "first_row"));
+        auto s = compact_sparse_schema();
+        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+        auto close_rd = deferred_close(rd);
+        auto mutation = read_mutation_from_mutation_reader(rd).get();
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 auto& row = mp.clustered_row(*s, clustering_key::make_empty());
                 match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
                 match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
-                return make_ready_future<>();
-            });
-          });
-        });
-    }).get();
   });
 }
 
