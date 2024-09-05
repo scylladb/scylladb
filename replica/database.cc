@@ -2367,6 +2367,7 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
 
 future<> database::flush_all_tables() {
     // see above
+    dblog.info("Forcing new commitlog segment and flushing all tables");
     co_await _commitlog->force_new_active_segment();
     co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
         return t->flush();
