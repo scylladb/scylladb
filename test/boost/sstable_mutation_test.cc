@@ -443,17 +443,18 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 // Make sure we don't regress on that.
 SEASTAR_TEST_CASE(broken_ranges_collection) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", generation_type{2}).then([&env] (auto sstp) {
+        auto sstp = env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", generation_type{2}).get();
         auto s = peers_schema();
-        return with_closeable(sstp->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range), [s] (auto& reader) {
-          return repeat([s, &reader] {
-            return read_mutation_from_mutation_reader(reader).then([s] (mutation_opt mut) {
+        auto reader = sstp->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range);
+        auto close_r = deferred_close(reader);
+        while (true) {
+            mutation_opt mut = read_mutation_from_mutation_reader(reader).get();
                 auto key_equal = [s, &mut] (sstring ip) {
                     return mut->key().equal(*s, partition_key::from_deeply_exploded(*s, { net::inet_address(ip) }));
                 };
 
                 if (!mut) {
-                    return stop_iteration::yes;
+                    break;
                 } else if (key_equal("127.0.0.1")) {
                     auto& row = mut->partition().clustered_row(*s, clustering_key::make_empty());
                     match_absent(row.cells(), *s, "tokens");
@@ -466,11 +467,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
                     auto t = mut->partition().partition_tombstone();
                     BOOST_REQUIRE(t.timestamp == 0x051EB3FB016850l);
                 }
-                return stop_iteration::no;
-            });
-          });
-        });
-    }).get();
+        }
   });
 }
 
