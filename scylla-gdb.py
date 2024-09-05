@@ -120,8 +120,7 @@ def downcast_vptr(ptr):
 
 class intrusive_list:
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def size_t(cls):
         return gdb.lookup_type('size_t')
 
@@ -166,8 +165,7 @@ class intrusive_list:
 
 class intrusive_slist:
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def size_t(cls):
         return gdb.lookup_type('size_t')
 
@@ -250,8 +248,7 @@ class std_tuple:
 
 class intrusive_set:
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def size_t(cls):
         return gdb.lookup_type('size_t')
 
@@ -442,8 +439,7 @@ class std_variant:
 
 class std_map:
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def size_t(cls):
         return gdb.lookup_type('size_t')
 
@@ -3908,8 +3904,7 @@ class scylla_fiber(gdb.Command):
     """
 
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def _vptr_type(cls):
         return gdb.lookup_type('uintptr_t').pointer()
 
@@ -4197,8 +4192,7 @@ class scylla_find(gdb.Command):
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
     @classmethod
-    @property
-    @functools.cache
+    @functools.cached_property
     def _vptr_type(cls):
         return gdb.lookup_type('uintptr_t').pointer()
 

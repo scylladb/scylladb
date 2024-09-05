@@ -200,7 +200,7 @@ def test_run_without_scylla(scylla_gdb):
     # commands themselves when they get exuecuted. To address potential
     # failures, consider moving code that references debug symbols into a code
     # path executed only when debug symbols is loaded. If the value of the
-    # symbol is a constant, consider caching it. using functools.cache
+    # symbol is a constant, consider caching it using functools.cached_property
     # decorator.
     _ = scylla_gdb
 
