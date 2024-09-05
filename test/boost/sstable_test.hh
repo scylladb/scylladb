@@ -130,11 +130,11 @@ inline schema_ptr uncompressed_schema(int32_t min_index_interval = 0) {
         builder.with_column("col1", utf8_type);
         builder.with_column("col2", int32_type);
         builder.set_comment("Uncompressed data");
-       builder.set_compressor_params(compression_parameters());
-       if (min_index_interval) {
-           builder.set_min_index_interval(min_index_interval);
-       }
-       return builder.build(schema_builder::compact_storage::no);
+        builder.set_compressor_params(compression_parameters());
+        if (min_index_interval) {
+            builder.set_min_index_interval(min_index_interval);
+        }
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return uncompressed;
 }
