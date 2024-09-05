@@ -1307,21 +1307,23 @@ void sstable::rewrite_statistics() {
 
 future<> sstable::read_summary() noexcept {
     if (_components->summary) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return read_toc().then([this] {
+    co_await read_toc();
+
         // We'll try to keep the main code path exception free, but if an exception does happen
         // we can try to regenerate the Summary.
         if (has_component(component_type::Summary)) {
-            return read_simple<component_type::Summary>(_components->summary).handle_exception([this] (auto ep) {
+          try {
+            co_return co_await read_simple<component_type::Summary>(_components->summary);
+          } catch (...) {
+            auto ep = std::current_exception();
                 sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
-                return this->generate_summary();
-            });
-        } else {
-            return generate_summary();
+          }
         }
-    });
+
+    co_await generate_summary();
 }
 
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) const noexcept {
