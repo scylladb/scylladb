@@ -92,18 +92,14 @@ atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, u
 
 // open_sstables() opens several generations of the same sstable, returning,
 // after all the tables have been open, their vector.
-static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type> generations) {
+static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type::int_t> gen_values) {
+    auto generations = generations_from_values(gen_values);
     std::vector<sstables::shared_sstable> ret;
     co_await coroutine::parallel_for_each(generations, [&env, &ret, &dir, s] (auto generation) -> future<> {
         auto sst = co_await env.reusable_sst(s, dir, generation);
         ret.push_back(std::move(sst));
     });
     co_return ret;
-}
-
-static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<sstables::generation_type::int_t> gen_values) {
-    auto generations = generations_from_values(gen_values);
-    return open_sstables(env, std::move(s), std::move(dir), std::move(generations));
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
