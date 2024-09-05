@@ -566,13 +566,14 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 // CQL, but we saw a similar thing is a real use case.
 SEASTAR_TEST_CASE(range_tombstone_reading) {
   return test_env::do_with_async([] (test_env& env) {
-    ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([&env] (auto sstp) {
+        auto sstp = ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).get();
         auto s = tombstone_overlap_schema();
-        return with_closeable(sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
-            return repeat([sstp, s, &reader] {
-                return read_mutation_from_mutation_reader(reader).then([s] (mutation_opt mut) {
+        auto reader = sstp->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+        auto close_r = deferred_close(reader);
+        while (true) {
+            mutation_opt mut = read_mutation_from_mutation_reader(reader).get();
                     if (!mut) {
-                        return stop_iteration::yes;
+                        break;
                     }
                     auto make_pkey = [s] (sstring b) {
                         return partition_key::from_deeply_exploded(*s, { data_value(b) });
@@ -597,11 +598,7 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
                                     tombstone(1459334681228103LL, it->tombstone().tomb.deletion_time))));
                     auto rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.calculate_size() == 0);
-                    return stop_iteration::no;
-                });
-            });
-        });
-    }).get();
+        }
   });
 }
 
