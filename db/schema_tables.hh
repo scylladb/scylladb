@@ -238,7 +238,7 @@ std::vector<mutation> make_create_keyspace_mutations(schema_features features, l
 
 std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp);
 
-future<lw_shared_ptr<keyspace_metadata>> create_keyspace_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition, lw_shared_ptr<query::result_set> scylla_specific_rs = nullptr);
+future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition, lw_shared_ptr<query::result_set> scylla_specific_rs);
 
 future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition);
 
