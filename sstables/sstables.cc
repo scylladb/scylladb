@@ -2643,12 +2643,13 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
+future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
     const auto digest = co_await sst->read_digest();
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr, sstable::raw_stream::yes);
 
     auto valid = true;
+    auto ret = validate_checksums_result::valid;
     std::exception_ptr ex;
 
     try {
@@ -2661,7 +2662,8 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
         } else {
             auto checksum = co_await sst->read_checksum();
             if (!checksum) {
-                throw std::runtime_error(format("No checksums available for SSTable: {}", sst->get_filename()));
+                sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
+                ret = validate_checksums_result::no_checksum;
             } else if (sst->get_version() >= sstable_version_types::mc) {
                 valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, digest);
             } else {
@@ -2675,7 +2677,10 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
     co_await data_stream.close();
     maybe_rethrow_exception(std::move(ex));
 
-    co_return valid;
+    if (!valid) {
+        ret = validate_checksums_result::invalid;
+    }
+    co_return ret;
 }
 
 void sstable::set_first_and_last_keys() {

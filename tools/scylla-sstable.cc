@@ -1575,9 +1575,26 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     json_writer writer(json_output_stream);
     writer.StartStream();
     for (auto& sst : sstables) {
-        const auto valid = sstables::validate_checksums(sst, permit).get();
+        const auto res = sstables::validate_checksums(sst, permit).get();
         writer.Key(sst->get_filename());
-        writer.Bool(valid);
+        writer.StartObject();
+        writer.Key("has_checksums");
+        switch (res) {
+        case validate_checksums_result::valid:
+            writer.Bool(true);
+            writer.Key("valid_checksums");
+            writer.Bool(true);
+            break;
+        case validate_checksums_result::invalid:
+            writer.Bool(true);
+            writer.Key("valid_checksums");
+            writer.Bool(false);
+            break;
+        case validate_checksums_result::no_checksum:
+            writer.Bool(false);
+            break;
+        }
+        writer.EndObject();
     }
     writer.EndStream();
     fmt::print(std::cout, "{}", json_output_stream.view());

@@ -1032,9 +1032,17 @@ public:
 // This method validates both the full checksum and the per-chunk checksum
 // for the entire Data.db.
 //
-// Returns true if all checksums are valid.
+// Returns `valid` if all checksums are valid.
+// Returns `invalid` if at least one checksum is invalid.
+// Returns `no_checksum` if the sstable is uncompressed and does not have
+// a CRC component (CRC.db is missing from TOC.txt).
 // Validation errors are logged individually.
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit);
+enum class validate_checksums_result {
+    invalid = 0,
+    valid = 1,
+    no_checksum = 2
+};
+future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

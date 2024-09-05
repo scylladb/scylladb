@@ -2466,8 +2466,8 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         f.dma_write(0, wbuf.get(), wbuf_len).get();
         f.close().get();
 
-        auto valid = sstables::validate_checksums(sst, permit).get();
-        BOOST_REQUIRE_EQUAL(valid, false);
+        auto res = sstables::validate_checksums(sst, permit).get();
+        BOOST_REQUIRE(res == validate_checksums_result::invalid);
 
 
         const auto errors = sst->validate(permit, abort, error_handler{count}).get();
