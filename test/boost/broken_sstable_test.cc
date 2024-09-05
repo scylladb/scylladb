@@ -49,7 +49,7 @@ static future<> broken_sst(sstring dir, sstables::generation_type::int_t generat
 static future<> broken_sst(sstring dir, sstables::generation_type::int_t generation, sstring msg, std::optional<sstring> sst_name = std::nullopt) {
     // Using an empty schema for this function, which is only about loading
     // a malformed component and checking that it fails.
-    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
+    auto s = schema_builder("ks", "cf", {}, utf8_type).build();
     return broken_sst(dir, generation, s, msg, sst_name);
 }
 

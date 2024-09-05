@@ -74,21 +74,12 @@ inline sstring get_test_dir(const sstring& name, const schema_ptr s)
 
 inline schema_ptr composite_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "composite",
+        schema_builder builder("tests", "composite");
         // partition key
-        {{"name", bytes_type}, {"col1", bytes_type}},
-        // clustering key
-        {},
-        // regular columns
-        {},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a composite key as pkey"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        builder.with_column("name", bytes_type, column_kind::partition_key);
+        builder.with_column("col1", bytes_type, column_kind::partition_key);
+        builder.set_comment("Table with a composite key as pkey");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
@@ -96,23 +87,11 @@ inline schema_ptr composite_schema() {
 inline schema_ptr set_schema() {
     static thread_local auto s = [] {
         auto my_set_type = set_type_impl::get_instance(bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "set_pk",
-        // partition key
-        {{"ss", my_set_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"ns", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a set as pkeys"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("tests", "set_pk");
+        builder.with_column("ss", my_set_type, column_kind::partition_key);
+        builder.with_column("ns", utf8_type);
+        builder.set_comment("Table with a set as pkeys");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
@@ -120,23 +99,12 @@ inline schema_ptr set_schema() {
 inline schema_ptr map_schema() {
     static thread_local auto s = [] {
         auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "map_pk",
+        schema_builder builder("tests", "map_pk");
         // partition key
-        {{"ss", my_map_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"ns", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a map as pkeys"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        builder.with_column("ss", my_map_type, column_kind::partition_key);
+        builder.with_column("ns", utf8_type);
+        builder.set_comment("Table with a map as pkeys");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
@@ -144,43 +112,24 @@ inline schema_ptr map_schema() {
 inline schema_ptr list_schema() {
     static thread_local auto s = [] {
         auto my_list_type = list_type_impl::get_instance(bytes_type, false);
-        schema_builder builder(make_shared_schema({}, "tests", "list_pk",
+        schema_builder builder("tests", "list_pk");
         // partition key
-        {{"ss", my_list_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"ns", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a list as pkeys"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        builder.with_column("ss", my_list_type, column_kind::partition_key);
+        builder.with_column("ns", utf8_type);
+        builder.set_comment("Table with a list as pkeys");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
 
 inline schema_ptr uncompressed_schema(int32_t min_index_interval = 0) {
     auto uncompressed = [=] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
+        schema_builder builder("ks", "uncompressed", generate_legacy_id("ks", "uncompressed"));
         // partition key
-        {{"name", utf8_type}},
-        // clustering key
-        {},
-        // regular columns
-        {{"col1", utf8_type}, {"col2", int32_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Uncompressed data"
-       ));
+        builder.with_column("name", utf8_type, column_kind::partition_key);
+        builder.with_column("col1", utf8_type);
+        builder.with_column("col2", int32_type);
+        builder.set_comment("Uncompressed data");
        builder.set_compressor_params(compression_parameters());
        if (min_index_interval) {
            builder.set_min_index_interval(min_index_interval);
@@ -202,121 +151,74 @@ inline schema_ptr complex_schema() {
         auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
         auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
 
-        schema_builder builder(make_shared_schema({}, "tests", "complex_schema",
-        // partition key
-        {{"key", bytes_type}},
-        // clustering key
-        {{"clust1", bytes_type}, {"clust2", bytes_type}},
-        // regular columns
-        {
-            {"reg_set", my_set_type},
-            {"reg_list", my_list_type},
-            {"reg_map", my_map_type},
-            {"reg_fset", my_fset_type},
-            {"reg", bytes_type},
-        },
-        // static columns
-        {{"static_obj", bytes_type}, {"static_collection", my_set_static_type}},
-        // regular column name type
-        bytes_type,
-        // comment
-        "Table with a complex schema, including collections and static keys"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("tests", "complex_schema", {}, bytes_type);
+        builder.with_column("key", bytes_type, column_kind::partition_key);
+        builder.with_column("clust1", bytes_type, column_kind::clustering_key);
+        builder.with_column("clust2", bytes_type, column_kind::clustering_key);
+        builder.with_column("reg_set", my_set_type);
+        builder.with_column("reg_list", my_list_type);
+        builder.with_column("reg_map", my_map_type);
+        builder.with_column("reg_fset", my_fset_type);
+        builder.with_column("reg", bytes_type);
+        builder.with_column("static_obj", bytes_type, column_kind::static_column);
+        builder.with_column("static_collection", my_set_static_type, column_kind::static_column);
+        builder.set_comment("Table with a complex schema, including collections and static keys");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
 
 inline schema_ptr columns_schema() {
     static thread_local auto columns = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("name", "columns"), "name", "columns",
-        // partition key
-        {{"keyspace_name", utf8_type}},
-        // clustering key
-        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
-        // regular columns
-        {
-            {"component_index", int32_type},
-            {"index_name", utf8_type},
-            {"index_options", utf8_type},
-            {"index_type", utf8_type},
-            {"type", utf8_type},
-            {"validator", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "column definitions"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("name", "columns", generate_legacy_id("name", "columns"));
+        builder.with_column("keyspace_name", utf8_type, column_kind::partition_key);
+        builder.with_column("columnfamily_name", utf8_type, column_kind::clustering_key);
+        builder.with_column("column_name", utf8_type, column_kind::clustering_key);
+        builder.with_column("component_index", int32_type);
+        builder.with_column("index_name", utf8_type);
+        builder.with_column("index_options", utf8_type);
+        builder.with_column("index_type", utf8_type);
+        builder.with_column("type", utf8_type);
+        builder.with_column("validator", utf8_type);
+        builder.set_comment("column definitions");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return columns;
 }
 
 inline schema_ptr compact_simple_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_simple_dense",
-        // partition key
-        {{"ks", bytes_type}},
-        // clustering key
-        {{"cl1", bytes_type}},
-        // regular columns
-        {{"cl2", bytes_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a compact storage, and a single clustering key"
-       ));
-       return builder.build(schema_builder::compact_storage::yes);
+        schema_builder builder("tests", "compact_simple_dense");
+        builder.with_column("ks", bytes_type, column_kind::partition_key);
+        builder.with_column("cl1", bytes_type, column_kind::clustering_key);
+        builder.with_column("cl2", bytes_type);
+        builder.set_comment("Table with a compact storage, and a single clustering key");
+        return builder.build(schema_builder::compact_storage::yes);
     }();
     return s;
 }
 
 inline schema_ptr compact_dense_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_simple_dense",
-        // partition key
-        {{"ks", bytes_type}},
-        // clustering key
-        {{"cl1", bytes_type}, {"cl2", bytes_type}},
-        // regular columns
-        {{"cl3", bytes_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a compact storage, and a compound clustering key"
-       ));
-       return builder.build(schema_builder::compact_storage::yes);
+        schema_builder builder("tests", "compact_simple_dense");
+        builder.with_column("ks", bytes_type, column_kind::partition_key);
+        builder.with_column("cl1", bytes_type, column_kind::clustering_key);
+        builder.with_column("cl2", bytes_type, column_kind::clustering_key);
+        builder.with_column("cl3", bytes_type);
+        builder.set_comment("Table with a compact storage, and a compound clustering key");
+        return builder.build(schema_builder::compact_storage::yes);
     }();
     return s;
 }
 
 inline schema_ptr compact_sparse_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema({}, "tests", "compact_sparse",
-        // partition key
-        {{"ks", bytes_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"cl1", bytes_type},
-            {"cl2", bytes_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "Table with a compact storage, but no clustering keys"
-       ));
-       return builder.build(schema_builder::compact_storage::yes);
+        schema_builder builder("tests", "compact_sparse");
+        builder.with_column("ks", bytes_type, column_kind::partition_key);
+        builder.with_column("cl1", bytes_type);
+        builder.with_column("cl2", bytes_type);
+        builder.set_comment("Table with a compact storage, but no clustering keys");
+        return builder.build(schema_builder::compact_storage::yes);
     }();
     return s;
 }
@@ -327,30 +229,18 @@ inline schema_ptr compact_sparse_schema() {
 //    sure we are testing the exact some one we have in our test dir.
 inline schema_ptr peers_schema() {
     static thread_local auto peers = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("system", "peers"), "system", "peers",
-        // partition key
-        {{"peer", inet_addr_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-                {"data_center", utf8_type},
-                {"host_id", uuid_type},
-                {"preferred_ip", inet_addr_type},
-                {"rack", utf8_type},
-                {"release_version", utf8_type},
-                {"rpc_address", inet_addr_type},
-                {"schema_version", uuid_type},
-                {"tokens", set_type_impl::get_instance(utf8_type, true)},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "information about known peers in the cluster"
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("system", "peers", generate_legacy_id("system", "peers"));
+        builder.with_column("peer", inet_addr_type, column_kind::partition_key);
+        builder.with_column("data_center", utf8_type);
+        builder.with_column("host_id", uuid_type);
+        builder.with_column("preferred_ip", inet_addr_type);
+        builder.with_column("rack", utf8_type);
+        builder.with_column("release_version", utf8_type);
+        builder.with_column("rpc_address", inet_addr_type);
+        builder.with_column("schema_version", uuid_type);
+        builder.with_column("tokens", set_type_impl::get_instance(utf8_type, true));
+        builder.set_comment("information about known peers in the cluster");
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return peers;
 }

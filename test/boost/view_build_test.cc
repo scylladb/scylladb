@@ -43,22 +43,11 @@ using namespace std::literals::chrono_literals;
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
-                generate_legacy_id("try1", "data"), "try1", "data",
-        // partition key
-        {{"p", utf8_type}},
-        // clustering key
-        {{"c", utf8_type}},
-        // regular columns
-        {{"v", utf8_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("try1", "data", generate_legacy_id("try1", "data"));
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("c", utf8_type, column_kind::clustering_key);
+        builder.with_column("v", utf8_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }

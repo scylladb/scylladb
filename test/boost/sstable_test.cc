@@ -51,7 +51,7 @@ SEASTAR_TEST_CASE(uncompressed_data) {
 }
 
 static auto make_schema_for_compressed_sstable() {
-    return make_shared_schema({}, "ks", "cf", {{"pk", utf8_type}}, {}, {}, {}, utf8_type);
+    return schema_builder("ks", "cf").with_column("pk", utf8_type, column_kind::partition_key).build();
 }
 
 SEASTAR_TEST_CASE(compressed_data) {
@@ -429,22 +429,11 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
 static schema_ptr large_partition_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
-                generate_legacy_id("try1", "data"), "try1", "data",
-        // partition key
-        {{"t1", utf8_type}},
-        // clustering key
-        {{"t2", utf8_type}},
-        // regular columns
-        {{"t3", utf8_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("try1", "data", generate_legacy_id("try1", "data"));
+        builder.with_column("t1", utf8_type, column_kind::partition_key);
+        builder.with_column("t2", utf8_type, column_kind::clustering_key);
+        builder.with_column("t3", utf8_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
