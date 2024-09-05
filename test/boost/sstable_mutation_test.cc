@@ -42,17 +42,13 @@ using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(nonexistent_key) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env] (auto sstp) {
-        return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "invalid_key")), [&env, sstp] (auto& pr) {
-            auto s = uncompressed_schema();
-            return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
-              return rd().then([sstp, s] (auto mutation) {
-                BOOST_REQUIRE(!mutation);
-                return make_ready_future<>();
-              });
-            });
-        });
-    }).get();
+      auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir()).get();
+      auto pr = dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "invalid_key"));
+      auto s = uncompressed_schema();
+      auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+      auto close_rd = deferred_close(rd);
+      auto mutation = rd().get();
+      BOOST_REQUIRE(!mutation);
   });
 }
 
