@@ -260,13 +260,13 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
     auto& sharded_db = proxy.local().get_db();
     for (auto& name : affected.created) {
         slogger.info("Creating keyspace {}", name);
-        auto ksm = co_await create_keyspace_from_schema_partition(proxy,
+        auto ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)});
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
     for (auto& name : affected.altered) {
         slogger.info("Altering keyspace {}", name);
-        auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
+        auto tmp_ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)});
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
