@@ -2826,8 +2826,7 @@ for more information on this operation, including what the different modes do.
     {{"validate-checksums",
             "Validate the checksums of the sstable(s)",
 R"(
-Validate both the whole-file and the per-chunk checksums checksums of the data
-component.
+Validate both the whole-file and the per-chunk checksums of the data component.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate-checksums
 for more information on this operation.
