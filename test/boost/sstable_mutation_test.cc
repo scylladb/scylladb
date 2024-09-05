@@ -145,7 +145,7 @@ inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes
 
 SEASTAR_TEST_CASE(complex_sst1_k1) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key1", generation_type{1}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key1", generation_type{1}).get();
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -168,15 +168,12 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         auto reg_list = match_collection(row2.cells(), *s, "reg_list", tombstone(deletion_time{1431451390, 1431451390213471l}));
         match_collection_element<status::live>(reg_list.cells[0], bytes_opt{}, to_bytes("2"));
         match_collection_element<status::live>(reg_list.cells[1], bytes_opt{}, to_bytes("1"));
-
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst1_k2) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key2", generation_type{1}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key2", generation_type{1}).get();
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -201,15 +198,12 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_absent(row2.cells(), *s, "reg_set");
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_list");
-
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst2_k1) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key1", generation_type{2}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key1", generation_type{2}).get();
         auto s = complex_schema();
 
         auto exploded = exploded_clustering_prefix({"cl1.1", "cl2.1"});
@@ -222,14 +216,12 @@ SEASTAR_TEST_CASE(complex_sst2_k1) {
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
         auto reg_list = match_collection(row.cells(), *s, "reg_list", tombstone(deletion_time{0, api::missing_timestamp}));
         match_collection_element<status::dead>(reg_list.cells[0], bytes_opt{}, bytes_opt{});
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst2_k2) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key2", generation_type{2}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key2", generation_type{2}).get();
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -252,15 +244,12 @@ SEASTAR_TEST_CASE(complex_sst2_k2) {
         match_absent(row2.cells(), *s, "reg_set");
         match_dead_cell(row2.cells(), *s, "reg_fset");
         match_dead_cell(row2.cells(), *s, "reg");
-
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst2_k3) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key3", generation_type{2}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key3", generation_type{2}).get();
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -273,14 +262,12 @@ SEASTAR_TEST_CASE(complex_sst2_k3) {
         match_absent(row1.cells(), *s, "reg_set");
         match_absent(row1.cells(), *s, "reg_map");
         match_absent(row1.cells(), *s, "reg_fset");
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst3_k1) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key1", generation_type{3}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key1", generation_type{3}).get();
         auto s = complex_schema();
 
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
@@ -295,14 +282,12 @@ SEASTAR_TEST_CASE(complex_sst3_k1) {
         match_absent(row.cells(), *s, "reg_map");
         match_absent(row.cells(), *s, "reg");
         match_absent(row.cells(), *s, "reg_fset");
-        return make_ready_future<>();
-    }).get();
   });
 }
 
 SEASTAR_TEST_CASE(complex_sst3_k2) {
   return test_env::do_with_async([] (test_env& env) {
-    generate_clustered(env, "key2", generation_type{3}).then([] (auto&& mutation) {
+        auto mutation = generate_clustered(env, "key2", generation_type{3}).get();
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row().get();
@@ -315,8 +300,6 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
         match_absent(row.cells(), *s, "reg_set");
         match_absent(row.cells(), *s, "reg");
         match_absent(row.cells(), *s, "reg_fset");
-        return make_ready_future<>();
-    }).get();
   });
 }
 
