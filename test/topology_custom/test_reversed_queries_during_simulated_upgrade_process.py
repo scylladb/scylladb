@@ -25,7 +25,7 @@ async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
     Use `suppress_features` error injection to simulate cluster upgrade process
     in order to test both native and legacy reversed formats.
     """
-    cmdline = ["--hinted-handoff-enabled", "0"]
+    cmdline = ["--config", "hinted_handoff_enabled: false"]
     node1, _ = await manager.servers_add(2, cmdline)
 
     cql = manager.get_cql()

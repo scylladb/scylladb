@@ -38,7 +38,7 @@ async def test_enable_compacting_data_for_streaming_and_repair_live_update(manag
     This config item has a non-trivial path of propagation and live-update was
     silently broken in the past.
     """
-    cmdline = ["--enable-compacting-data-for-streaming-and-repair", "0", "--smp", "1", "--logger-log-level", "api=trace"]
+    cmdline = ["--config", "enable_compacting_data_for_streaming_and_repair: false", "--smp", "1", "--logger-log-level", "api=trace"]
     node1 = await manager.server_add(cmdline=cmdline)
     node2 = await manager.server_add(cmdline=cmdline)
 
@@ -82,10 +82,10 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
     * enable_tombstone_gc_for_streaming_and_repair is live-update
     """
     cmdline = [
-            "--enable-compacting-data-for-streaming-and-repair", "1",
-            "--enable-tombstone-gc-for-streaming-and-repair", "1",
-            "--enable-cache", "0",
-            "--hinted-handoff-enabled", "0",
+            "--config", "enable_compacting_data_for_streaming_and_repair: true",
+            "--config", "enable_tombstone_gc_for_streaming_and_repair: true",
+            "--config", "enable_cache: false",
+            "--config", "hinted_handoff_enabled: false",
             "--smp", "1",
             "--logger-log-level", "api=trace:database=trace"]
     node1 = await manager.server_add(cmdline=cmdline)

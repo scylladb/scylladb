@@ -212,9 +212,9 @@ async def test_incremental_read_repair(data_class, workdir, manager):
     seed = int(time.time())
     logger.info(f"random-seed: {seed}")
     random.seed(seed)
-    cmdline = ["--hinted-handoff-enabled", "0",
-               "--query-tombstone-page-limit", "10",
-               "--query-page-size-in-bytes", "1024"]
+    cmdline = ["--config", "hinted_handoff_enabled: false",
+               "--config", "query_tombstone_page_limit: 10",
+               "--config", "query_page_size_in_bytes: 1024"]
     node1 = await manager.server_add(cmdline=cmdline)
     node2 = await manager.server_add(cmdline=cmdline)
 
