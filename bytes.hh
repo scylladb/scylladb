@@ -16,13 +16,10 @@
 #include <iosfwd>
 #include <functional>
 #include <compare>
+#include "bytes_fwd.hh"
 #include "utils/mutable_view.hh"
 #include "utils/simple_hashers.hh"
 
-using bytes = basic_sstring<int8_t, uint32_t, 31, false>;
-using bytes_view = std::basic_string_view<int8_t>;
-using bytes_mutable_view = basic_mutable_view<bytes_view::value_type>;
-using bytes_opt = std::optional<bytes>;
 using sstring_view = std::string_view;
 
 inline bytes to_bytes(bytes&& b) {

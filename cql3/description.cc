@@ -8,46 +8,36 @@
 
 #include "cql3/description.hh"
 
+#include <seastar/core/on_internal_error.hh>
+
 #include "cql3/util.hh"
-#include "data_dictionary/keyspace_element.hh"
-#include "replica/database.hh"
+#include "log.hh"
+#include "types/types.hh"
+
+static logging::logger dlogger{"description"};
 
 namespace cql3 {
 
-description::description(replica::database& db, const data_dictionary::keyspace_element& element)
-    : _keyspace(util::maybe_quote(element.keypace_name()))
-    , _type(element.element_type(db))
-    , _name(util::maybe_quote(element.element_name()))
-    , _create_statement(std::nullopt) {}
+std::vector<bytes_opt> description::serialize(bool serialize_create_statement) const {
+    std::vector<bytes_opt> result{};
+    result.reserve(serialize_create_statement ? 4 : 3);
 
-description::description(replica::database& db, const data_dictionary::keyspace_element& element, bool with_internals)
-    : _keyspace(util::maybe_quote(element.keypace_name()))
-    , _type(element.element_type(db))
-    , _name(util::maybe_quote(element.element_name()))
-{
-    std::ostringstream os;
-    element.describe(db, os, with_internals);
-    _create_statement = os.str();
-}
-
-description::description(replica::database& db, const data_dictionary::keyspace_element& element, sstring create_statement)
-    : _keyspace(util::maybe_quote(element.keypace_name()))
-    , _type(element.element_type(db))
-    , _name(util::maybe_quote(element.element_name()))
-    , _create_statement(std::move(create_statement)) {}
-
-std::vector<bytes_opt> description::serialize() const {
-    auto desc = std::vector<bytes_opt>{
-        {to_bytes(_keyspace)},
-        {to_bytes(_type)},
-        {to_bytes(_name)}
-    };
-
-    if (_create_statement) {
-        desc.push_back({to_bytes(*_create_statement)});
+    if (keyspace) {
+        result.push_back(to_bytes(cql3::util::maybe_quote(*keyspace)));
+    } else {
+        result.push_back(data_value::make_null(utf8_type).serialize());
     }
 
-    return desc;
+    result.push_back(to_bytes(type));
+    result.push_back(to_bytes(cql3::util::maybe_quote(name)));
+
+    if (serialize_create_statement && create_statement) {
+        result.push_back(to_bytes(*create_statement));
+    } else if (serialize_create_statement) {
+        on_internal_error(dlogger, "create_statement field is empty");
+    }
+
+    return result;
 }
 
 } // namespace cql3
