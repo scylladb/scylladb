@@ -1,5 +1,3 @@
-add_scylla_test(bptree_compaction_test
-  KIND UNIT)
 add_scylla_test(cross_shard_barrier_test
   KIND UNIT)
 add_scylla_test(lsa_sync_eviction_test

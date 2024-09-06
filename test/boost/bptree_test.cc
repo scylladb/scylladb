@@ -7,11 +7,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE bptree
-
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
+#include <seastar/testing/thread_test_case.hh>
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "test/unit/collection_stress.hh"
@@ -477,4 +476,51 @@ BOOST_AUTO_TEST_CASE(stress_test) {
     false);
 
     delete itc;
+}
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
+    constexpr int TEST_NODE_SIZE = 7;
+
+    using test_key = tree_test_key_base;
+
+    class test_data {
+        int _value;
+    public:
+        test_data() : _value(0) {}
+        test_data(test_key& k) : _value((int)k + 10) {}
+
+        operator unsigned long() const { return _value; }
+        bool match_key(const test_key& k) const { return _value == (int)k + 10; }
+    };
+    using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
+    using test_validator = validator<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;
+
+    stress_config cfg;
+    cfg.count = 10000;
+    cfg.iters = 13;
+    cfg.verb = false;
+
+    tree_pointer<test_tree> t(test_key_compare{});
+    test_validator tv;
+
+    stress_compact_collection(cfg,
+        /* insert */ [&] (int key) {
+            test_key k(key);
+            auto ti = t->emplace(copy_key(k), k);
+            SCYLLA_ASSERT(ti.second);
+        },
+        /* erase */ [&] (int key) {
+            t->erase(test_key(key));
+        },
+        /* validate */ [&] {
+            if (cfg.verb) {
+                fmt::print("Validating:\n");
+                tv.print_tree(*t, '|');
+            }
+            tv.validate(*t);
+        },
+        /* clear */ [&] {
+            t->clear();
+        }
+    );
 }
