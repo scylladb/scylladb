@@ -452,7 +452,7 @@ async def test_concurrent_tablet_repair_and_split(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'raft_topology=debug',
-        '--target-tablet-size-in-bytes', '1024',
+        '--config', 'target_tablet_size_in_bytes: 1024',
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
@@ -518,7 +518,7 @@ async def test_concurrent_tablet_repair_and_split(manager: ManagerClient):
 async def test_tablet_missing_data_repair(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
-        '--hinted-handoff-enabled', 'false',
+        '--config', 'hinted_handoff_enabled: false',
         ]
     servers = [await manager.server_add(cmdline=cmdline),
                await manager.server_add(cmdline=cmdline),
@@ -625,7 +625,7 @@ async def test_tablet_repair_ranges_selection(manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_tablet_cleanup(manager: ManagerClient):
-    cmdline = ['--smp=2', '--commitlog-sync=batch']
+    cmdline = ['--smp=2', '--config', 'commitlog_sync: batch']
 
     logger.info("Start first node")
     servers = [await manager.server_add(cmdline=cmdline)]
@@ -787,7 +787,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'table=debug',
-        '--target-tablet-size-in-bytes', '1024',
+        '--config', 'target_tablet_size_in_bytes: 1024',
     ]
     servers = [await manager.server_add(config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
