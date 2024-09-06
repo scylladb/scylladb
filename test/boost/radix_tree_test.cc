@@ -13,7 +13,7 @@
 #include <fmt/core.h>
 
 #include "test/unit/radix_tree_printer.hh"
-#include "test/unit/collection_stress.hh"
+#include "collection_stress.hh"
 #include "utils/compact-radix-tree.hh"
 
 using namespace compact_radix_tree;
@@ -260,8 +260,8 @@ BOOST_AUTO_TEST_CASE(stress_test) {
                     vld = validate::oracle;
                 }
             },
-            /* step */ [] (stress_step step) { },
-        false);
+            /* step */ [] (stress_step step) { }
+        );
 
         cfg.count /= 3;
     }

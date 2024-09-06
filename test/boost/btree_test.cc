@@ -12,7 +12,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "test/unit/collection_stress.hh"
+#include "collection_stress.hh"
 #include "test/unit/btree_validation.hh"
 #include "test/unit/tree_test_key.hh"
 #include "utils/intrusive_btree.hh"
@@ -617,8 +617,8 @@ BOOST_DATA_TEST_CASE(stress_test, boost::unit_test::data::make({std::tuple(4132,
                     ti++;
                 }
             }
-        },
-    false);
+        }
+    );
 
     delete itc;
 }

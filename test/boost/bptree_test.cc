@@ -13,7 +13,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
-#include "test/unit/collection_stress.hh"
+#include "collection_stress.hh"
 #include "test/unit/bptree_validation.hh"
 #include "test/unit/tree_test_key.hh"
 
@@ -472,8 +472,8 @@ BOOST_AUTO_TEST_CASE(stress_test) {
                     ti++;
                 }
             }
-        },
-    false);
+        }
+    );
 
     delete itc;
 }
