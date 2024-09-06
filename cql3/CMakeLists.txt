@@ -32,6 +32,7 @@ target_sources(cql3
     attributes.cc
     cf_name.cc
     cql3_type.cc
+    description.cc
     operation.cc
     index_name.cc
     keyspace_element_name.cc

@@ -47,6 +47,7 @@
 #include "db/extensions.hh"
 #include "utils/sorting.hh"
 #include "replica/database.hh"
+#include "cql3/description.hh"
 
 static logging::logger dlogger("describe");
 
@@ -60,55 +61,9 @@ namespace cql3 {
 
 namespace statements {
 
-using keyspace_element = data_dictionary::keyspace_element;
-
 namespace {
 
-// Represents description of keyspace_element
-struct description {
-    sstring _keyspace;
-    sstring _type;
-    sstring _name;
-    std::optional<sstring> _create_statement;
-
-    // Description without create_statement
-    description(replica::database& db, const keyspace_element& element)
-        : _keyspace(util::maybe_quote(element.keypace_name()))
-        , _type(element.element_type(db))
-        , _name(util::maybe_quote(element.element_name()))
-        , _create_statement(std::nullopt) {}
-
-    // Description with create_statement
-    description(replica::database& db, const keyspace_element& element, bool with_internals)
-        : _keyspace(util::maybe_quote(element.keypace_name()))
-        , _type(element.element_type(db))
-        , _name(util::maybe_quote(element.element_name()))
-    {
-        std::ostringstream os;
-        element.describe(db, os, with_internals);
-        _create_statement = os.str();
-    }
-
-    description(replica::database& db, const keyspace_element& element, sstring create_statement)
-        : _keyspace(util::maybe_quote(element.keypace_name()))
-        , _type(element.element_type(db))
-        , _name(util::maybe_quote(element.element_name()))
-        , _create_statement(std::move(create_statement)) {}
-
-    std::vector<bytes_opt> serialize() const {
-        auto desc = std::vector<bytes_opt>{
-            {to_bytes(_keyspace)},
-            {to_bytes(_type)},
-            {to_bytes(_name)}
-        };
-
-        if (_create_statement) {
-            desc.push_back({to_bytes(*_create_statement)});
-        }
-
-        return desc;
-    }
-};
+using keyspace_element = data_dictionary::keyspace_element;
 
 future<std::vector<description>> generate_descriptions(
     replica::database& db, 
