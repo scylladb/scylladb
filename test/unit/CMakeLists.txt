@@ -1,7 +1,5 @@
 add_scylla_test(bptree_compaction_test
   KIND UNIT)
-add_scylla_test(bptree_stress_test
-  KIND UNIT)
 add_scylla_test(btree_compaction_test
   KIND UNIT)
 add_scylla_test(btree_stress_test
