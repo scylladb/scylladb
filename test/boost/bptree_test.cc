@@ -14,8 +14,8 @@
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "collection_stress.hh"
-#include "test/unit/bptree_validation.hh"
-#include "test/unit/tree_test_key.hh"
+#include "bptree_validation.hh"
+#include "tree_test_key.hh"
 
 struct int_compare {
     bool operator()(const int& a, const int& b) const noexcept { return a < b; }

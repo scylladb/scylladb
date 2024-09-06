@@ -12,7 +12,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <fmt/core.h>
 
-#include "test/unit/radix_tree_printer.hh"
+#include "radix_tree_printer.hh"
 #include "collection_stress.hh"
 #include "utils/compact-radix-tree.hh"
 

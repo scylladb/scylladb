@@ -13,8 +13,8 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "collection_stress.hh"
-#include "test/unit/btree_validation.hh"
-#include "test/unit/tree_test_key.hh"
+#include "btree_validation.hh"
+#include "tree_test_key.hh"
 #include "utils/intrusive_btree.hh"
 
 using namespace intrusive_b;
