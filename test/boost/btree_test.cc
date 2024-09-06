@@ -12,6 +12,8 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include "test/unit/collection_stress.hh"
+#include "test/unit/btree_validation.hh"
 #include "test/unit/tree_test_key.hh"
 #include "utils/intrusive_btree.hh"
 
@@ -524,6 +526,101 @@ BOOST_DATA_TEST_CASE(test_unlink_leftmost_n,
         BOOST_REQUIRE(int(*k) == rover++);
         delete k;
     }
+}
+
+BOOST_DATA_TEST_CASE(stress_test, boost::unit_test::data::make({std::tuple(4132, 9), std::tuple(27, 312)}), count, iter) {
+    constexpr int TEST_NODE_SIZE = 8;
+    constexpr int TEST_LINEAR_THRESH = 21;
+
+    class test_key : public tree_test_key_base {
+    public:
+        member_hook _hook;
+        test_key(int nr) noexcept : tree_test_key_base(nr) {}
+        test_key(const test_key&) = delete;
+        test_key(test_key&&) = delete;
+    };
+
+    using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH, key_search::both, with_debug::yes>;
+    using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
+    using test_iterator_checker = iterator_checker<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
+
+    test_key_tri_compare cmp;
+    auto t = std::make_unique<test_tree>();
+    std::map<int, unsigned long> oracle;
+    test_validator tv;
+    auto* itc = new test_iterator_checker(tv, *t);
+
+    stress_config cfg;
+    cfg.count = count;
+    cfg.iters = iter;
+    cfg.keys = "rand";
+    cfg.verb = false;
+    auto itv = 0;
+
+    stress_collection(cfg,
+        /* insert */ [&] (int key) {
+            auto ir = t->insert(std::make_unique<test_key>(key), cmp);
+            SCYLLA_ASSERT(ir.second);
+            oracle[key] = key;
+
+            if (itv++ % 7 == 0) {
+                if (!itc->step()) {
+                    delete itc;
+                    itc = new test_iterator_checker(tv, *t);
+                }
+            }
+        },
+        /* erase */ [&] (int key) {
+            test_key k(key);
+            auto deleter = [] (test_key* k) noexcept { delete k; };
+
+            if (itc->here(k)) {
+                delete itc;
+                itc = nullptr;
+            }
+
+            t->erase_and_dispose(key, cmp, deleter);
+            oracle.erase(key);
+
+            if (itc == nullptr) {
+                itc = new test_iterator_checker(tv, *t);
+            }
+
+            if (itv++ % 5 == 0) {
+                if (!itc->step()) {
+                    delete itc;
+                    itc = new test_iterator_checker(tv, *t);
+                }
+            }
+        },
+        /* validate */ [&] {
+            if (cfg.verb) {
+                fmt::print("Validating\n");
+                tv.print_tree(*t, '|');
+            }
+            tv.validate(*t);
+        },
+        /* step */ [&] (stress_step step) {
+            if (step == stress_step::before_erase) {
+                auto sz = t->calculate_size();
+                if (sz != (size_t)cfg.count) {
+                    fmt::print("Size {} != count {}\n", sz, cfg.count);
+                    throw "size";
+                }
+
+                auto ti = t->begin();
+                for (auto oe : oracle) {
+                    if ((unsigned long)*ti != oe.second) {
+                        fmt::print("Data mismatch {} vs {}\n", oe.second, *ti);
+                        throw "oracle";
+                    }
+                    ti++;
+                }
+            }
+        },
+    false);
+
+    delete itc;
 }
 
 static future<> test_exception_safety_of_clone(unsigned nr_keys) {
