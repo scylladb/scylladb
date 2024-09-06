@@ -1340,6 +1340,7 @@ roleOptions[cql3::role_options& opts]
 
 roleOption[cql3::role_options& opts]
     : K_PASSWORD '=' v=STRING_LITERAL { opts.password = $v.text; }
+    | K_SALTED K_HASH '=' v=STRING_LITERAL { opts.salted_hash = $v.text; }
     | K_OPTIONS '=' m=mapLiteral { opts.options = convert_property_map(m); }
     | K_SUPERUSER '=' b=BOOLEAN { opts.is_superuser = convert_boolean_literal($b.text); }
     | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
@@ -2071,6 +2072,8 @@ basic_unreserved_keyword returns [sstring str]
         | K_NOLOGIN
         | K_OPTIONS
         | K_PASSWORD
+        | K_SALTED
+        | K_HASH
         | K_EXISTS
         | K_CUSTOM
         | K_TRIGGER
@@ -2231,6 +2234,8 @@ K_ROLES:       R O L E S;
 K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
 K_PASSWORD:    P A S S W O R D;
+K_SALTED:      S A L T E D;
+K_HASH:        H A S H;
 K_LOGIN:       L O G I N;
 K_NOLOGIN:     N O L O G I N;
 K_OPTIONS:     O P T I O N S;

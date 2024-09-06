@@ -37,11 +37,21 @@ using result_message = cql_transport::messages::result_message;
 using result_message_ptr = ::shared_ptr<result_message>;
 
 static auth::authentication_options extract_authentication_options(const cql3::role_options& options) {
+    if (options.password && options.salted_hash) {
+        throw exceptions::syntax_exception("Only one of the options: PASSWORD, SALTED HASH can be provided");
+    }
+
     auth::authentication_options authen_options;
-    authen_options.password = options.password;
 
     if (options.options) {
         authen_options.options = std::unordered_map<sstring, sstring>(options.options->begin(), options.options->end());
+    }
+
+    if (options.salted_hash) {
+        authen_options.credentials = auth::salted_hash_option {.salted_hash = *options.salted_hash};
+    }
+    if (options.password) {
+        authen_options.credentials = auth::password_option {.password = *options.password};
     }
 
     return authen_options;

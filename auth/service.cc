@@ -8,6 +8,7 @@
 
 #include <exception>
 #include <seastar/core/coroutine.hh>
+#include "auth/authentication_options.hh"
 #include "auth/resource.hh"
 #include "auth/service.hh"
 
@@ -33,6 +34,7 @@
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <variant>
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "timestamp.hh"
@@ -322,8 +324,11 @@ static void validate_authentication_options_are_supported(
         }
     };
 
-    if (options.password) {
-        check(authentication_option::password);
+    if (options.credentials) {
+        std::visit(make_visitor(
+            [&] (const password_option&) { check(authentication_option::password); },
+            [&] (const salted_hash_option&) { check(authentication_option::salted_hash); }
+        ), *options.credentials);
     }
 
     if (options.options) {
