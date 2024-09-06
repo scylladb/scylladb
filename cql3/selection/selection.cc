@@ -621,7 +621,7 @@ result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<const 
         uint64_t rows_fetched_for_last_partition)
     : _restrictions(restrictions)
     , _options(options)
-    , _skip_pk_restrictions(!_restrictions->pk_restrictions_need_filtering())
+    , _partition_key_filter(_restrictions->get_partition_key_filter())
     , _skip_ck_restrictions(!_restrictions->ck_restrictions_need_filtering())
     , _remaining(remaining)
     , _schema(schema)
@@ -643,6 +643,21 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
     }
 
     auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
+
+    if (_partition_key_filter) {
+        if (!expr::is_satisfied_by(
+                        *_partition_key_filter,
+                        expr::evaluation_inputs{
+                            .partition_key = partition_key,
+                            .clustering_key = clustering_key,
+                            .static_and_regular_columns = {}, // partition key filtering only
+                            .selection = &selection,
+                            .options = &_options,
+                        })) {
+            _current_partition_key_does_not_match = true;
+            return false;
+        }
+    }
 
     const expr::expression& clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
     if (expr::contains_multi_column_restriction(clustering_columns_restrictions)) {
@@ -694,27 +709,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             }
             break;
         case column_kind::partition_key: {
-            if (_skip_pk_restrictions) {
-                continue;
-            }
-            auto partition_key_restrictions_map = _restrictions->get_single_column_partition_key_restrictions();
-            auto restr_it = partition_key_restrictions_map.find(cdef);
-            if (restr_it == partition_key_restrictions_map.end()) {
-                continue;
-            }
-            const expr::expression& single_col_restriction = restr_it->second;
-            if (!expr::is_satisfied_by(
-                        single_col_restriction,
-                        expr::evaluation_inputs{
-                            .partition_key = partition_key,
-                            .clustering_key = clustering_key,
-                            .static_and_regular_columns = {}, // partition key filtering only
-                            .selection = &selection,
-                            .options = &_options,
-                        })) {
-                _current_partition_key_does_not_match = true;
-                return false;
-            }
+            // handled via _partition_key_filter
             }
             break;
         case column_kind::clustering_key: {

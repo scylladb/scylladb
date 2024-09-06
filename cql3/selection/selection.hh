@@ -208,7 +208,7 @@ public:
     class restrictions_filter {
         const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
         const query_options& _options;
-        const bool _skip_pk_restrictions;
+        const std::optional<expr::expression>& _partition_key_filter;
         const bool _skip_ck_restrictions;
         mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
