@@ -18,6 +18,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "auth/resource.hh"
+#include "cql3/description.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -195,5 +196,8 @@ public:
     /// \note: This is a no-op if the role does not have the named attribute set.
     ///
     virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name, ::service::group0_batch& mc) = 0;
+
+    /// Produces descriptions that can be used to restore the role grants.
+    virtual future<std::vector<cql3::description>> describe_role_grants() = 0;
 };
 }

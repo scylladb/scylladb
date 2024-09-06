@@ -24,7 +24,9 @@
 #include "auth/role_manager.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/description.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/util.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
@@ -701,4 +703,33 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
                 {sstring(role_name), sstring(attribute_name)});
     }
 }
+
+future<std::vector<cql3::description>> standard_role_manager::describe_role_grants() {
+    std::vector<cql3::description> result{};
+
+    const auto grants = co_await query_all_directly_granted();
+    result.reserve(grants.size());
+
+    for (const auto& [grantee_role, granted_role] : grants) {
+        const auto formatted_grantee = cql3::util::maybe_quote(grantee_role);
+        const auto formatted_granted = cql3::util::maybe_quote(granted_role);
+
+        result.push_back(cql3::description {
+            // Role grants do not belong to any keyspace.
+            .keyspace = std::nullopt,
+            .type = "grant_role",
+            .name = granted_role,
+            .create_statement = seastar::format("GRANT {} TO {};", formatted_granted, formatted_grantee)
+        });
+
+        co_await coroutine::maybe_yield();
+    }
+
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+        return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
+    });
+
+    co_return result;
 }
+
+} // namespace auth

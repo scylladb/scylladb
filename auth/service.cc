@@ -9,6 +9,7 @@
 #include <exception>
 #include <seastar/core/coroutine.hh>
 #include "auth/authentication_options.hh"
+#include "auth/authorizer.hh"
 #include "auth/resource.hh"
 #include "auth/service.hh"
 
@@ -26,7 +27,9 @@
 #include "auth/role_or_anonymous.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/description.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/util.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
@@ -421,6 +424,223 @@ future<bool> service::exists(const resource& r) const {
     }
 
     return make_ready_future<bool>(false);
+}
+
+future<std::vector<cql3::description>> service::describe_roles(bool with_salted_hashes) {
+    std::vector<cql3::description> result{};
+
+    const auto roles = co_await _role_manager->query_all();
+    result.reserve(roles.size());
+
+    const bool authenticator_uses_password_hashes = _authenticator->uses_password_hashes();
+
+    auto produce_create_statement = [with_salted_hashes] (const sstring& formatted_role_name,
+            const std::optional<sstring>& maybe_salted_hash, bool can_login, bool is_superuser) {
+        // Even after applying formatting to a role, `formatted_role_name` can only equal `meta::DEFAULT_SUPER_NAME`
+        // if the original identifier was equal to it.
+        const sstring role_part = formatted_role_name == meta::DEFAULT_SUPERUSER_NAME
+                ? seastar::format("IF NOT EXISTS {}", formatted_role_name)
+                : formatted_role_name;
+
+        const sstring with_salted_hash_part = with_salted_hashes && maybe_salted_hash
+                // `K_PASSWORD` in Scylla's CQL grammar requires that passwords be quoted
+                // with single quotation marks.
+                ? seastar::format("WITH SALTED HASH = {} AND", cql3::util::single_quote(*maybe_salted_hash))
+                : "WITH";
+
+        return seastar::format("CREATE ROLE {} {} LOGIN = {} AND SUPERUSER = {};",
+                role_part, with_salted_hash_part, can_login, is_superuser);
+    };
+
+    for (const auto& role : roles) {
+        const sstring formatted_role_name = cql3::util::maybe_quote(role);
+
+        std::optional<sstring> maybe_salted_hash;
+        if (authenticator_uses_password_hashes) {
+            maybe_salted_hash = co_await _authenticator->get_password_hash(role);
+        }
+
+        const bool can_login = co_await _role_manager->can_login(role);
+        const bool is_superuser = co_await _role_manager->is_superuser(role);
+
+        result.push_back(cql3::description {
+            // Roles do not belong to any keyspace.
+            .keyspace = std::nullopt,
+            .type = "role",
+            .name = role,
+            .create_statement = produce_create_statement(formatted_role_name, maybe_salted_hash, can_login, is_superuser)
+        });
+    }
+
+    std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
+
+    co_return result;
+}
+
+// The function doesn't assume anything about `role`.
+static sstring describe_data_resource(const permission& perm, const resource& r, std::string_view role) {
+    const auto permission = permissions::to_string(perm);
+    const auto formatted_role = cql3::util::maybe_quote(role);
+
+    const auto view = data_resource_view(r);
+    const auto maybe_ks = view.keyspace();
+    const auto maybe_cf = view.table();
+
+    // The documentation says:
+    //
+    //     Both keyspace and table names consist of only alphanumeric characters, cannot be empty,
+    //     and are limited in size to 48 characters (that limit exists mostly to avoid filenames,
+    //     which may include the keyspace and table name, to go over the limits of certain file systems).
+    //     By default, keyspace and table names are case insensitive (myTable is equivalent to mytable),
+    //     but case sensitivity can be forced by using double-quotes ("myTable" is different from mytable).
+    //
+    // That's why we wrap identifiers with quotation marks below.
+
+    if (!maybe_ks) {
+        return seastar::format("GRANT {} ON ALL KEYSPACES TO {};", permission, formatted_role);
+    }
+    const auto ks = cql3::util::maybe_quote(*maybe_ks);
+
+    if (!maybe_cf) {
+        return seastar::format("GRANT {} ON KEYSPACE {} TO {};", permission, ks, formatted_role);
+    }
+    const auto cf = cql3::util::maybe_quote(*maybe_cf);
+
+    return seastar::format("GRANT {} ON {}.{} TO {};", permission, ks, cf, formatted_role);
+}
+
+// The function doesn't assume anything about `role`.
+static sstring describe_role_resource(const permission& perm, const resource& r, std::string_view role) {
+    const auto permission = permissions::to_string(perm);
+    const auto formatted_role = cql3::util::maybe_quote(role);
+
+    const auto view = role_resource_view(r);
+    const auto maybe_target_role = view.role();
+
+    if (!maybe_target_role) {
+        return seastar::format("GRANT {} ON ALL ROLES TO {};", permission, formatted_role);
+    }
+    return seastar::format("GRANT {} ON ROLE {} TO {};", permission, cql3::util::maybe_quote(*maybe_target_role), formatted_role);
+}
+
+// The function doesn't assume anything about `role`.
+static sstring describe_udf_resource(const permission& perm, const resource& r, std::string_view role) {
+    const auto permission = permissions::to_string(perm);
+    const auto formatted_role = cql3::util::maybe_quote(role);
+
+    const auto view = functions_resource_view(r);
+    const auto maybe_ks = view.keyspace();
+    const auto maybe_fun_sig = view.function_signature();
+    const auto maybe_fun_name = view.function_name();
+    const auto maybe_fun_args = view.function_args();
+
+    // The documentation says:
+    //
+    //     Both keyspace and table names consist of only alphanumeric characters, cannot be empty,
+    //     and are limited in size to 48 characters (that limit exists mostly to avoid filenames,
+    //     which may include the keyspace and table name, to go over the limits of certain file systems).
+    //     By default, keyspace and table names are case insensitive (myTable is equivalent to mytable),
+    //     but case sensitivity can be forced by using double-quotes ("myTable" is different from mytable).
+    //
+    // That's why we wrap identifiers with quotation marks below.
+
+    if (!maybe_ks) {
+        return seastar::format("GRANT {} ON ALL FUNCTIONS TO {};", permission, formatted_role);
+    }
+    const auto ks = cql3::util::maybe_quote(*maybe_ks);
+
+    if (!maybe_fun_sig && !maybe_fun_name) {
+        return seastar::format("GRANT {} ON ALL FUNCTIONS IN KEYSPACE {} TO {};", permission, ks, formatted_role);
+    }
+
+    if (maybe_fun_name) {
+        SCYLLA_ASSERT(maybe_fun_args);
+
+        const auto fun_name = cql3::util::maybe_quote(*maybe_fun_name);
+        const auto fun_args_range = *maybe_fun_args | std::views::transform([] (const auto& fun_arg) {
+            return cql3::util::maybe_quote(fun_arg);
+        });
+
+        return seastar::format("GRANT {} ON FUNCTION {}.{}({}) TO {};",
+                permission, ks, fun_name, fmt::join(fun_args_range, ", "), formatted_role);
+    }
+
+    SCYLLA_ASSERT(maybe_fun_sig);
+
+    auto [fun_name, fun_args] = decode_signature(*maybe_fun_sig);
+    fun_name = cql3::util::maybe_quote(fun_name);
+
+    // We don't call `cql3::util::maybe_quote` later because `cql3_type_name_without_frozen` already guarantees
+    // that the type will be wrapped within double quotation marks if it's necessary.
+    auto parsed_fun_args = fun_args | std::views::transform([] (const data_type& dt) {
+        return dt->without_reversed().cql3_type_name_without_frozen();
+    });
+
+    return seastar::format("GRANT {} ON FUNCTION {}.{}({}) TO {};",
+            permission, ks, fun_name, fmt::join(parsed_fun_args, ", "), formatted_role);
+}
+
+// The function doesn't assume anything about `role`.
+static sstring describe_resource_kind(const permission& perm, const resource& r, std::string_view role) {
+    switch (r.kind()) {
+        case resource_kind::data:
+            return describe_data_resource(perm, r, role);
+        case resource_kind::role:
+            return describe_role_resource(perm, r, role);
+        case resource_kind::service_level:
+            on_internal_error(log, "Granting permissions for service levels is not supported");
+        case resource_kind::functions:
+            return describe_udf_resource(perm, r, role);
+    }
+}
+
+future<std::vector<cql3::description>> service::describe_permissions() const {
+    std::vector<cql3::description> result{};
+
+    const auto permission_list = co_await std::invoke([&] -> future<std::vector<permission_details>> {
+        try {
+            co_return co_await _authorizer->list_all();
+        } catch (const unsupported_authorization_operation&) {
+            // If Scylla uses AllowAllAuthorizer, permissions do not exist and the corresponding authorizer
+            // will throw an exception when trying to access them.
+            co_return std::vector<permission_details>{};
+        }
+    });
+
+    for (const auto& permissions : permission_list) {
+        for (const auto& permission : permissions.permissions) {
+            result.push_back(cql3::description {
+                // Permission grants do not belong to any keyspace.
+                .keyspace = std::nullopt,
+                .type = "grant_permission",
+                .name = permissions.role_name,
+                .create_statement = describe_resource_kind(permission, permissions.resource, permissions.role_name)
+            });
+        }
+
+        co_await coroutine::maybe_yield();
+    }
+
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+        return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
+    });
+
+    co_return result;
+}
+
+future<std::vector<cql3::description>> service::describe_auth(bool with_salted_hashes) {
+    auto role_descs = co_await describe_roles(with_salted_hashes);
+    auto role_grant_descs = co_await _role_manager->describe_role_grants();
+    auto permission_descs = co_await describe_permissions();
+
+    auto join_vectors = [] (std::vector<cql3::description>& v1, std::vector<cql3::description>&& v2) {
+        v1.insert(v1.end(), std::make_move_iterator(v2.begin()), std::make_move_iterator(v2.end()));
+    };
+
+    join_vectors(role_descs, std::move(role_grant_descs));
+    join_vectors(role_descs, std::move(permission_descs));
+
+    co_return role_descs;
 }
 
 //
