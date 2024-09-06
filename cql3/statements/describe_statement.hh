@@ -75,6 +75,7 @@ public:
 class schema_describe_statement : public describe_statement {
     struct schema_desc {
         bool full_schema;
+        bool with_salted_hashes;
     };
     struct keyspace_desc {
         std::optional<sstring> keyspace;
@@ -90,7 +91,7 @@ protected:
     virtual seastar::future<std::vector<std::vector<bytes_opt>>> describe(cql3::query_processor& qp, const service::client_state& client_state) const override;
 
 public:
-    schema_describe_statement(bool full_schema, bool with_internals);
+    schema_describe_statement(bool full_schema, bool with_salted_hashes, bool with_internals);
     schema_describe_statement(std::optional<sstring> keyspace, bool only, bool with_internals);
 };
 
