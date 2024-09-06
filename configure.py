@@ -632,7 +632,6 @@ scylla_tests = set([
     'test/unit/row_cache_stress_test',
     'test/unit/bptree_compaction_test',
     'test/unit/btree_compaction_test',
-    'test/unit/radix_tree_stress_test',
     'test/unit/radix_tree_compaction_test',
     'test/unit/cross_shard_barrier_test',
 ])
@@ -1420,7 +1419,6 @@ tests_not_using_seastar_test_framework = set([
     'test/unit/row_cache_alloc_stress_test',
     'test/unit/bptree_compaction_test',
     'test/unit/btree_compaction_test',
-    'test/unit/radix_tree_stress_test',
     'test/unit/radix_tree_compaction_test',
     'test/manual/sstable_scan_footprint_test',
     'test/unit/cross_shard_barrier_test',
