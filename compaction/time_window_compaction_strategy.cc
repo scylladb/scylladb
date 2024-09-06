@@ -310,10 +310,9 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     auto all_disjoint = !single_window.empty() && is_disjoint(single_window);
     auto all_buckets = get_buckets(single_window, _options);
     single_window.clear();
-    for (auto& pair : all_buckets.first) {
-        auto ssts = std::move(pair.second);
+    for (auto& [bucket, ssts] : all_buckets.first) {
         if (ssts.size() >= offstrategy_threshold) {
-            clogger.debug("time_window_compaction_strategy::get_reshaping_job: bucket={} bucket_size={}", pair.first, ssts.size());
+            clogger.debug("time_window_compaction_strategy::get_reshaping_job: bucket={} bucket_size={}", bucket, ssts.size());
             if (all_disjoint) {
                 std::copy(ssts.begin(), ssts.end(), std::back_inserter(single_window));
                 continue;
@@ -418,13 +417,13 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 std::vector<shared_sstable>
 time_window_compaction_strategy::get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
     auto& state = get_state(table_s);
-    auto p = get_buckets(std::move(candidate_sstables), _options);
+    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
-    state.highest_window_seen = std::max(state.highest_window_seen, p.second);
+    state.highest_window_seen = std::max(state.highest_window_seen, max_timestamp);
 
-    update_estimated_compaction_by_tasks(state, p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
+    update_estimated_compaction_by_tasks(state, buckets, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
-    return newest_bucket(table_s, control, std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
+    return newest_bucket(table_s, control, std::move(buckets), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
         state.highest_window_seen);
 }
 
