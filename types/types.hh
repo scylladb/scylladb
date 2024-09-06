@@ -568,33 +568,6 @@ using bytes_view_opt = std::optional<bytes_view>;
 using managed_bytes_view_opt = std::optional<managed_bytes_view>;
 
 static inline
-bool optional_less_compare(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
-    if (bool(e1) != bool(e2)) {
-        return bool(e2);
-    }
-    if (!e1) {
-        return false;
-    }
-    return t->less(*e1, *e2);
-}
-
-static inline
-bool optional_equal(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
-    if (bool(e1) != bool(e2)) {
-        return false;
-    }
-    if (!e1) {
-        return true;
-    }
-    return t->equal(*e1, *e2);
-}
-
-static inline
-bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
-    return t->less(e1, e2);
-}
-
-static inline
 std::strong_ordering tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
