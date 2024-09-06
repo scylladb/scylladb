@@ -2144,9 +2144,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 #endif
 
-            ss.local().register_protocol_server(alternator_ctl, cfg->alternator_port() || cfg->alternator_https_port()).get();
+            if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
+                ss.local().register_protocol_server(alternator_ctl, enabled).get();
+            }
 
-            ss.local().register_protocol_server(redis_ctl, cfg->redis_port() || cfg->redis_ssl_port()).get();
+            if (bool enabled = cfg->redis_port() || cfg->redis_ssl_port()) {
+                ss.local().register_protocol_server(redis_ctl, enabled).get();
+            }
 
             supervisor::notify("serving");
 
