@@ -642,11 +642,11 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         return false;
     }
 
+    auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
+
     const expr::expression& clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
     if (expr::contains_multi_column_restriction(clustering_columns_restrictions)) {
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
-        // FIXME: push to upper layer so it happens once per row
-        auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
         bool multi_col_clustering_satisfied = expr::is_satisfied_by(
                 clustering_columns_restrictions,
                 expr::evaluation_inputs{
@@ -678,8 +678,6 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                 return false;
             }
             const expr::expression& single_col_restriction = restr_it->second;
-            // FIXME: push to upper layer so it happens once per row
-            auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
             bool regular_restriction_matches = expr::is_satisfied_by(
                     single_col_restriction,
                     expr::evaluation_inputs{
