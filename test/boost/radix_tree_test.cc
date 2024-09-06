@@ -292,3 +292,74 @@ SEASTAR_TEST_CASE(test_exception_safety_of_clone) {
                 }));
     });
 }
+
+class compaction_test_data {
+    unsigned long *_data;
+    unsigned long _val;
+public:
+    compaction_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
+    compaction_test_data(const compaction_test_data&) = delete;
+    compaction_test_data(compaction_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
+    ~compaction_test_data() {
+        if (_data != nullptr) {
+            delete _data;
+        }
+    }
+
+    unsigned long value() const {
+        return _data == nullptr ? _val + 0x80000000 : *_data;
+    }
+};
+
+template <> struct fmt::formatter<compaction_test_data> : fmt::formatter<string_view> {
+    auto format(const compaction_test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
+    using test_tree = tree<compaction_test_data>;
+
+    tree_pointer<test_tree> t;
+
+    stress_config cfg;
+    cfg.count = 132564;
+    cfg.iters = 1;
+    cfg.keys = "rand";
+    cfg.verb = false;
+
+    unsigned col_size = 0;
+
+    for (int i = 0; i < 32; i++) {
+        stress_compact_collection(cfg,
+            /* insert */ [&] (int key) {
+                t->emplace(key, key);
+                col_size++;
+            },
+            /* erase */ [&] (int key) {
+                t->erase(key);
+                col_size--;
+            },
+            /* validate */ [&] {
+                if (cfg.verb) {
+                    compact_radix_tree::printer<compaction_test_data, unsigned>::show(*t);
+                }
+
+                unsigned nr = 0;
+                auto ti = t->begin();
+                while (ti != t->end()) {
+                    SCYLLA_ASSERT(ti->value() == ti.key());
+                    nr++;
+                    ti++;
+                }
+                SCYLLA_ASSERT(nr == col_size);
+            },
+            /* clear */ [&] {
+                t->clear();
+                col_size = 0;
+            }
+        );
+
+        cfg.count /= 2;
+    }
+}
