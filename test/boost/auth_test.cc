@@ -400,3 +400,13 @@ SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_salted_hash) {
                 exception_predicate::message_equals("Username and/or password are incorrect"));
     }, auth_on(true));
 }
+
+SEASTAR_TEST_CASE(test_try_describe_schema_with_internals_and_passwords_as_anonymous_user) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.local_client_state().set_login(auth::anonymous_user());
+        env.refresh_client_state().get();
+        BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));
+        BOOST_REQUIRE_EXCEPTION(env.execute_cql("DESC SCHEMA WITH INTERNALS AND PASSWORDS").get(), exceptions::unauthorized_exception,
+                exception_predicate::message_equals("DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
+    }, auth_on(true));
+}
