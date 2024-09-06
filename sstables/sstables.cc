@@ -2487,10 +2487,10 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
              return make_checksummed_file_m_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options));
+                *checksum, pos, len, std::move(options), std::nullopt);
         } else {
             return make_checksummed_file_k_l_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options));
+                *checksum, pos, len, std::move(options), std::nullopt);
         }
     }
     return make_file_input_stream(f, pos, len, std::move(options));
