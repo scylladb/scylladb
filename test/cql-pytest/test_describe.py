@@ -9,11 +9,46 @@
 
 import pytest
 import random
-from pytest import fixture
-from contextlib import contextmanager, ExitStack
-from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix
-from cassandra.protocol import InvalidRequest
 import re
+from contextlib import contextmanager, ExitStack
+from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix, new_user, new_session
+from cassandra.protocol import InvalidRequest, Unauthorized
+from collections.abc import Iterable
+from typing import Any
+
+# Type of the row returned by `DESC` statements. It's of form
+#   (keyspace_name, type, name, create_statement)
+DescRowType = Any
+
+DEFAULT_SUPERUSER = "cassandra"
+
+def filter_non_default_user(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.name != DEFAULT_SUPERUSER, desc_result_iter)
+
+###
+
+def filter_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.type == "role", desc_result_iter)
+
+def filter_grant_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.type == "grant_role", desc_result_iter)
+
+def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.type == "grant_permission", desc_result_iter)
+
+def filter_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.type == "service_level", desc_result_iter)
+
+def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
+    return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
+
+###
+
+def extract_names(desc_result_iter: Iterable[DescRowType]) -> Iterable[str]:
+    return map(lambda result: result.name, desc_result_iter)
+
+def extract_create_statements(desc_result_iter: Iterable[DescRowType]) -> Iterable[str]:
+    return map(lambda result: result.create_statement, desc_result_iter)
 
 # (`element` refers to keyspace or keyspace's element(table, type, function, aggregate))
 # There are 2 main types of tests:
@@ -1193,3 +1228,171 @@ def new_random_type(cql, keyspace, udts=[]):
     return new_type(cql, keyspace, f"({fields})")
 
 ### ===========================================================================
+
+################################################################################
+# ............................................................................ #
+# ------------------------------- DESCRIPTION -------------------------------- #
+# ............................................................................ #
+# ============================================================================ #
+#                                                                              #
+# The tests below correspond to the task `scylladb/scylladb#18750`:            #
+#     "auth on raft: safe backup and restore"                                  #
+#                                                                              #
+# We want to test the following features related to the issue:                 #
+#                                                                              #
+# 1. Creating roles when providing `SALTED HASH`,                              #
+# 2. The behavior of `DESC SCHEMA WITH INTERNALS (AND PASSWORDS)` and          #
+#    the correctness of statements that it produces and which are related      #
+#    to the referenced issue: auth and service levels.                         #
+#                                                                              #
+# To do that, we use the following pattern for most of the cases we should     #
+# cover in this file:                                                          #
+#                                                                              #
+# 1. Format of the returned result by the query:                               #
+#    - Are all of the values in the columns present and correct?               #
+# 2. Formatting of identifiers with quotation marks.                           #
+# 3. Formatting of identifiers with uppercase characters.                      #
+# 4. Formatting of identifiers with unicode characters.                        #
+# 5. Test(s) verifying that all of the cases are handled and `DESC SCHEMA`     #
+#    prints them properly.                                                     #
+#                                                                              #
+################################################################################
+
+################################################################################
+# ............................................................................ #
+# ---------------------------------- NOTES ----------------------------------- #
+# ............................................................................ #
+# ============================================================================ #
+#                                                                              #
+# 1. Every create statement corresponding to auth and service levels returned  #
+#    by                                                                        #
+#        `DESC SCHEMA WITH INTERNALS (AND PASSWORDS)`                          #
+#    is termined with a semicolon.                                             #
+#                                                                              #
+# 2. `CREATE ROLE` statements always preserve the following order of options:  #
+#        `SALTED HASH`, `LOGIN`, `SUPERUSER`                                   #
+#    Aside from `SALTED HASH`, which only appears when executing               #
+#        `DESC SCHEMA WITH INTERNALS AND PASSWORDS`                            #
+#    the parameters are always present.                                        #
+#                                                                              #
+# 3. *ALL* create statements returned by                                       #
+#        `DESC SCHEMA WITH INTERNALS (AND PASSWORDS)`                          #
+#    and related to AUTH/service levels use capital letters for CQL syntax.    #
+#                                                                              #
+# 4. If an identifier needs to be quoted, e.g. because it contains whitespace  #
+#    characters, it will be wrapped with double quoatation marks.              #
+#    There are three exceptions to that rule:                                  #
+#                                                                              #
+#    (i)   the `WORKLOAD_TYPE` option when creating a service level,           #
+#    (ii)  the `PASSWORD` option when creating a role,                         #
+#    (iii) the `SALTED HASH` option when creating a role.                      #
+#                                                                              #
+#    The exceptions are enforced by the CQL grammar used in Scylla.            #
+#                                                                              #
+# 5. Statements for creating service levels always have options listed in the  #
+#    following order:                                                          #
+#        `TIMEOUT`, `WORKLOAD_TYPE`, `SHARES`                                  #
+#    If an option is unnecessary (e.g. there's no timeout or the workload      #
+#    type is unspecified -- default!), it's not present in the create          #
+#    statement of the result of `DESC SCHEMA WITH INTERNALS`.                  #
+#                                                                              #
+# 6. The `TIMEOUT` option in `CREATE SERVICE LEVEL` statements returned        #
+#    by `DESC SCHEMA WITH INTERNALS` always uses milliseconds as its           #
+#    resolution.                                                               #
+#                                                                              #
+# 7. We create test keyspaces manually here. The rationale for that is         #
+#    the fact that the creator of a resource automatically obtains all         #
+#    permissions on the resource. Since in these tests we verify permission    #
+#    grants, we want to have full control over who creates what.               #
+#                                                                              #
+################################################################################
+
+def sanitize_identifier(identifier: str, quotation_mark: str) -> str:
+    doubled_quotation_mark = quotation_mark + quotation_mark
+    return identifier.replace(quotation_mark, doubled_quotation_mark)
+
+def sanitize_password(password: str) -> str:
+    return sanitize_identifier(password, "'")
+
+def make_identifier(identifier: str, quotation_mark: str) -> str:
+    return quotation_mark + sanitize_identifier(identifier, quotation_mark) + quotation_mark
+
+###
+
+KS_AND_TABLE_PERMISSIONS = ["CREATE", "ALTER", "DROP", "MODIFY", "SELECT", "AUTHORIZE"]
+
+###
+
+class AuthSLContext:
+    def __init__(self, cql, ks=None):
+        self.cql = cql
+        self.ks = ks
+
+    def __enter__(self):
+        if self.ks:
+            self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'SimpleStrategy', 'replication_factor': 1 }}")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self.ks:
+            self.cql.execute(f"DROP KEYSPACE {self.ks}")
+
+        roles_iter = self.cql.execute(f"SELECT role FROM system.roles")
+        roles_iter = filter(lambda record: record.role != DEFAULT_SUPERUSER, roles_iter)
+        roles = [record.role for record in roles_iter]
+        for role in roles:
+            self.cql.execute(f"DROP ROLE {make_identifier(role, quotation_mark='"')}")
+
+        service_levels_iter = self.cql.execute("LIST ALL SERVICE LEVELS")
+        service_levels = [record.service_level for record in service_levels_iter]
+        for sl in service_levels:
+            self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+
+###
+
+def test_create_role_with_salted_hash(cql):
+    """
+    Verify that creating a role with a salted hash works correctly, i.e. that the salted hash
+    present in `system.roles` is the same as the one we provide.
+    """
+
+    with AuthSLContext(cql):
+        role = "andrew"
+        # Arbitrary salted hash. Could be anything.
+        # We don't use characters that won't be generated, i.e.:
+        #    `:`, `;`, `*`, `!`, and `\`,
+        # but Scylla should technically accept them too.
+        salted_hash = "@#$%^&()`,./{}[]abcdefghijklmnopqrstuwvxyzABCDEFGHIJKLMNOPQRSTUWVXYZ123456789~-_=+|"
+        cql.execute(f"CREATE ROLE {role} WITH SALTED HASH = '{sanitize_password(salted_hash)}'")
+
+        [result] = cql.execute(f"SELECT salted_hash FROM system.roles WHERE role = '{role}'")
+        assert salted_hash == result.salted_hash
+
+
+def test_create_role_with_salted_hash_authorization(cql):
+    """
+    Verify that roles that aren't superusers cannot perform `CREATE ROLE WITH SALTED HASH`.
+    """
+
+    with AuthSLContext(cql):
+        def try_create_role_with_salted_hash(role):
+            with new_session(cql, role) as ncql:
+                with pytest.raises(Unauthorized):
+                    ncql.execute("CREATE ROLE some_unused_name WITH SALTED HASH = 'somesaltedhash'")
+
+        # List of form (role name, list of permission grants to the role)
+        r1 = "andrew"
+        r2 = "jane"
+
+        with new_user(cql, r1), new_user(cql, r2):
+            # This also grants access to system tables.
+            cql.execute(f"GRANT ALL ON ALL KEYSPACES TO {r2}")
+
+            try_create_role_with_salted_hash(r1)
+            try_create_role_with_salted_hash(r2)
+
+        r3 = "bob"
+
+        with new_user(cql, r3, with_superuser_privileges=True):
+            with new_session(cql, r3) as ncql:
+                ncql.execute("CREATE ROLE some_unused_name WITH SALTED HASH = 'somesaltedhash'")

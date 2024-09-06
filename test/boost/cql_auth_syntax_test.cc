@@ -320,3 +320,37 @@ BOOST_AUTO_TEST_CASE(grant_role) {
 BOOST_AUTO_TEST_CASE(revoke_role) {
     test_valid("REVOKE soldier FROM boromir;");
 }
+
+BOOST_AUTO_TEST_CASE(create_role_with_salted_hash) {
+    test_valid("CREATE ROLE adam WITH SALTED HASH = 'something';");
+}
+
+BOOST_AUTO_TEST_CASE(create_role_with_salted) {
+    BOOST_REQUIRE_THROW(
+        cql3::util::do_with_parser("CREATE ROLE jane WITH SALTED = 'something';", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+        exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(create_role_with_salted_underscore_hash) {
+    BOOST_REQUIRE_THROW(
+        cql3::util::do_with_parser("CREATE ROLE jane WITH SALTED_HASH = 'something';", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+        exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(create_role_with_hash) {
+    BOOST_REQUIRE_THROW(
+        cql3::util::do_with_parser("CREATE ROLE jane WITH HASH = 'something';", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+        exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(create_role_with_salted_hash_double_quotation_marks) {
+    BOOST_REQUIRE_THROW(
+        cql3::util::do_with_parser("CREATE ROLE jane WITH SALTED HASH = \"something\";", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+        exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(create_role_with_salted_no_quotation_marks) {
+    BOOST_REQUIRE_THROW(
+        cql3::util::do_with_parser("CREATE ROLE jane WITH SALTED = something;", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+        exceptions::syntax_exception);
+}
