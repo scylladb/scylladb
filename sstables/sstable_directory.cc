@@ -507,8 +507,7 @@ sstable_directory::remove_unshared_sstables(std::vector<sstables::shared_sstable
     // list. So not only do we have to remove them, we also have to update the list. Because we're
     // dealing with a vector it's easier to just reconstruct the list.
     dirlog.debug("Removing {} unshared SSTables", sstlist.size());
-    return do_with(std::move(sstlist), std::unordered_set<sstables::shared_sstable>(),
-            [this] (std::vector<sstables::shared_sstable>& sstlist, std::unordered_set<sstables::shared_sstable>& exclude) {
+    std::unordered_set<sstables::shared_sstable> exclude;
 
         for (auto& sst : sstlist) {
             exclude.insert(sst);
@@ -524,10 +523,8 @@ sstable_directory::remove_unshared_sstables(std::vector<sstables::shared_sstable
 
         // Do this last for exception safety. If there is an exception on unlink we
         // want to at least leave the SSTable unshared list in a sane state.
-        return remove_sstables(std::move(sstlist)).then([] {
+        co_await remove_sstables(std::move(sstlist));
             dirlog.debug("Finished removing all SSTables");
-        });
-    });
 }
 
 
