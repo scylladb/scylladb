@@ -509,22 +509,22 @@ sstable_directory::remove_unshared_sstables(std::vector<sstables::shared_sstable
     dirlog.debug("Removing {} unshared SSTables", sstlist.size());
     std::unordered_set<sstables::shared_sstable> exclude;
 
-        for (auto& sst : sstlist) {
-            exclude.insert(sst);
+    for (auto& sst : sstlist) {
+        exclude.insert(sst);
+    }
+
+    auto old = std::exchange(_unshared_local_sstables, {});
+
+    for (auto& sst : old) {
+        if (!exclude.contains(sst)) {
+            _unshared_local_sstables.push_back(sst);
         }
+    }
 
-        auto old = std::exchange(_unshared_local_sstables, {});
-
-        for (auto& sst : old) {
-            if (!exclude.contains(sst)) {
-                _unshared_local_sstables.push_back(sst);
-            }
-        }
-
-        // Do this last for exception safety. If there is an exception on unlink we
-        // want to at least leave the SSTable unshared list in a sane state.
-        co_await remove_sstables(std::move(sstlist));
-            dirlog.debug("Finished removing all SSTables");
+    // Do this last for exception safety. If there is an exception on unlink we
+    // want to at least leave the SSTable unshared list in a sane state.
+    co_await remove_sstables(std::move(sstlist));
+    dirlog.debug("Finished removing all SSTables");
 }
 
 
