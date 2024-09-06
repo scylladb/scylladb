@@ -85,10 +85,18 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
     return async([this, &state] {
         state.ensure_has_permission({auth::permission::CREATE, auth::root_role_resource()}).get();
 
-        if (*_options.is_superuser) {
-            if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get()) {
-                throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
-            }
+        if (!_options.is_superuser && !_options.salted_hash) {
+            return;
+        }
+
+        const bool has_superuser = auth::has_superuser(*state.get_auth_service(), *state.user()).get();
+
+        if (_options.salted_hash && !has_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can create a role with a salted hash.");
+        }
+
+        if (_options.is_superuser.value_or(false) && !has_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
         }
     });
 }
