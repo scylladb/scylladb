@@ -452,6 +452,14 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     }
 
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db);
+
+    if (pk_restrictions_need_filtering()) {
+        _partition_key_filter = expr::conjunction{
+            .children = _single_column_partition_key_restrictions
+                    | std::ranges::views::values
+                    | std::ranges::to<std::vector>(),
+        };
+    }
 }
 
 bool
