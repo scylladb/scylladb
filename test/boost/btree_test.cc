@@ -664,3 +664,57 @@ SEASTAR_TEST_CASE(test_exception_safety_of_clone_linear) {
 SEASTAR_TEST_CASE(test_exception_safety_of_clone_large) {
     return test_exception_safety_of_clone(2534);
 }
+
+void stress_compaction_test(int count, int iter) {
+    constexpr int TEST_NODE_SIZE = 7;
+    constexpr int TEST_LINEAR_THRESHOLD = 19;
+
+    class test_key : public tree_test_key_base {
+    public:
+        member_hook _hook;
+        test_key(int nr) noexcept : tree_test_key_base(nr) {}
+        test_key(const test_key&) = delete;
+        test_key(test_key&& o) noexcept : tree_test_key_base(std::move(o)), _hook(std::move(o._hook)) {}
+    };
+
+    using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD, key_search::both, with_debug::yes>;
+    using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD>;
+
+    stress_config cfg;
+    cfg.count = count;
+    cfg.iters = iter;
+    cfg.verb = false;
+
+    tree_pointer<test_tree> t;
+    test_validator tv;
+
+    stress_compact_collection(cfg,
+        /* insert */ [&] (int key) {
+            auto k = alloc_strategy_unique_ptr<test_key>(current_allocator().construct<test_key>(key));
+            auto ti = t->insert(std::move(k), test_key_tri_compare{});
+            SCYLLA_ASSERT(ti.second);
+        },
+        /* erase */ [&] (int key) {
+            auto deleter = current_deleter<test_key>();
+            t->erase_and_dispose(test_key(key), test_key_tri_compare{}, deleter);
+        },
+        /* validate */ [&] {
+            if (cfg.verb) {
+                fmt::print("Validating:\n");
+                tv.print_tree(*t, '|');
+            }
+            tv.validate(*t);
+        },
+        /* clear */ [&] {
+            t->clear_and_dispose(current_deleter<test_key>());
+        }
+    );
+}
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test_large) {
+    stress_compaction_test(10000, 13);
+}
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test_small) {
+    stress_compaction_test(17, 3);
+}
