@@ -25,7 +25,7 @@ struct stress_config {
 enum class stress_step { before_insert, before_erase, iteration_finished };
 
 template <typename Insert, typename Erase, typename Validate, typename Step>
-void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase, Validate&& validate, Step&& step) {
+void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase, Validate&& validate, Step&& step, bool in_thread = true) {
     std::vector<int> keys;
 
     fmt::print("Inserting {:d} k:v pairs {:d} times\n", conf.count, conf.iters);
@@ -68,7 +68,9 @@ void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase
                 validate();
             }
 
-            seastar::thread::maybe_yield();
+            if (in_thread) {
+                seastar::thread::maybe_yield();
+            }
         }
 
         if (shuffle) {
@@ -86,7 +88,9 @@ void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase
                 validate();
             }
 
-            seastar::thread::maybe_yield();
+            if (in_thread) {
+                seastar::thread::maybe_yield();
+            }
         }
 
         step(stress_step::iteration_finished);
