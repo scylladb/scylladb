@@ -460,6 +460,14 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                     | std::ranges::to<std::vector>(),
         };
     }
+
+    if (ck_restrictions_need_filtering()) {
+        _clustering_key_filter = expr::conjunction{
+            .children = _single_column_clustering_key_restrictions
+                    | std::ranges::views::values
+                    | std::ranges::to<std::vector>(),
+        };
+    }
 }
 
 bool

@@ -49,6 +49,7 @@ private:
     expr::expression _clustering_columns_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
+    std::optional<expr::expression> _clustering_key_filter;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
@@ -356,6 +357,14 @@ public:
     // This is equivalent to pk_restrictions_need_filtering() + get_single_column_partition_key_restrictions().
     const std::optional<expr::expression>& get_partition_key_filter() const {
         return _partition_key_filter;
+    }
+
+    // Returns any filter that needs to be applied to the clustering key. If the clustering key restriction is translated
+    // to read_command, it will not be in the filter.
+    //
+    // This is equivalent to ck_restrictions_need_filtering() + get_single_column_clustering_key_restrictions().
+    const std::optional<expr::expression>& get_clustering_key_filter() const {
+        return _clustering_key_filter;
     }
 
     /**
