@@ -114,6 +114,7 @@ private:
 
 
     check_indexes _check_indexes = check_indexes::yes;
+    std::vector<const column_definition*> _column_defs_for_filtering;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -286,7 +287,7 @@ private:
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
-
+    void calculate_column_defs_for_filtering(data_dictionary::database db);
 public:
     /**
      * Returns the specified range of the partition key.

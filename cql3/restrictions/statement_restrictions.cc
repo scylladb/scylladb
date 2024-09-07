@@ -450,6 +450,8 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
     }
+
+    calculate_column_defs_for_filtering(db);
 }
 
 bool
@@ -576,6 +578,10 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
+    return _column_defs_for_filtering;
+}
+
+void statement_restrictions::calculate_column_defs_for_filtering(data_dictionary::database db) {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
@@ -622,7 +628,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
             }
         }
     }
-    return column_defs_for_filtering;
+    _column_defs_for_filtering = std::move(column_defs_for_filtering);
 }
 
 void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
