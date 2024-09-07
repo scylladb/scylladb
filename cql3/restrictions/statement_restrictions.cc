@@ -468,6 +468,28 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
                     | std::ranges::to<std::vector>(),
         };
     }
+
+    auto check_column_kind = [] (column_kind kind, const expr::single_column_restrictions_map::value_type& v) -> bool {
+        return v.first->kind == kind;
+    };
+
+    auto make_column_kind_checker = [&] (column_kind kind) {
+        return std::bind_front(check_column_kind, kind);
+    };
+
+    _static_columns_filter = expr::conjunction{
+        .children = _single_column_nonprimary_key_restrictions
+                | std::ranges::views::filter(make_column_kind_checker(column_kind::static_column))
+                | std::ranges::views::values
+                | std::ranges::to<std::vector>(),
+    };
+
+    _regular_columns_filter = expr::conjunction{
+        .children = _single_column_nonprimary_key_restrictions
+                | std::ranges::views::filter(make_column_kind_checker(column_kind::regular_column))
+                | std::ranges::views::values
+                | std::ranges::to<std::vector>(),
+    };
 }
 
 bool

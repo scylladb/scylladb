@@ -58,6 +58,10 @@ private:
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
+    expr::expression _static_columns_filter = expr::conjunction({});
+    expr::expression _regular_columns_filter = expr::conjunction({});
+
+
     std::unordered_set<const column_definition*> _not_null_columns;
 
     /**
@@ -365,6 +369,18 @@ public:
     // This is equivalent to ck_restrictions_need_filtering() + get_single_column_clustering_key_restrictions().
     const std::optional<expr::expression>& get_clustering_key_filter() const {
         return _clustering_key_filter;
+    }
+
+    // Returns any filter that needs to be applied to the static row. If a column is used for a secondary index, it will
+    // not be in the filter.
+    const expr::expression& get_static_columns_filter() const {
+        return _static_columns_filter;
+    }
+
+    // Returns any filter that needs to be applied to regular columns. If a column is used for a secondary index, it will
+    // not be in the filter.
+    const expr::expression& get_regular_columns_filter() const {
+        return _regular_columns_filter;
     }
 
     /**
