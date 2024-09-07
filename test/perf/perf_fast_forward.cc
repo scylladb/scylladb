@@ -278,7 +278,7 @@ private:
     template <std::size_t... Is>
     inline sstring_vec stats_values_to_strings_impl(const stats_values& values, std::index_sequence<Is...> seq) {
         static_assert(stats_formats.size() == seq.size());
-        sstring_vec result {seastar::format(stats_formats[Is].c_str(), std::get<Is>(values))...};
+        sstring_vec result {seastar::format(fmt::runtime(stats_formats[Is].c_str()), std::get<Is>(values))...};
         return result;
     }
 

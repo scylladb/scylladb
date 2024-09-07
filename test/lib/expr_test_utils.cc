@@ -376,8 +376,8 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
     const schema_ptr& table_schema,
     const column_values& column_vals,
     const std::vector<raw_value>& bind_marker_values) {
-    auto throw_error = [&](const auto&... fmt_args) -> sstring {
-        sstring error_msg = seastar::format(fmt_args...);
+    auto throw_error = [&]<typename... Args>(fmt::format_string<Args...> fmt, Args&&... args) -> sstring {
+        sstring error_msg = seastar::format(fmt, std::forward<Args>(args)...);
         sstring final_msg = seastar::format("make_evaluation_inputs error: {}. (table_schema: {}, column_vals: {})", error_msg,
                                    *table_schema, column_vals);
         throw std::runtime_error(final_msg);

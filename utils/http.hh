@@ -64,7 +64,7 @@ public:
     {
     }
 
-    virtual future<connected_socket> make() override {
+    virtual future<connected_socket> make(abort_source*) override {
         if (!_state->initialized) {
             _logger.debug("Waiting for factory to initialize");
             co_await _done.get_future();

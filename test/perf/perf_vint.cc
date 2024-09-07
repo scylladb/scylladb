@@ -7,6 +7,7 @@
  */
 
 #include <seastar/testing/perf_tests.hh>
+#include <seastar/testing/random.hh>
 #include <seastar/testing/test_runner.hh>
 
 #include <random>
