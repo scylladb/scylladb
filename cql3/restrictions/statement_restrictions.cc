@@ -613,8 +613,8 @@ void statement_restrictions::calculate_column_defs_for_filtering(data_dictionary
                     num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
-                auto it = _single_column_partition_key_restrictions.find(cdef);
-                if (it != _single_column_partition_key_restrictions.end()) {
+                auto it = _single_column_clustering_key_restrictions.find(cdef);
+                if (it != _single_column_clustering_key_restrictions.end()) {
                     single_col_restr = &it->second;
                 }
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
