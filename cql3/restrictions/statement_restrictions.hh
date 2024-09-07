@@ -130,9 +130,9 @@ public:
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
-        bool for_view = false,
-        bool allow_filtering = false,
-        check_indexes do_check_indexes = check_indexes::yes);
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
 
     const std::vector<expr::expression>& index_restrictions() const;
 
