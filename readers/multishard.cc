@@ -197,9 +197,9 @@ mutation_reader make_foreign_reader(schema_ptr schema,
 }
 
 template <typename... Arg>
-static void require(bool condition, const char* msg, const Arg&... arg) {
+static void require(bool condition, fmt::format_string<Arg...> fmt, Arg&&... arg) {
     if (!condition) {
-        on_internal_error(mrlog, seastar::format(msg, arg...));
+        on_internal_error(mrlog, seastar::format(fmt, std::forward<Arg>(arg)...)) ;
     }
 }
 

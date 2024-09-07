@@ -1170,7 +1170,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     }
 
     if (!unused_attribute_definitions.empty()) {
-        co_return api_error::validation(format(
+        co_return api_error::validation(fmt::format(
             "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
             unused_attribute_definitions));
     }
