@@ -209,8 +209,7 @@ public:
         const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
         const query_options& _options;
         const expr::expression& _partition_level_filter;
-        const std::optional<expr::expression>& _clustering_key_filter;
-        const expr::expression& _regular_columns_filter;
+        const expr::expression& _clustering_row_level_filter;
         mutable bool _current_partition_does_not_match = false;
         mutable uint64_t _rows_dropped = 0;
         mutable uint64_t _remaining;

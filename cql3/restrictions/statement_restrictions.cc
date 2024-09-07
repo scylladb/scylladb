@@ -463,11 +463,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     }
 
     if (ck_restrictions_need_filtering()) {
-        _clustering_key_filter = expr::conjunction{
+        auto clustering_key_filter = expr::conjunction{
             .children = _single_column_clustering_key_restrictions
                     | std::ranges::views::values
                     | std::ranges::to<std::vector>(),
         };
+        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(clustering_key_filter));
     }
 
     auto check_column_kind = [] (column_kind kind, const expr::single_column_restrictions_map::value_type& v) -> bool {
@@ -487,12 +488,14 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
 
     _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(static_columns_filter));
 
-    _regular_columns_filter = expr::conjunction{
+    auto regular_columns_filter = expr::conjunction{
         .children = _single_column_nonprimary_key_restrictions
                 | std::ranges::views::filter(make_column_kind_checker(column_kind::regular_column))
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
     };
+
+    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
 }
 
 bool

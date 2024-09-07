@@ -622,8 +622,7 @@ result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<const 
     : _restrictions(restrictions)
     , _options(options)
     , _partition_level_filter(_restrictions->get_partition_level_filter())
-    , _clustering_key_filter(_restrictions->get_clustering_key_filter())
-    , _regular_columns_filter(_restrictions->get_regular_columns_filter())
+    , _clustering_row_level_filter(_restrictions->get_clustering_row_level_filter())
     , _remaining(remaining)
     , _schema(schema)
     , _per_partition_limit(per_partition_limit)
@@ -660,30 +659,18 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         }
     }
 
-    if (_clustering_key_filter) {
+    {
         if (!expr::is_satisfied_by(
-                        *_clustering_key_filter,
+                        _clustering_row_level_filter,
                         expr::evaluation_inputs{
                             .partition_key = partition_key,
                             .clustering_key = clustering_key,
-                            .static_and_regular_columns = {}, // clustering key filtering only
+                            .static_and_regular_columns = static_and_regular_columns,
                             .selection = &selection,
                             .options = &_options,
                         })) {
             return false;
         }
-    }
-
-    if (!expr::is_satisfied_by(
-                    _regular_columns_filter,
-                    expr::evaluation_inputs{
-                        .partition_key = partition_key,
-                        .clustering_key = clustering_key,
-                        .static_and_regular_columns = static_and_regular_columns,
-                        .selection = &selection,
-                        .options = &_options,
-                    })) {
-        return false;
     }
 
     const expr::expression& clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
