@@ -306,7 +306,7 @@ def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit
         statement = SimpleStatement(f"SELECT * FROM {table}", fetch_size=10)
         check_pages_many_partitions(cql.execute(statement), {-1: all_pks[-1]})
 
-        statement = SimpleStatement(f"SELECT * FROM {table} WHERE v = 0 ALLOW FILTERING", fetch_size=10)
+        statement = SimpleStatement(f"SELECT * FROM {table} WHERE s = 0 ALLOW FILTERING", fetch_size=10)
         check_pages_many_partitions(cql.execute(statement), {-1: all_pks[-1]})
 
 
@@ -327,7 +327,7 @@ def test_static_row_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, 
         statement = SimpleStatement(f"SELECT * FROM {table}", fetch_size=10)
         check_pages_many_partitions(cql.execute(statement), {0: all_pks[0], -1: all_pks[-1]})
 
-        statement = SimpleStatement(f"SELECT * FROM {table} WHERE v = 0 ALLOW FILTERING", fetch_size=10)
+        statement = SimpleStatement(f"SELECT * FROM {table} WHERE s = 0 ALLOW FILTERING", fetch_size=10)
         check_pages_many_partitions(cql.execute(statement), {0: all_pks[0], -1: all_pks[-1]})
 
 

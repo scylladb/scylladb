@@ -669,12 +669,13 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         case column_kind::static_column:
             // fallthrough
         case column_kind::regular_column: {
-            if (cdef->kind == column_kind::regular_column && !row_iterator) {
-                continue;
-            }
             auto restr_it = non_pk_restrictions_map.find(cdef);
             if (restr_it == non_pk_restrictions_map.end()) {
                 continue;
+            }
+            if (cdef->kind == column_kind::regular_column && !row_iterator) {
+                // Since we don't have IS NULL, no restriction on a regular column can be satisfied if the column is NULL (#10357)
+                return false;
             }
             const expr::expression& single_col_restriction = restr_it->second;
             // FIXME: push to upper layer so it happens once per row

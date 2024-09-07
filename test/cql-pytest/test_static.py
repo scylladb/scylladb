@@ -88,7 +88,6 @@ def test_filter_with_static(cql, table1):
 # test (test_filter_with_static), but here the partition has only a static
 # column value, and no clustering row at all. We expect to get back nothing
 # when using a filtering on a regular column.
-@pytest.mark.xfail(reason="issue #10357")
 def test_filter_with_only_static(cql, table1):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1}(p, s) values ({p}, 1)')
