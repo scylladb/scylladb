@@ -287,7 +287,7 @@ private:
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
-    void calculate_column_defs_for_filtering(data_dictionary::database db);
+    void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db);
 public:
     /**
      * Returns the specified range of the partition key.

@@ -451,7 +451,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         validate_secondary_index_selections(selects_only_static_columns);
     }
 
-    calculate_column_defs_for_filtering(db);
+    calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db);
 }
 
 bool
@@ -585,7 +585,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     return _column_defs_for_filtering;
 }
 
-void statement_restrictions::calculate_column_defs_for_filtering(data_dictionary::database db) {
+void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db) {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
@@ -608,6 +608,8 @@ void statement_restrictions::calculate_column_defs_for_filtering(data_dictionary
                 }
                 if (!column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
+                } else {
+                    _single_column_partition_key_restrictions.erase(it);
                 }
             }
         }
@@ -623,12 +625,18 @@ void statement_restrictions::calculate_column_defs_for_filtering(data_dictionary
                 }
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
+                } else {
+                    _single_column_clustering_key_restrictions.erase(it);
                 }
             }
         }
-        for (auto&& [cdef, cur_restr] : _single_column_nonprimary_key_restrictions) {
+        for (auto it = _single_column_nonprimary_key_restrictions.begin(); it != _single_column_nonprimary_key_restrictions.end();) {
+            auto&& [cdef, cur_restr] = *it;
             if (!column_uses_indexing(cdef, &cur_restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
+                ++it;
+            } else {
+                it = _single_column_nonprimary_key_restrictions.erase(it);
             }
         }
     }
