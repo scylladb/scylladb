@@ -1925,7 +1925,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     auto handle_sstable_exception = [&error_handler](const malformed_sstable_exception& e, uint64_t& errors) -> std::exception_ptr {
         std::exception_ptr ex;
         try {
-            error_handler(format("unrecoverable error: {}", e));
+            error_handler(seastar::format("unrecoverable error: {}", e));
             ++errors;
         } catch (...) {
             ex = std::current_exception();
