@@ -673,27 +673,6 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         }
     }
 
-    auto static_row_iterator = static_row.iterator();
-    auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
-    for (auto&& cdef : selection.get_columns()) {
-        switch (cdef->kind) {
-        case column_kind::static_column:
-            // fallthrough
-        case column_kind::regular_column: {
-            }
-            break;
-        case column_kind::partition_key: {
-            // handled via _partition_key_filter
-            }
-            break;
-        case column_kind::clustering_key: {
-            // handled via _clustering_key_filter
-            }
-            break;
-        default:
-            break;
-        }
-    }
     return true;
 }
 
