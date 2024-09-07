@@ -535,6 +535,10 @@ int statement_restrictions::score(const secondary_index::index& index) const {
 }
 
 std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
+    if (!_uses_secondary_indexing) {
+        return {std::nullopt, expr::conjunction({})};
+    }
+
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
     expr::expression chosen_index_restrictions = expr::conjunction({});
