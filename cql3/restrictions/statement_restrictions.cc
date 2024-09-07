@@ -496,6 +496,14 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     };
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
+
+    auto multi_column_restrictions = expr::conjunction{
+        .children = expr::boolean_factors(_clustering_columns_restrictions)
+                | std::ranges::views::filter(expr::contains_multi_column_restriction)
+                | std::ranges::to<std::vector>()
+    };
+
+    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
 }
 
 bool

@@ -673,23 +673,6 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         }
     }
 
-    const expr::expression& clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (expr::contains_multi_column_restriction(clustering_columns_restrictions)) {
-        clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
-        bool multi_col_clustering_satisfied = expr::is_satisfied_by(
-                clustering_columns_restrictions,
-                expr::evaluation_inputs{
-                    .partition_key = partition_key,
-                    .clustering_key = clustering_key,
-                    .static_and_regular_columns = static_and_regular_columns,
-                    .selection = &selection,
-                    .options = &_options,
-                });
-        if (!multi_col_clustering_satisfied) {
-            return false;
-        }
-    }
-
     auto static_row_iterator = static_row.iterator();
     auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
     for (auto&& cdef : selection.get_columns()) {
