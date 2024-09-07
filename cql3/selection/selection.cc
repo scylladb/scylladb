@@ -644,33 +644,29 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
 
     auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
 
-    {
-        if (!expr::is_satisfied_by(
-                        _partition_level_filter,
-                        expr::evaluation_inputs{
-                            .partition_key = partition_key,
-                            .clustering_key = clustering_key,
-                            .static_and_regular_columns = static_and_regular_columns,
-                            .selection = &selection,
-                            .options = &_options,
-                        })) {
-            _current_partition_does_not_match = true;
-            return false;
-        }
+    if (!expr::is_satisfied_by(
+                    _partition_level_filter,
+                    expr::evaluation_inputs{
+                        .partition_key = partition_key,
+                        .clustering_key = clustering_key,
+                        .static_and_regular_columns = static_and_regular_columns,
+                        .selection = &selection,
+                        .options = &_options,
+                    })) {
+        _current_partition_does_not_match = true;
+        return false;
     }
 
-    {
-        if (!expr::is_satisfied_by(
-                        _clustering_row_level_filter,
-                        expr::evaluation_inputs{
-                            .partition_key = partition_key,
-                            .clustering_key = clustering_key,
-                            .static_and_regular_columns = static_and_regular_columns,
-                            .selection = &selection,
-                            .options = &_options,
-                        })) {
-            return false;
-        }
+    if (!expr::is_satisfied_by(
+                    _clustering_row_level_filter,
+                    expr::evaluation_inputs{
+                        .partition_key = partition_key,
+                        .clustering_key = clustering_key,
+                        .static_and_regular_columns = static_and_regular_columns,
+                        .selection = &selection,
+                        .options = &_options,
+                    })) {
+        return false;
     }
 
     return true;
