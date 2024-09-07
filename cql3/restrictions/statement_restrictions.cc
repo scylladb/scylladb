@@ -454,11 +454,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db);
 
     if (pk_restrictions_need_filtering()) {
-        _partition_key_filter = expr::conjunction{
+        auto partition_key_filter = expr::conjunction{
             .children = _single_column_partition_key_restrictions
                     | std::ranges::views::values
                     | std::ranges::to<std::vector>(),
         };
+        _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(partition_key_filter));
     }
 
     if (ck_restrictions_need_filtering()) {
@@ -477,12 +478,14 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         return std::bind_front(check_column_kind, kind);
     };
 
-    _static_columns_filter = expr::conjunction{
+    auto static_columns_filter = expr::conjunction{
         .children = _single_column_nonprimary_key_restrictions
                 | std::ranges::views::filter(make_column_kind_checker(column_kind::static_column))
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
     };
+
+    _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(static_columns_filter));
 
     _regular_columns_filter = expr::conjunction{
         .children = _single_column_nonprimary_key_restrictions

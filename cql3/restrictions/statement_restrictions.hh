@@ -41,7 +41,7 @@ private:
     expr::expression _partition_key_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_partition_key_restrictions;
-    std::optional<expr::expression> _partition_key_filter;
+    expr::expression _partition_level_filter = expr::conjunction({});
 
     /**
      * Restrictions on clustering columns
@@ -58,7 +58,6 @@ private:
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
-    expr::expression _static_columns_filter = expr::conjunction({});
     expr::expression _regular_columns_filter = expr::conjunction({});
 
 
@@ -355,12 +354,12 @@ public:
      */
     const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
 
-    // Returns any filter that needs to be applied to the partition key. If the partition key restriction is translated
-    // to read_command, it will not be in the filter.
+    // Returns any filter that needs to be applied to a row, but if it fails, it will fail for all rows in the partition.
+    // If a column is used for a secondary index, it will not be in the filter.
     //
-    // This is equivalent to pk_restrictions_need_filtering() + get_single_column_partition_key_restrictions().
-    const std::optional<expr::expression>& get_partition_key_filter() const {
-        return _partition_key_filter;
+    // This filter will only reference partition key columns and static columns.
+    const expr::expression& get_partition_level_filter() const {
+        return _partition_level_filter;
     }
 
     // Returns any filter that needs to be applied to the clustering key. If the clustering key restriction is translated
@@ -369,12 +368,6 @@ public:
     // This is equivalent to ck_restrictions_need_filtering() + get_single_column_clustering_key_restrictions().
     const std::optional<expr::expression>& get_clustering_key_filter() const {
         return _clustering_key_filter;
-    }
-
-    // Returns any filter that needs to be applied to the static row. If a column is used for a secondary index, it will
-    // not be in the filter.
-    const expr::expression& get_static_columns_filter() const {
-        return _static_columns_filter;
     }
 
     // Returns any filter that needs to be applied to regular columns. If a column is used for a secondary index, it will

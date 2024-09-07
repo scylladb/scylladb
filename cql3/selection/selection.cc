@@ -621,9 +621,8 @@ result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<const 
         uint64_t rows_fetched_for_last_partition)
     : _restrictions(restrictions)
     , _options(options)
-    , _partition_key_filter(_restrictions->get_partition_key_filter())
+    , _partition_level_filter(_restrictions->get_partition_level_filter())
     , _clustering_key_filter(_restrictions->get_clustering_key_filter())
-    , _static_columns_filter(_restrictions->get_static_columns_filter())
     , _regular_columns_filter(_restrictions->get_regular_columns_filter())
     , _remaining(remaining)
     , _schema(schema)
@@ -640,23 +639,23 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const query::result_row_view* row) const {
     static logging::logger rlogger("restrictions_filter");
 
-    if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
+    if (_current_partition_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
         return false;
     }
 
     auto static_and_regular_columns = expr::get_non_pk_values(selection, static_row, row);
 
-    if (_partition_key_filter) {
+    {
         if (!expr::is_satisfied_by(
-                        *_partition_key_filter,
+                        _partition_level_filter,
                         expr::evaluation_inputs{
                             .partition_key = partition_key,
                             .clustering_key = clustering_key,
-                            .static_and_regular_columns = {}, // partition key filtering only
+                            .static_and_regular_columns = static_and_regular_columns,
                             .selection = &selection,
                             .options = &_options,
                         })) {
-            _current_partition_key_does_not_match = true;
+            _current_partition_does_not_match = true;
             return false;
         }
     }
@@ -673,19 +672,6 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                         })) {
             return false;
         }
-    }
-
-    if (!expr::is_satisfied_by(
-                    _static_columns_filter,
-                    expr::evaluation_inputs{
-                        .partition_key = partition_key,
-                        .clustering_key = clustering_key,
-                        .static_and_regular_columns = static_and_regular_columns,
-                        .selection = &selection,
-                        .options = &_options,
-                    })) {
-        _current_static_row_does_not_match = true;
-        return false;
     }
 
     if (!expr::is_satisfied_by(
@@ -761,8 +747,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
 }
 
 void result_set_builder::restrictions_filter::reset(const partition_key* key) {
-    _current_partition_key_does_not_match = false;
-    _current_static_row_does_not_match = false;
+    _current_partition_does_not_match = false;
     _rows_dropped = 0;
     _per_partition_remaining = _per_partition_limit;
     if (_is_first_partition_on_page && _per_partition_limit < std::numeric_limits<decltype(_per_partition_limit)>::max()) {
