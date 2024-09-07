@@ -494,7 +494,6 @@ def testIndexOnRegularColumnWithPartitionWithoutRows(cql, test_keyspace):
                           row(1, 1, 9, 1),
                           row(4, 1, 9, 1))
 
-@pytest.mark.xfail(reason="issue #10357")
 def testFilteringWithPartitionWithoutRows(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c int, s int static, v int, PRIMARY KEY (pk, c))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, s, v) VALUES (?, ?, ?, ?)", 1, 1, 9, 1)

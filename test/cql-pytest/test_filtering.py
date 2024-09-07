@@ -453,3 +453,11 @@ def test_multi_column_relation_wrong_number_of_items_in_tuple(cql, test_keyspace
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2), (2, 1, 4))')
         with pytest.raises(InvalidRequest, match='Invalid list literal for in'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3, 4, 5), (2, 1, 4))')
+
+# Test for a bug found while developing the fix for #10357. The bug was that if a regular column was selected
+# but not filtered, it could cause filtering of the static row to fail.
+def test_selecting_a_regular_column_does_not_poison_filtering_of_a_static_row(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, s int static, primary key (a, b)') as table:
+        cql.execute(f"INSERT INTO {table} (a, s) VALUES (1, 2)")
+        res = cql.execute(f"SELECT a, b, c, s FROM {table} WHERE s = 2 ALLOW FILTERING")
+        assert list(res) == [(1, None, None, 2)]
