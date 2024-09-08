@@ -238,6 +238,10 @@ private:
     /// If the original destination end point is still a replica for the given mutation - send the mutation directly
     /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
     ///
+    /// The mutation will be sent with CL=ALL semantics to all current replicas also in case if the original destination
+    /// is leaving the cluster - otherwise the hint might be applied only on the leaving node and streaming might
+    /// miss it.
+    ///
     /// \param m mutation to send
     /// \return future that resolves when the mutation sending processing is complete.
     future<> send_one_mutation(frozen_mutation_and_schema m);
