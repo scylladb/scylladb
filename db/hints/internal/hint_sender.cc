@@ -267,11 +267,17 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
         const auto& tm = ermp->get_token_metadata();
         const auto maybe_addr = tm.get_endpoint_for_host_id_if_known(end_point_key());
 
-        if (maybe_addr && boost::range::find(natural_endpoints, *maybe_addr) != natural_endpoints.end()) {
+        if (maybe_addr && boost::range::find(natural_endpoints, *maybe_addr) != natural_endpoints.end() && !tm.is_leaving(end_point_key())) {
             manager_logger.trace("Sending directly to {}", end_point_key());
             return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), *maybe_addr);
         } else {
-            manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
+            if (manager_logger.is_enabled(log_level::trace)) {
+                if (tm.is_leaving(end_point_key())) {
+                    manager_logger.trace("The original target endpoint {} is leaving. Mutating from scratch...", end_point_key());
+                } else {
+                    manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
+                }
+            }
             return _proxy.send_hint_to_all_replicas(std::move(m));
         }
     });
