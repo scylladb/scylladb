@@ -21,6 +21,10 @@ from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, unique_name
 from contextlib import asynccontextmanager
+<<<<<<< HEAD
+=======
+from typing import Optional, List
+>>>>>>> a75d0c0bfa (test: topology/util: extract find_server_by_host_id)
 
 
 logger = logging.getLogger(__name__)
@@ -88,6 +92,13 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
     host = await get_available_host(manager.cql, time.time() + 60)
     await read_barrier(manager.cql, host)
     return await manager.api.get_raft_leader(host.address)
+
+
+async def find_server_by_host_id(manager: ManagerClient, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
+    for s in servers:
+        if await manager.get_host_id(s.server_id) == host_id:
+            return s
+    raise Exception(f"Host ID {host_id} not found in {servers}")
 
 
 async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> None:
