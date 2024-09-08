@@ -30,6 +30,25 @@ def get_hint_manager_metric(server: ServerInfo, metric_name: str) -> int:
             result += int(float(metric.split()[1]))
     return result
 
+# Creates a sync point for ALL hosts.
+def create_sync_point(node: ServerInfo) -> str:
+    return requests.post(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point/").json()
+
+def await_sync_point(node: ServerInfo, sync_point: str, timeout: int) -> bool:
+    params = {
+        "id": sync_point,
+        "timeout": str(timeout)
+    }
+
+    response = requests.get(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point", params=params).json()
+    match response:
+        case "IN_PROGRESS":
+            return False
+        case "DONE":
+            return True
+        case _:
+            pytest.fail(f"Unexpected response from the server: {response}")
+
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
 @pytest.mark.asyncio
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient):
@@ -97,25 +116,6 @@ async def test_sync_point(manager: ManagerClient):
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}")
     await cql.run_async("CREATE TABLE ks.t (pk int primary key, v int)")
-
-    # Creates a sync point for ALL hosts.
-    def create_sync_point(node: ServerInfo) -> str:
-        return requests.post(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point/").json()
-
-    def await_sync_point(node: ServerInfo, sync_point: str, timeout: int) -> bool:
-        params = {
-            "id": sync_point,
-            "timeout": str(timeout)
-        }
-
-        response = requests.get(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point", params=params).json()
-        match response:
-            case "IN_PROGRESS":
-                return False
-            case "DONE":
-                return True
-            case _:
-                pytest.fail(f"Unexpected response from the server: {response}")
 
     await manager.server_stop_gracefully(node2.server_id)
     await manager.server_stop_gracefully(node3.server_id)
