@@ -175,3 +175,6 @@ fi
 cd "${CLANG_BUILD_DIR}"
 ninja -C build install-distribution-stripped
 dnf remove -y clang clang-libs
+# above package removal might have removed those symbolic links, which will cause ccache not to work later on. Manually restore them.
+ln -sf /usr/bin/ccache /usr/lib64/ccache/clang
+ln -sf /usr/bin/ccache /usr/lib64/ccache/clang++
