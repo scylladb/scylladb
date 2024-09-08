@@ -1886,6 +1886,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
                 break;
             case topology::transition_state::write_both_read_new: {
+                while (utils::get_local_injector().enter("topology_coordinator_pause_after_streaming")) {
+                    co_await sleep_abortable(std::chrono::milliseconds(10), _as);
+                }
                 auto node = get_node_to_work_on(std::move(guard));
                 bool barrier_failed = false;
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
