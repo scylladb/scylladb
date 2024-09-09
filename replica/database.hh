@@ -937,7 +937,7 @@ public:
 private:
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
 
-    future<snapshot_file_set> take_snapshot(database& db, sstring jsondir);
+    future<snapshot_file_set> take_snapshot(sstring jsondir);
     // Writes the table schema and the manifest of all files in the snapshot directory.
     future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
