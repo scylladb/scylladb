@@ -17,17 +17,10 @@ import asyncio
 import logging
 
 from test.topology.conftest import skip_mode
-from test.topology.util import get_topology_coordinator
+from test.topology.util import get_topology_coordinator, find_server_by_host_id
 from test.topology_experimental_raft.test_mv_tablets import get_tablet_replicas
 
 logger = logging.getLogger(__name__)
-
-
-async def find_server_by_host_id(manager: ManagerClient, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
-    for s in servers:
-        if await manager.get_host_id(s.server_id) == host_id:
-            return s
-    raise Exception(f"Host ID {host_id} not found in {servers}")
 
 
 @pytest.mark.asyncio

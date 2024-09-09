@@ -18,6 +18,9 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for
 
+from test.topology.conftest import skip_mode
+from test.topology.util import get_topology_coordinator, find_server_by_host_id
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,25 @@ def get_hint_manager_metric(server: ServerInfo, metric_name: str) -> int:
         if pattern.match(metric) is not None:
             result += int(float(metric.split()[1]))
     return result
+
+# Creates a sync point for ALL hosts.
+def create_sync_point(node: ServerInfo) -> str:
+    return requests.post(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point/").json()
+
+def await_sync_point(node: ServerInfo, sync_point: str, timeout: int) -> bool:
+    params = {
+        "id": sync_point,
+        "timeout": str(timeout)
+    }
+
+    response = requests.get(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point", params=params).json()
+    match response:
+        case "IN_PROGRESS":
+            return False
+        case "DONE":
+            return True
+        case _:
+            pytest.fail(f"Unexpected response from the server: {response}")
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
 @pytest.mark.asyncio
@@ -98,25 +120,6 @@ async def test_sync_point(manager: ManagerClient):
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}")
     await cql.run_async("CREATE TABLE ks.t (pk int primary key, v int)")
 
-    # Creates a sync point for ALL hosts.
-    def create_sync_point(node: ServerInfo) -> str:
-        return requests.post(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point/").json()
-
-    def await_sync_point(node: ServerInfo, sync_point: str, timeout: int) -> bool:
-        params = {
-            "id": sync_point,
-            "timeout": str(timeout)
-        }
-
-        response = requests.get(f"http://{node.ip_addr}:10000/hinted_handoff/sync_point", params=params).json()
-        match response:
-            case "IN_PROGRESS":
-                return False
-            case "DONE":
-                return True
-            case _:
-                pytest.fail(f"Unexpected response from the server: {response}")
-
     await manager.server_stop_gracefully(node2.server_id)
     await manager.server_stop_gracefully(node3.server_id)
 
@@ -148,3 +151,87 @@ async def test_sync_point(manager: ManagerClient):
     await manager.server_sees_other_server(node1.ip_addr, node3.ip_addr)
 
     assert await_sync_point(node1, sync_point1, 30)
+
+
+@pytest.mark.asyncio
+@skip_mode('release', "error injections aren't enabled in release mode")
+async def test_hints_consistency_during_decommission(manager: ManagerClient):
+    """
+    This test reproduces the failure observed in scylladb/scylla-dtest#4582
+    in a more reliable way than the test_hintedhandoff_decom dtest.
+
+    We want to make sure that data stored in hints will not get lost if hints replay
+    happens in parallel to streaming during decommission.
+
+    The test is vnodes-specific.
+    """
+    (server1, server2, server3) = await manager.servers_add(3, config={
+        "error_injections_at_startup": ["decrease_hints_flush_period"]
+    })
+    cql = manager.cql
+
+    logger.info("Creatting a keyspace with RF=1 and a table")
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }")
+    await cql.run_async("CREATE TABLE ks.t (pk int primary key, v int)")
+
+    logger.info("Stopping node 3")
+    await manager.server_stop_gracefully(server3.server_id)
+    await manager.others_not_see_server(server3.ip_addr)
+
+    # Write 100 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
+    logger.info("Writing 100 rows with CL=ANY")
+    for i in range(100):
+        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+
+    # Temporarily pause hints replay, we will unpause it after decommission starts and streaming is done,
+    # but before switching to writing to new nodes
+    logger.info("Pause hints replay on nodes 1 and 2")
+    for srv in (server1, server2):
+        await manager.api.enable_injection(srv.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+
+    # Start the node
+    logger.info("Start node 3")
+    await manager.server_start(server3.server_id)
+    await manager.servers_see_each_other([server1, server2, server3])
+
+    # Record the current position of hints so that we can wait for them later
+    sync_points = [create_sync_point(srv) for srv in (server1, server2)]
+
+    async with asyncio.TaskGroup() as tg:
+        coord = await get_topology_coordinator(manager)
+        coord_srv = await find_server_by_host_id(manager, [server1, server2, server3], coord)
+
+        # Make sure topology coordinator will pause right after streaming
+        logger.info("Enabling injection on the topology coordinator that will tell it to pause streaming")
+        await manager.api.enable_injection(coord_srv.ip_addr, "topology_coordinator_pause_after_streaming", one_shot=False)
+        coord_log = await manager.server_open_log(coord_srv.server_id)
+        coord_mark = await coord_log.mark()
+
+        # Start decommission - it will get stuck on error injection so do it in the background
+        logger.info("Starting decommission in the background")
+        decommission_result = tg.create_task(manager.decommission_node(server3.server_id))
+
+        # Wait until streaming ends
+        logger.info("Wait until decomission finishes streaming")
+        await coord_log.wait_for(f'decommissioning: streaming completed for node', from_mark=coord_mark)
+
+        # Now, unpause hints and let them be replayed
+        logger.info("Unpause hints replay on nodes 1 and 2")
+        for srv in (server1, server2):
+            await manager.api.disable_injection(srv.ip_addr, "hinted_handoff_pause_hint_replay")
+
+        logger.info("Wait until hints are replayed from nodes 1 and 2")
+        await asyncio.gather(*(asyncio.to_thread(await_sync_point, srv, pt, timeout=30) for srv, pt in zip((server1, server2), sync_points)))
+
+        # Unpause streaming and let decommission finish
+        logger.info("Unpause streaming")
+        await manager.api.disable_injection(coord_srv.ip_addr, "topology_coordinator_pause_after_streaming")
+
+        logger.info("Wait until decomission finishes")
+        await decommission_result
+
+    # Verify that no data has been lost - if the hints replay only sent the hints to the original destination (server3),
+    # then they will be only present on server3 which already left the cluster
+    logger.info("Verify that no data stored in hints have been lost")
+    for i in range(100):
+        assert list(await cql.run_async(f"SELECT v FROM ks.t WHERE pk = {i}")) == [(i + 1,)]
