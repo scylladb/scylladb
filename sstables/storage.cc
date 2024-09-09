@@ -717,18 +717,25 @@ lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_t
     return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
-future<> init_table_storage(const data_dictionary::storage_options::local& so, sstring dir) {
+future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
+    std::vector<sstring> dirs;
+    for (const auto& dd : mgr.config().data_file_directories()) {
+        auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
+        dirs.emplace_back(std::move(dir));
+    }
+   co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
     co_await io_check([&dir] { return recursive_touch_directory(dir); });
     co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
     co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+   });
 }
 
-future<> init_table_storage(const data_dictionary::storage_options::s3& so, sstring dir) {
+future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
     co_return;
 }
 
-future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
-    co_await std::visit([&dir] (const auto& so) { return init_table_storage(so, dir); }, so.value);
+future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
+    co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {

@@ -297,8 +297,8 @@ void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
 }
 
-future<> sstables_manager::init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
-    return sstables::init_table_storage(so, dir);
+future<> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
+    return sstables::init_table_storage(*this, s, so);
 }
 
 future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {
