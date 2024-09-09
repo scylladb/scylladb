@@ -614,6 +614,7 @@ class Test:
         self.shortname = shortname
         self.mode = suite.mode
         self.suite = suite
+        self.allure_dir = pathlib.Path(suite.options.tmpdir) / self.mode / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}.{}".format(self.suite.name, self.shortname, self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
@@ -812,6 +813,7 @@ class CQLApprovalTest(Test):
             "--run_id={}".format(self.id),
             "--mode={}".format(self.mode),
         ]
+        self.args.append(f"--alluredir={self.allure_dir}")
 
     async def run(self, options: argparse.Namespace) -> Test:
         self.success = False
@@ -925,6 +927,7 @@ class RunTest(Test):
             "-o",
             "junit_suite_name={}".format(self.suite.name)
         ]
+        self.args.append(f"--alluredir={self.allure_dir}")
         RunTest._reset(self)
 
     def _reset(self):
@@ -967,6 +970,7 @@ class PythonTest(Test):
             "--run_id={}".format(self.id),
             "--mode={}".format(self.mode)
         ]
+        self.args.append(f"--alluredir={self.allure_dir}")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -1050,9 +1054,7 @@ class TopologyTest(PythonTest):
 
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
         async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
-            self.args.insert(0, "--run_id={}".format(self.id))
             self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
-            self.args.insert(0, "--mode={}".format(self.mode))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
             if options.artifacts_dir_url:
                 self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))
@@ -1097,6 +1099,7 @@ class ToolTest(Test):
             "--mode={}".format(self.mode),
             "--run_id={}".format(self.id)
         ]
+        self.args.append(f"--alluredir={self.allure_dir}")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
