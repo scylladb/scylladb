@@ -2475,11 +2475,11 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         // Disabling integrity checks is not supported by compressed
         // file input streams. `integrity` is ignored.
         if (_version >= sstable_version_types::mc) {
-             return make_compressed_file_m_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options), permit);
+            return make_compressed_file_m_format_input_stream(f, &_components->compression,
+               pos, len, std::move(options), permit, std::nullopt);
         } else {
             return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options), permit);
+                pos, len, std::move(options), permit, std::nullopt);
         }
     }
     if (_components->checksum && integrity == integrity_check::yes) {
