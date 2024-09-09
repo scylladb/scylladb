@@ -23,7 +23,7 @@ import glob
 from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
-
+import itertools
 
 logger = logging.getLogger(__name__)
 
@@ -1294,7 +1294,10 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, v text) WITH compression = {'sstable_compression': ''};")
     insert_stmt = cql.prepare("INSERT INTO test.test (pk, v) VALUES (?, ?);")
     payload = "a"*10000
-    await asyncio.gather(*[cql.run_async(insert_stmt, [k, payload]) for k in range(n_partitions)])
+
+    max_concurrency = 100
+    for batch in itertools.batched(range(n_partitions), max_concurrency):
+        await asyncio.gather(*[cql.run_async(insert_stmt, [k, payload]) for k in batch])
     await manager.api.keyspace_flush(servers[0].ip_addr, "test")
 
     logger.info("Start second node.")
