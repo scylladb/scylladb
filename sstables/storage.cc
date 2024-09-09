@@ -734,8 +734,9 @@ future<> init_table_storage(const sstables_manager& mgr, const schema& s, const 
     co_return;
 }
 
-future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
     co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
+    co_return make_storage_options_for_table(mgr.config(), s, so);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {

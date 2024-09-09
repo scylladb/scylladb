@@ -297,7 +297,7 @@ void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
 }
 
-future<> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
+future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
     return sstables::init_table_storage(*this, s, so);
 }
 
