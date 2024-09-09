@@ -1584,9 +1584,6 @@ protected:
 
             setup_new_compaction(descriptor.run_identifier);
 
-            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
-            _cm.register_backlog_tracker(user_initiated);
-
             std::exception_ptr ex;
             try {
                 sstables::compaction_result res = co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, on_replace, _can_purge);
