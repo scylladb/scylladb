@@ -2553,7 +2553,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
             file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
-                return table_shards->take_snapshot(sharded_db.local(), jsondir);
+                return table_shards->take_snapshot(jsondir);
             }));
         });
 
@@ -2561,7 +2561,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
     });
 }
 
-future<table::snapshot_file_set> table::take_snapshot(database& db, sstring jsondir) {
+future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
     tlogger.trace("take_snapshot {}", jsondir);
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
