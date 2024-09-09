@@ -25,20 +25,22 @@ Production grade configuration requires tuning a few kernel parameters
 such that limiting the number of available cores (with `--smp 1`) is
 the simplest way to go.
 
-Using multiple cores requires setting a proper value to the `/proc/sys/fs/aio-max-nr`.
-On many non-production systems, it will be equal to 65K. The formula
-to calculate the proper value is:
+Using multiple cores requires storing a proper value to `/proc/sys/fs/aio-max-nr`.
+While the default value for `aio-max-nr` on many non-production systems is 64K,
+this may not be optimal for high-performance workloads. The ideal value depends
+on the current value of `/proc/sys/fs/aio-nr` and also on the number of cores to
+be used by ScyllaDB:
 
-    Available AIO on the system - (request AIO per-cpu * ncpus) =
-    aio_max_nr - aio_nr < (reactor::max_aio + detect_aio_poll + reactor_backend_aio::max_polls) * cpu_cores =
-    aio_max_nr - aio_nr < (1024 + 2 + 10000) * cpu_cores =
-    aio_max_nr - aio_nr < 11026 * cpu_cores
+    Available AIO on the system >= (AIO requests per-cpu) * ncpus
 
-    where
+Expanding the definitions on both sides, we get:
 
-    reactor::max_aio = max_aio_per_queue * max_queues,
-    max_aio_per_queue = 128,
-    max_queues = 8.
+    aio_max_nr - aio_nr >= (storage_iocbs + preempt_iocbs + network_iocbs) * ncpus
+                                     1024               2           50000
+
+Which yields, for `/proc/sys/fs/aio-max-nr`:
+
+    aio_max_nr >= aio_nr + 51026 * ncpus
 
 ## How to use this image
 
@@ -139,7 +141,7 @@ $ docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scyl
 ### Configuring resource limits
 
 The ScyllaDB docker image defaults to running on overprovisioned mode and won't apply any CPU pinning optimizations, which it normally does in non-containerized environments.
-For better performance, it is recommended to configure resource limits for your Docker container using the `--smp`, `--memory`, and `--cpuset` command line options, as well as 
+For better performance, it is recommended to configure resource limits for your Docker container using the `--smp`, `--memory`, and `--cpuset` command line options, as well as
 disabling the overprovisioned flag as documented in the section "Command-line options".
 
 ### Restart ScyllaDB
@@ -348,7 +350,7 @@ The `--authorizer` command lines option allows to provide the authorizer class S
 
 JMX ScyllaDB service is initialized from the `/scylla-jmx-service.sh` on
 container startup. By default the script uses `/etc/sysconfig/scylla-jmx`
-to read the default configuration. It then can be overridden by setting 
+to read the default configuration. It then can be overridden by setting
 environmental parameters.
 
 An example:
