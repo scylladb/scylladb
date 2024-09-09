@@ -698,26 +698,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
-lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_table(const db::config& cfg, const schema& s, const data_dictionary::storage_options& sopts) {
-    data_dictionary::storage_options nopts;
-    nopts.value = std::visit(overloaded_functor {
-        [&] (const data_dictionary::storage_options::local& o) -> data_dictionary::storage_options::value_type {
-            return data_dictionary::storage_options::local {
-                .dir = fs::path(format("{}/{}/{}", cfg.data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()))),
-            };
-        },
-        [&] (const data_dictionary::storage_options::s3& o) -> data_dictionary::storage_options::value_type {
-            return data_dictionary::storage_options::s3 {
-                .bucket = o.bucket,
-                .endpoint = o.endpoint,
-                .prefix = format("{}/{}/{}", cfg.data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
-            };
-        }
-    }, sopts.value);
-    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
-}
-
-future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
     for (const auto& dd : mgr.config().data_file_directories()) {
         auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
@@ -728,15 +709,26 @@ future<> init_table_storage(const sstables_manager& mgr, const schema& s, const 
         co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
         co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
     });
+
+    data_dictionary::storage_options nopts;
+    nopts.value = data_dictionary::storage_options::local {
+        .dir = fs::path(format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()))),
+    };
+    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
-future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
-    co_return;
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
+    data_dictionary::storage_options nopts;
+    nopts.value = data_dictionary::storage_options::s3 {
+        .bucket = so.bucket,
+        .endpoint = so.endpoint,
+        .prefix = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
+    };
+    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
-    co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
-    co_return make_storage_options_for_table(mgr.config(), s, so);
+    co_return co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
