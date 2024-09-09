@@ -717,17 +717,18 @@ lw_shared_ptr<const data_dictionary::storage_options> make_storage_options_for_t
     return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
+future<> init_table_storage(const data_dictionary::storage_options::local& so, sstring dir) {
+    co_await io_check([&dir] { return recursive_touch_directory(dir); });
+    co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+    co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+}
+
+future<> init_table_storage(const data_dictionary::storage_options::s3& so, sstring dir) {
+    co_return;
+}
+
 future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
-    co_await std::visit(overloaded_functor {
-        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
-            co_await io_check([&dir] { return recursive_touch_directory(dir); });
-            co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-            co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
-        },
-        [] (const data_dictionary::storage_options::s3&) -> future<> {
-            co_return;
-        }
-    }, so.value);
+    co_await std::visit([&dir] (const auto& so) { return init_table_storage(so, dir); }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
