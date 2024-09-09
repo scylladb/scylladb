@@ -928,7 +928,7 @@ public:
     // Start a compaction of all sstables in a process known as major compaction
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
-    future<> compact_all_sstables(tasks::task_info info, do_flush = do_flush::yes);
+    future<> compact_all_sstables(tasks::task_info info, do_flush = do_flush::yes, bool consider_only_existing_data = false);
 
     future<bool> snapshot_exists(sstring name);
 
@@ -1802,6 +1802,8 @@ public:
     // Note: force_new_active_segment in the commitlog, so that
     // flushing all tables will allow reclaiming of all commitlog segments
     future<> flush_all_tables();
+    // a wrapper around flush_all_tables, allowing the caller to express intent more clearly
+    future<> flush_commitlog() { return flush_all_tables(); }
 
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 

@@ -1126,6 +1126,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto params = req_params({
             std::pair("name", mandatory::yes),
             std::pair("flush_memtables", mandatory::no),
+            std::pair("consider_only_existing_data", mandatory::no),
             std::pair("split_output", mandatory::no),
         });
         params.process(*req);
@@ -1134,7 +1135,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         }
         auto [ks, cf] = parse_fully_qualified_cf_name(*params.get("name"));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.info("column_family/force_major_compaction: name={} flush={}", req->get_path_param("name"), flush);
+        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        apilog.info("column_family/force_major_compaction: name={} flush={} consider_only_existing_data={}", req->get_path_param("name"), flush, consider_only_existing_data);
 
         auto keyspace = validate_keyspace(ctx, ks);
         std::vector<table_info> table_infos = {table_info{
@@ -1144,10 +1146,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
         std::optional<flush_mode> fmopt;
-        if (!flush) {
+        if (!flush && !consider_only_existing_data) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), ctx.db, std::move(table_infos), fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), ctx.db, std::move(table_infos), fmopt, consider_only_existing_data);
         co_await task->done();
         co_return json_void();
     });

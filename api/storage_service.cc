@@ -716,17 +716,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto& db = ctx.db;
         auto params = req_params({
             std::pair("flush_memtables", mandatory::no),
+            std::pair("consider_only_existing_data", mandatory::no),
         });
         params.process(*req);
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.info("force_compaction: flush={}", flush);
+        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        apilog.info("force_compaction: flush={} consider_only_existing_data={}", flush, consider_only_existing_data);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         std::optional<flush_mode> fmopt;
-        if (!flush) {
+        if (!flush && !consider_only_existing_data) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt);
+        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, consider_only_existing_data);
         try {
             co_await task->done();
         } catch (...) {
@@ -743,19 +745,21 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             std::pair("keyspace", mandatory::yes),
             std::pair("cf", mandatory::no),
             std::pair("flush_memtables", mandatory::no),
+            std::pair("consider_only_existing_data", mandatory::no),
         });
         params.process(*req);
         auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
         auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.debug("force_keyspace_compaction: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
+        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         std::optional<flush_mode> fmopt;
-        if (!flush) {
+        if (!flush && !consider_only_existing_data) {
             fmopt = flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
         try {
             co_await task->done();
         } catch (...) {
