@@ -11,7 +11,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
-#include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/reactor.hh>
 
 namespace generic_server {
@@ -114,14 +114,12 @@ server::~server()
 
 future<> server::stop() {
     co_await shutdown();
-    co_await std::exchange(_all_connections_stopped, make_ready_future<>());
 }
 
 future<> server::shutdown() {
-    if (_gate.is_closed()) {
-        co_return;
+    if (_shutting_down.valid()) {
+        return _shutting_down.get_future();
     }
-    _all_connections_stopped = _gate.close();
     size_t nr = 0;
     size_t nr_total = _listeners.size();
     _logger.debug("abort accept nr_total={}", nr_total);
@@ -129,14 +127,19 @@ future<> server::shutdown() {
         l.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
-    size_t nr_conn = 0;
+    auto nr_conn = make_lw_shared<size_t>(0);
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
-    co_await coroutine::parallel_for_each(_connections_list, [&] (auto&& c) -> future<> {
-        co_await c.shutdown();
-        _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
-    });
-    co_await std::move(_listeners_stopped);
+    _shutting_down = when_all(
+                         parallel_for_each(_connections_list, [this, nr_conn, nr_conn_total] (auto&& c) {
+                             return c.shutdown().then([this, nr_conn, nr_conn_total] {
+                                 _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+                             });
+                         }),
+                         _gate.close(),
+                         std::move(_listeners_stopped)
+                     ).discard_result();
+    return _shutting_down.get_future();
 }
 
 future<>
@@ -171,9 +174,8 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
-        seastar::gate::holder holder(_gate);
-        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr, holder = std::move(holder)] (future<accept_result> f_cs_sa) mutable {
-            if (_gate.is_closed()) {
+        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
+            if (_shutting_down.valid()) {
                 f_cs_sa.ignore_ready_future();
                 return stop_iteration::yes;
             }

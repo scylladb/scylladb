@@ -16,6 +16,7 @@
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
@@ -79,7 +80,7 @@ protected:
     sstring _server_name;
     logging::logger& _logger;
     seastar::gate _gate;
-    future<> _all_connections_stopped = make_ready_future<>();
+    shared_future<> _shutting_down;
     uint64_t _total_connections = 0;
     future<> _listeners_stopped = make_ready_future<>();
     using connections_list_t = boost::intrusive::list<connection>;
