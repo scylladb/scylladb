@@ -712,7 +712,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
 
     data_dictionary::storage_options nopts;
     nopts.value = data_dictionary::storage_options::local {
-        .dir = fs::path(format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()))),
+        .dir = fs::path(std::move(dirs[0])),
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
