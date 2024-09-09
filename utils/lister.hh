@@ -208,6 +208,8 @@ public:
         , _queue(512 / sizeof(std::optional<directory_entry>))
     { }
 
+    directory_lister(directory_lister&&) noexcept = default;
+
     ~directory_lister();
 
     future<std::optional<directory_entry>> get() override;
