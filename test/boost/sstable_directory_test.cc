@@ -106,9 +106,9 @@ make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state
     return sst;
 }
 
-sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, sstables::generation_type gen) {
-    testlog.debug("new_sstable: dir={} gen={}", dir, gen);
-    return env.make_sstable(test_table_schema(), dir.native(), gen);
+sstables::shared_sstable new_sstable(sstables::test_env& env, sstables::generation_type gen) {
+    testlog.debug("new_sstable: dir={} gen={}", env.tempdir().path(), gen);
+    return env.make_sstable(test_table_schema(), gen);
 }
 
 sstables::shared_sstable new_env_sstable(sstables::test_env& env) {
@@ -195,7 +195,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
     return sstables::test_env::do_with_async([] (test_env& env) {
-        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), env.tempdir().path().native(), generation_type(this_shard_id())));
+        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type(this_shard_id())));
 
         // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
         // We should fail validation and leave the directory untouched
@@ -346,20 +346,17 @@ future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, 
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_generations) {
     sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-        // Use the local env.tempdir since each shard has its own
-        auto& dir = env.local().tempdir();
-
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start(0).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (shard_id i = 0; i < smp::count; ++i) {
-            env.invoke_on(i, [dir = dir.path(), &sharded_gen] (sstables::test_env& env) {
+            env.invoke_on(i, [&sharded_gen] (sstables::test_env& env) {
                 auto generation = std::invoke(sharded_gen.local());
                 // this is why it is annoying for the internal functions in the test infrastructure to
                 // assume threaded execution
-                return seastar::async([dir, generation, &env] {
-                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, generation));
+                return seastar::async([generation, &env] {
+                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation));
                 });
             }).get();
         }
@@ -375,23 +372,20 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_generations) {
     sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
-        // Use the local env.tempdir since each shard has its own
-        auto& dir = env.local().tempdir();
-
         sharded<sstables::sstable_generation_generator> sharded_gen;
         sharded_gen.start(0).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (shard_id i = 0; i < smp::count; ++i) {
-            env.invoke_on(i, [dir = dir.path(), &sharded_gen] (sstables::test_env& env) -> future<> {
+            env.invoke_on(i, [&sharded_gen] (sstables::test_env& env) -> future<> {
                 // intentionally generate the generation on a different shard
                 auto generation = co_await sharded_gen.invoke_on((this_shard_id() + 1) % smp::count, [] (auto& gen) {
                     return gen(sstables::uuid_identifiers::no);
                 });
                 // this is why it is annoying for the internal functions in the test infrastructure to
                 // assume threaded execution
-                co_return co_await seastar::async([dir, generation, &env] {
-                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, generation));
+                co_return co_await seastar::async([generation, &env] {
+                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation));
                 });
             }).get();
         }
