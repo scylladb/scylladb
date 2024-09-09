@@ -723,11 +723,11 @@ future<> init_table_storage(const sstables_manager& mgr, const schema& s, const 
         auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
         dirs.emplace_back(std::move(dir));
     }
-   co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
-    co_await io_check([&dir] { return recursive_touch_directory(dir); });
-    co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-    co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
-   });
+    co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
+        co_await io_check([&dir] { return recursive_touch_directory(dir); });
+        co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+        co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+    });
 }
 
 future<> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
