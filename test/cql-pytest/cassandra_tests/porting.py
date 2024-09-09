@@ -154,6 +154,8 @@ def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
     with pytest.raises(typ, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+assertInvalidThrowMessage = assert_invalid_throw_message
+
 def assert_invalid_throw_message_re(cql, table, message, typ, cmd, *args):
     with pytest.raises(typ, match=message):
         execute(cql, table, cmd, *args)
@@ -193,13 +195,23 @@ def result_cleanup(item):
         return { freeze(item[0]): item[1] for item in item._items }
     if isinstance(item, SortedSet):
         return { freeze(x) for x in item }
+    if item != item:
+        # item is a bizarre object like NaN which isn't equal to itself
+        # so it's hopeless it will ever equal to anything else in the
+        # result set. Return an object that will allow assertRows with NaN.
+        return "NaN-Like Object"
     return item
 
 def assert_rows_list(result, expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     for r,e in zip(allresults, expected):
-        r = [result_cleanup(col) for col in r]
+        if hasattr(r, 'values'):
+            # case of ordered_dict_factory or dict_factory
+            r = [result_cleanup(col) for col in r.values()]
+        else:
+            # case of namedtuple_factory
+            r = [result_cleanup(col) for col in r]
         assert r == e
 
 def assert_rows(result, *expected):
@@ -279,10 +291,38 @@ def assert_all_rows(cql, table, *expected):
 # "cleans" column names in result sets by dropping any non-alphanumeric
 # character at the beginning or end of the name and replacing such characters
 # in the middle by a "_".  So, for example the column name "m['1']" is
-# converted to "m__1".
+# converted to "m__1". This cleanup is needed because of the limitations
+# of Python's namedtuple.
+# Wrap your query with the original_column_names() context manager below to
+# avoid using namedtuple in a query, and avoid this cleanup.
 def assert_column_names(result, *expected):
-    assert result.one()._fields == expected
+    r = result.one()
+    if hasattr(r, '_fields'):
+        assert r._fields == expected
+    else:
+        # ordered_dict_factory or dict_factory gets here:
+        assert tuple(r.keys()) == expected
+
 assertColumnNames = assert_column_names
+
+# Use the "original_column_names" context manager to monkey-patch the query
+# wrapped by it to NOT use the column name "cleanup" described above
+# for assert_column_names().
+# For example:
+#     with original_column_names(cql) as cql:
+#         assertColumnNames(execute(cql, table, "SELECT a+a, a+b"),
+#                           "a+a", "a+b")
+@contextmanager
+def original_column_names(cql):
+    profiles = cql.cluster.profile_manager.profiles
+    profile = next(iter(profiles.values())) # assume there's just one...
+    saved_row_factory = profile.row_factory
+    from cassandra.query import ordered_dict_factory
+    profile.row_factory = ordered_dict_factory
+    try:
+        yield cql
+    finally:
+        profile.row_factory = saved_row_factory
 
 def flush(cql, table):
     nodetool.flush(cql, table)
