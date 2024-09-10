@@ -1122,6 +1122,12 @@ public:
         return true;
     }
 
+    // Checks whether moving a tablet from shard A to B (intra-node) would go against convergence.
+    // Returns false if the tablet should not be moved, and true if it may be moved.
+    bool check_convergence(const shard_load& src_info, const shard_load& dst_info) {
+        return src_info.tablet_count > dst_info.tablet_count + 1;
+    }
+
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
@@ -1183,7 +1189,7 @@ public:
             // Convergence check
 
             // When in shuffle mode, exit condition is guaranteed by running out of candidates or by load limit.
-            if (!shuffle && (src == dst || src_info.tablet_count <= dst_info.tablet_count + 1)) {
+            if (!shuffle && (src == dst || !check_convergence(src_info, dst_info))) {
                 lblogger.debug("Node {} is balanced", host);
                 break;
             }
