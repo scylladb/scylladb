@@ -1932,6 +1932,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
         ("with-compression", "Generates compressed sstables")
         ("rows", bpo::value<int>()->default_value(1000000), "Number of CQL rows in a partition. Relevant only for population.")
         ("value-size", bpo::value<int>()->default_value(100), "Size of value stored in a cell. Relevant only for population.")
+        ("column-index-size-in-kb", bpo::value<int>(), "Overrides default column_index_size_in_kb config.")
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
@@ -1975,7 +1976,9 @@ int scylla_fast_forward_main(int argc, char** argv) {
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
         db_cfg.unspooled_dirty_soft_limit(1.0); // prevent background memtable flushes.
-
+        if (app.configuration().contains("column-index-size-in-kb")) {
+            db_cfg.column_index_size_in_kb(app.configuration()["column-index-size-in-kb"].as<int>());
+        }
         db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();
