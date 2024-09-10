@@ -147,6 +147,51 @@ struct migration_badness {
     bool operator<=>(const migration_badness& other) const = default;
 };
 
+struct colocated_tablet {
+    global_tablet_id left_tablet;
+    global_tablet_id right_tablet;
+
+    auto operator<=>(const colocated_tablet&) const = default;
+};
+
+template <class... Ts>
+struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+
+struct tablet_candidate {
+    std::variant<global_tablet_id, colocated_tablet> candidate;
+
+    table_id table() const {
+        return std::visit(
+            overloaded{
+                [](global_tablet_id t) { return t.table; },
+                [](colocated_tablet t) { return t.left_tablet.table; },
+            },
+            candidate);
+    }
+
+    using tablet_small_vector = utils::small_vector<global_tablet_id, 2>;
+
+    tablet_small_vector tablets() const {
+        return std::visit(
+            overloaded{
+                [](global_tablet_id t) {
+                    return tablet_small_vector{t}; },
+                [](colocated_tablet t) {
+                    return tablet_small_vector{t.left_tablet, t.right_tablet};
+                },
+            },
+            candidate);
+    }
+
+    bool colocated() const {
+        return std::holds_alternative<colocated_tablet>(candidate);
+    }
+
+    auto operator<=>(const tablet_candidate&) const = default;
+};
+
 struct migration_candidate {
     global_tablet_id tablet;
     tablet_replica src;
@@ -165,6 +210,17 @@ struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_v
 };
 
 template<>
+struct fmt::formatter<service::tablet_candidate> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::tablet_candidate& candidate, FormatContext& ctx) const {
+        if (candidate.colocated()) {
+            return fmt::format_to(ctx.out(), "{{colocated: {}}}", candidate.tablets());
+        }
+        return fmt::format_to(ctx.out(), "{}", candidate.tablets().front());
+    }
+};
+
+template<>
 struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::migration_candidate& candidate, FormatContext& ctx) const {
@@ -177,6 +233,27 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
         return ctx.out();
     }
 };
+
+namespace std {
+
+using namespace service;
+
+template <>
+struct hash<colocated_tablet> {
+    size_t operator()(const colocated_tablet& id) const {
+        return utils::hash_combine(std::hash<global_tablet_id>()(id.left_tablet),
+                                   std::hash<global_tablet_id>()(id.right_tablet));
+    }
+};
+
+template <>
+struct hash<tablet_candidate> {
+    size_t operator()(const tablet_candidate& t) const {
+        return std::hash<decltype(tablet_candidate::candidate)>()(t.candidate);
+    }
+};
+
+}
 
 namespace service {
 
