@@ -797,6 +797,19 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             semaphore.initial_resources().memory - semaphore.available_resources().memory,
             semaphore.initial_resources().memory,
             problem);
+
+    if (permit) {
+        const auto& schema = permit->get_schema();
+        fmt::print(os, "Trigger permit: count={}, memory={}, table={}.{}, operation={}, state={}\n",
+            permit->resources().count,
+            permit->resources().memory,
+            schema ? permit->get_schema()->ks_name() : "*",
+            schema ? permit->get_schema()->cf_name() : "*",
+            permit->get_op_name(),
+            permit->get_state());
+    }
+
+    fmt::print(os, "\n");
     total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
     const auto& stats = semaphore.get_stats();
