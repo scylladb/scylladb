@@ -1822,3 +1822,74 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+// Unit test version of dtest to verify we enforce limit.
+SEASTAR_TEST_CASE(test_commitlog_disk_limit) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 20;
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    // ensure total size per shard is not multiple of segment size.
+    cfg.commitlog_total_space_in_mb = 5 * max_size_mb * smp::count;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    std::deque<rp_set> queue;
+    size_t n = 0;
+
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = make_table_id();
+    auto size = log.max_record_size() / 3;
+
+    // add a flush handler that swallows everything
+    auto r = log.add_flush_handler([&](cf_id_type, replay_position pos) {
+        auto old = std::exchange(rps, rp_set{});
+        queue.emplace_back(std::move(old));
+    });
+
+    uint64_t limit = log.disk_limit(), footprint = 0;
+
+    try {
+        // Keep adding stuff until we fill up the commit log -> will block and time out
+        for (;;) {
+            auto now = timeout_clock::now();
+            rp_handle h = co_await with_timeout(now + 2s, log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            }));
+            rps.put(std::move(h));
+        }
+    } catch (timed_out_error&) {
+        // ok...
+    }
+
+    // we should be at max size now.
+    footprint = log.disk_footprint();
+    // now release segments. this will allow the timed out alloc above to
+    // complete (in background). The shutdown below will ensure we wait for it.
+    while (!queue.empty()) {
+        auto flush = std::move(queue.front());
+        queue.pop_front();
+        log.discard_completed_segments(uuid, flush);
+        ++n;
+    };
+
+    // will force any alloc still pending to complete.
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_GT(n, 0); // we should have gotten at least one flush
+    BOOST_REQUIRE_GT(footprint, 0); // footprint must have been set -> timeout
+    // main purpose: verify that footprint is at most disk_limit aligned up to segment size (+1)
+    BOOST_REQUIRE_LE(footprint, 1024*1024*(1 + limit / max_size_mb) * max_size_mb);
+}
