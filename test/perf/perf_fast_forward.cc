@@ -922,9 +922,10 @@ static test_result select_spread_rows(replica::column_family& cf, clustered_ds& 
     }
 
     auto slice = sb.build();
+    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
-        query::full_partition_range,
+        pr,
         slice);
     auto close_rd = deferred_close(rd);
 
