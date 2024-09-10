@@ -1298,7 +1298,6 @@ def testIndexQueryWithValueOver64K(cql, test_keyspace):
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE c = ?  ALLOW FILTERING", too_big))
 
 # Reproduces #10366
-@pytest.mark.xfail(reason="#10366 - server error instead of InvalidRequest")
 def testPKQueryWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b text, PRIMARY KEY (a, b))") as table:
         TOO_BIG = 1024 * 65
@@ -1307,7 +1306,7 @@ def testPKQueryWithValueOver64K(cql, test_keyspace):
                            "SELECT * FROM %s WHERE a = ?", too_big)
 
 # Reproduces #10366
-@pytest.mark.xfail(reason="#10366 - server error instead of silent return")
+@pytest.mark.xfail(reason="Cassandra silently ignores oversized clustering key, Scylla chose to generate an error as in the case of an oversized partition key - see discussion in #10366")
 def testCKQueryWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b text, PRIMARY KEY (a, b))") as table:
         TOO_BIG = 1024 * 65
