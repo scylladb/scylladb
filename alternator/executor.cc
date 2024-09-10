@@ -1042,7 +1042,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // any table.
     const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     std::vector<schema_builder> view_builders;
-    std::vector<sstring> where_clauses;
     std::unordered_set<std::string> index_names;
     if (gsi) {
         if (!gsi->IsArray()) {
@@ -1094,12 +1093,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             }
             // GSIs have no tags:
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
-            sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(view_hash_key));
-            if (!view_range_key.empty()) {
-                where_clause = format("{} AND {} IS NOT NULL", where_clause,
-                    cql3::util::maybe_quote(view_range_key));
-            }
-            where_clauses.push_back(std::move(where_clause));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
@@ -1152,12 +1145,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // Note above we don't need to add virtual columns, as all
             // base columns were copied to view. TODO: reconsider the need
             // for virtual columns when we support Projection.
-            sstring where_clause = format("{} IS NOT NULL", cql3::util::maybe_quote(view_hash_key));
-            if (!view_range_key.empty()) {
-                where_clause = format("{} AND {} IS NOT NULL", where_clause,
-                    cql3::util::maybe_quote(view_range_key));
-            }
-            where_clauses.push_back(std::move(where_clause));
             // LSIs have no tags, but Scylla's "synchronous_updates" feature
             // (which an LSIs need), is actually implemented as a tag so we
             // need to add it here:
@@ -1199,7 +1186,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     co_await verify_create_permission(client_state);
 
     schema_ptr schema = builder.build();
-    auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
         // Note below we don't need to add virtual columns, as all
         // base columns were copied to view. TODO: reconsider the need
@@ -1210,8 +1196,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             }
         }
         const bool include_all_columns = true;
-        view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        ++where_clause_it;
+        view_builder.with_view_info(*schema, include_all_columns, ""/*where clause*/);
     }
 
     // FIXME: the following needs to be in a loop. If mm.announce() below

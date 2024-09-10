@@ -11,7 +11,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
+from test.alternator.util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -58,27 +58,26 @@ def assert_index_scan(table, index_name, expected_items, **kwargs):
 # The following test does not work for KA/LA tables due to #6157, but we
 # no longer allow writing those in Scylla.
 def test_gsi_identical(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
-        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'hello',
-                'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-                'Projection': { 'ProjectionType': 'ALL' }
-            }
-        ])
-    items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    # Scanning the entire table directly or via the index yields the same
-    # results (in different order).
-    assert multiset(items) == multiset(full_scan(table))
-    assert_index_scan(table, 'hello', items)
-    # We can't scan a non-existent index
-    with pytest.raises(ClientError, match='ValidationException'):
-        full_scan(table, ConsistentRead=False, IndexName='wrong')
-    table.delete()
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ]) as table:
+        items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Scanning the entire table directly or via the index yields the same
+        # results (in different order).
+        assert multiset(items) == multiset(full_scan(table))
+        assert_index_scan(table, 'hello', items)
+        # We can't scan a non-existent index
+        with pytest.raises(ClientError, match='ValidationException'):
+            full_scan(table, ConsistentRead=False, IndexName='wrong')
 
 # One of the simplest forms of a non-trivial GSI: The base table has a hash
 # and sort key, and the index reverses those roles. Other attributes are just
@@ -162,27 +161,80 @@ def test_gsi_strong_consistency(test_table_gsi_1):
 
 # Test that setting an indexed string column to an empty string is illegal,
 # since keys cannot contain empty strings
+# Test this in the different write operations - PutItem, UpdateItem and
+# BatchWriteItem, to verify we didn't miss the checks in any of those
+# code paths.
 def test_gsi_empty_value(test_table_gsi_2):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
+        test_table_gsi_2.put_item(Item={'p': p, 'x': ''})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': '', 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p': p, 'x': ''})
 
 def test_gsi_empty_value_with_range_key(test_table_gsi_3):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': '', 'b': random_string()})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': '', 'b': p})
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': ''})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': p, 'b': ''})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': '', 'Action': 'PUT'}, 'b': {'Value': p, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': p, 'Action': 'PUT'}, 'b': {'Value': '', 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': '', 'b': p})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': p, 'b': ''})
+
+# In test_gsi_empty_value we validated that writing an empty string to
+# column that is a GSI key fails. We also checked BatchWriteItem. Let's
+# verify that with BatchWriteItem, if one of the writes fail this
+# verification, none of the other writes in the batch get done either.
+def test_gsi_empty_value_in_bigger_batch_write(test_table_gsi_2):
+    p1 = random_string()
+    p2 = random_string()
+    p3 = random_string()
+    items = [{'p': p1, 'x': p1}, {'p': p2, 'x': ''}, {'p': p3, 'x': p3}]
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_2.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+    for p in [p1, p2, p3]:
+        assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
 
 # Dynamodb supports special way of setting NULL value.
 # It's different than non existing value.
 def test_gsi_null_value(test_table_gsi_2):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': None})
+        test_table_gsi_2.put_item(Item={'p': p, 'x': None})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': None, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p': p, 'x': None})
 
 def test_gsi_null_value_with_range_key(test_table_gsi_3):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': None, 'b': random_string()})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': None, 'b': p})
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': None})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': p, 'b': None})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': None, 'Action': 'PUT'}, 'b': {'Value': p, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': p, 'Action': 'PUT'}, 'b': {'Value': None, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': None, 'b': p})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': p, 'b': None})
 
 # Verify that a GSI is correctly listed in describe_table
 def test_gsi_describe(test_table_gsi_1):
@@ -315,14 +367,76 @@ def test_gsi_2(test_table_gsi_2):
     assert_index_query(test_table_gsi_2, 'hello', expected_items,
         KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
 
+# The previous tests just need to create rows in the materialized view.
+# This test adds more elaborate operations which need to create new rows,
+# modify existing rows, and delete rows of the materialized view.
+# We use the schema test_table_gsi_2, and create, modify and delete the
+# attribute "x" (a regular attribute in the base table, a key in the GSI)
+# to cause all these different operations on the view rows, and check
+# various code paths in the view update code.
+def test_update_gsi_pk(test_table_gsi_2):
+    p = random_string()
+    x1 = random_string()
+    y = random_string()
+    z = random_string()
+
+    # Create a new GSI row (x1), see that it appears
+    test_table_gsi_2.put_item(Item={'p': p, 'x': x1, 'y': y, 'z': z})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Update only the unrelated attribute y. Should leave the same row in
+    # the GSI (x=x1), just with a modified y (and unmodified z)
+    y = random_string()
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'y': {'Value': y, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Update the GSI's key attribute x to x2. The old row (x=x1) should
+    # disappear from the GSI, and the new row (x=x2) should appear, with the
+    # base row's "y" and "z" value that weren't changed in this update.
+    x2 = random_string()
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x2, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
+
+    # Delete only the attribute x from our base-table row. The row should
+    # remain in the table (with no x), but disappear from the view
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Action': 'DELETE'}})
+    assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y, 'z': z}
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
+
+    # Set x again to x1, see the view item re-appears in the view:
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Delete the entire item in the base table, the view row should also
+    # disappear
+    test_table_gsi_2.delete_item(Key={'p': p})
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
-def test_gsi_missing_attribute(test_table_gsi_2):
+@pytest.mark.parametrize('op', ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_gsi_missing_attribute(test_table_gsi_2, op):
     p1 = random_string()
     x1 = random_string()
-    test_table_gsi_2.put_item(Item={'p':  p1, 'x': x1})
     p2 = random_string()
-    test_table_gsi_2.put_item(Item={'p':  p2})
+    if op == 'PutItem':
+        test_table_gsi_2.put_item(Item={'p':  p1, 'x': x1})
+        test_table_gsi_2.put_item(Item={'p':  p2})
+    elif op == 'UpdateItem':
+        test_table_gsi_2.update_item(Key={'p':  p1}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
+        test_table_gsi_2.update_item(Key={'p':  p2}, AttributeUpdates={})
+    elif op == 'BatchWriteItem':
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item(Item={'p':  p1, 'x': x1})
+            batch.put_item(Item={'p':  p2})
 
     # Both items are now in the base table:
     assert test_table_gsi_2.get_item(Key={'p':  p1}, ConsistentRead=True)['Item'] == {'p': p1, 'x': x1}
@@ -364,6 +478,15 @@ def test_gsi_wrong_type_attribute_update(test_table_gsi_2):
         test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': 3, 'Action': 'PUT'}})
     assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': x}
 
+def test_gsi_wrong_type_attribute_batchwrite(test_table_gsi_2):
+    # BatchWriteItem with wrong type for 'x' is rejected, item isn't created
+    # even in the base table.
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p':  p, 'x': 3})
+    assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
+
 # Since a GSI key x cannot be a map or an array, in particular updates to
 # nested attributes like x.y or x[1] are not legal. The error that DynamoDB
 # reports is "Key attributes must be scalars; list random access '[]' and map
@@ -374,15 +497,12 @@ def test_gsi_wrong_type_attribute_update_nested(test_table_gsi_2):
     test_table_gsi_2.put_item(Item={'p':  p, 'x': x})
     # We can't write a map into a GSI key column, which in this case can only
     # be a string and in any case can never be a map. DynamoDB and Alternator
-    # report different errors here: DynamoDB reports a type mismatch (exactly
-    # like in test test_gsi_wrong_type_attribute_update), but Alternator
-    # reports the obscure message "Malformed value object for key column x".
-    # Alternator's error message should probably be improved here, but let's
-    # not test it in this test.
-    with pytest.raises(ClientError, match='ValidationException'):
+    # both report a "type mismatch" error, exactly like in the test
+    # test_gsi_wrong_type_attribute_update.
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
         test_table_gsi_2.update_item(Key={'p': p}, UpdateExpression='SET x = :val1',
             ExpressionAttributeValues={':val1': {'a': 3, 'b': 4}})
-    # Here we try to set x.y for the GSI key column x. Again DynamoDB and
+    # Here we try to set x.y for the GSI key column x. Here DynamoDB and
     # Alternator produce different error messages - but both make sense.
     # DynamoDB says "Key attributes must be scalars; list random access '[]'
     # and map # lookup '.' are not allowed: IndexKey: x", while Alternator
@@ -572,6 +692,120 @@ def test_11801_variant4(test_table_gsi_3):
     assert_index_query(test_table_gsi_3, 'hello', [item],
         KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+
+# An additional test for the case that two non-key attributes in the base
+# table become keys of the view. In this test we try to cover all the
+# cases of an update modifying, not modifying, or deleting, one of the two
+# attributes, and checking which view rows are changed/deleted/inserted.
+def test_gsi_3_long(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    z = random_string()
+    test_table_gsi_3.put_item(Item={'p': p, 'a': a, 'b': b, 'z': z})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a, 'b': b, 'z': z}],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change z, the existing view row changes:
+    z2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'z': {'Value': z2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a, 'b': b, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change a, the original row (a,b) is deleted, a new one (a2, b) created
+    a2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a2, 'b': b, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change b, the original row (a2, b) is deleted, a new one (a2, b2) created
+    b2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a2, 'b': b2, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
+    # Change both a and b, the old row (a2, b2) is deleted, a new one
+    # (a3, b3) is created
+    a3 = random_string()
+    b3 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a3, 'Action': 'PUT'}, 'b': {'Value': b3, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a3, 'b': b3, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b3], 'ComparisonOperator': 'EQ'}})
+    # Delete attribute a and at the same time change b to b4. This is *not* the
+    # same as just not setting a (as we checked above). In this case, the
+    # old row should be deleted, but no new view row is created.
+    b4 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Value': b4, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b3], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Set "a" again (to a4), and the view row (a4, b4) appears
+    a4 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a4, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a4, 'b': b4, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a4], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Similar to above, but for second column: Delete attribute b and at the
+    # same time change a to a5. the old row should be deleted, but no new
+    # view row is created.
+    a5 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Action': 'DELETE'}, 'a': {'Value': a5, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a4], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Set "b" again (to b5), and the view row (a5, b5) appears
+    b5 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b5, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a5, 'b': b5, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    # Now unset both a and b. The view row disappears, and setting only a,
+    # or only b, doesn't bring it back.
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Action': 'DELETE'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    a6 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a6, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    b6 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b6, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a6, 'b': b6, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b6], 'ComparisonOperator': 'EQ'}})
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Action': 'DELETE'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b6], 'ComparisonOperator': 'EQ'}})
+    b7 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b7, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b7], 'ComparisonOperator': 'EQ'}})
+    a7 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a7, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a7, 'b': b7, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a7], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b7], 'ComparisonOperator': 'EQ'}})
+
 
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
@@ -1101,6 +1335,18 @@ def test_gsi_backfill(dynamodb):
         assert multiset([items1[3]]) == multiset(full_query(table,
             ConsistentRead=False, IndexName='hello',
             KeyConditions={'x': {'AttributeValueList': [items1[3]['x']], 'ComparisonOperator': 'EQ'}}))
+        # Because the GSI now exists, we are no longer allowed to add to the
+        # base table items with a wrong type for x (like we were able to add
+        # earlier - see items3). But if x is missing (as in items2), we
+        # *are* allowed to add the item and it appears in the base table
+        # (but the view table doesn't change)
+        p = random_string()
+        y = random_string()
+        table.put_item(Item={'p': p, 'y': y})
+        assert table.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y}
+        with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+            table.put_item(Item={'p': random_string(), 'x': 3})
+
         # Let's also test that we cannot add another index with the same name
         # that already exists
         with pytest.raises(ClientError, match='ValidationException.*already exists'):
@@ -1148,12 +1394,18 @@ def test_gsi_delete(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*hello'):
             full_query(table, ConsistentRead=False, IndexName='hello',
                 KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
+        # When we had a GSI on x with type S, we weren't allowed to insert
+        # items with a number for x. Now, after dropping this GSI, we should
+        # be able to insert any type for x:
+        p = random_string()
+        table.put_item(Item={'p': p, 'x': 7})
+        assert table.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 7}
 
 # Utility function for creating a new table a GSI with the given name,
 # and, if creation was successful, delete it. Useful for testing which
 # GSI names work.
 def create_gsi(dynamodb, index_name):
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
         GlobalSecondaryIndexes=[
@@ -1161,10 +1413,9 @@ def create_gsi(dynamodb, index_name):
                 'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
                 'Projection': { 'ProjectionType': 'ALL' }
             }
-        ])
-    # Verify that the GSI wasn't just ignored, as Scylla originally did ;-)
-    assert 'GlobalSecondaryIndexes' in table.meta.client.describe_table(TableName=table.name)['Table']
-    table.delete()
+        ]) as table:
+        # Verify that the GSI wasn't just ignored, as Scylla originally did ;-)
+        assert 'GlobalSecondaryIndexes' in table.meta.client.describe_table(TableName=table.name)['Table']
 
 # Like table names (tested in test_table.py), index names must must also
 # be 3-255 characters and match the regex [a-zA-Z0-9._-]+. This test
@@ -1386,6 +1637,147 @@ def test_gsi_query_select_2(dynamodb):
             Select='COUNT',
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
 
+# In all GSIs above, the GSI's key was a string from the base table
+# (AttributeType: S). While most of the GSI functionality is independent of
+# the key's type, some may be type-specific - Alternator may rely on a
+# "computed function" to deserializes the value from the base to put it in
+# the view row. So test_table_gsi_6 is a table which has six GSIs, each one
+# with one of the three legal AttributeType (S, B, and N) for its partition
+# key or clustering key.
+@pytest.fixture(scope="module")
+def test_table_gsi_6(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 's', 'AttributeType': 'S' },
+                    { 'AttributeName': 'b', 'AttributeType': 'B' },
+                    { 'AttributeName': 'n', 'AttributeType': 'N' }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_s',
+                'KeySchema': [
+                    { 'AttributeName': 's', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_ss',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 's', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_b',
+                'KeySchema': [
+                    { 'AttributeName': 'b', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_sb',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'b', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_n',
+                'KeySchema': [
+                    { 'AttributeName': 'n', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'gsi_sn',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'n', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+# Tests for test_table_gsi_6, just checking that the write of different types
+# doesn't fail (below we'll have additional tests that also read the GSI).
+# Also check failure cases (wrong types, and empty string).
+# As explained in a comment above for test_table_gsi_6, the main goal of these
+# tests is to check the "computed function" which our implementation uses to
+# parse the base-table values of different types.
+def test_gsi_6_write_s(test_table_gsi_6):
+    test_table_gsi_6.put_item(Item={'p': random_string(), 's': random_string()})
+
+def test_gsi_6_write_s_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': ''})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': 3})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': b'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 's': {'hi', 'there'}})
+
+def test_gsi_6_write_b(test_table_gsi_6):
+    p = random_string()
+    b = random_bytes()
+    test_table_gsi_6.put_item(Item={'p': p, 'b': b})
+
+def test_gsi_6_write_b_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': b''})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': 3})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': 'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'b': {'hi', 'there'}})
+
+def test_gsi_6_write_n(test_table_gsi_6):
+    p = random_string()
+    n = 87
+    test_table_gsi_6.put_item(Item={'p': p, 'n': n})
+
+def test_gsi_6_write_n_fail(test_table_gsi_6):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': b'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': 'hi'})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': True})
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        test_table_gsi_6.put_item(Item={'p': p, 'n': {'hi', 'there'}})
+
+def test_gsi_6(test_table_gsi_6):
+    p = random_string()
+    s = random_string()
+    b = random_bytes()
+    n = 17
+    x = random_string()
+    item={'p': p, 's': s, 'b': b, 'n': n, 'x': x}
+    test_table_gsi_6.put_item(Item=item)
+    # Check that all six GSIs as usable with their different keys.
+    # Note that we're reading from six different GSIs, so we need to use
+    # the maybe-retrying assert_index_query() for each of them.
+    assert_index_query(test_table_gsi_6, 'gsi_s', [item],
+        KeyConditions={'s': {'AttributeValueList': [s], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [item],
+        KeyConditions={'s': {'AttributeValueList': [s], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_b', [item],
+        KeyConditions={'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_sb', [item],
+        KeyConditions={'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_n', [item],
+        KeyConditions={'n': {'AttributeValueList': [n], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_6, 'gsi_sn', [item],
+        KeyConditions={'n': {'AttributeValueList': [n], 'ComparisonOperator': 'EQ'}, 'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+
 # Test that trying to create a table with two GSIs with the same name is an
 # error.
 # In test_gsi_backfill we also check that adding a second GSI with the same
@@ -1593,3 +1985,90 @@ def test_17119a(test_table_gsi_2):
     assert_index_query(test_table_gsi_2, 'hello', [item],
         KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                        'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# The following test checks what happens when we have an LSI and a GSI using
+# the same base-table attribute. We want to verify that if the implementation
+# happens to store key attributes for LSIs and GSIs differently, and we have
+# both on the same table, both are usable. This is a delicate corner case,
+# which should be tested so it doesn't regress.
+#
+# In particular, we plan LSI and GSI to be implemented as follows: When "x"
+# is an LSI key, "x" becomes a full-fleged column in the schema (remember
+# that in DynamoDB, an LSI must be defined at table-creation time). Yet, when
+# "x" is a GSI key, it will use a "computed column" to extract x from the
+# map ":attrs" of un-schema'ed attributes. So do the two work at the same time?
+# It turns out the code value_getter::operator() which is supposed to
+# read the base data from either a real column or a computed column,
+# looks for the real column *first*; If it exists (as in the case of the
+# LSI), it is used and the computed column is outright ignored. Because
+# this logic is delicate and even counter-intuitive and at risk of being
+# "cleaned up" in the future, this test is an important regression test.
+# By the way, we have in test_lsi.py::test_lsi_and_gsi() another test
+# for combining GSI and LSI, testing somewhat different things.
+def test_gsi_and_lsi_same_key(dynamodb):
+    # A table whose non-key column "x" serves as a range key in an LSI,
+    # and partition key in a GSI.
+    with new_test_table(dynamodb,
+        KeySchema=[
+            # Must have both hash key and range key to allow LSI creation
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        # Write some data with attribute x, see it appear in the base table
+        # and both LSI and GSI.
+        p = random_string() # key column in base (and therefore in GSI & LSI)
+        c = random_string() # key column in base (and therefore in GSI & LSI)
+        x = random_string() # key column in LSI and GSI (regular in base)
+        y = random_string() # not a key anywhere
+        item = {'p': p, 'c': c, 'x': x, 'y': y}
+        table.put_item(Item=item)
+        assert table.get_item(Key={'p':  p, 'c': c}, ConsistentRead=True)['Item'] == item
+        assert_index_query(table, 'lsi', [item],
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}, 'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        assert_index_query(table, 'gsi', [item],
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# Check that any type besides S(tring), B(ytes) or N(umber)s is *not* NOT
+# allowed as the type of a GSI key attribute. We don't check here that these
+# three types *are* allowed, because we already checked this in other tests
+# (see test_gsi_6_*).
+def test_gsi_invalid_key_types(dynamodb):
+    # The following are all the types that DynamoDB supports, as documented in
+    # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.LowLevelAPI.html
+    # also the non-existent type "junk" yields the same error message.
+    for key_type in ['BOOL', 'NULL', 'M', 'L', 'SS', 'NS', 'BS', 'junk']:
+        # DynamDB's and Alternator's error messages are different, but both
+        # include the invalid type's name in single quotes.
+        with pytest.raises(ClientError, match=f"ValidationException.*'{key_type}'"):
+            with new_test_table(dynamodb,
+                KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': key_type },
+                ],
+                GlobalSecondaryIndexes=[{
+                    'IndexName': 'gsi',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }]) as table:
+                pass
