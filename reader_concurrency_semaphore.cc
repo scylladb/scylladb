@@ -228,14 +228,24 @@ private:
 
         _ex = std::make_exception_ptr(timed_out_error{});
 
-        if (_state == state::waiting_for_admission || _state == state::waiting_for_memory || _state == state::waiting_for_execution) {
-            _aux_data.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
-
-            maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
-
-            _semaphore.dequeue_permit(*this);
-        } else if (_state == state::inactive) {
-            _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
+        switch (_state) {
+            case state::waiting_for_admission:
+            case state::waiting_for_memory:
+            case state::waiting_for_execution:
+                _aux_data.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
+                maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
+                _semaphore.dequeue_permit(*this);
+                break;
+            case state::active:
+            case state::active_need_cpu:
+            case state::active_await:
+                maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
+                break;
+            case state::inactive:
+                _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
+                break;
+            case state::evicted:
+                break;
         }
     }
 
