@@ -443,14 +443,9 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
     if (_cm._sys_ks) {
-        // FIXME: add support to merged_rows. merged_rows is a histogram that
-        // shows how many sstables each row is merged from. This information
-        // cannot be accessed until we make combined_reader more generic,
-        // for example, by adding a reducer method.
         auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
-        std::vector<int64_t> rows_merged;
         co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
-                ended_at.count(), res.stats.start_size, res.stats.end_size, rows_merged);
+                ended_at.count(), res.stats.start_size, res.stats.end_size, res.stats.reader_statistics.rows_merged_histogram);
     }
 }
 
