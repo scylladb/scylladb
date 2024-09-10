@@ -914,11 +914,11 @@ static test_result slice_rows_by_ck(replica::column_family& cf, clustered_ds& ds
     return test_reading_all(rd);
 }
 
-static test_result select_spread_rows(replica::column_family& cf, clustered_ds& ds, int stride = 0, int n_read = 1) {
+static test_result select_spread_rows(replica::column_family& cf, clustered_ds& ds, int stride = 0, int n_read = 1, int offset = 0) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
-        sb.with_range(query::clustering_range::make_singular(ds.make_ck(*cf.schema(), i * stride)));
+        sb.with_range(query::clustering_range::make_singular(ds.make_ck(*cf.schema(), i * stride + offset)));
     }
 
     auto slice = sb.build();
@@ -1606,22 +1606,22 @@ void test_large_partition_slicing_single_partition_reader(app_template &app, rep
 void test_large_partition_select_few_rows(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
-    output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
-    auto test = [&](int stride, int read) {
+    output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
+    auto test = [&](int offset, int stride, int read) {
       run_test_case(app, [&] {
-        auto r = select_spread_rows(cf, ds, stride, read);
-        r.set_params(to_sstrings(stride, read));
+        auto r = select_spread_rows(cf, ds, stride, read, offset);
+        r.set_params(to_sstrings(offset, stride, read));
         check_fragment_count(r, read);
         return r;
       });
     };
 
-    test(n_rows / 1, 1);
-    test(n_rows / 2, 2);
-    test(n_rows / 4, 4);
-    test(n_rows / 8, 8);
-    test(n_rows / 16, 16);
-    test(2, n_rows / 2);
+    test(0, n_rows / 1, 1);
+    test(0, n_rows / 2, 2);
+    test(0, n_rows / 4, 4);
+    test(0, n_rows / 8, 8);
+    test(0, n_rows / 16, 16);
+    test(0, 2, n_rows / 2);
 }
 
 void test_large_partition_forwarding(app_template &app, replica::column_family& cf, clustered_ds& ds) {
