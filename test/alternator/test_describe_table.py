@@ -13,6 +13,7 @@
 #     feature.
 #  3. Tests for describing a restored table (RestoreSummary, TableId)
 #     will be together with tests devoted to the backup/restore feature.
+#  4. Tests for describing TableClass are in test_tableclass.py.
 
 import pytest
 from botocore.exceptions import ClientError
