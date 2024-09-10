@@ -1616,6 +1616,9 @@ void test_large_partition_select_few_rows(app_template &app, replica::column_fam
       });
     };
 
+    test(n_rows / 2, 1, 1);
+    test(n_rows / 2 + 1, 1, 1);
+
     test(0, n_rows / 1, 1);
     test(0, n_rows / 2, 2);
     test(0, n_rows / 4, 4);
