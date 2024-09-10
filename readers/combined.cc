@@ -13,6 +13,7 @@
 #include "readers/clustering_combined.hh"
 #include "readers/range_tombstone_change_merger.hh"
 #include "readers/combined.hh"
+#include "readers/combined_reader_stats.hh"
 
 extern logging::logger mrlog;
 
@@ -83,12 +84,14 @@ class mutation_fragment_merger {
     Producer _producer;
     range_tombstone_change_merger<stream_id_t> _tombstone_merger;
     mutation_fragment_v2_opt _result;
+    combined_reader_statistics* _statistics{ nullptr };
 
 public:
-    mutation_fragment_merger(schema_ptr schema, reader_permit permit, Producer&& producer)
+    mutation_fragment_merger(schema_ptr schema, reader_permit permit, Producer&& producer, combined_reader_statistics* statistics = nullptr)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
-        , _producer(std::move(producer)) {
+        , _producer(std::move(producer))
+        , _statistics(statistics) {
     }
 
     future<mutation_fragment_v2_opt> operator()() {
@@ -100,6 +103,11 @@ public:
                 if (begin == end) {
                     return stop_iteration::yes;
                 }
+
+                if (_statistics) {
+                    ++_statistics->rows_merged_histogram[fragments.size()];
+                }
+
                 // If fragment is a range tombstone change, all others in the batch
                 // have to be too. This follows from all fragments in the batch
                 // having identical positions, and range tombstones never having the

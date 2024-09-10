@@ -14,6 +14,7 @@
 #include "readers/mutation_reader.hh"
 
 class reader_permit;
+struct combined_reader_statistics;
 
 class reader_selector {
 protected:
