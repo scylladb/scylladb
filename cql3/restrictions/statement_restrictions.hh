@@ -349,11 +349,6 @@ public:
         return _single_column_nonprimary_key_restrictions;
     }
 
-    /**
-     * @return partition key restrictions split into single column restrictions (e.g. for filtering support).
-     */
-    const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
-
     // Returns any filter that needs to be applied to a row, but if it fails, it will fail for all rows in the partition.
     // If a column is used for a secondary index, it will not be in the filter.
     //
@@ -367,11 +362,6 @@ public:
     const expr::expression& get_clustering_row_level_filter() const {
         return _clustering_row_level_filter;
     }
-
-    /**
-     * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
-     */
-    const expr::single_column_restrictions_map& get_single_column_clustering_key_restrictions() const;
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().

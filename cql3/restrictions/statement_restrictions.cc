@@ -1933,17 +1933,6 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
     }
 }
 
-const expr::single_column_restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
-    return _single_column_partition_key_restrictions;
-}
-
-/**
- * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
- */
-const expr::single_column_restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
-    return _single_column_clustering_key_restrictions;
-}
-
 void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {
     if (!_partition_range_is_simple) {
         return;
