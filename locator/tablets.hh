@@ -312,6 +312,8 @@ struct resize_decision {
     bool operator==(const resize_decision&) const;
     sstring type_name() const;
     seq_number_t next_sequence_number() const;
+    // Returns true if this is the initial decision, before split or merge was emitted.
+    bool initial_decision() const;
 };
 
 struct table_load_stats {
