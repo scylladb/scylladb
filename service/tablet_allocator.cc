@@ -1076,6 +1076,15 @@ public:
         }
     }
 
+    void erase_candidates(node_load_map& nodes, const tablet_map& tmap, global_tablet_id tablet) {
+        auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+        for (auto&& r : src_tinfo.replicas) {
+            if (nodes.contains(r.host)) {
+                erase_candidate(nodes[r.host].shards[r.shard], tablet);
+            }
+        }
+    }
+
     void add_candidate(shard_load& shard_info, global_tablet_id tablet) {
         if (_use_table_aware_balancing) {
             shard_info.candidates[tablet.table].insert(tablet);
@@ -1210,11 +1219,7 @@ public:
             _stats.for_dc(node_load.dc()).intranode_migrations_produced++;
             plan.add(std::move(mig));
 
-            for (auto&& r : src_tinfo.replicas) {
-                if (nodes.contains(r.host)) {
-                    erase_candidate(nodes[r.host].shards[r.shard], tablet);
-                }
-            }
+            erase_candidates(nodes, tmap, tablet);
 
             dst_info.tablet_count++;
             src_info.tablet_count--;
@@ -1809,11 +1814,7 @@ public:
                 }
             }
 
-            for (auto&& r : src_tinfo.replicas) {
-                if (nodes.contains(r.host)) {
-                    erase_candidate(nodes[r.host].shards[r.shard], source_tablet);
-                }
-            }
+            erase_candidates(nodes, tmap, source_tablet);
 
             {
                 auto& target_info = nodes[dst.host];
