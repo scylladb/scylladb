@@ -537,7 +537,6 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
-        auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
 
         e.db().invoke_on_all([] (replica::database& db) {
             auto& cf = db.find_column_family("ks", "cf");
@@ -566,7 +565,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
-        auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
+        auto make_sstable = [&e, &sharded_gen] (shard_id shard) {
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
                 return gen(sstables::uuid_identifiers::no);
             }).get();
