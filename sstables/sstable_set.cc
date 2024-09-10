@@ -1366,7 +1366,8 @@ sstable_set::make_local_shard_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor_generator& monitor_generator,
-        const sstable_predicate& predicate) const
+        const sstable_predicate& predicate,
+        combined_reader_statistics* statistics) const
 {
     auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
@@ -1392,7 +1393,8 @@ sstable_set::make_local_shard_sstable_reader(
                     std::move(trace_state),
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr);
+            fwd_mr,
+            statistics);
 }
 
 mutation_reader sstable_set::make_full_scan_reader(
