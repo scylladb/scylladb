@@ -45,9 +45,9 @@ def pytest_addoption(parser):
     # presence.
     parser.addoption('--omit-scylla-output', action='store_true',
         help='Omit scylla\'s output from the test output')
-    parser.addoption('--mode', action='store', default='no_mode',
+    parser.addoption('--mode', action='store', default=None,
                      help='Scylla build mode. Tests can use it to adjust their behavior.')
-    parser.addoption('--run_id', action='store', default=1,
+    parser.addoption('--run_id', action='store', default=None,
                      help='Run id for the test run')
 
 # "cql" fixture: set up client object for communicating with the CQL API.

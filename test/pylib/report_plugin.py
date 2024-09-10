@@ -24,7 +24,8 @@ class ReportPlugin:
     def pytest_runtest_makereport(self):
         outcome = yield
         report = outcome.get_result()
-        report.nodeid = f"{report.nodeid}.{self.mode}.{self.run_id}"
+        if self.mode is not None or self.run_id is not None:
+            report.nodeid = f"{report.nodeid}.{self.mode}.{self.run_id}"
 
     @pytest.fixture(scope="function", autouse=True)
     def allure_set_mode(self, request):
