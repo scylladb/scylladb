@@ -153,6 +153,12 @@ public:
         _migrations.emplace_back(std::move(info));
     }
 
+    void add(migrations_vector migrations) {
+        for (auto&& mig : migrations) {
+            add(std::move(mig));
+        }
+    }
+
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
