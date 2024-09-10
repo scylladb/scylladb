@@ -430,7 +430,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingTimeoutClause[attrs] )?
+      ( usingTimeoutServiceLevelClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -564,6 +564,15 @@ usingTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
 
 usingTimestampClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = std::move(ts); }
+    ;
+
+usingTimeoutServiceLevelClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING usingTimeoutServiceLevelClauseObjective[attrs] ( K_AND usingTimeoutServiceLevelClauseObjective[attrs] )*
+    ;
+
+usingTimeoutServiceLevelClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_TIMEOUT to=term { attrs->timeout = std::move(to); }
+    | serviceLevel sl_name=serviceLevelOrRoleName { attrs->service_level = std::move(sl_name); }
     ;
 
 /**
