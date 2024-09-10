@@ -809,6 +809,21 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             permit->get_state());
     }
 
+    std::vector<sstring> bottlenecks;
+    if (semaphore.get_stats().need_cpu_permits > 0) {
+        bottlenecks.push_back("CPU");
+    }
+    if (semaphore.available_resources().memory <= 0) {
+        bottlenecks.push_back("memory");
+    }
+    if (semaphore.available_resources().count <= 0) {
+        bottlenecks.push_back("disk");
+    }
+
+    if (!bottlenecks.empty()) {
+        fmt::print(os, "Identified bottleneck(s): {}\n", fmt::join(bottlenecks, ", "));
+    }
+
     fmt::print(os, "\n");
     total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
