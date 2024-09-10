@@ -1256,7 +1256,7 @@ future<> table::init_storage() {
 }
 
 future<> table::destroy_storage() {
-    return _sstables_manager.destroy_table_storage(*_storage_opts, _config.datadir);
+    return _sstables_manager.destroy_table_storage(*_storage_opts);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {

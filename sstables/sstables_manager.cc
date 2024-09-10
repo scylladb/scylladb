@@ -305,8 +305,8 @@ future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_
     return sstables::init_keyspace_storage(*this, so, dir);
 }
 
-future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
-    return sstables::destroy_table_storage(so, dir);
+future<> sstables_manager::destroy_table_storage(const data_dictionary::storage_options& so) {
+    return sstables::destroy_table_storage(so);
 }
 
 void sstables_manager::validate_new_keyspace_storage_options(const data_dictionary::storage_options& so) {

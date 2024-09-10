@@ -746,10 +746,13 @@ future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionar
     }, so.value);
 }
 
-future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+future<> destroy_table_storage(const data_dictionary::storage_options& so) {
     co_await std::visit(overloaded_functor {
-        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
-            co_await sstables::remove_table_directory_if_has_no_snapshots(fs::path(dir));
+        [] (const data_dictionary::storage_options::local& so) -> future<> {
+            if (so.dir.empty()) {
+                on_internal_error(sstlog, "Non-table local storage options");
+            }
+            co_await sstables::remove_table_directory_if_has_no_snapshots(so.dir);
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;
