@@ -34,6 +34,7 @@ namespace detail {
     public:
         sector_split_iterator(const sector_split_iterator&) noexcept;
         sector_split_iterator(base_iterator i, base_iterator e, size_t sector_size);
+        sector_split_iterator(base_iterator i, base_iterator e, size_t sector_size, size_t overhead);
         sector_split_iterator();
 
         char* get_write() const {
@@ -101,8 +102,9 @@ public:
     {}
 
     void set_with_schema(bool value) {
-        _with_schema = value;
-        compute_size();
+        if (std::exchange(_with_schema, value) != value || _size == std::numeric_limits<size_t>::max()) {
+            compute_size();
+        }
     }
     bool with_schema() const {
         return _with_schema;

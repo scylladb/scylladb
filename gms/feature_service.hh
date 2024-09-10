@@ -135,6 +135,14 @@ public:
     gms::feature native_reverse_queries { *this, "NATIVE_REVERSE_QUERIES"sv };
     gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
 
+    // Whether to allow fragmented commitlog entries. While this is a node-local feature as such, hide
+    // behind a feature to ensure an upgrading cluster appears to be at least functional before using,
+    // to avoid data loss if rolling back in a dirty state, but also because it changes which/how mutations
+    // can be applied to a given node - i.e. with it on, a node can accept larger, say, schema mutations,
+    // whereas without it, it will fail the insert - i.e. for things like raft etc _all_ nodes should
+    // have it or none, otherwise we can get partial failures on writes.
+    gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
+
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
     // This feature MUST NOT be advertised in release mode!

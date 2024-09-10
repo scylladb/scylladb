@@ -1822,3 +1822,205 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+/**
+ * Test allocating oversized multi-entry
+*/
+static future<> do_test_oversized_entry(size_t max_size_mb) {
+    commitlog::config cfg;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    std::unordered_map<replay_position, frozen_mutation> rp2mut;
+    random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+
+    {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto size = log.max_record_size() * 2;
+
+        std::vector<commitlog_entry_writer> writers;
+        std::vector<frozen_mutation> mutations;
+
+        size_t tot = 0; 
+        // generate a bunch of mutation until we have more data than allowed.
+        while (tot <= size) {
+            mutations.emplace_back(gen(1).front());
+            tot += mutations.back().representation().size();
+        }
+        for (auto& fm : mutations) {
+            writers.emplace_back(gen.schema(), fm, commitlog::force_sync::no);
+        }
+
+        // this will create an oversized entry set.
+        auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 60s);
+
+        auto i = mutations.begin();
+        for (auto& h : res) {
+            rp2mut.emplace(h.release(), *i++);
+        }
+        co_await log.sync_all_segments();
+        // as if we crashed -> segment left on disk
+        co_await log.release();
+        co_await log.shutdown();
+    }
+
+    // new log, for replay.
+    auto log = co_await commitlog::create_commitlog(cfg);
+    std::exception_ptr e;
+    size_t n = 0;
+
+    auto replay_set = co_await log.get_segments_to_replay();
+    // Now replay the old commitlog and ensure we match all data.
+
+    commitlog::replay_state state;
+    for (auto& f : replay_set) {
+        try {
+            co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                auto&& buf = buf_rp.buffer;
+                auto&& rp = buf_rp.position;
+
+                BOOST_CHECK(rp2mut.count(rp));
+                commitlog_entry_reader cer(buf);
+                auto& fm = cer.mutation();
+                auto m1 = fm.unfreeze(gen.schema());
+                auto m2 = rp2mut.at(rp).unfreeze(gen.schema());
+
+                BOOST_CHECK_EQUAL(m1, m2);
+                ++n;
+                co_return;
+            });
+        } catch (commitlog::segment_truncation&) {
+            e = std::current_exception();
+        }
+    }
+
+    BOOST_CHECK_EQUAL(n, rp2mut.size());
+
+    co_await log.shutdown();
+    co_await log.clear();
+
+    if (n != rp2mut.size() && e) {
+        std::rethrow_exception(e);
+    }
+}
+
+SEASTAR_TEST_CASE(test_oversized_entry_small) {
+    co_await do_test_oversized_entry(1); // small segments
+}
+
+SEASTAR_TEST_CASE(test_oversized_entry_normal) {
+    co_await do_test_oversized_entry(32); // normal segments
+}
+
+SEASTAR_TEST_CASE(test_oversized_entry_large) {
+    co_await do_test_oversized_entry(32*3); // bigger segments
+}
+
+static future<> test_oversized(size_t n_entries, size_t max_size_mb) {
+    commitlog::config cfg;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 8 * n_entries * max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto uuid = make_table_id();
+    std::unordered_map<replay_position, fragmented_temporary_buffer> rp2buf;
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<unsigned> dist(0u, 255u);
+
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto size = log.max_record_size() * 2 + dist(gen) * 1024 + dist(gen) * 64;
+
+        // TODO: we can't create multi-entries using current API.
+        for (size_t i = 0; i < n_entries; ++i) {
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+
+            auto out = buf.get_ostream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = static_cast<char>(dist(gen));
+                out.write(&c, 1);
+            }
+
+            auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (auto& tmp : buf) {
+                    dst.write(tmp.get(), tmp.size());
+                }
+            });
+            rp2buf.emplace(h.release(), std::move(buf)); // no freeing for you
+        }
+
+        co_await log.sync_all_segments();
+        // as if we crashed -> segment left on disk
+        co_await log.release();
+        co_await log.shutdown();
+    }
+
+    // new log, for replay.
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+    size_t n_found = 0;
+    std::exception_ptr e;
+    commitlog::replay_state state;
+
+    // Now replay the old commitlog and ensure we match all data.
+    for (auto& f : replay_set) {
+        try {
+            co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                auto&& buf_in = buf_rp.buffer;
+                auto&& rp_in = buf_rp.position;
+
+                auto& buf = rp2buf.at(rp_in);
+                BOOST_CHECK_EQUAL(buf.size_bytes(), buf_in.size_bytes());
+                fragmented_temporary_buffer::view v1(buf); 
+                fragmented_temporary_buffer::view v2(buf_in); 
+                BOOST_CHECK_EQUAL(v1, v2);
+                ++n_found;
+                co_return;
+            });
+        } catch (commitlog::segment_truncation&) {
+            e = std::current_exception();
+        }
+    }
+
+    BOOST_CHECK_EQUAL(n_found, rp2buf.size());
+
+    co_await log.shutdown();
+    co_await log.clear();
+
+    if (n_found != rp2buf.size() && e) {
+        std::rethrow_exception(e);
+    }
+}
+
+SEASTAR_TEST_CASE(test_oversized_single_entry) {
+    co_await test_oversized(1, 1);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_small) {
+    co_await test_oversized(8, 1);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_medium) {
+    co_await test_oversized(8, 8);
+}
+
+SEASTAR_TEST_CASE(test_oversized_several_large) {
+    co_await test_oversized(8, 32);
+}

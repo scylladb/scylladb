@@ -111,6 +111,7 @@ public:
         bool use_o_dsync = false;
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = true;
+        bool allow_fragmented_entries = false;
 
         // The base segment ID to use.
         // The segment IDs of newly allocated segments will be issued sequentially
@@ -136,7 +137,8 @@ public:
         static inline constexpr uint32_t segment_version_1 = 1u;
         static inline constexpr uint32_t segment_version_2 = 2u;
         static inline constexpr uint32_t segment_version_3 = 3u;
-        static inline constexpr uint32_t current_version = segment_version_3;
+        static inline constexpr uint32_t segment_version_4 = 4u;
+        static inline constexpr uint32_t current_version = segment_version_4;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
@@ -162,6 +164,12 @@ public:
      */
     static future<commitlog> create_commitlog(config);
 
+    /**
+     * Update a running instance with new config options.
+     * Note: only some options (see code part) are actually 
+     * applied once started.
+     */
+    void update_configuration(const config&);
 
     /**
      * Note: To be able to keep impl out of header file,
@@ -378,7 +386,7 @@ public:
     // (Re-)set data mix lifetime.
     void update_max_data_lifetime(std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds);
 
-    typedef std::function<future<>(buffer_and_replay_position)> commit_load_reader_func;
+    using commit_load_reader_func = std::function<future<>(buffer_and_replay_position)>;
 
     class segment_error : public std::exception {};
 
@@ -424,7 +432,18 @@ public:
         const char* what() const noexcept override;
     };
 
+    class replay_state {
+    public:
+        replay_state();
+        ~replay_state();
+    private:
+        friend class commitlog;
+        class impl;
+        std::unique_ptr<impl> _impl;
+    };
+
     static future<> read_log_file(sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
+    static future<> read_log_file(const replay_state&, sstring filename, sstring prefix, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
 
