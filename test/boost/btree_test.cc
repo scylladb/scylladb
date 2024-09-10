@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 
@@ -348,7 +349,8 @@ BOOST_AUTO_TEST_CASE(test_data_self_iterator) {
     BOOST_REQUIRE(t.find(1, cmp) == t.end());
 }
 
-static void test_singular_tree_ptr_sz(int sz) {
+BOOST_DATA_TEST_CASE(test_singular_tree_ptr_sz,
+                     boost::unit_test::data::make({1, 2, 10}), sz) {
     test_tree t;
 
     for (int i = 0; i < sz; i++) {
@@ -364,12 +366,6 @@ static void test_singular_tree_ptr_sz(int sz) {
         }
         t.erase_and_dispose(it, key_deleter);
     }
-}
-
-BOOST_AUTO_TEST_CASE(test_singular_tree_ptr) {
-    test_singular_tree_ptr_sz(1);
-    test_singular_tree_ptr_sz(2);
-    test_singular_tree_ptr_sz(10);
 }
 
 BOOST_AUTO_TEST_CASE(test_range_erase) {
@@ -410,7 +406,8 @@ BOOST_AUTO_TEST_CASE(test_range_erase) {
     }
 }
 
-static void test_clone_n(int n) {
+BOOST_DATA_TEST_CASE(test_clone_n,
+                     boost::unit_test::data::make({1, 3, 32}), n) {
     /* Quick check for tree::clone_from */
     test_tree t;
 
@@ -431,12 +428,6 @@ static void test_clone_n(int n) {
 
     t.clear_and_dispose(key_deleter);
     ct.clear_and_dispose(key_deleter);
-}
-
-BOOST_AUTO_TEST_CASE(test_clone) {
-    test_clone_n(1);
-    test_clone_n(3);
-    test_clone_n(32);
 }
 
 BOOST_AUTO_TEST_CASE(test_insert_before_hint) {
@@ -523,7 +514,8 @@ BOOST_AUTO_TEST_CASE(test_swap_between_trees) {
     t2.clear_and_dispose(key_deleter);
 }
 
-static void test_unlink_leftmost_n(int n) {
+BOOST_DATA_TEST_CASE(test_unlink_leftmost_n,
+                     boost::unit_test::data::make({0, 1, 3, 32}), n) {
     fmt::print("CHK {}\n", n);
     test_tree t;
 
@@ -537,13 +529,6 @@ static void test_unlink_leftmost_n(int n) {
         BOOST_REQUIRE(int(*k) == rover++);
         delete k;
     }
-}
-
-BOOST_AUTO_TEST_CASE(test_unlink_leftmost_without_rebalance) {
-    test_unlink_leftmost_n(0);
-    test_unlink_leftmost_n(1);
-    test_unlink_leftmost_n(3);
-    test_unlink_leftmost_n(32);
 }
 
 static future<> test_exception_safety_of_clone(unsigned nr_keys) {
