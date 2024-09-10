@@ -61,7 +61,11 @@ struct tablet_replica {
     host_id host;
     shard_id shard;
 
-    bool operator==(const tablet_replica&) const = default;
+    auto operator<=>(const tablet_replica&) const = default;
+};
+
+struct tablet_replica_less_comparator {
+    bool operator()(const tablet_replica& r1, tablet_replica& r2) const noexcept { return r1 < r2; }
 };
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
