@@ -502,6 +502,7 @@ protected:
     uint64_t _estimated_partitions = 0;
     double _estimated_droppable_tombstone_ratio = 0;
     uint64_t _bloom_filter_checks = 0;
+    combined_reader_statistics _reader_statistics;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     const bool _can_split_large_partition = false;
@@ -898,6 +899,7 @@ protected:
                 .start_size = _start_size,
                 .end_size = _end_size,
                 .bloom_filter_checks = _bloom_filter_checks,
+                .reader_statistics = std::move(_reader_statistics),
             },
         };
 
@@ -1157,7 +1159,9 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                unwrap_monitor_generator());
+                unwrap_monitor_generator(),
+                default_sstable_predicate(),
+                &_reader_statistics);
     }
 
     std::string_view report_start_desc() const override {
