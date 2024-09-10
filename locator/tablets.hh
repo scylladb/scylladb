@@ -482,6 +482,7 @@ public:
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
+    bool needs_merge() const;
 
     /// Returns the token_range in which the given token will belong to after a tablet split
     dht::token_range get_token_range_after_split(const token& t) const noexcept;

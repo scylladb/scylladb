@@ -540,6 +540,10 @@ bool tablet_map::needs_split() const {
     return std::holds_alternative<resize_decision::split>(_resize_decision.way);
 }
 
+bool tablet_map::needs_merge() const {
+    return std::holds_alternative<resize_decision::merge>(_resize_decision.way);
+}
+
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
 }
