@@ -1128,6 +1128,37 @@ public:
         return src_info.tablet_count > dst_info.tablet_count + 1;
     }
 
+    // Adjusts the load of the source and destination shards in the host where intra-node migration happens.
+    void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, global_tablet_id tablet) {
+        auto& src_info = node_load.shards[src];
+        auto& dst_info = node_load.shards[dst];
+        dst_info.tablet_count++;
+        src_info.tablet_count--;
+        dst_info.tablet_count_per_table[tablet.table]++;
+        src_info.tablet_count_per_table[tablet.table]--;
+    }
+
+    // Adjusts the load of the source and destination (host:shard) that were picked for the migration.
+    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, global_tablet_id source_tablet) {
+        {
+            auto& target_info = nodes[dst.host];
+            target_info.shards[dst.shard].tablet_count++;
+            target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
+            target_info.tablet_count_per_table[source_tablet.table]++;
+            target_info.tablet_count += 1;
+            target_info.update();
+        }
+
+        auto& src_node_info = nodes[src.host];
+        auto& src_shard_info = src_node_info.shards[src.shard];
+        src_shard_info.tablet_count -= 1;
+        src_shard_info.tablet_count_per_table[source_tablet.table]--;
+        src_node_info.tablet_count_per_table[source_tablet.table]--;
+
+        src_node_info.tablet_count -= 1;
+        src_node_info.update();
+    }
+
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
@@ -1227,10 +1258,7 @@ public:
 
             erase_candidates(nodes, tmap, tablet);
 
-            dst_info.tablet_count++;
-            src_info.tablet_count--;
-            dst_info.tablet_count_per_table[tablet.table]++;
-            src_info.tablet_count_per_table[tablet.table]--;
+            update_node_load_on_migration(node_load, host, src, dst, tablet);
             sketch.pick(host, dst);
             sketch.unload(host, src);
         }
@@ -1822,22 +1850,7 @@ public:
 
             erase_candidates(nodes, tmap, source_tablet);
 
-            {
-                auto& target_info = nodes[dst.host];
-                target_info.shards[dst.shard].tablet_count++;
-                target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
-                target_info.tablet_count_per_table[source_tablet.table]++;
-                target_info.tablet_count += 1;
-                target_info.update();
-            }
-
-            auto& src_shard_info = src_node_info.shards[src.shard];
-            src_shard_info.tablet_count -= 1;
-            src_shard_info.tablet_count_per_table[source_tablet.table]--;
-            src_node_info.tablet_count_per_table[source_tablet.table]--;
-
-            src_node_info.tablet_count -= 1;
-            src_node_info.update();
+            update_node_load_on_migration(nodes, src, dst, source_tablet);
             if (src_node_info.tablet_count == 0) {
                 push_back_node_candidate.cancel();
                 nodes_by_load.pop_back();
