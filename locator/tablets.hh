@@ -432,6 +432,7 @@ public:
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
+    bool needs_merge() const;
 
     const locator::resize_decision& resize_decision() const;
 public:
