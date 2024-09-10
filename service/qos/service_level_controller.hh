@@ -259,6 +259,10 @@ public:
         return sl_it->second;
     }
 
+    bool has_service_level(const sstring& service_level_name) const {
+        return _service_levels_db.contains(service_level_name);
+    }
+
     future<> commit_mutations(::service::group0_batch&& mc) {
         if (_sl_data_accessor->is_v2()) {
             return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
