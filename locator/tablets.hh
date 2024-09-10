@@ -47,7 +47,7 @@ struct tablet_id {
     explicit tablet_id(size_t id) : id(id) {}
     size_t value() const { return id; }
     explicit operator size_t() const { return id; }
-    bool operator<=>(const tablet_id&) const = default;
+    auto operator<=>(const tablet_id&) const = default;
 };
 
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
@@ -55,7 +55,7 @@ struct global_tablet_id {
     table_id table;
     tablet_id tablet;
 
-    bool operator<=>(const global_tablet_id&) const = default;
+    auto operator<=>(const global_tablet_id&) const = default;
 };
 
 struct tablet_replica {
