@@ -15,6 +15,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
+#include "utils/overloaded_functor.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
@@ -150,6 +151,51 @@ struct migration_badness {
     bool operator<=>(const migration_badness& other) const = default;
 };
 
+struct colocated_tablets {
+    global_tablet_id left_tablet;
+    global_tablet_id right_tablet;
+
+    auto operator<=>(const colocated_tablets&) const = default;
+};
+
+// Represents either a single tablet replica or co-located replicas of sibling
+// tablets. The migration tablet set is logically treated by balancer as a single
+// candidate. When candidate represents co-located replicas, it means that
+// the balancer will work to preserve the co-location by migrating those replicas
+// to same destination.
+struct migration_tablet_set {
+    std::variant<global_tablet_id, colocated_tablets> tablet_s;
+
+    table_id table() const {
+        return std::visit(
+            overloaded_functor{
+                [](global_tablet_id t) { return t.table; },
+                [](colocated_tablets t) { return t.left_tablet.table; },
+            },
+            tablet_s);
+    }
+
+    using tablet_small_vector = utils::small_vector<global_tablet_id, 2>;
+
+    tablet_small_vector tablets() const {
+        return std::visit(
+            overloaded_functor{
+                [](global_tablet_id t) {
+                    return tablet_small_vector{t}; },
+                [](colocated_tablets t) {
+                    return tablet_small_vector{t.left_tablet, t.right_tablet};
+                },
+            },
+            tablet_s);
+    }
+
+    bool colocated() const {
+        return std::holds_alternative<colocated_tablets>(tablet_s);
+    }
+
+    auto operator<=>(const migration_tablet_set&) const = default;
+};
+
 struct migration_candidate {
     global_tablet_id tablet;
     tablet_replica src;
@@ -168,6 +214,17 @@ struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_v
 };
 
 template<>
+struct fmt::formatter<service::migration_tablet_set> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const service::migration_tablet_set& tablet_set, FormatContext& ctx) const {
+        if (tablet_set.colocated()) {
+            return fmt::format_to(ctx.out(), "{{colocated: {}}}", tablet_set.tablets());
+        }
+        return fmt::format_to(ctx.out(), "{}", tablet_set.tablets().front());
+    }
+};
+
+template<>
 struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::migration_candidate& candidate, FormatContext& ctx) const {
@@ -180,6 +237,27 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
         return ctx.out();
     }
 };
+
+namespace std {
+
+using namespace service;
+
+template <>
+struct hash<colocated_tablets> {
+    size_t operator()(const colocated_tablets& id) const {
+        return utils::hash_combine(std::hash<global_tablet_id>()(id.left_tablet),
+                                   std::hash<global_tablet_id>()(id.right_tablet));
+    }
+};
+
+template <>
+struct hash<migration_tablet_set> {
+    size_t operator()(const migration_tablet_set& tablet_set) const {
+        return std::hash<decltype(migration_tablet_set::tablet_s)>()(tablet_set.tablet_s);
+    }
+};
+
+}
 
 namespace service {
 
