@@ -173,4 +173,15 @@ position_in_partition_view get_slice_upper_bound(const schema& s, const query::p
     return position_in_partition_view::for_range_end(ranges.back());
 }
 
+position_in_partition_view get_slice_lower_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
+    const auto& ranges = slice.row_ranges(s, *key.key());
+    if (ranges.empty()) {
+        return position_in_partition_view::for_static_row();
+    }
+    if (slice.is_reversed()) {
+        return position_in_partition_view::for_range_start(ranges.back());
+    }
+    return position_in_partition_view::for_range_start(ranges.front());
+}
+
 } // namespace sstables

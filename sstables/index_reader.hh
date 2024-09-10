@@ -724,6 +724,7 @@ private:
         });
     }
 
+public:
     // Forwards the upper bound cursor to a position which is greater than given position in current partition.
     //
     // Note that the index within partition, unlike the partition index, doesn't cover all keys.
@@ -751,7 +752,7 @@ private:
 
         index_entry& e = current_partition_entry(*_upper_bound);
         auto e_pos = e.position();
-        clustered_index_cursor* cur = current_clustered_cursor(*_upper_bound);
+        clustered_index_cursor* cur = current_clustered_cursor();
 
         if (!cur) {
             sstlog.trace("index {}: no promoted index", fmt::ptr(this));
@@ -769,6 +770,7 @@ private:
         });
     }
 
+private:
     // Returns position right after all partitions in the sstable
     uint64_t data_file_end() const {
         return _sstable->data_size();
@@ -935,10 +937,10 @@ public:
             return make_ready_future<>();
         }
 
-        return cur->advance_to(pos).then([this, e_pos] (std::optional<clustered_index_cursor::skip_info> si) {
+        return cur->advance_to(pos).then([this, cur, e_pos] (std::optional<clustered_index_cursor::skip_info> si) {
             if (!si) {
                 sstlog.trace("index {}: position in the same block", fmt::ptr(this));
-                return;
+                si = cur->current_block();
             }
             if (!si->active_tombstone) {
                 // End open marker can be only engaged in SSTables 3.x ('mc' format) and never in ka/la
@@ -954,25 +956,18 @@ public:
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
     // If upper_bound is provided, the upper bound within position is looked up
-    future<bool> advance_lower_and_check_if_present(
-            dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) {
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) {
         utils::get_local_injector().inject("advance_lower_and_check_if_present", [] { throw std::runtime_error("advance_lower_and_check_if_present"); });
-        return advance_to(_lower_bound, key).then([this, key, pos] {
+        return advance_to(_lower_bound, key).then([this, key] {
             if (eof()) {
                 return make_ready_future<bool>(false);
             }
-            return read_partition_data().then([this, key, pos] {
+            return read_partition_data().then([this, key] {
                 index_comparator cmp(*_sstable->_schema);
                 bool found = _alloc_section(_region, [&] {
                     return cmp(key, current_partition_entry(_lower_bound)) == 0;
                 });
-                if (!found || !pos) {
-                    return make_ready_future<bool>(found);
-                }
-
-                return advance_upper_past(*pos).then([] {
-                    return make_ready_future<bool>(true);
-                });
+                return make_ready_future<bool>(found);
             });
         });
     }
