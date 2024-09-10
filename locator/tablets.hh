@@ -306,6 +306,12 @@ struct load_stats {
 
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
 
+struct tablet_desc {
+    tablet_id tid;
+    const tablet_info* info; // cannot be null.
+    const tablet_transition_info* transition; // null if there's no transition.
+};
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
@@ -402,6 +408,10 @@ public:
 
     /// Calls a given function for each tablet in the map in token ownership order.
     future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
+
+    /// Calls a given function for each sibling tablet in the map in token ownership order.
+    /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
+    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {
         return _transitions;
