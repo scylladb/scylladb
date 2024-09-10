@@ -276,9 +276,11 @@ public:
     merging_reader(schema_ptr schema,
             reader_permit permit,
             streamed_mutation::forwarding fwd_sm,
-            Producer&& producer)
+            Producer&& producer,
+            combined_reader_statistics* statistics = nullptr
+            )
         : impl(std::move(schema), std::move(permit))
-        , _merger(_schema, _permit, std::move(producer))
+        , _merger(_schema, _permit, std::move(producer), statistics)
         , _fwd_sm(fwd_sm) {}
 
     virtual future<> fill_buffer() override;
@@ -691,18 +693,28 @@ mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector> selector,
         streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
+        mutation_reader::forwarding fwd_mr,
+        combined_reader_statistics* statistics) {
+    if (statistics && selector) {
+        auto size = selector->max_reader_count();
+        if (size > statistics->rows_merged_histogram.size()) {
+            statistics->rows_merged_histogram.resize(selector->max_reader_count() + 1, 0);
+        }
+    }
+
     return make_mutation_reader<merging_reader<mutation_reader_merger>>(schema,
             std::move(permit),
             fwd_sm,
-            mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr));
+            mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr),
+            statistics);
 }
 
 mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::vector<mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
+        mutation_reader::forwarding fwd_mr,
+        combined_reader_statistics* statistics) {
     if (readers.empty()) {
         return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
     }
@@ -713,7 +725,8 @@ mutation_reader make_combined_reader(schema_ptr schema,
             std::move(permit),
             std::make_unique<list_reader_selector>(schema, std::move(readers)),
             fwd_sm,
-            fwd_mr);
+            fwd_mr,
+            statistics);
 }
 
 mutation_reader make_combined_reader(schema_ptr schema,
@@ -721,12 +734,13 @@ mutation_reader make_combined_reader(schema_ptr schema,
         mutation_reader&& a,
         mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
+        mutation_reader::forwarding fwd_mr,
+        combined_reader_statistics* statistics) {
     std::vector<mutation_reader> v;
     v.reserve(2);
     v.push_back(std::move(a));
     v.push_back(std::move(b));
-    return make_combined_reader(std::move(schema), std::move(permit), std::move(v), fwd_sm, fwd_mr);
+    return make_combined_reader(std::move(schema), std::move(permit), std::move(v), fwd_sm, fwd_mr, statistics);
 }
 
 position_reader_queue::~position_reader_queue() {}
