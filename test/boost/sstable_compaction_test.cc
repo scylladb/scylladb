@@ -4119,13 +4119,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         for (unsigned idx = 0; idx < num_tables; idx++) {
             auto s = make_schema(idx);
             schemas.push_back(s);
-
-            replica::column_family::config cfg = env.make_table_config();
-            cfg.datadir = env.tempdir().path().string() + "/" + std::to_string(idx);
-            touch_directory(cfg.datadir).get();
-            cfg.enable_commitlog = false;
-            cfg.enable_incremental_backups = false;
-
             auto cf = env.make_table_for_tests(s);
             tables.push_back(cf);
         }
