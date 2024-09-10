@@ -220,28 +220,8 @@ future<authenticated_user> password_authenticator::authenticate(
     const sstring username = credentials.at(USERNAME_KEY);
     const sstring password = credentials.at(PASSWORD_KEY);
 
-    // Here was a thread local, explicit cache of prepared statement. In normal execution this is
-    // fine, but since we in testing set up and tear down system over and over, we'd start using
-    // obsolete prepared statements pretty quickly.
-    // Rely on query processing caching statements instead, and lets assume
-    // that a map lookup string->statement is not gonna kill us much.
-    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
-                SALTED_HASH,
-                get_auth_ks_name(_qp),
-                meta::roles_table::name,
-                meta::roles_table::role_col_name);
     try {
-        const auto res = co_await _qp.execute_internal(
-                query,
-                consistency_for_user(username),
-                internal_distributed_query_state(),
-                {username},
-                cql3::query_processor::cache_internal::yes);
-
-        auto salted_hash = std::optional<sstring>();
-        if (!res->empty()) {
-            salted_hash = res->one().get_opt<sstring>(SALTED_HASH);
-        }
+        const std::optional<sstring> salted_hash = co_await get_password_hash(username);
         if (!salted_hash || !passwords::check(password, *salted_hash)) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
@@ -336,6 +316,36 @@ future<> password_authenticator::drop(std::string_view name, ::service::group0_b
 
 future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {
     return make_ready_future<custom_options>();
+}
+
+bool password_authenticator::uses_password_hashes() const {
+    return true;
+}
+
+future<std::optional<sstring>> password_authenticator::get_password_hash(std::string_view role_name) const {
+    // Here was a thread local, explicit cache of prepared statement. In normal execution this is
+    // fine, but since we in testing set up and tear down system over and over, we'd start using
+    // obsolete prepared statements pretty quickly.
+    // Rely on query processing caching statements instead, and lets assume
+    // that a map lookup string->statement is not gonna kill us much.
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
+                SALTED_HASH,
+                get_auth_ks_name(_qp),
+                meta::roles_table::name,
+                meta::roles_table::role_col_name);
+
+    const auto res = co_await _qp.execute_internal(
+            query,
+            consistency_for_user(role_name),
+            internal_distributed_query_state(),
+            {role_name},
+            cql3::query_processor::cache_internal::yes);
+
+    if (res->empty()) {
+        co_return std::nullopt;
+    }
+
+    co_return res->one().get_opt<sstring>(SALTED_HASH);
 }
 
 const resource_set& password_authenticator::protected_resources() const {
