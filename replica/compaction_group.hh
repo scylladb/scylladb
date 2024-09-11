@@ -185,6 +185,9 @@ using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
 // shard will have as many groups as there are tablet replicas owned by that shard.
 class storage_group {
     compaction_group_ptr _main_cg;
+    // Holds compaction groups that now belongs to same tablet after merge. Compaction groups here will
+    // eventually have all their data moved into main group.
+    std::vector<compaction_group_ptr> _merging_groups;
     std::vector<compaction_group_ptr> _split_ready_groups;
     seastar::gate _async_gate;
 private:
@@ -212,6 +215,11 @@ public:
     void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups() noexcept;
     utils::small_vector<const_compaction_group_ptr, 3> compaction_groups() const noexcept;
+
+    utils::small_vector<compaction_group_ptr, 3> split_unready_groups() const;
+    bool split_unready_groups_are_empty() const;
+
+    void add_merging_group(compaction_group_ptr);
 
     // Puts the storage group in split mode, in which it internally segregates data
     // into two sstable sets and two memtable sets corresponding to the two adjacent
