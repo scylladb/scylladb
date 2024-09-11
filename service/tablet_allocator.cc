@@ -503,8 +503,16 @@ class load_balancer {
         std::vector<table_id_and_size_desc> tables_being_resized;
 
         static bool table_needs_merge(const table_size_desc& d) {
-            // FIXME: ignore merge request if tablet_count == initial_tablets.
-            return d.tablet_count > 1 && d.avg_tablet_size < d.target_min_tablet_size();
+            // The initial_tablet_count is respected while the table is in "growing mode".
+            // We say that a table leaves this mode if it required a split above the initial
+            // tablet count. After that, we can rely purely on the average size to say that
+            // a table is shrinking and requires merge.
+            // FIXME: this is not perfect and we may want to leave the mode too if we detect
+            //  average size is decreasing significantly, before any split happened.
+            bool left_growing_mode = !d.resize_decision.initial_decision();
+            lblogger.debug("table_needs_merge: tablet_count={}, avg_tablet_size={}, left_growing_mode={} (seq number: {})",
+                           d.tablet_count, d.avg_tablet_size, left_growing_mode, d.resize_decision.sequence_number);
+            return left_growing_mode && d.tablet_count > 1 && d.avg_tablet_size < d.target_min_tablet_size();
         }
         static bool table_needs_split(const table_size_desc& d) {
             return d.avg_tablet_size > d.target_max_tablet_size;
