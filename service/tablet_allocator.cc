@@ -1051,7 +1051,7 @@ public:
     // The assumption is that the algorithm moves tablets from more loaded nodes to less loaded nodes,
     // so convergence is reached where the node we picked as source has lower load, or will have lower
     // load post-movement, than the node we picked as the destination.
-    bool check_convergence(node_load& src_info, node_load& dst_info) {
+    bool check_convergence(node_load& src_info, node_load& dst_info, unsigned delta = 1) {
         // Allow migrating only from candidate nodes which have higher load than the target.
         if (src_info.avg_load <= dst_info.avg_load) {
             lblogger.trace("Load inversion: src={} (avg_load={}), dst={} (avg_load={})",
@@ -1060,8 +1060,8 @@ public:
         }
 
         // Prevent load inversion post-movement which can lead to oscillations.
-        if (src_info.get_avg_load(src_info.tablet_count - 1) <
-            dst_info.get_avg_load(dst_info.tablet_count + 1)) {
+        if (src_info.get_avg_load(src_info.tablet_count - delta) <
+            dst_info.get_avg_load(dst_info.tablet_count + delta)) {
             lblogger.trace("Load inversion post-movement: src={} (avg_load={}), dst={} (avg_load={})",
                            src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
             return false;
@@ -1070,10 +1070,18 @@ public:
         return true;
     }
 
+    bool check_convergence(node_load& src_info, node_load& dst_info, const tablet_candidate& candidate) {
+        return check_convergence(src_info, dst_info, candidate.tablets().size());
+    }
+
     // Checks whether moving a tablet from shard A to B (intra-node) would go against convergence.
     // Returns false if the tablet should not be moved, and true if it may be moved.
-    bool check_convergence(const shard_load& src_info, const shard_load& dst_info) {
-        return src_info.tablet_count > dst_info.tablet_count + 1;
+    bool check_convergence(const shard_load& src_info, const shard_load& dst_info, unsigned delta = 1) {
+        return src_info.tablet_count > dst_info.tablet_count + delta;
+    }
+
+    bool check_convergence(const shard_load& src_info, const shard_load& dst_info, const tablet_candidate& candidate) {
+        return check_convergence(src_info, dst_info, candidate.tablets().size());
     }
 
     // Adjusts the load of the source and destination shards in the host where intra-node migration happens.
