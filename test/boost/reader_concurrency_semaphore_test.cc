@@ -546,7 +546,8 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
 }
 
 SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
+    const auto initial_resources = reader_concurrency_semaphore::resources{10, 32 * 1024};
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
     const auto nr_tables = tests::random::get_int<unsigned>(2, 4);
@@ -556,33 +557,99 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type, column_kind::regular_column).build());
     }
+    schemas.emplace_back(nullptr);
 
-    const auto nr_ops = tests::random::get_int<unsigned>(1, 3);
-    std::vector<std::string> op_names;
-    for (unsigned i = 0; i < nr_ops; ++i) {
-        op_names.emplace_back(fmt::format("op{}", i));
-    }
+    const std::vector<std::string> tracing_permit_op_names{"push-view-updates-1", "push-view-updates-2", "multishard-mutation-query"};
+    const std::vector<std::string> regular_permit_op_names{"data-query", "mutation-query", "shard-reader"};
 
-    std::deque<std::pair<reader_permit, reader_permit::resource_units>> permits;
+    struct permit_data {
+        std::optional<future<reader_permit>> permit_fut;
+        reader_permit_opt permit;
+        std::optional<reader_permit::resource_units> resources;
+        reader_concurrency_semaphore::inactive_read_handle irh;
+        std::optional<reader_permit::need_cpu_guard> need_cpu_guard;
+
+        void reset() {
+            permit_fut.reset();
+            permit = {};
+            resources.reset();
+            irh = {};
+            need_cpu_guard.reset();
+        }
+    };
+
+    std::deque<permit_data> permits;
     for (auto& schema : schemas) {
         const auto nr_permits = tests::random::get_int<unsigned>(2, 32);
         for (unsigned i = 0; i < nr_permits; ++i) {
-            auto permit = semaphore.make_tracking_only_permit(schema, op_names.at(tests::random::get_int<unsigned>(0, nr_ops - 1)), db::no_timeout, {});
-            if (tests::random::get_int<unsigned>(0, 4)) {
-                auto units = permit.consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
-                permits.push_back(std::pair(std::move(permit), std::move(units)));
+            auto& permit = permits.emplace_back();
+
+            if (!tests::random::get_int<unsigned>(0, 4)) {
+                permit.permit = semaphore.make_tracking_only_permit(
+                        schema,
+                        tracing_permit_op_names.at(tests::random::get_int<unsigned>(0, tracing_permit_op_names.size() - 1)),
+                        db::no_timeout,
+                        {});
+
+                permit.resources = permit.permit->consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
             } else {
-                auto hdnl = semaphore.register_inactive_read(make_empty_flat_reader_v2(schema, permit));
-                BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
-                auto units = permit.consume_memory(tests::random::get_int<unsigned>(1024, 2048));
-                permits.push_back(std::pair(std::move(permit), std::move(units)));
+                const auto timeout_seconds = tests::random::get_int<unsigned>(0, 3);
+
+                permit.permit_fut = semaphore.obtain_permit(
+                        schema,
+                        regular_permit_op_names.at(tests::random::get_int<unsigned>(0, regular_permit_op_names.size() - 1)),
+                        1024,
+                        db::timeout_clock::now() + std::chrono::seconds(timeout_seconds),
+                        {});
+
+                if (!permit.permit_fut->available()) {
+                    continue;
+                }
+
+                if (permit.permit_fut) {
+                    permit.permit = permit.permit_fut->get();
+                    permit.permit_fut.reset();
+                }
+
+                switch (tests::random::get_int<unsigned>(0, 4)) {
+                    case 0:
+                        permit.resources = permit.permit->consume_memory(tests::random::get_int<unsigned>(1024, 2048));
+                        permit.irh = semaphore.register_inactive_read(make_empty_flat_reader_v2(schema, *permit.permit));
+                        break;
+                    case 1:
+                        permit.need_cpu_guard.emplace(*permit.permit);
+                        break;
+                    default:
+                        permit.resources = permit.permit->consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
+                }
             }
         }
     }
 
     testlog.info("With max-lines=4: {}", semaphore.dump_diagnostics(4));
     testlog.info("With no max-lines: {}", semaphore.dump_diagnostics(0));
+
+    std::exception_ptr ex;
+
+    for (auto& permit : permits) {
+        try {
+            if (permit.permit_fut) {
+                permit.permit_fut->get();
+            }
+        } catch (const timed_out_error&) {
+            // Ignore the timeouts
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        permit.reset();
+    }
+
+    if (ex) {
+        BOOST_FAIL(fmt::format("obtain_permit() resolved with unexpected exception {}", ex));
+    }
 }
+
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits) {
     BOOST_TEST_MESSAGE("unused");
     {
