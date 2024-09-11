@@ -1354,11 +1354,23 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
             tmap.set_resize_decision(resize_decision);
         });
     }
+}
+
+static
+future<> handle_resize_finalize(tablet_allocator& talloc, shared_token_metadata& stm, const migration_plan& plan) {
     for (auto table_id : plan.resize_plan().finalize_resize) {
-        const auto& old_tmap = tm.tablets().get_tablet_map(table_id);
-        testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
-        tablet_map tmap(old_tmap.tablet_count() * 2);
-        tm.tablets().set_tablet_map(table_id, std::move(tmap));
+        auto tm = stm.get();
+        const auto& old_tmap = tm->tablets().get_tablet_map(table_id);
+
+        auto new_tmap = co_await talloc.resize_tablets(tm, table_id);
+        auto new_resize_decision = locator::resize_decision{};
+        new_resize_decision.sequence_number = old_tmap.resize_decision().next_sequence_number();
+        new_tmap.set_resize_decision(std::move(new_resize_decision));
+
+        co_await stm.mutate_token_metadata([table_id, &new_tmap] (token_metadata& tm) {
+            tm.tablets().set_tablet_map(table_id, std::move(new_tmap));
+            return make_ready_future<>();
+        });
     }
 }
 
@@ -1414,6 +1426,7 @@ void rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, loc
             apply_plan(tm, plan);
             return make_ready_future<>();
         }).get();
+        handle_resize_finalize(talloc, stm, plan).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
@@ -2602,7 +2615,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         auto host1 = host_id(next_uuid());
         auto host2 = host_id(next_uuid());
 
-        auto table1 = table_id(next_uuid());
+        auto table1 = add_table(e).get();
 
         unsigned shard_count = 2;
 
@@ -2614,11 +2627,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
                 }
         });
 
-        stm.mutate_token_metadata([&] (token_metadata& tm) {
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
             tm.update_host_id(host1, ip1);
             tm.update_host_id(host2, ip2);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(2. / 2))}, host2);
 
             tablet_map tmap(2);
             for (auto tid : tmap.tablet_ids()) {
@@ -2632,7 +2647,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             tablet_metadata tmeta;
             tmeta.set_tablet_map(table1, std::move(tmap));
             tm.set_tablets(std::move(tmeta));
-            return make_ready_future<>();
         }).get();
 
         auto tablet_count = [&] {
@@ -2654,19 +2668,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
 
         const auto initial_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
-
-        // there are 2 tablets, each with avg size hitting merge threshold, so merge request is emitted
-        {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.0), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
-
-            do_rebalance_tablets(std::move(load_stats));
-            BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
-            BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(resize_decision().way));
-        }
 
         // avg size moved above target size, so merge is cancelled
         {
@@ -2709,6 +2710,19 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets * 2);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
+
+        // Check that balancer detects table size dropped to 0 and reduces tablet count down to 1 through merges.
+        {
+            locator::load_stats load_stats = {
+                .tables = {
+                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.0), .split_ready_seq_number = initial_ready_seq_number }},
+                }
+            };
+
+            do_rebalance_tablets(std::move(load_stats));
+            BOOST_REQUIRE_EQUAL(tablet_count(), 1);
+        }
+
     }).get();
 }
 

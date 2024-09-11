@@ -106,6 +106,7 @@ struct table_resize_plan {
                 resize[id] = std::move(other_resize);
             }
         }
+
         finalize_resize.merge(std::move(other.finalize_resize));
     }
 };
