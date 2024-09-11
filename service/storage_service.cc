@@ -686,6 +686,25 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     });
     co_await update_service_levels_cache(qos::update_both_cache_levels::yes);
 
+    // the view_builder is migrated to v2 in view_builder::migrate_to_v2.
+    // it writes a v2 version mutation as topology_change, then we get here
+    // to update the service to start using the v2 table.
+    auto view_builder_version = co_await _sys_ks.local().get_view_builder_version();
+    switch (view_builder_version) {
+        case db::system_keyspace::view_builder_version_t::v1_5:
+            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
+                co_await vb.upgrade_to_v1_5();
+            });
+            break;
+        case db::system_keyspace::view_builder_version_t::v2:
+            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
+                co_await vb.upgrade_to_v2();
+            });
+            break;
+        default:
+            break;
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
     });
@@ -1144,7 +1163,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
                     get_ring_delay(),
-                    _lifecycle_notifier);
+                    _lifecycle_notifier,
+                    _feature_service);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1331,6 +1351,9 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
         
         insert_join_request_mutations.emplace_back(
                 co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_keyspace::auth_version_t::v2));
+
+        insert_join_request_mutations.emplace_back(
+                co_await _sys_ks.local().make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2));
 
         topology_change change{std::move(insert_join_request_mutations)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
@@ -6819,7 +6842,25 @@ void storage_service::init_messaging_service() {
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
             auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
-            for (const auto& table : params.tables) {
+
+            // We may need to send additional raft-based tables to the requester that
+            // are not indicated in the parameter.
+            // For example, when a node joins, it requests a snapshot before it knows
+            // which features are enabled, so it doesn't know yet if these tables exist
+            // on other nodes.
+            // In the current "legacy" mode we assume the requesting node sends 2 RPCs - one for
+            // topology tables and one for auth tables, service levels, and additional tables.
+            // When we detect it's the second RPC, we add additional tables based on our feature flags.
+            // In the future we want to deprecate this parameter, so this condition should
+            // apply only for "legacy" snapshot pull RPCs.
+            std::vector<table_id> additional_tables;
+            if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
+                if (ss._feature_service.view_build_status_on_group0) {
+                    additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+                }
+            }
+
+            for (const auto& table : boost::join(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
@@ -6856,6 +6897,11 @@ void storage_service::init_messaging_service() {
             auto auth_version_mut = co_await ss._sys_ks.local().get_auth_version_mutation();
             if (auth_version_mut) {
                 mutations.emplace_back(*auth_version_mut);
+            }
+
+            auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
+            if (view_builder_version_mut) {
+                mutations.emplace_back(*view_builder_version_mut);
             }
 
             co_return raft_snapshot{

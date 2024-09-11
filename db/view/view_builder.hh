@@ -10,6 +10,7 @@
 
 #include "query-request.hh"
 #include "service/migration_listener.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/serialized_action.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "replica/database.hh"
@@ -151,6 +152,8 @@ class view_builder final : public service::migration_listener::only_view_notific
     replica::database& _db;
     db::system_keyspace& _sys_ks;
     db::system_distributed_keyspace& _sys_dist_ks;
+    service::raft_group0_client& _group0_client;
+    cql3::query_processor& _qp;
     service::migration_notifier& _mnotifier;
     view_update_generator&  _vug;
     reader_permit _permit;
@@ -169,6 +172,12 @@ class view_builder final : public service::migration_listener::only_view_notific
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
     stats _stats;
     metrics::metric_groups _metrics;
+
+    enum class view_build_status_location { sys_dist_ks, group0, both };
+
+    view_build_status_location _view_build_status_on = view_build_status_location::sys_dist_ks;
+    bool _init_virtual_table_on_upgrade = false;
+    utils::phased_barrier _upgrade_phaser;
 
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
@@ -189,7 +198,8 @@ public:
     replica::database& get_db() noexcept { return _db; }
 
 public:
-    view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&, view_update_generator& vug);
+    view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&, view_update_generator& vug,
+            service::raft_group0_client& group0_client, cql3::query_processor& qp);
     view_builder(view_builder&&) = delete;
 
     /**
@@ -208,6 +218,16 @@ public:
      * Stops the view building process.
      */
     future<> stop();
+
+    static future<> generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, std::vector<canonical_mutation>& muts);
+
+    static future<> migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
+    static future<> migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard);
+
+    future<> upgrade_to_v1_5();
+    future<> upgrade_to_v2();
+
+    void init_virtual_table();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
@@ -236,6 +256,27 @@ private:
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
     future<> mark_as_built(view_ptr);
     void setup_metrics();
+
+    template <typename Func1, typename Func2>
+    future<> write_view_build_status(Func1&& fn_group0, Func2&& fn_sys_dist) {
+        auto op = _upgrade_phaser.start();
+
+        // read locally so it doesn't change between async calls
+        const auto v = _view_build_status_on;
+
+        if (v == view_build_status_location::group0 || v == view_build_status_location::both) {
+            co_await fn_group0();
+        }
+
+        if (v == view_build_status_location::sys_dist_ks || v == view_build_status_location::both) {
+            co_await fn_sys_dist();
+        }
+    }
+
+    future<> mark_view_build_started(sstring ks_name, sstring view_name);
+    future<> mark_view_build_success(sstring ks_name, sstring view_name);
+    future<> remove_view_build_status(sstring ks_name, sstring view_name);
+    future<std::unordered_map<locator::host_id, sstring>> view_status(sstring ks_name, sstring view_name) const;
 
     struct consumer;
 };

@@ -1665,7 +1665,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting the view builder");
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
             });
@@ -1979,6 +1979,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sl_controller.local().maybe_start_legacy_update_from_distributed_data([cfg] () {
                 return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));
             }, ss.local(), group0_client);
+
+            // Initialize virtual table in system_distributed keyspace after joining the cluster, so
+            // that the keyspace is ready
+            view_builder.invoke_on_all([] (db::view::view_builder& vb) {
+                vb.init_virtual_table();
+            }).get();
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());

@@ -89,6 +89,7 @@ namespace {
             system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
+            system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -1143,6 +1144,20 @@ schema_ptr system_keyspace::service_levels_v2() {
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_column("timeout", duration_type)
                 .with_column("workload_type", utf8_type)
+                .with_version(db::system_keyspace::generate_schema_version(id))
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::view_build_status_v2() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, VIEW_BUILD_STATUS_V2);
+        return schema_builder(NAME, VIEW_BUILD_STATUS_V2, id)
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("view_name", utf8_type, column_kind::partition_key)
+                .with_column("host_id", uuid_type, column_kind::clustering_key)
+                .with_column("status", utf8_type)
                 .with_version(db::system_keyspace::generate_schema_version(id))
                 .build();
     }();
@@ -2249,7 +2264,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::commitlog_cleanups(),
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
-                    topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(),
+                    topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2824,6 +2839,39 @@ future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type
     auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {AUTH_VERSION_KEY, std::to_string(int64_t(version))});
     if (muts.size() != 1) {
          on_internal_error(slogger, fmt::format("expected 1 auth_version mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+static constexpr auto VIEW_BUILDER_VERSION_KEY = "view_builder_version";
+
+future<system_keyspace::view_builder_version_t> system_keyspace::get_view_builder_version() {
+    auto str_opt = co_await get_scylla_local_param(VIEW_BUILDER_VERSION_KEY);
+    if (!str_opt) {
+        co_return view_builder_version_t::v1;
+    }
+    auto& str = *str_opt;
+    if (str == "" || str == "10") {
+        co_return view_builder_version_t::v1;
+    }
+    if (str == "15") {
+        co_return view_builder_version_t::v1_5;
+    }
+    if (str == "20") {
+        co_return view_builder_version_t::v2;
+    }
+    on_internal_error(slogger, fmt::format("unexpected view_builder_version in scylla_local got {}", str));
+}
+
+future<std::optional<mutation>> system_keyspace::get_view_builder_version_mutation() {
+    return get_scylla_local_mutation(_db, VIEW_BUILDER_VERSION_KEY);
+}
+
+future<mutation> system_keyspace::make_view_builder_version_mutation(api::timestamp_type ts, db::system_keyspace::view_builder_version_t version) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VIEW_BUILDER_VERSION_KEY, std::to_string(int64_t(version))});
+    if (muts.size() != 1) {
+         on_internal_error(slogger, fmt::format("expected 1 view_builder_version mutation got {}", muts.size()));
     }
     co_return std::move(muts[0]);
 }
