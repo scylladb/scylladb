@@ -47,6 +47,7 @@
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
+#include "checksummed_data_source.hh"
 #include "index_reader.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
@@ -1898,14 +1899,43 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
         std::function<void(sstring)> error_handler, sstables::read_monitor& monitor) {
+    auto handle_sstable_exception = [&error_handler](const malformed_sstable_exception& e, uint64_t& errors) -> std::exception_ptr {
+        std::exception_ptr ex;
+        try {
+            error_handler(format("unrecoverable error: {}", e));
+            ++errors;
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        return ex;
+    };
+
+    uint64_t errors = 0;
+    std::exception_ptr ex;
+    lw_shared_ptr<checksum> checksum;
+    try {
+        checksum = co_await read_checksum();
+    } catch (const malformed_sstable_exception& e) {
+        ex = handle_sstable_exception(e, errors);
+    }
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+    if (errors) {
+        co_return errors;
+    }
+    co_await utils::get_local_injector().inject("sstable_validate/pause", [] (auto& handler) {
+        sstlog.info("sstable_validate/pause init");
+        auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
+        sstlog.info("sstable_validate/pause done");
+        return ret;
+    });
+
     if (_version >= sstable_version_types::mc) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
-    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor);
-
-    uint64_t errors = 0;
-    std::exception_ptr ex;
+    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor, integrity_check::yes);
 
     try {
         auto validator = mutation_fragment_stream_validator(*_schema);
@@ -1937,12 +1967,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
             ++errors;
         }
     } catch (const malformed_sstable_exception& e) {
-        try {
-            error_handler(format("unrecoverable error: {}", e));
-            ++errors;
-        } catch (...) {
-            ex = std::current_exception();
-        }
+        ex = handle_sstable_exception(e, errors);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -2308,11 +2333,12 @@ sstable::make_crawling_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
-        read_monitor& monitor) {
+        read_monitor& monitor,
+        integrity_check integrity) {
     if (_version >= version_types::mc) {
-        return mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
+        return mx::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
-    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor);
+    return kl::make_crawling_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
 }
 
 static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(const std::filesystem::path& sst_path, sstring* const provided_ks, sstring* const provided_cf) {
@@ -2410,7 +2436,8 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
-        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw) {
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
+        integrity_check integrity) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
@@ -2421,8 +2448,9 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
     }
 
-    input_stream<char> stream;
     if (_components->compression && raw == raw_stream::no) {
+        // Disabling integrity checks is not supported by compressed
+        // file input streams. `integrity` is ignored.
         if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options), permit);
@@ -2431,7 +2459,17 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
                 pos, len, std::move(options), permit);
         }
     }
-
+    if (_components->checksum && integrity == integrity_check::yes) {
+        auto checksum = get_checksum();
+        auto file_len = data_size();
+        if (_version >= sstable_version_types::mc) {
+             return make_checksummed_file_m_format_input_stream(f, file_len,
+                *checksum, pos, len, std::move(options));
+        } else {
+            return make_checksummed_file_k_l_format_input_stream(f, file_len,
+                *checksum, pos, len, std::move(options));
+        }
+    }
     return make_file_input_stream(f, pos, len, std::move(options));
 }
 
@@ -2564,10 +2602,15 @@ future<uint32_t> sstable::read_digest() {
     co_return boost::lexical_cast<uint32_t>(digest_str);
 }
 
-future<checksum> sstable::read_checksum() {
-    sstables::checksum checksum;
-
-    co_await do_read_simple(component_type::CRC, [&] (version_types v, file crc_file) -> future<> {
+future<lw_shared_ptr<checksum>> sstable::read_checksum() {
+    if (_components->checksum) {
+        co_return _components->checksum->shared_from_this();
+    }
+    if (!has_component(component_type::CRC)) {
+        co_return nullptr;
+    }
+    auto checksum = make_lw_shared<sstables::checksum>();
+    co_await do_read_simple(component_type::CRC, [checksum, this] (version_types v, file crc_file) -> future<> {
         file_input_stream_options options;
         options.buffer_size = 4096;
 
@@ -2580,12 +2623,12 @@ future<checksum> sstable::read_checksum() {
 
             auto buf = co_await crc_stream.read_exactly(size);
             check_buf_size(buf, size);
-            checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+            checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
 
             buf = co_await crc_stream.read_exactly(size);
             while (!buf.empty()) {
                 check_buf_size(buf, size);
-                checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+                checksum->checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
                 buf = co_await crc_stream.read_exactly(size);
             }
         } catch (...) {
@@ -2594,17 +2637,19 @@ future<checksum> sstable::read_checksum() {
 
         co_await crc_stream.close();
         maybe_rethrow_exception(std::move(ex));
+        _components->checksum = checksum->weak_from_this();
     });
 
-    co_return checksum;
+    co_return std::move(checksum);
 }
 
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
+future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
     const auto digest = co_await sst->read_digest();
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr, sstable::raw_stream::yes);
 
     auto valid = true;
+    auto ret = validate_checksums_result::valid;
     std::exception_ptr ex;
 
     try {
@@ -2616,10 +2661,13 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
             }
         } else {
             auto checksum = co_await sst->read_checksum();
-            if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, checksum, digest);
+            if (!checksum) {
+                sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
+                ret = validate_checksums_result::no_checksum;
+            } else if (sst->get_version() >= sstable_version_types::mc) {
+                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, digest);
             } else {
-                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, checksum, digest);
+                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, digest);
             }
         }
     } catch (...) {
@@ -2629,7 +2677,10 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
     co_await data_stream.close();
     maybe_rethrow_exception(std::move(ex));
 
-    co_return valid;
+    if (!valid) {
+        ret = validate_checksums_result::invalid;
+    }
+    co_return ret;
 }
 
 void sstable::set_first_and_last_keys() {

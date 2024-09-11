@@ -20,6 +20,9 @@ class cql_test_env;
 namespace tests {
 
 class random_schema_specification {
+public:
+    using compress_sstable = bool_class<class compress_sstable_tag>;
+private:
     sstring _keyspace_name;
 public:
     explicit random_schema_specification(sstring keyspace_name) : _keyspace_name(std::move(keyspace_name)) { }
@@ -34,6 +37,7 @@ public:
     virtual std::vector<data_type> clustering_key_columns(std::mt19937& engine) = 0;
     virtual std::vector<data_type> regular_columns(std::mt19937& engine) = 0;
     virtual std::vector<data_type> static_columns(std::mt19937& engine) = 0;
+    virtual compress_sstable& compress() = 0;
 };
 
 /// Helper class that can generate a subset of all valid combination of types.
@@ -68,7 +72,8 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
         std::uniform_int_distribution<size_t> partition_column_count_dist = std::uniform_int_distribution<size_t>(1, 4),
         std::uniform_int_distribution<size_t> clustering_column_count_dist = std::uniform_int_distribution<size_t>(0, 4),
         std::uniform_int_distribution<size_t> regular_column_count_dist = std::uniform_int_distribution<size_t>(1, 4),
-        std::uniform_int_distribution<size_t> static_column_count_dist = std::uniform_int_distribution<size_t>(0, 4));
+        std::uniform_int_distribution<size_t> static_column_count_dist = std::uniform_int_distribution<size_t>(0, 4),
+        random_schema_specification::compress_sstable compress = random_schema_specification::compress_sstable::yes);
 
 /// Generate values for any type.
 ///

@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <seastar/core/weak_ptr.hh>
+
 #include "compress.hh"
 #include "sstables/types.hh"
 #include "utils/i_filter.hh"
@@ -22,6 +24,7 @@ struct shareable_components {
     sstables::summary summary;
     sstables::statistics statistics;
     std::optional<sstables::scylla_metadata> scylla_metadata;
+    weak_ptr<sstables::checksum> checksum;
 };
 
 }   // namespace sstables

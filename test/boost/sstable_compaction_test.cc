@@ -66,6 +66,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/eventually.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
@@ -2013,6 +2014,7 @@ static void verify_fragments(std::vector<sstables::shared_sstable> ssts, reader_
     r.produces_end_of_stream();
 };
 
+using compress_sstable = tests::random_schema_specification::compress_sstable;
 
 // A framework for scrub-related tests.
 // Lives in a seastar thread
@@ -2027,14 +2029,15 @@ private:
     tests::random_schema _random_schema;
 
 public:
-    scrub_test_framework()
+    scrub_test_framework(compress_sstable compress)
         : _seed(tests::random::get_int<uint32_t>())
         , _random_schema_spec(tests::make_random_schema_specification(
                 "scrub_test_framework",
                 std::uniform_int_distribution<size_t>(2, 4),
                 std::uniform_int_distribution<size_t>(2, 4),
                 std::uniform_int_distribution<size_t>(2, 8),
-                std::uniform_int_distribution<size_t>(2, 8)))
+                std::uniform_int_distribution<size_t>(2, 8),
+                compress))
         , _random_schema(_seed, *_random_schema_spec)
     {
         _env.start().get();
@@ -2097,8 +2100,8 @@ public:
     }
 };
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
-    scrub_test_framework test;
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2113,19 +2116,56 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // No way to really test validation besides observing the log messages.
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
+    scrub_test_framework test(compress_sstable::yes);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(
+            test.random_schema(),
+            tests::uncompactible_timestamp_generator(test.seed()),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(10, 10)).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        // Corrupt the data to cause an invalid checksum.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        const auto wbuf_align = f.memory_dma_alignment();
+        const auto wbuf_len = f.disk_write_dma_alignment();
+        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+        f.dma_write(0, wbuf.get(), wbuf_len).get();
+        f.close().get();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
         BOOST_REQUIRE(in_strategy_sstables(ts).empty());
     });
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
-    scrub_test_framework test;
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2135,15 +2175,160 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // No way to really test validation besides observing the log messages.
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content_uncompressed) {
+    scrub_test_framework test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(
+            test.random_schema(),
+            tests::uncompactible_timestamp_generator(test.seed()),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(10, 10)).get();
+    std::swap(*muts.begin(), *(muts.begin() + 1));
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_uncompressed) {
+    scrub_test_framework test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(
+            test.random_schema(),
+            tests::uncompactible_timestamp_generator(test.seed()),
+            tests::no_expiry_expiry_generator(),
+            std::uniform_int_distribution<size_t>(10, 10)).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        // Corrupt the data to cause an invalid checksum.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        const auto wbuf_align = f.memory_dma_alignment();
+        const auto wbuf_len = f.disk_write_dma_alignment();
+        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+        f.dma_write(0, wbuf.get(), wbuf_len).get();
+        f.close().get();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_uncompressed) {
+    scrub_test_framework test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE(!sst->get_checksum());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_uncompressed) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    scrub_test_framework test(compress_sstable::no);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+
+        utils::get_local_injector().enable("sstable_validate/pause");
+
+        auto scrub1 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        BOOST_REQUIRE(eventually_true([sst] {
+            auto checksum = sst->get_checksum();
+            return checksum != nullptr;
+        }));
+        auto checksum1 = sst->get_checksum();
+
+        auto scrub2 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        BOOST_REQUIRE(eventually_true([sst] {
+            auto checksum = sst->get_checksum();
+            return checksum != nullptr;
+        }));
+        auto checksum2 = sst->get_checksum();
+
+        // Scrub instances use the same checksum component.
+        BOOST_REQUIRE(checksum1);
+        BOOST_REQUIRE(checksum2);
+        BOOST_REQUIRE(checksum1 == checksum2);
+        checksum1.release();
+        checksum2.release();
+
+        utils::get_local_injector().receive_message("sstable_validate/pause");
+        when_all_succeed(std::move(scrub1), std::move(scrub2)).get();
 
         BOOST_REQUIRE(!sst->is_quarantined());
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        // Checksum component released after scrub instances terminate.
+        BOOST_REQUIRE(sst->get_checksum() == nullptr);
+
+        utils::get_local_injector().disable("sstable_validate/pause");
     });
 }
 
@@ -2274,8 +2459,8 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         f.dma_write(0, wbuf.get(), wbuf_len).get();
         f.close().get();
 
-        auto valid = sstables::validate_checksums(sst, permit).get();
-        BOOST_REQUIRE_EQUAL(valid, false);
+        auto res = sstables::validate_checksums(sst, permit).get();
+        BOOST_REQUIRE(res == validate_checksums_result::invalid);
 
 
         const auto errors = sst->validate(permit, abort, error_handler{count}).get();
@@ -2286,7 +2471,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
-    scrub_test_framework test;
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2310,7 +2495,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
-    scrub_test_framework test;
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2358,7 +2543,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
-    scrub_test_framework test;
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2398,7 +2583,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
-    scrub_test_framework test;
+    scrub_test_framework test(compress_sstable::yes);
 
     auto schema = test.schema();
 

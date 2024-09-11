@@ -76,6 +76,7 @@ public:
     virtual std::vector<data_type> clustering_key_columns(std::mt19937& engine) override { return _underlying_spec->clustering_key_columns(engine); }
     virtual std::vector<data_type> regular_columns(std::mt19937& engine) override { return _underlying_spec->regular_columns(engine); }
     virtual std::vector<data_type> static_columns(std::mt19937& engine) override { return _underlying_spec->static_columns(engine); }
+    virtual compress_sstable& compress() override { return _underlying_spec->compress(); };
 };
 
 } // anonymous namespace

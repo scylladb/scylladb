@@ -190,6 +190,7 @@ public:
     using format_types = sstable_format_types;
     using manager_list_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     using manager_set_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using integrity_check = bool_class<class integrity_check_tag>;
 public:
     sstable(schema_ptr schema,
             sstring table_dir,
@@ -287,7 +288,8 @@ public:
             schema_ptr schema,
             reader_permit permit,
             tracing::trace_state_ptr trace_state = {},
-            read_monitor& monitor = default_read_monitor());
+            read_monitor& monitor = default_read_monitor(),
+            integrity_check integrity = integrity_check::no);
 
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
@@ -724,9 +726,13 @@ public:
     //
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
+    //
+    // When created with `integrity_check::yes`, the integrity mechanisms
+    // of the underlying data streams will be enabled.
     using raw_stream = bool_class<class raw_stream_tag>;
     input_stream<char> data_stream(uint64_t pos, size_t len,
-            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw = raw_stream::no);
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+            raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -922,6 +928,10 @@ public:
         return _components->summary;
     }
 
+    const lw_shared_ptr<const checksum> get_checksum() const {
+        return _components->checksum ? _components->checksum->shared_from_this() : nullptr;
+    }
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -986,19 +996,19 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, sstable::integrity_check);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::integrity_check);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
     future<uint32_t> read_digest();
-    future<checksum> read_checksum();
+    future<lw_shared_ptr<checksum>> read_checksum();
 };
 
 // Validate checksums
@@ -1022,9 +1032,17 @@ public:
 // This method validates both the full checksum and the per-chunk checksum
 // for the entire Data.db.
 //
-// Returns true if all checksums are valid.
+// Returns `valid` if all checksums are valid.
+// Returns `invalid` if at least one checksum is invalid.
+// Returns `no_checksum` if the sstable is uncompressed and does not have
+// a CRC component (CRC.db is missing from TOC.txt).
 // Validation errors are logged individually.
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit);
+enum class validate_checksums_result {
+    invalid = 0,
+    valid = 1,
+    no_checksum = 2
+};
+future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

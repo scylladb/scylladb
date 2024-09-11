@@ -85,7 +85,7 @@ template <typename... Args>
 sstables::shared_sstable
 make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
-    // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
+    // but the users are usually in a thread, and rewrite_toc_without_component requires
     // a thread. We could fix that, but deferring that for now.
     auto s = table.schema();
     auto mt = make_lw_shared<replica::memtable>(s);
@@ -102,7 +102,7 @@ make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state
     // it came from Cassandra
     testlog.debug("make_sstable_for_all_shards: {}: rewriting TOC", sst->get_filename());
     sstables::test(sst).remove_component(sstables::component_type::Scylla).get();
-    sstables::test(sst).rewrite_toc_without_scylla_component();
+    sstables::test(sst).rewrite_toc_without_component(sstables::component_type::Scylla);
     return sst;
 }
 

@@ -2812,12 +2812,12 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
                 sst->load(sst->get_schema()->get_sharder()).get();
 
-                bool valid;
+                validate_checksums_result res;
 
                 testlog.info("Validating intact {}", sst->get_filename());
 
-                valid = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(valid);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res == validate_checksums_result::valid);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
@@ -2831,8 +2831,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size()).get();
                 }
 
-                valid = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(!valid);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res == validate_checksums_result::invalid);
 
                 testlog.info("Validating truncated {}", sst->get_filename());
 
@@ -2840,8 +2840,15 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst_file.truncate(sst->ondisk_data_size() / 2).get();
                 }
 
-                valid = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(!valid);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+
+                if (compression_params == no_compression_params) {
+                    testlog.info("Validating with no checksums {}", sst->get_filename());
+                    sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
+                    auto res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                }
             }
         }
     });

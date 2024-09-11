@@ -10,6 +10,7 @@
 
 #include "disk_types.hh"
 #include <seastar/core/enum.hh>
+#include <seastar/core/weak_ptr.hh>
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "locator/host_id.hh"
@@ -616,9 +617,19 @@ struct scylla_metadata {
 static constexpr int DEFAULT_CHUNK_SIZE = 65536;
 
 // checksums are generated using adler32 algorithm.
-struct checksum {
+struct checksum : public weakly_referencable<checksum>, enable_lw_shared_from_this<checksum> {
     uint32_t chunk_size;
     utils::chunked_vector<uint32_t> checksums;
+
+    checksum()
+            : chunk_size(0)
+            , checksums()
+    {}
+
+    explicit checksum(uint32_t chunk_size, utils::chunked_vector<uint32_t> checksums)
+            : chunk_size(chunk_size)
+            , checksums(std::move(checksums))
+    {}
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(chunk_size, checksums); }
