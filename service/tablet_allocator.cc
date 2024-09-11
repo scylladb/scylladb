@@ -1510,6 +1510,65 @@ public:
         return std::nullopt;
     }
 
+    // Verifies if moving a given tablet from src_info.id to dst_info.id would not violate
+    // replication constraints (no increase in replica co-location on nodes, racks).
+    // Returns std::nullopt if it does not and the movement is allowed.
+    //
+    // The contraints might not be the same for two sibling tablets that have co-located
+    // replicas.
+    // Example:
+    //  nodes   = {A, B, C, D}
+    //  tablet1 = {A, B, C}
+    //  tablet2 = {A, B, D}
+    //  viable target for {tablet1, B} is D.
+    //  viable target for {tablet2, B} is C.
+    //
+    //  When co-located replicas share a viable target, then a migration can be emitted to
+    //  preserve co-location.
+    //  To allow decommission when co-located replicas don't share a viable target, a skip
+    //  info will be returned for each tablet, even though that means breaking this
+    //  co-location. Decommission is higher in priority.
+    using skip_info_vector = std::vector<std::pair<skip_info, migration_tablet_set>>;
+    std::optional<skip_info_vector>
+    check_constraints(node_load_map& nodes,
+                      const locator::tablet_map& tmap,
+                      node_load& src_info,
+                      node_load& dst_info,
+                      migration_tablet_set tablet_set,
+                      bool need_viable_targets) {
+        std::unordered_map<host_id, unsigned> viable_targets_count;
+        std::unordered_map<global_tablet_id, skip_info> skip_info_per_tablet;
+        std::unordered_set<host_id> shared_viable_targets;
+        const size_t tablet_count = tablet_set.tablets().size();
+
+        for (auto tablet : tablet_set.tablets()) {
+            auto skip = check_constraints(nodes, tmap, src_info, dst_info, tablet, need_viable_targets);
+            if (!skip) {
+                continue;
+            }
+            for (const auto& target : skip->viable_targets) {
+                // A viable target is considered shared if all candidates share that same viable target.
+                if (++viable_targets_count[target] == tablet_count) {
+                    shared_viable_targets.insert(target);
+                }
+            }
+            skip_info_per_tablet.emplace(std::make_pair(tablet, std::move(*skip)));
+        }
+        if (skip_info_per_tablet.empty()) {
+            return std::nullopt;
+        }
+        if (!shared_viable_targets.empty()) {
+            return skip_info_vector{std::make_pair(skip_info{std::move(shared_viable_targets)}, std::move(tablet_set))};
+        }
+
+        skip_info_vector skip_infos;
+        skip_infos.reserve(skip_info_per_tablet.size());
+        for (auto&& [tablet, info] : skip_info_per_tablet) {
+            skip_infos.push_back(std::make_pair(std::move(info), migration_tablet_set{std::move(tablet)}));
+        }
+        return skip_infos;
+    }
+
     // Picks best tablet replica to move and its new destination.
     // The destination host is picked among nodes_by_load_dst, with dst being the preferred destination.
     //
@@ -1944,14 +2003,18 @@ public:
 
             // When drain_skipped is true, we already picked movement to a viable target.
             if (!drain_skipped) {
+                auto process_skip_info = [&] (global_tablet_id tablet, skip_info skip) {
+                    if (src_node_info.drained && skip.viable_targets.empty()) {
+                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
+                                                        tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                    }
+                    src_node_info.skipped_candidates.emplace_back(src, tablet, std::move(skip.viable_targets));
+                };
+
                 auto skip = check_constraints(nodes, tmap, src_node_info, nodes[dst.host], source_tablet, src_node_info.drained);
                 if (skip) {
-                    if (src_node_info.drained && skip->viable_targets.empty()) {
-                        auto replicas = tmap.get_tablet_info(source_tablet.tablet).replicas;
-                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
-                                                        source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
-                    }
-                    src_node_info.skipped_candidates.emplace_back(src, source_tablet, std::move(skip->viable_targets));
+                    process_skip_info(source_tablet, std::move(*skip));
                     continue;
                 }
             }
