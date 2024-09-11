@@ -74,10 +74,10 @@ public:
         return _count;
     }
     // Not used in input streams, but unfortunately we still need to implement
-    Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
-    void Put(Ch) { RAPIDJSON_ASSERT(false); }
-    void Flush() { RAPIDJSON_ASSERT(false); }
-    size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false); return 0; }
+    Ch* PutBegin() { RAPIDJSON_ASSERT(false && "PutBegin"); return 0; }
+    void Put(Ch) { RAPIDJSON_ASSERT(false && "Put"); }
+    void Flush() { RAPIDJSON_ASSERT(false && "Flush"); }
+    size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false && "PutEnd"); return 0; }
 
 };
 
