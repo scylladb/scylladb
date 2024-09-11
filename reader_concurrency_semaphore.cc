@@ -226,13 +226,14 @@ private:
     void on_timeout() {
         auto keepalive = std::exchange(_aux_data.permit_keepalive, std::nullopt);
 
-        _ex = std::make_exception_ptr(timed_out_error{});
+        auto ex = named_semaphore_timed_out(_semaphore._name);
+        _ex = std::make_exception_ptr(ex);
 
         switch (_state) {
             case state::waiting_for_admission:
             case state::waiting_for_memory:
             case state::waiting_for_execution:
-                _aux_data.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
+                _aux_data.pr.set_exception(ex);
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out");
                 _semaphore.dequeue_permit(*this);
                 break;
