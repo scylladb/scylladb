@@ -721,7 +721,7 @@ private:
                        port = tmp.local_address().port();
                     }
                     // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
-                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service)).get();
+                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service), std::ref(_gossip_address_map)).get();
                     stop_ms = defer(stop_type(stop_ms_func));
 
                     if (cfg_in.ms_listen) {

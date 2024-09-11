@@ -77,7 +77,7 @@ int main(int ac, char ** av) {
 
             gossip_address_map.start().get();
 
-            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service)).get();
+            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service), std::ref(gossip_address_map)).get();
             auto stop_messaging = deferred_stop(messaging);
 
             gms::gossip_config gcfg;

@@ -144,6 +144,12 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
     });
 }
 
+// Send a message for verb
+template <typename MsgIn, typename... MsgOut>
+auto send_message(messaging_service* ms, messaging_verb verb, locator::host_id hid, MsgOut&&... msg) {
+    return send_message<MsgIn, MsgOut...>(ms, verb, ms->addr_for_host_id(hid), std::forward<MsgOut>(msg)...);
+}
+
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
@@ -165,6 +171,12 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
             return futurator::make_exception_future(std::move(eptr));
         }
     });
+}
+
+// Send a message for verb
+template <typename MsgIn, typename... MsgOut>
+auto send_message_timeout(messaging_service* ms, messaging_verb verb, locator::host_id hid, MsgOut&&... msg) {
+    return send_message_timeout<MsgIn, MsgOut...>(ms, verb, ms->addr_for_host_id(hid), std::forward<MsgOut>(msg)...);
 }
 
 // Requesting abort on the provided abort_source drops the message from the outgoing queue (if it's still there)
@@ -205,6 +217,11 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, msg_ad
     });
 }
 
+template <typename MsgIn, typename... MsgOut>
+auto send_message_cancellable(messaging_service* ms, messaging_verb verb, locator::host_id id, abort_source& as, MsgOut&&... msg) {
+    return send_message_cancellable<MsgIn, MsgOut...>(ms, verb, ms->addr_for_host_id(id), as, std::forward<MsgOut>(msg)...);
+}
+
 // Send one way message for verb
 template <typename... MsgOut>
 auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
@@ -214,6 +231,17 @@ auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id
 // Send one way message for verb
 template <typename Timeout, typename... MsgOut>
 auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
+    return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
+}
+
+template <typename... MsgOut>
+auto send_message_oneway(messaging_service* ms, messaging_verb verb, locator::host_id id, MsgOut&&... msg) {
+    return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
+}
+
+// Send one way message for verb
+template <typename Timeout, typename... MsgOut>
+auto send_message_oneway_timeout(messaging_service* ms, messaging_verb verb, locator::host_id id, Timeout timeout, MsgOut&&... msg) {
     return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
 }
 

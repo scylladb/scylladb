@@ -23,6 +23,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "service/maintenance_mode.hh"
+#include "gms/gossip_address_map.hh"
 #include "tasks/types.hh"
 
 #include <list>
@@ -230,6 +231,10 @@ struct schema_pull_options {
     bool group0_snapshot_transfer = false;
 };
 
+struct unknown_address : public std::runtime_error {
+    unknown_address(locator::host_id id) : std::runtime_error(fmt::format("no ip address mapping for {}", id)) {}
+};
+
 class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;
@@ -346,6 +351,7 @@ private:
     struct connection_ref;
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
     std::unordered_set<locator::host_id> _banned_hosts;
+    gms::gossip_address_map& _address_map;
 
     future<> shutdown_tls_server();
     future<> shutdown_nontls_server();
@@ -356,8 +362,8 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service);
-    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service);
+    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
     ~messaging_service();
 
     future<> start();
@@ -493,6 +499,8 @@ public:
     // No further RPC handlers will be called for that node,
     // but we don't prevent handlers that were started concurrently from finishing.
     future<> ban_host(locator::host_id);
+
+    msg_addr addr_for_host_id(locator::host_id hid);
 private:
     template <typename Fn>
     requires std::is_invocable_r_v<bool, Fn, const shard_info&>

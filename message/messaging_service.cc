@@ -233,9 +233,9 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service)
+messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service, gms::gossip_address_map& address_map)
     : messaging_service(config{std::move(id), ip, ip, port},
-                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr, feature_service)
+                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr, feature_service, address_map)
 {}
 
 static
@@ -423,7 +423,8 @@ void messaging_service::do_start_listen() {
     }
 }
 
-messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service)
+messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service,
+                                     gms::gossip_address_map& address_map)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
@@ -431,6 +432,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
     , _feature_service(feature_service)
+    , _address_map(address_map)
 {
     _rpc->set_logger(&rpc_logger);
 
@@ -678,6 +680,14 @@ static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> 
 }
 
 static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
+
+msg_addr messaging_service::addr_for_host_id(locator::host_id hid) {
+    auto opt_ip = _address_map.find(hid);
+    if (!opt_ip) {
+        throw unknown_address(hid);
+    }
+    return msg_addr{*opt_ip, 0};
+}
 
 unsigned
 messaging_service::get_rpc_client_idx(messaging_verb verb) const {
