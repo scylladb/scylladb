@@ -32,6 +32,21 @@
 
 namespace bpo = boost::program_options;
 
+namespace utils {
+
+auto
+format_as(config_file::liveness l) {
+    switch (l) {
+    case utils::config_file::liveness::LiveUpdate:
+        return "live-updatable";
+    case utils::config_file::liveness::MustRestart:
+        return "requires-restart";
+    }
+    std::unreachable();
+}
+
+}
+
 template<>
 std::istream& std::operator>>(std::istream& is, std::unordered_map<seastar::sstring, seastar::sstring>& map) {
    std::istreambuf_iterator<char> i(is), e;
@@ -247,43 +262,57 @@ void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
     _cfgs.insert(_cfgs.end(), cfgs.begin(), cfgs.end());
 }
 
-bpo::options_description utils::config_file::get_options_description() {
-    bpo::options_description opts("");
-    return get_options_description(opts);
-}
+void
+utils::config_file::add_options(
+        boost::program_options::options_description& all_options,
+        boost::program_options::options_description& help_visible_options) {
+    bpo::options_description deprecated_options("Deprecated options - ignored");
+    bpo::options_description transitional("Transitional options - use `--config yaml-snippet` of `--options-file yaml-file` instead");
 
-bpo::options_description utils::config_file::get_options_description(boost::program_options::options_description opts) {
-    auto init = opts.add_options();
-    add_options(init);
-    return opts;
-}
+    auto easy_init_std = help_visible_options.add_options();
+    auto easy_init_deprecated = deprecated_options.add_options();
+    auto easy_init_transitional = transitional.add_options();
 
-bpo::options_description_easy_init&
-utils::config_file::add_options(bpo::options_description_easy_init& init) {
     for (config_src& src : _cfgs) {
-        if (src.status() == value_status::Used) {
-            src.add_command_line_option(init);
+        if (src.status() == value_status::UsedCLIPromoted) {
+            src.add_command_line_option(easy_init_std);
+        } else if (src.status() == value_status::Used) {
+            src.add_command_line_option(easy_init_transitional);
+        } else if (src.status() == value_status::Deprecated) {
+            src.add_command_line_option(easy_init_deprecated);
         }
     }
-    return init;
+
+    all_options.add(help_visible_options);
+    all_options.add(transitional);
+    all_options.add(deprecated_options);
 }
 
-
-bpo::options_description_easy_init&
-utils::config_file::add_deprecated_options(bpo::options_description_easy_init& init) {
+void
+utils::config_file::print_help(std::ostream& os) {
     for (config_src& src : _cfgs) {
-        if (src.status() == value_status::Deprecated) {
-            src.add_command_line_option(init);
+        switch (src.status()) {
+        case value_status::Unused:
+            continue;
+        case value_status::Invalid:
+            continue;
+        case value_status::Deprecated:
+            os << "(deprecated) ";
+            break;
+        case value_status::Used:
+            continue;
+        case value_status::UsedCLIPromoted:
+            break;
         }
+        fmt::print(os, "{} ({}):\n {}\n\n", src.name(), src.liveness(), src.desc());
     }
-    return init;
 }
 
-void utils::config_file::read_from_yaml(const sstring& yaml, error_handler h) {
-    read_from_yaml(yaml.c_str(), std::move(h));
+void utils::config_file::read_from_yaml(const sstring& yaml, config_source source, error_handler h) {
+    read_from_yaml(yaml.c_str(), source, std::move(h));
 }
 
-void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
+void utils::config_file::read_from_yaml(const char* yaml, config_source source, error_handler h) {
     std::unordered_map<sstring, cfg_ref> values;
 
     if (!h) {
@@ -299,6 +328,10 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
      * file mapping to the data type...
      */
     auto doc = YAML::Load(yaml);
+    if (!doc.IsMap()) {
+        h(std::string_view(yaml).contains('\n') ? "<document>" : yaml, "Expected a yaml mapping", std::nullopt);
+        return;
+    }
     for (auto node : doc) {
         auto label = node.first.as<sstring>();
 
@@ -310,7 +343,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
 
         config_src& cfg = *i;
 
-        if (cfg.source() > config_source::SettingsFile) {
+        if (cfg.source() > source) {
             // already set
             continue;
         }
@@ -330,7 +363,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
         }
         // Still, a syntax error is an error warning, not a fail
         try {
-            cfg.set_value(node.second);
+            cfg.set_value(node.second, source);
         } catch (std::exception& e) {
             h(label, e.what(), cfg.status());
         } catch (...) {
@@ -341,7 +374,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
 
 utils::config_file::configs utils::config_file::set_values() const {
     return boost::copy_range<configs>(_cfgs | boost::adaptors::filtered([] (const config_src& cfg) {
-        return cfg.status() > value_status::Used || cfg.source() > config_source::None;
+        return cfg.source() > config_source::None;
     }));
 }
 
@@ -363,7 +396,7 @@ future<> utils::config_file::read_from_file(file f, error_handler h) {
     return f.size().then([this, f, h](size_t s) {
         return do_with(make_file_input_stream(f), [this, s, h](input_stream<char>& in) {
             return in.read_exactly(s).then([this, h](temporary_buffer<char> buf) {
-               read_from_yaml(sstring(buf.begin(), buf.end()), h);
+               read_from_yaml(sstring(buf.begin(), buf.end()), config_source::SettingsFile, h);
             });
         });
     });

@@ -6,5 +6,5 @@ skip_in_release:
     - test_compaction_task
 
 extra_scylla_cmdline_options:
-  - '--experimental-features=udf'
-  - '--enable-tablets=true'
+  - '--config=experimental_features: [udf]'
+  - '--config=enable_tablets: true'

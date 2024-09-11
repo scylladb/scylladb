@@ -72,7 +72,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
-        '--commitlog-sync', 'batch', # So that ACKed writes are not lost on crash
+        '--config', 'commitlog_sync: batch', # So that ACKed writes are not lost on crash
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 

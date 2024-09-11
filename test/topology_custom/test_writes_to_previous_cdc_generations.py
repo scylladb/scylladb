@@ -111,7 +111,7 @@ async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerCl
     ignore it in debug mode due to the reasons above.
     """
     logger.info("Bootstrapping nodes")
-    servers = await manager.servers_add(2, cmdline=['--ring-delay', '5000'])
+    servers = await manager.servers_add(2, cmdline=['--config', 'ring_delay_ms: 5000'])
 
     cql = manager.get_cql()
 

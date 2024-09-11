@@ -270,7 +270,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
-        '--enable-cache', with_cache,
+        '--config', f'enable_cache: {with_cache}',
     ]
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 

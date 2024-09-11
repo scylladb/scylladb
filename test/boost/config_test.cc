@@ -798,7 +798,7 @@ SEASTAR_TEST_CASE(test_parse_yaml) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
 
-    cfg.read_from_yaml(cassandra_conf, throw_on_error);
+    cfg.read_from_yaml(cassandra_conf, utils::config_file::config_source::SettingsFile, throw_on_error);
 
     BOOST_CHECK_EQUAL(cfg.cluster_name(), "Test Cluster");
     BOOST_CHECK_EQUAL(cfg.cluster_name.is_set(), true);
@@ -843,7 +843,9 @@ SEASTAR_TEST_CASE(test_parse_broken) {
     cfg.read_from_yaml(R"foo(bork_bnork:
     apa
     ko
-)foo", [&](auto& opt, auto& msg, auto status) {
+)foo",
+    utils::config_file::config_source::SettingsFile,
+    [&](auto& opt, auto& msg, auto status) {
         if (!status) { // unknown
             ok = true;
         }
@@ -855,7 +857,7 @@ SEASTAR_TEST_CASE(test_parse_broken) {
 
     // this should be a value parsing error.
     cfg.read_from_yaml(R"foo(commitlog_segment_size_in_mb: flaska
-)foo", [&](auto& opt, auto& msg, auto status) {
+)foo", utils::config_file::config_source::SettingsFile, [&](auto& opt, auto& msg, auto status) {
         if (status && status != config::value_status::Invalid) { // option exists and is valid.
             ok = true;
         }
@@ -872,7 +874,7 @@ using features = std::vector<enum_option<experimental_features_t>>;
 SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - cdc\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - cdc\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -884,7 +886,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - lwt\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - lwt\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -896,7 +898,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - udf\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - udf\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UDF});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
@@ -908,7 +910,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_alternator_streams) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - alternator-streams\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - alternator-streams\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::ALTERNATOR_STREAMS});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -920,7 +922,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_alternator_streams) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - broadcast-tables\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - broadcast-tables\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::BROADCAST_TABLES});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -933,7 +935,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_keyspace_storage_options) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - keyspace-storage-options\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - keyspace-storage-options\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::KEYSPACE_STORAGE_OPTIONS});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -945,7 +947,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_keyspace_storage_options) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
-    cfg.read_from_yaml("experimental_features:\n    - cdc\n    - lwt\n    - cdc\n", throw_on_error);
+    cfg.read_from_yaml("experimental_features:\n    - cdc\n    - lwt\n    - cdc\n", utils::config_file::config_source::SettingsFile, throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::UNUSED, ef::UNUSED, ef::UNUSED}));
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
@@ -959,6 +961,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
     config& cfg = *cfg_ptr;
     using value_status = utils::config_file::value_status;
     cfg.read_from_yaml("experimental_features:\n    - invalidoptiontvaluedonotuse\n",
+                       utils::config_file::config_source::SettingsFile,
                        [&cfg] (const sstring& opt, const sstring& msg, std::optional<value_status> status) {
                            BOOST_REQUIRE_EQUAL(opt, "experimental_features");
                            BOOST_REQUIRE_NE(msg.find("line 2, column 7"), msg.npos);

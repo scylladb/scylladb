@@ -14,7 +14,7 @@ from cassandra.protocol import WriteTimeout
 @pytest.mark.asyncio
 async def test_cas_semaphore(manager):
     """ This is a regression test for scylladb/scylladb#19698 """
-    servers = await manager.servers_add(1, cmdline=['--smp', '1', '--write-request-timeout-in-ms', '500'])
+    servers = await manager.servers_add(1, cmdline=['--smp', '1', '--config', 'write_request_timeout_in_ms: 500'])
 
     host = await wait_for_cql_and_get_hosts(manager.cql, {servers[0]}, time.time() + 60)
 

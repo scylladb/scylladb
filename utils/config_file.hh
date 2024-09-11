@@ -66,9 +66,11 @@ public:
     typedef std::vector<sstring> string_list;
 
     enum class value_status {
-        Used, ///< a valid option which changes scylla's behavior. only the
-              ///< "Used" options are added to the command line options,
-              ///< and can be specified with command line.
+        UsedCLIPromoted, ///< a valid option which changes scylla's behavior. only the
+              ///< "UsedCLIPromoted" options are added to the command line options,
+              ///< and can be specified with command line (or as with "Used", below)
+        Used, ///< a valid option which changes scylla's behavior. Can
+              ///< be specified with --config or --options-file.
         Unused, ///< an option inherited or not yet implemented.
                 ///< We want to minimize their "visibility" from user. So
                 ///< despite that they are still accepted in the config file,
@@ -110,22 +112,26 @@ public:
 
     struct config_src {
         config_file* _cf;
-        std::string_view _name, _alias, _desc;
+        std::string_view _name, _alias;
+        liveness _liveness;
+        std::string_view _desc;
         const config_type* _type;
         size_t _per_shard_values_offset;
     protected:
         virtual const void* current_value() const = 0;
     public:
-        config_src(config_file* cf, std::string_view name, const config_type* type, std::string_view desc)
+        config_src(config_file* cf, std::string_view name, const config_type* type, config_file::liveness liveness, std::string_view desc)
             : _cf(cf)
             , _name(name)
+            , _liveness(liveness)
             , _desc(desc)
             , _type(type)
         {}
-        config_src(config_file* cf, std::string_view name, std::string_view alias, const config_type* type, std::string_view desc)
+        config_src(config_file* cf, std::string_view name, std::string_view alias, config_file::liveness liveness, const config_type* type, std::string_view desc)
             : _cf(cf)
             , _name(name)
             , _alias(alias)
+            , _liveness(liveness)
             , _desc(desc)
             , _type(type)
         {}
@@ -143,14 +149,17 @@ public:
         std::string_view type_name() const {
             return _type->name();
         }
+        config_file::liveness liveness() const {
+            return _liveness;
+        }
         config_file * get_config_file() const {
             return _cf;
         }
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
-        virtual void set_value(const YAML::Node&) = 0;
+        virtual void set_value(const YAML::Node&, config_source source) = 0;
         virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
-        virtual future<> set_value_on_all_shards(const YAML::Node&) = 0;
+        virtual future<> set_value_on_all_shards(const YAML::Node&, config_source source) = 0;
         virtual future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
@@ -175,7 +184,6 @@ public:
                 value.set(typed_source->value());
             }
         };
-        liveness _liveness;
         std::vector<T> _allowed_values;
     protected:
         updateable_value_source<T>& the_value() {
@@ -192,15 +200,14 @@ public:
         typedef T type;
         typedef named_value<T> MyType;
 
-        named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, std::string_view alias, config_file::liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : config_src(file, name, alias, &config_type_for<T>, desc)
+            : config_src(file, name, alias, liveness_, &config_type_for<T>, desc)
             , _value_status(vs)
-            , _liveness(liveness_)
             , _allowed_values(std::move(allowed_values)) {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
         }
-        named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, config_file::liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
             : named_value(file, name, {}, liveness_, vs, t, desc) {
         }
@@ -256,13 +263,17 @@ public:
             return the_value().observe(std::move(callback));
         }
 
+        config_file::liveness liveness() const {
+            return _liveness;
+        }
+
         void add_command_line_option(bpo::options_description_easy_init&) override;
-        void set_value(const YAML::Node&) override;
+        void set_value(const YAML::Node&, config_source source) override;
         bool set_value(sstring, config_source = config_source::Internal) override;
         // For setting a single value on all shards,
         // without having to call broadcast_to_all_shards
         // that broadcasts all values to all shards.
-        future<> set_value_on_all_shards(const YAML::Node&) override;
+        future<> set_value_on_all_shards(const YAML::Node&, config_source source) override;
         future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) override;
     };
 
@@ -275,13 +286,10 @@ public:
     void add(std::initializer_list<cfg_ref>);
     void add(const std::vector<cfg_ref> &);
 
-    boost::program_options::options_description get_options_description();
-    boost::program_options::options_description get_options_description(boost::program_options::options_description);
+    void add_options(boost::program_options::options_description& all_options,
+                     boost::program_options::options_description& help_visible_options);
 
-    boost::program_options::options_description_easy_init&
-    add_options(boost::program_options::options_description_easy_init&);
-    boost::program_options::options_description_easy_init&
-    add_deprecated_options(boost::program_options::options_description_easy_init&);
+    void print_help(std::ostream& os);
 
     /**
      * Default behaviour for yaml parser is to throw on
@@ -298,8 +306,8 @@ public:
      */
     using error_handler = std::function<void(const sstring&, const sstring&, std::optional<value_status>)>;
 
-    void read_from_yaml(const sstring&, error_handler = {});
-    void read_from_yaml(const char *, error_handler = {});
+    void read_from_yaml(const sstring&, config_source source, error_handler = {});
+    void read_from_yaml(const char *, config_source source, error_handler = {});
     future<> read_from_file(const sstring&, error_handler = {});
     future<> read_from_file(file, error_handler = {});
 

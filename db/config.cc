@@ -406,7 +406,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @Group Default directories
     * @GroupDescription If you have changed any of the default directories during installation, make sure you have root access and set these properties.
     */
-    , work_directory(this, "workdir,W", value_status::Used, "/var/lib/scylla",
+    , work_directory(this, "workdir,W", value_status::UsedCLIPromoted, "/var/lib/scylla",
         "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overridden by the respective ``*_directory`` options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
         "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
@@ -977,7 +977,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , fd_max_interval_ms(this, "fd_max_interval_ms", value_status::Used, 2 * 1000, "The maximum failure_detector interval time in milliseconds. Interval larger than the maximum will be ignored. Larger cluster may need to increase the default.")
     , fd_initial_value_ms(this, "fd_initial_value_ms", value_status::Used, 2 * 1000, "The initial failure_detector interval time in milliseconds.")
     , shutdown_announce_in_ms(this, "shutdown_announce_in_ms", value_status::Used, 2 * 1000, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.")
-    , developer_mode(this, "developer_mode", value_status::Used, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
+    , developer_mode(this, "developer_mode", value_status::UsedCLIPromoted, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
     , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
     , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())

@@ -642,23 +642,26 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
 
     auto cfg = make_lw_shared<db::config>(ext);
-    auto init = app.get_options_description().add_options();
+    auto main_options_cop = app.get_options_description();
+    auto& main_options = app.get_options_description();
+    auto help_visible_options = boost::program_options::options_description("Scylla options");
+    auto init = help_visible_options.add_options();
 
     init("version", bpo::bool_switch(), "print version number and exit");
     init("build-id", bpo::bool_switch(), "print build-id and exit");
     init("build-mode", bpo::bool_switch(), "print build mode and exit");
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
 
-    bpo::options_description deprecated_options("Deprecated options - ignored");
-    auto deprecated_options_easy_init = deprecated_options.add_options();
-    cfg->add_deprecated_options(deprecated_options_easy_init);
-    app.get_options_description().add(deprecated_options);
-
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
+    init("config", bpo::value<std::vector<std::string>>()->default_value(std::vector<std::string>(), ""),
+            "configuration yaml snippet (i.e. 'workdir: /var/lib/scylla'); may be repeated");
+    init("help-config", bpo::bool_switch(), "print yaml configuration options and exit");
 
     configurable::append_all(*cfg, init);
-    cfg->add_options(init);
+    cfg->add_options(main_options, help_visible_options);
+
+    app.set_app_visible_options_for_help(&help_visible_options);
 
     // If --version is requested, print it out and exit immediately to avoid
     // Seastar-specific warnings that may occur when running the app
@@ -702,14 +705,22 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         auto&& opts = app.configuration();
 
+        if (opts.count("help-config") && opts["help-config"].as<bool>()) {
+            cfg->print_help(std::cout);
+            return make_ready_future<int>(0);
+        }
+
         namespace sm = seastar::metrics;
         app_metrics.add_group("scylladb", {
             sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
         });
 
-        for (auto& opt: deprecated_options.options()) {
-            if (opts.contains(opt->long_name())) {
-                startlog.warn("{} option ignored (deprecated)", opt->long_name());
+        for (auto& this_cfg: cfg->set_values()) {
+            if (this_cfg.get().status() == utils::config_file::value_status::Deprecated) {
+                startlog.warn("{} option ignored (deprecated)", this_cfg.get().name());
+            } else if (this_cfg.get().status() == utils::config_file::value_status::Used && this_cfg.get().source() == utils::config_file::config_source::CommandLine) {
+                startlog.error("{} option should be set via --config or --options-file; direct command-line changes are deprecated", this_cfg.get().name());
+                return make_ready_future<int>(1);
             }
         }
 
@@ -740,6 +751,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
+
+            // Read --config options first, so they can override the later read_config().
+            for (auto& yaml: opts["config"].as<std::vector<std::string>>()) {
+                startlog.info("config: {}", yaml);
+                cfg->read_from_yaml(yaml, utils::config_file::config_source::CommandLine);
+            }
+
             read_config(opts, *cfg).get();
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
             enable_initial_error_injections(*cfg).get();
