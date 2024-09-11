@@ -97,7 +97,7 @@ public:
 
     sstring cql() const {
         return format("CREATE TABLE {}.{} (pk text, ck text, v text, s1 text{}{}, PRIMARY KEY (pk, ck))",
-                      _s->keypace_name(), _s->element_name(),
+                      _s->ks_name(), _s->cf_name(),
                       _ws ? " static" : "", _wc ? ", c1 map<text, text>" : "");
     }
 
