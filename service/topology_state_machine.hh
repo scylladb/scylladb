@@ -110,7 +110,7 @@ struct topology {
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
-        tablet_split_finalization,
+        tablet_resize_finalization,
         left_token_ring,
         rollback_to_normal,
     };

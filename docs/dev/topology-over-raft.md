@@ -369,7 +369,7 @@ emits a decision to finalize the split request. The finalization is serialized w
 doubling tablet count would interfere with the migration process.
 
 When the state machine leaves the migration track, and there are tablets waiting for tablet split to
-be finalized, the topology will transition into `tablet_split_finalization` state. At this moment, there will
+be finalized, the topology will transition into `tablet_resize_finalization` state. At this moment, there will
 be no migration running in the system. A global token metadata barrier is executed to make sure that no
 process e.g. repair will be holding stale metadata when finalizing split. After that, the new tablet map,
 which is a result of splitting each preexisting tablet into two, is committed to group0.
