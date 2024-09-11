@@ -652,6 +652,26 @@ private:
         on_internal_error(lblogger, format("Invalid transition stage: {}", static_cast<int>(trinfo->stage)));
     }
 
+    using migration_vector = migration_plan::migrations_vector;
+    static migration_vector
+    get_migration_info(const migration_tablet_set& tablet_set, tablet_transition_kind kind, tablet_replica src, tablet_replica dst) {
+        migration_vector infos;
+        for (auto tablet : tablet_set.tablets()) {
+            infos.push_back(tablet_migration_info{kind, tablet, src, dst});
+        }
+        return infos;
+    }
+
+    using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
+    static migration_streaming_info_vector
+    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+        migration_streaming_info_vector streaming_infos;
+        for (auto& info : infos) {
+            auto& ti = tmap.get_tablet_info(info.tablet.tablet);
+            streaming_infos.push_back(get_migration_streaming_info(topology, ti, info));
+        }
+        return streaming_infos;
+    }
 public:
     load_balancer(replica::database& db, token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
@@ -967,6 +987,12 @@ public:
         }
     }
 
+    void apply_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
+        for (auto& info : infos) {
+            apply_load(nodes, info);
+        }
+    }
+
     bool can_accept_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
         for (auto r : info.read_from) {
             if (!nodes.contains(r.host)) {
@@ -989,6 +1015,16 @@ public:
             }
         }
         return true;
+    }
+
+    // Precondition: all migration streaming info have same source and destination.
+    //  FIXME: remove precondition but it's not easy without copying noad_load_map.
+    bool can_accept_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
+        // Since all migration info have the same source and destination, the load check can be easily done
+        // by informing the number of migrations.
+        auto info = infos[0];
+        info.stream_weight = infos.size();
+        return can_accept_load(nodes, info);
     }
 
     bool in_shuffle_mode() const {
@@ -1235,6 +1271,30 @@ public:
 
         src_node_info.tablet_count -= 1;
         src_node_info.update();
+    }
+
+    void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, const migration_tablet_set& tablet_set) {
+        for (auto tablet : tablet_set.tablets()) {
+            update_node_load_on_migration(node_load, host, src, dst, tablet);
+        }
+    }
+
+    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, const migration_tablet_set& tablet_set) {
+        for (auto tablet : tablet_set.tablets()) {
+            update_node_load_on_migration(nodes, src, dst, tablet);
+        }
+    }
+
+    static void unload(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
+        for (auto _ : tablet_set.tablets()) {
+            sketch.unload(host, shard);
+        }
+    }
+
+    static void pick(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
+        for (auto _ : tablet_set.tablets()) {
+            sketch.pick(host, shard);
+        }
     }
 
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
