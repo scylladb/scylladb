@@ -2565,11 +2565,53 @@ private:
                       table, tablets.tablet_count(), new_tablets.tablet_count());
         co_return std::move(new_tablets);
     }
+
+    // The merging of tablet is completely based on the power-of-two constraint.
+    // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
+    future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
+        auto& tablets = tm->tablets().get_tablet_map(table);
+
+        tablet_map new_tablets(tablets.tablet_count() / 2);
+
+        for (tablet_id tid : new_tablets.tablet_ids()) {
+            co_await coroutine::maybe_yield();
+
+            tablet_id old_left_tid = tablet_id(tid.value() << 1);
+            tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
+
+            auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
+            auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+
+            auto sorted = [] (tablet_replica_set set) {
+                std::ranges::sort(set, std::less<tablet_replica>());
+                return set;
+            };
+            auto left_tablet_replicas = sorted(left_tablet_info.replicas);
+            auto right_tablet_replicas = sorted(right_tablet_info.replicas);
+            if (left_tablet_replicas != right_tablet_replicas) {
+                throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
+                                                old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
+            }
+            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info);
+            if (!merged_tablet_info) {
+                throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
+                                                old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
+            }
+
+            new_tablets.set_tablet(tid, *merged_tablet_info);
+        }
+
+        lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
+                      table, tablets.tablet_count(), new_tablets.tablet_count());
+        co_return std::move(new_tablets);
+    }
 public:
     future<tablet_map> resize_tablets(token_metadata_ptr tm, table_id table) {
         auto& tmap = tm->tablets().get_tablet_map(table);
         if (tmap.needs_split()) {
             return split_tablets(std::move(tm), table);
+        } else if (tmap.needs_merge()) {
+            return merge_tablets(std::move(tm), table);
         }
         throw std::logic_error(format("Table {} cannot be resized", table));
     }
