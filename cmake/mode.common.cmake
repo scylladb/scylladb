@@ -24,9 +24,8 @@ add_compile_options(
   ${_supported_warnings})
 
 function(default_target_arch arch)
-  set(x86_instruction_sets i386 i686 x86_64)
-  if(CMAKE_SYSTEM_PROCESSOR IN_LIST x86_instruction_sets)
-    set(${arch} "westmere" PARENT_SCOPE)
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(${arch} "broadwell" PARENT_SCOPE)
   elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     # we always use intrinsics like vmull.p64 for speeding up crc32 calculations
     # on the aarch64 architectures, and they require the crypto extension, so
