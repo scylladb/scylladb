@@ -409,7 +409,6 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
         auto ks_name = "ks";
         auto cf_name = "cf";
-        auto path = fs::path(e.local_db().find_column_family(ks_name, cf_name).dir());
         std::unordered_map<unsigned, std::vector<sstring>> sstables;
 
         testlog.debug("Inserting into cf");
