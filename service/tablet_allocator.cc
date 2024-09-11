@@ -2278,7 +2278,7 @@ public:
     load_balancer_stats_manager& stats() {
         return _load_balancer_stats;
     }
-
+private:
     // The splitting of tablets today is completely based on the power-of-two constraint.
     // A tablet of id X is split into 2 new tablets, which new ids are (x << 1) and
     // (x << 1) + 1.
@@ -2305,6 +2305,14 @@ public:
                       table, tablets.tablet_count(), new_tablets.tablet_count());
         co_return std::move(new_tablets);
     }
+public:
+    future<tablet_map> resize_tablets(token_metadata_ptr tm, table_id table) {
+        auto& tmap = tm->tablets().get_tablet_map(table);
+        if (tmap.needs_split()) {
+            return split_tablets(std::move(tm), table);
+        }
+        throw std::logic_error(format("Table {} cannot be resized", table));
+    }
 
     // FIXME: Handle materialized views.
 };
@@ -2325,8 +2333,8 @@ void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balan
     impl().set_use_tablet_aware_balancing(use_tablet_aware_balancing);
 }
 
-future<locator::tablet_map> tablet_allocator::split_tablets(locator::token_metadata_ptr tm, table_id table) {
-    return impl().split_tablets(std::move(tm), table);
+future<locator::tablet_map> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
+    return impl().resize_tablets(std::move(tm), table);
 }
 
 tablet_allocator_impl& tablet_allocator::impl() {
