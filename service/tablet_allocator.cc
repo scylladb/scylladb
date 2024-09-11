@@ -621,6 +621,12 @@ private:
         return trinfo ? trinfo->next : ti.replicas;
     }
 
+    tablet_replica_set sorted_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+        auto set = get_replicas_for_tablet_load(ti, trinfo);
+        std::ranges::sort(set, std::less<tablet_replica>());
+        return set;
+    }
+
     // Whether to count the tablet as putting streaming load on the system.
     // Tablets which are streaming or are yet-to-stream are counted.
     bool is_streaming(const tablet_transition_info* trinfo) {
