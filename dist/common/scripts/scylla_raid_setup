@@ -333,3 +333,19 @@ WantedBy=local-fs.target
         LOGGER.error(f'Error detected, dumping udev env parameters on {fsdev}')
         udev_info.verify()
         udev_info.dump_variables()
+
+    if is_redhat_variant():
+        if not shutil.which('getenforce'):
+            pkg_install('libselinux-utils')
+        if not shutil.which('restorecon'):
+            pkg_install('policycoreutils')
+        if not shutil.which('semanage'):
+            pkg_install('policycoreutils-python-utils')
+        selinux_status = out('getenforce')
+        selinux_context = out('matchpathcon -n /var/lib/systemd/coredump')
+        selinux_type = selinux_context.split(':')[2]
+        run(f'semanage fcontext -a -t {selinux_type} "{root}/coredump(/.*)?"', shell=True, check=True)
+        if selinux_status != 'Disabled':
+            run(f'restorecon -F -v -R {root}', shell=True, check=True)
+        else:
+            Path('/.autorelabel').touch(exist_ok=True)
