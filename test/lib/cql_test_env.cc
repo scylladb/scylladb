@@ -690,19 +690,45 @@ private:
             }).get();
 
             uint16_t port = 7000;
-            if (cfg_in.ms_listen) {
-               std::random_device rd;
-               std::mt19937 gen(rd());
-               std::uniform_int_distribution<> distrib(27000, 37000);
-               port = distrib(gen);
-            }
-            // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
-            _ms.start(host_id, listen, std::move(port)).get();
-            auto stop_ms = defer([this] { _ms.stop().get(); });
+            seastar::server_socket tmp;
 
-            if (cfg_in.ms_listen) {
-                _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata)).get();
-            }
+            // #20543 - if we should actually use message_server::listen, we need to find an unused port.
+            // Create a dummy socket to pick the port for us. Unfortunately, due to reactor::posix_reuseport_detect()
+            // currently giving back false always, we can't simply do this though. Thus this ugly loop.
+            // Adding the stop defer before actually creating the service should be fine.
+
+            auto stop_ms_func = [this] { _ms.stop().get(); };
+            using stop_type = decltype(stop_ms_func);
+            std::optional<decltype(defer(stop_type(stop_ms_func)))> stop_ms;
+
+            do {
+                stop_ms = std::nullopt;
+                try {
+                    if (cfg_in.ms_listen) {
+                       tmp = seastar::listen(seastar::socket_address(listen, 0), listen_options{true});
+                       port = tmp.local_address().port();
+                    }
+                    // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
+                    _ms.start(host_id, listen, std::move(port)).get();
+                    stop_ms = defer(stop_type(stop_ms_func));
+
+                    if (cfg_in.ms_listen) {
+                        // FIXME: should not need to do this - it makes this whole thing unsafe. But
+                        // reactor::posix_reuseport_detect() currently always returns false, thus
+                        // trying to grab a port and reusing it properly here does _not_ work at all.
+                        // Once the seastar issue is fixed, we can just keep the tmp socket aliva across
+                        // the listen invoke below.
+                        tmp = {};
+                        _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata)).get();
+                    }
+                } catch (std::system_error& e) {
+                    // if we still hit a used port (quick other process), just shut down ms and try again.
+                    if (port != 7000 && e.code().category() == std::system_category() && e.code().value() == EADDRINUSE) {
+                        continue;
+                    }
+                    throw;
+                }
+            } while (false);
 
             // Normally the auth server is already stopped in here,
             // but if there is an initialization failure we have to
