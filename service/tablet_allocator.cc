@@ -1344,6 +1344,28 @@ public:
         return std::nullopt;
     }
 
+    // Verifies if moving a given tablet from src_info.id to dst_info.id would not violate
+    // replication constraints (no increase in replica co-location on nodes, racks).
+    // Returns std::nullopt if it does not and the movement is allowed.
+    //
+    // When candidate is co-located tablets, the verification should yield the same result
+    // for both replicas because the constraints are the same for both.
+    std::optional<std::pair<skip_info, global_tablet_id>>
+    check_constraints(node_load_map& nodes,
+                      const locator::tablet_map& tmap,
+                      node_load& src_info,
+                      node_load& dst_info,
+                      tablet_candidate candidate,
+                      bool need_viable_targets) {
+        for (auto tablet : candidate.tablets()) {
+            auto skip = check_constraints(nodes, tmap, src_info, dst_info, tablet, need_viable_targets);
+            if (skip) {
+                return std::make_pair(std::move(*skip), tablet);
+            }
+        }
+        return std::nullopt;
+    }
+
     // Picks best tablet replica to move and its new destination.
     // The destination host is picked among nodes_by_load_dst, with dst being the preferred destination.
     //
