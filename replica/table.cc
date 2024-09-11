@@ -757,6 +757,11 @@ private:
     // that were previously split.
     future<> handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
+    // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
+    // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
+    // are merged into a new storage group with id (X >> 1).
+    future<> handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+
     storage_group& storage_group_for_id(size_t i) const {
         return storage_group_manager::storage_group_for_id(schema(), i);
     }
@@ -874,6 +879,9 @@ compaction_group_ptr& storage_group::select_compaction_group(locator::tablet_ran
 
 void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept {
     action(_main_cg);
+    for (auto& cg : _merging_groups) {
+        action(cg);
+    }
     for (auto& cg : _split_ready_groups) {
         action(cg);
     }
@@ -895,6 +903,17 @@ utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_gro
     return cgs;
 }
 
+utils::small_vector<compaction_group_ptr, 3> storage_group::split_unready_groups() const {
+    utils::small_vector<compaction_group_ptr, 3> cgs;
+    cgs.push_back(_main_cg);
+    std::copy(_merging_groups.begin(), _merging_groups.end(), std::back_inserter(cgs));
+    return cgs;
+}
+
+bool storage_group::split_unready_groups_are_empty() const {
+    return std::ranges::all_of(split_unready_groups(), std::mem_fn(&compaction_group::empty));
+}
+
 bool storage_group::set_split_mode() {
     if (!splitting_mode()) {
         auto create_cg = [this] () -> compaction_group_ptr {
@@ -907,8 +926,12 @@ bool storage_group::set_split_mode() {
         _split_ready_groups = std::move(split_ready_groups);
     }
 
-    // The storage group is considered "split ready" if its main compaction group is empty.
-    return _main_cg->empty();
+    // The storage group is considered "split ready" if all split unready groups (main + merging) are empty.
+    return split_unready_groups_are_empty();
+}
+
+void storage_group::add_merging_group(compaction_group_ptr cg) {
+    _merging_groups.push_back(std::move(cg));
 }
 
 future<> storage_group::split(sstables::compaction_type_options::split opt) {
@@ -917,24 +940,31 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
     }
     co_await utils::get_local_injector().inject("delay_split_compaction", 5s);
 
-    if (_main_cg->empty()) {
+    if (split_unready_groups_are_empty()) {
         co_return;
     }
-    auto holder = _main_cg->async_gate().hold();
-    co_await _main_cg->flush();
-    // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
-    co_await _main_cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
-    co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+    for (auto cg : split_unready_groups()) {
+        auto holder = cg->async_gate().hold();
+        co_await cg->flush();
+        // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
+        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
+        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+    }
 }
 
 lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
-    if (!splitting_mode()) {
+    if (_split_ready_groups.empty() && _merging_groups.empty()) {
         return _main_cg->make_sstable_set();
     }
     const auto& schema = _main_cg->_t.schema();
     std::vector<lw_shared_ptr<sstables::sstable_set>> underlying;
-    underlying.reserve(1 + _split_ready_groups.size());
+    underlying.reserve(1 + _merging_groups.size() + _split_ready_groups.size());
     underlying.emplace_back(_main_cg->make_sstable_set());
+    for (const auto& cg : _merging_groups) {
+        if (!cg->empty()) {
+            underlying.emplace_back(cg->make_sstable_set());
+        }
+    }
     for (const auto& cg : _split_ready_groups) {
         underlying.emplace_back(cg->make_sstable_set());
     }
@@ -2392,7 +2422,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     // Stop the released main compaction groups asynchronously
     future<> stop_fut = make_ready_future<>();
     for (auto& [id, sg] : _storage_groups) {
-        if (!sg->main_compaction_group()->empty()) {
+        if (!sg->split_unready_groups_are_empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
                                               "therefore groups cannot be remapped with the new tablet count.",
                                               id, table_id));
@@ -2427,6 +2457,51 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     return stop_fut;
 }
 
+future<> tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+    auto table_id = schema()->id();
+    size_t old_tablet_count = old_tmap.tablet_count();
+    size_t new_tablet_count = new_tmap.tablet_count();
+    storage_group_map new_storage_groups;
+
+    unsigned log2_reduce_factor = log2ceil(old_tablet_count / new_tablet_count);
+    unsigned merge_size = 1 << log2_reduce_factor;
+
+    if (merge_size != 2) {
+        throw std::runtime_error(format("Tablet count was not reduced by a factor of 2 (old: {}, new {}) for table {}",
+                                 old_tablet_count, new_tablet_count, table_id));
+    }
+
+    for (auto& [id, sg] : _storage_groups) {
+        // Pick first (even) tablet of each sibling pair.
+        if (id % merge_size != 0) {
+            continue;
+        }
+        auto new_tid = id >> log2_reduce_factor;
+
+        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)));
+        auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
+
+        for (unsigned i = 0; i < merge_size; i++) {
+            auto group_id = id + i;
+
+            auto it = _storage_groups.find(group_id);
+            if (it == _storage_groups.end()) {
+                throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
+            }
+            auto& sg = it->second;
+            sg->for_each_compaction_group([&new_sg, new_tid] (const compaction_group_ptr& cg) {
+                cg->update_id(new_tid);
+                new_sg->add_merging_group(cg);
+            });
+            // FIXME: we MUST schedule a background action to flush memtable and move sstables of merging groups into the main one.
+        }
+
+        new_storage_groups[new_tid] = std::move(new_sg);
+    }
+    _storage_groups = std::move(new_storage_groups);
+    return make_ready_future<>();
+}
+
 future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
@@ -2437,6 +2512,11 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                         schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
         co_await handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
+        co_return;
+    } else if (new_tablet_count < old_tablet_count) {
+        tlogger.info0("Detected tablet merge for table {}.{}, decreasing from {} to {} tablets",
+                      schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
+        co_await handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
         co_return;
     }
 
@@ -2845,9 +2925,7 @@ size_t compaction_group::memtable_count() const noexcept {
 }
 
 size_t storage_group::memtable_count() const noexcept {
-    auto memtable_count = [] (const compaction_group_ptr& cg) { return cg ? cg->memtable_count() : 0; };
-    return memtable_count(_main_cg) +
-            std::ranges::fold_left(_split_ready_groups | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
+    return std::ranges::fold_left(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
@@ -3797,6 +3875,9 @@ future<> storage_group::stop(sstring reason) noexcept {
     // exception while running under row_cache::external_updater::execute, resulting in node crash.
     co_await _main_cg->stop(reason);
     co_await coroutine::parallel_for_each(_split_ready_groups, [&reason] (const compaction_group_ptr& cg_ptr) {
+        return cg_ptr->stop(reason);
+    });
+    co_await coroutine::parallel_for_each(_merging_groups, [&reason] (const compaction_group_ptr& cg_ptr) {
         return cg_ptr->stop(reason);
     });
     co_await std::move(closed_gate_fut);
