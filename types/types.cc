@@ -9,6 +9,7 @@
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
 #include "cql3/cql3_type.hh"
+#include "cql3/description.hh"
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
@@ -3234,7 +3235,9 @@ sstring user_type_impl::get_name_as_cql_string() const {
     return cql3::util::maybe_quote(get_name_as_string());
 }
 
-std::ostream& user_type_impl::describe(std::ostream& os) const {
+cql3::description user_type_impl::describe() const {
+    std::ostringstream os;
+
     os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
     for (size_t i = 0; i < _string_field_names.size(); i++) {
         os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
@@ -3245,6 +3248,17 @@ std::ostream& user_type_impl::describe(std::ostream& os) const {
     }
     os << ");";
 
+    return cql3::description {
+        .keyspace = _keyspace,
+        .type = "type",
+        .name = get_name_as_string(),
+        .create_statement = std::move(os).str()
+    };
+}
+
+std::ostream& user_type_impl::describe(std::ostream& os) const {
+    auto desc = describe();
+    os << *desc.create_statement;
     return os;
 }
 

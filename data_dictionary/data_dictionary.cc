@@ -7,6 +7,7 @@
  */
 
 #include "data_dictionary.hh"
+#include "cql3/description.hh"
 #include "impl.hh"
 #include "user_types_metadata.hh"
 #include "keyspace_metadata.hh"
@@ -351,7 +352,9 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, const tab
 {
 }
 
-std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
+cql3::description keyspace_metadata::describe(const replica::database& db) const {
+    std::ostringstream os;
+
     os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
        << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
     for (const auto& opt: _strategy_options) {
@@ -373,10 +376,21 @@ std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& o
     }
     os << ";";
 
+    return cql3::description {
+        .keyspace = name(),
+        .type = "keyspace",
+        .name = name(),
+        .create_statement = std::move(os).str()
+    };
+}
+
+std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
+    auto desc = describe(db);
+    os << *desc.create_statement;
     return os;
 }
 
-}
+} // namespace data_dictionary
 
 template <>
 struct fmt::formatter<data_dictionary::user_types_metadata> {

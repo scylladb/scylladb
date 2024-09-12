@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cql3/description.hh"
 #include "utils/assert.hh"
 #include <functional>
 #include <optional>
@@ -919,6 +920,9 @@ public:
      * (and `ALTER ADD` if the column has been re-added) to the description.
      */
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
+
+    cql3::description describe(const replica::database& db, bool with_internals) const;
+
     // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.
     // The method cannot be used on index, as indexes don't support alter statement.
     std::ostream& describe_alter_with_properties(replica::database& db, std::ostream& os) const;
@@ -938,7 +942,9 @@ public:
     }
 private:
     // Print all schema properties in CQL syntax
-    std::ostream& schema_properties(replica::database& db, std::ostream& os) const;
+    std::ostream& schema_properties(const replica::database& db, std::ostream& os) const;
+
+    sstring get_create_statement(const replica::database& db, bool with_internals) const;
 public:
     const v3_columns& v3() const {
         return _v3_columns;

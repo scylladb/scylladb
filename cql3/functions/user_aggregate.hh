@@ -9,6 +9,7 @@
 #pragma once
 
 #include "scalar_function.hh"
+#include "cql3/description.hh"
 #include "data_dictionary/keyspace_element.hh"
 #include "cql3/functions/function_name.hh"
 #include "db/functions/aggregate_function.hh"
@@ -25,6 +26,8 @@ public:
     virtual sstring element_name() const override { return name().name; }
     virtual sstring element_type() const override { return "aggregate"; }
     virtual std::ostream& describe(std::ostream& os) const override;
+
+    description describe() const;
 
     seastar::shared_ptr<scalar_function> sfunc() const {
         return _agg.aggregation_function;

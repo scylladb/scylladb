@@ -66,9 +66,11 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
         });
 }
 
-std::ostream& user_function::describe(std::ostream& os) const {
+description user_function::describe() const {
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
+
+    std::ostringstream os;
 
     os << "CREATE FUNCTION " << ks << "." << na << "(";
     for (size_t i = 0; i < _arg_names.size(); i++) {
@@ -91,6 +93,17 @@ std::ostream& user_function::describe(std::ostream& os) const {
        << _body << "\n"
        << "$$;";
 
+    return description {
+        .keyspace = name().keyspace,
+        .type = "function",
+        .name = name().name,
+        .create_statement = std::move(os).str()
+    };
+}
+
+std::ostream& user_function::describe(std::ostream& os) const {
+    auto desc = describe();
+    os << *desc.create_statement;
     return os;
 }
 

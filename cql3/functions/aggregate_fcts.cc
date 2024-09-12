@@ -355,9 +355,11 @@ user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared
 
 bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
-std::ostream& user_aggregate::describe(std::ostream& os) const {
+description user_aggregate::describe() const {
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
+
+    std::ostringstream os;
 
     os << "CREATE AGGREGATE " << ks << "." << na << "(";
     auto a = arg_types();
@@ -382,6 +384,17 @@ std::ostream& user_aggregate::describe(std::ostream& os) const {
     }
     os << ";";
 
+    return description {
+        .keyspace = name().keyspace,
+        .type = "aggregate",
+        .name = name().name,
+        .create_statement = std::move(os).str()
+    };
+}
+
+std::ostream& user_aggregate::describe(std::ostream& os) const {
+    auto desc = describe();
+    os << *desc.create_statement;
     return os;
 }
 

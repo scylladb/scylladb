@@ -11,6 +11,7 @@
 #pragma once
 
 #include "abstract_function.hh"
+#include "cql3/description.hh"
 #include "scalar_function.hh"
 #include "lang/lua.hh"
 #include "lang/wasm.hh"
@@ -65,6 +66,8 @@ public:
     virtual sstring element_name() const override { return name().name; }
     virtual sstring element_type() const override { return "function"; }
     virtual std::ostream& describe(std::ostream& os) const override;
+
+    description describe() const;
 };
 
 }

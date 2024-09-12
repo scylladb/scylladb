@@ -13,6 +13,7 @@
 #include <iosfwd>
 #include <seastar/core/sstring.hh>
 
+#include "cql3/description.hh"
 #include "schema/schema.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/user_types_metadata.hh"
@@ -99,6 +100,8 @@ public:
     virtual sstring element_name() const override { return name(); }
     virtual sstring element_type() const override { return "keyspace"; }
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
+
+    cql3::description describe(const replica::database& db) const;
 };
 
 }

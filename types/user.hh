@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cql3/description.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "data_dictionary/keyspace_element.hh"
@@ -63,6 +64,8 @@ public:
     virtual sstring element_name() const override { return get_name_as_string(); }
     virtual sstring element_type() const override { return "type"; }
     virtual std::ostream& describe(std::ostream& os) const override;
+
+    cql3::description describe() const;
 
 private:
     static sstring make_name(sstring keyspace,
