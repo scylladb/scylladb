@@ -378,8 +378,16 @@ class BoostTestSuite(UnitTestSuite):
                     preexec_fn=os.setsid,
                 )
                 _, stderr = await asyncio.wait_for(process.communicate(), options.timeout)
-
-                case_list = [case[:-1] for case in stderr.decode().splitlines() if case.endswith('*')]
+                # --list_content produces the list of all test cases in the file. When BOOST_DATA_TEST_CASE is used it
+                # will additionally produce the lines with numbers for each case preserving the function name like this:
+                # test_singular_tree_ptr_sz*
+                #     _0*
+                #     _1*
+                #     _2*
+                # however, it's only possible to run test_singular_tree_ptr_sz that will execute all test cases
+                # this line catches only test function name ignoring unrelated lines like '_0'
+                # Note: this will ignore any test case starting with a '_' symbol
+                case_list = [case[:-1] for case in stderr.decode().splitlines() if case.endswith('*') and not case.strip().startswith('_')]
                 self._case_cache[fqname] = case_list
 
             case_list = self._case_cache[fqname]
