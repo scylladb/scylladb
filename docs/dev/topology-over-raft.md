@@ -366,6 +366,10 @@ which is a result of splitting each preexisting tablet into two, is committed to
 The replicas will react to that by remapping its compaction groups into a new set which is, at least,
 twice as large as the old one.
 
+# Tablet merging
+
+FIXME: document it.
+
 # Sharding with tablets
 
 Each table can have different shard assignment for a given token computed from the placement of tablet replicas,
