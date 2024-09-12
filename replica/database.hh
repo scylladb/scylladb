@@ -1642,7 +1642,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
     reader_concurrency_semaphore& read_concurrency_sem();
@@ -1660,7 +1660,8 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    void insert_keyspace(std::unique_ptr<keyspace> ks);
     future<> remove(table&) noexcept;
     void drop_keyspace(const sstring& name);
     future<> update_keyspace(const keyspace_metadata& tmp_ksm);
