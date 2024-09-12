@@ -885,15 +885,9 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 // unlike upload_sink and upload_jumbo_sink, do_upload_file reads from the
 // specified file, and sends the data read from disk right away to the wire,
 // without accumulating them first.
-class client::do_upload_file {
-    shared_ptr<client> _client;
+class client::do_upload_file : private multipart_upload {
     const std::filesystem::path _path;
-    sstring _object_name;
-    sstring _upload_id;
-    utils::chunked_vector<sstring> _part_etags;
-    std::optional<tag> _tag;
     size_t _part_size;
-    gate _bg_uploads;
 
     // each time, we read up to transmit size from disk.
     // this is also an option which limits the number of multipart upload tasks.
@@ -910,46 +904,6 @@ class client::do_upload_file {
             .buffer_size = 128_KiB,
             .read_ahead = 4,
         };
-    }
-
-    future<> create_multipart_upload() {
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html
-        auto req = http::request::make("POST", _client->_host, _object_name);
-        req.query_parameters["uploads"] = "";
-        if (_tag) {
-            req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
-        }
-        co_await _client->make_request(std::move(req), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
-            auto in = std::move(in_);
-            auto body = co_await util::read_entire_stream_contiguous(in);
-            _upload_id = parse_multipart_upload_id(body);
-            if (_upload_id.empty()) {
-                co_await coroutine::return_exception(std::runtime_error("cannot initiate upload"));
-            }
-            s3l.trace("created multipart upload for {} -> id = {}", _object_name, _upload_id);
-        });
-    }
-
-    future<> complete_multipart_upload() {
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
-        unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
-        auto req = http::request::make("POST", _client->_host, _object_name);
-        req.query_parameters["uploadId"] = _upload_id;
-        req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
-            return dump_multipart_upload_parts(std::move(out), _part_etags);
-        });
-        // If this request fails, complete_multipart_upload() throws, the upload should then
-        // be aborted in .close() method
-        co_await _client->make_request(std::move(req));
-        _upload_id = ""; // now upload_started() returns false
-    }
-
-    future<> abort_multipart_upload() {
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_AbortMultipartUpload.html
-        s3l.trace("abort multipart upload {}", _upload_id);
-        auto req = http::request::make("DELETE", _client->_host, _object_name);
-        req.query_parameters["uploadId"] = std::exchange(_upload_id, "");
-        co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
     }
 
     // transmit data from input to output in chunks sized up to unit_size
@@ -994,7 +948,7 @@ class client::do_upload_file {
             return copy_to(std::move(input), std::move(output), _transmit_size);
         });
         // upload the parts in the background for better throughput
-        auto gh = _bg_uploads.hold();
+        auto gh = _bg_flushes.hold();
         std::ignore = _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
@@ -1028,7 +982,7 @@ class client::do_upload_file {
     }
 
     future<> multi_part_upload(file&& f, uint64_t total_size, size_t part_size) {
-        co_await create_multipart_upload();
+        co_await start_upload();
 
         for (size_t offset = 0; offset < total_size; offset += part_size) {
             part_size = std::min(total_size - offset, part_size);
@@ -1036,15 +990,14 @@ class client::do_upload_file {
             co_await upload_part(file{f}, offset, part_size);
         }
 
-        co_await _bg_uploads.close();
         std::exception_ptr ex;
         try {
-            co_await complete_multipart_upload();
+            co_await finalize_upload();
         } catch (...) {
             ex = std::current_exception();
         }
         if (ex) {
-            co_await abort_multipart_upload();
+            co_await abort_upload();
             std::rethrow_exception(ex);
         }
     }
@@ -1075,11 +1028,10 @@ public:
                    sstring object_name,
                    std::optional<tag> tag,
                    size_t part_size)
-        : _client{std::move(cln)}
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag))
         , _path{std::move(path)}
-        , _object_name{std::move(object_name)}
-        , _tag{std::move(tag)}
-        , _part_size{part_size} {
+        , _part_size(part_size)
+    {
     }
 
     future<> upload() {
