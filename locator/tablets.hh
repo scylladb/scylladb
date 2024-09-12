@@ -236,9 +236,15 @@ tablet_replica_set get_primary_replicas(const tablet_info&, const tablet_transit
 tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
 
 /// Describes streaming required for a given tablet transition.
+constexpr int tablet_migration_stream_weight_default = 1;
+constexpr int tablet_migration_stream_weight_repair = 2;
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;
+    // The stream_weight for repair migration is set to 2, because it requires
+    // more work than just moving the tablet around. The stream_weight for all
+    // other migrations are set to 1.
+    int stream_weight = tablet_migration_stream_weight_default;
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
