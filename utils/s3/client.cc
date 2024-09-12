@@ -481,7 +481,7 @@ future<> client::delete_object(sstring object_name) {
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
-class client::upload_sink_base : public data_sink_impl {
+class client::multipart_upload {
 protected:
     shared_ptr<client> _client;
     sstring _object_name;
@@ -500,11 +500,21 @@ protected:
         return !_upload_id.empty();
     }
 
-public:
-    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
+    multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
         , _tag(std::move(tag))
+    {
+    }
+
+public:
+    unsigned parts_count() const noexcept { return _part_etags.size(); }
+};
+
+class client::upload_sink_base : public multipart_upload, public data_sink_impl {
+public:
+    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag))
     {
     }
 
@@ -518,7 +528,6 @@ public:
         return 128 * 1024;
     }
 
-    unsigned parts_count() const noexcept { return _part_etags.size(); }
 };
 
 sstring parse_multipart_upload_id(sstring& body) {
@@ -601,7 +610,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
     }
 }
 
-future<> client::upload_sink_base::start_upload() {
+future<> client::multipart_upload::start_upload() {
     s3l.trace("POST uploads {} (tag {})", _object_name, seastar::value_of([this] { return _tag ? _tag->key + "=" + _tag->value : "none"; }));
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
@@ -619,7 +628,7 @@ future<> client::upload_sink_base::start_upload() {
     });
 }
 
-future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
+future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     if (!upload_started()) {
         co_await start_upload();
     }
@@ -678,14 +687,14 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     }).finally([gh = std::move(gh)] {});
 }
 
-future<> client::upload_sink_base::abort_upload() {
+future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
     co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
-future<> client::upload_sink_base::finalize_upload() {
+future<> client::multipart_upload::finalize_upload() {
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _bg_flushes.close();
 
@@ -766,7 +775,7 @@ public:
     }
 };
 
-future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piece_ptr) {
+future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piece_ptr) {
     if (!upload_started()) {
         co_await start_upload();
     }
