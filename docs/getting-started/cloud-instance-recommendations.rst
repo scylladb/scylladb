@@ -175,7 +175,7 @@ Recommended instances types are `n1-highmem <https://cloud.google.com/compute/do
    * - n2-highmem-32
      - 32
      - 256
-     - 6,000
+     - 9,000
    * - n2-highmem-48
      - 48
      - 384
