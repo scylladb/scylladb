@@ -1362,6 +1362,11 @@ future<> server_impl::applier_fiber() {
                     _stats.applied_entries += size;
                 }
 
+                // Use error injection to override the snapshot thresholds.
+                // NOTE: we do not want to yield later since a snapshot could be applied in the meantime,
+                // outdating the variables _applied_idx and last_snap_idx.
+                co_await override_snapshot_thresholds();
+
                 _applied_idx = last_idx;
                 _applied_index_changed.broadcast();
                 notify_waiters(_awaited_applies, batch);
@@ -1370,9 +1375,6 @@ future<> server_impl::applier_fiber() {
                 // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
                 // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
                 const auto last_snap_idx = _fsm->log_last_snapshot_idx();
-
-                // Use error injection to override the snapshot thresholds.
-                co_await override_snapshot_thresholds();
 
                 const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
