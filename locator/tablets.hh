@@ -239,6 +239,10 @@ tablet_transition_info migration_to_transition_info(const tablet_info&, const ta
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;
+    // The stream_weight for repair migration is set to 2, because it requires
+    // more work than just moving the tablet around. The stream_weight for all
+    // other migrations are set to 1.
+    int stream_weight = 1;
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);

@@ -717,12 +717,12 @@ public:
     void apply_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
         for (auto&& replica : info.read_from) {
             if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_read_load += 1;
+                nodes[replica.host].shards[replica.shard].streaming_read_load += info.stream_weight;
             }
         }
         for (auto&& replica : info.written_to) {
             if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_write_load += 1;
+                nodes[replica.host].shards[replica.shard].streaming_write_load += info.stream_weight;
             }
         }
     }
@@ -733,7 +733,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_read_load;
-            if (load >= max_read_streaming_load) {
+            if (load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
             }
@@ -743,7 +743,7 @@ public:
                 continue;
             }
             auto load = nodes[r.host].shards[r.shard].streaming_write_load;
-            if (load >= max_write_streaming_load) {
+            if (load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
             }
