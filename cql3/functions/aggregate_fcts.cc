@@ -9,6 +9,7 @@
  */
 
 #include "bytes.hh"
+#include "cql3/description.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
@@ -355,7 +356,12 @@ user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared
 
 bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
-description user_aggregate::describe() const {
+description user_aggregate::describe(with_create_statement with_stmt) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_stmt) {
+            return std::nullopt;
+        }
+
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
 
@@ -384,16 +390,19 @@ description user_aggregate::describe() const {
     }
     os << ";";
 
+        return std::move(os).str();
+    });
+
     return description {
         .keyspace = name().keyspace,
         .type = "aggregate",
         .name = name().name,
-        .create_statement = std::move(os).str()
+        .create_statement = std::move(maybe_create_statement)
     };
 }
 
 std::ostream& user_aggregate::describe(std::ostream& os) const {
-    auto desc = describe();
+    auto desc = describe(with_create_statement::yes);
     os << *desc.create_statement;
     return os;
 }

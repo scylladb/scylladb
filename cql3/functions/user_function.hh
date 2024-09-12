@@ -67,7 +67,7 @@ public:
     virtual sstring element_type() const override { return "function"; }
     virtual std::ostream& describe(std::ostream& os) const override;
 
-    description describe() const;
+    description describe(with_create_statement) const;
 };
 
 }

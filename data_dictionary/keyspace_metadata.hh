@@ -101,7 +101,7 @@ public:
     virtual sstring element_type() const override { return "keyspace"; }
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
 
-    cql3::description describe(const replica::database& db) const;
+    cql3::description describe(const replica::database& db, cql3::with_create_statement) const;
 };
 
 }

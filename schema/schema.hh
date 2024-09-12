@@ -921,7 +921,7 @@ public:
      */
     virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
 
-    cql3::description describe(const replica::database& db, bool with_internals) const;
+    cql3::description describe(const replica::database& db, cql3::describe_option) const;
 
     // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.
     // The method cannot be used on index, as indexes don't support alter statement.

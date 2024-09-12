@@ -7,6 +7,7 @@
  */
 
 #include "user_function.hh"
+#include "cql3/description.hh"
 #include "cql3/util.hh"
 #include "log.hh"
 #include "lang/wasm.hh"
@@ -66,7 +67,12 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
         });
 }
 
-description user_function::describe() const {
+description user_function::describe(with_create_statement with_stmt) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_stmt) {
+            return std::nullopt;
+        }
+
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
 
@@ -93,16 +99,19 @@ description user_function::describe() const {
        << _body << "\n"
        << "$$;";
 
+        return std::move(os).str();
+    });
+
     return description {
         .keyspace = name().keyspace,
         .type = "function",
         .name = name().name,
-        .create_statement = std::move(os).str()
+        .create_statement = std::move(maybe_create_statement)
     };
 }
 
 std::ostream& user_function::describe(std::ostream& os) const {
-    auto desc = describe();
+    auto desc = describe(with_create_statement::yes);
     os << *desc.create_statement;
     return os;
 }

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 
 #include "bytes_fwd.hh"
 
@@ -18,6 +19,30 @@
 using namespace seastar;
 
 namespace cql3 {
+
+/// Tag indicating whether a describe function should return a `cql3::description`
+/// with a `create_statement` or not.
+using with_create_statement = bool_class<struct with_create_statement_tag>;
+
+/// An option type that functions generating instances of `cql3::description`
+/// can be parameterized with.
+///
+/// In some cases, the user doesn't need a create statement, so producing it
+/// is a waste of time. An example of that could be `DESCRIBE TYPES`.
+///
+/// In some other cases, we may want to produce either a less, or a more detailed
+/// create statement depending on the context. An example of that is
+/// `DESCRIBE SCHEMA [WITH INTERNALS]` that may print additional details of tables
+/// when the `WITH INTERNALS` option is used.
+///
+/// Some entities can generate `cql3::description`s parameterized by those two
+/// characteristics and this type embodies the choice of the user.
+enum class describe_option {
+    NO_STMTS,           /// Describe an entity, but don't generate a create statement.
+    STMTS,              /// Describe an entity and generate a create statement.
+    STMTS_AND_INTERNALS /// Describe an entity and generate a create statement,
+                        /// including internal details.
+};
 
 /// Type representing an entity that can be restored by performing
 /// a SINGLE CQL query. It can correspond to a tangible object such as

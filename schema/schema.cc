@@ -977,7 +977,7 @@ sstring schema::get_create_statement(const replica::database& db, bool with_inte
     return std::move(os).str();
 }
 
-cql3::description schema::describe(const replica::database& db, bool with_internals) const {
+cql3::description schema::describe(const replica::database& db, cql3::describe_option desc_opt) const {
     const sstring type = std::invoke([&] {
         if (is_view()) {
             return is_index(db, view_info()->base_id(), *this)
@@ -991,12 +991,14 @@ cql3::description schema::describe(const replica::database& db, bool with_intern
         .keyspace = ks_name(),
         .type = std::move(type),
         .name = cf_name(),
-        .create_statement = get_create_statement(db, with_internals)
+        .create_statement = desc_opt == cql3::describe_option::NO_STMTS
+                ? std::nullopt
+                : std::make_optional(get_create_statement(db, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
     };
 }
 
 std::ostream& schema::describe(replica::database& db, std::ostream& os, bool with_internals) const {
-    auto desc = describe(db, with_internals);
+    auto desc = describe(db, with_internals ? cql3::describe_option::STMTS_AND_INTERNALS : cql3::describe_option::STMTS);
     os << *desc.create_statement;
     return os;
 }

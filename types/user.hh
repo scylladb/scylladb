@@ -65,7 +65,7 @@ public:
     virtual sstring element_type() const override { return "type"; }
     virtual std::ostream& describe(std::ostream& os) const override;
 
-    cql3::description describe() const;
+    cql3::description describe(cql3::with_create_statement) const;
 
 private:
     static sstring make_name(sstring keyspace,

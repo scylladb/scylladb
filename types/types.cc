@@ -3235,7 +3235,12 @@ sstring user_type_impl::get_name_as_cql_string() const {
     return cql3::util::maybe_quote(get_name_as_string());
 }
 
-cql3::description user_type_impl::describe() const {
+cql3::description user_type_impl::describe(cql3::with_create_statement with_create_statement) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_create_statement) {
+            return std::nullopt;
+        }
+
     std::ostringstream os;
 
     os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
@@ -3248,16 +3253,19 @@ cql3::description user_type_impl::describe() const {
     }
     os << ");";
 
+        return std::move(os).str();
+    });
+
     return cql3::description {
         .keyspace = _keyspace,
         .type = "type",
         .name = get_name_as_string(),
-        .create_statement = std::move(os).str()
+        .create_statement = std::move(maybe_create_statement)
     };
 }
 
 std::ostream& user_type_impl::describe(std::ostream& os) const {
-    auto desc = describe();
+    auto desc = describe(cql3::with_create_statement::yes);
     os << *desc.create_statement;
     return os;
 }

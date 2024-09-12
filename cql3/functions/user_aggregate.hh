@@ -27,7 +27,7 @@ public:
     virtual sstring element_type() const override { return "aggregate"; }
     virtual std::ostream& describe(std::ostream& os) const override;
 
-    description describe() const;
+    description describe(with_create_statement) const;
 
     seastar::shared_ptr<scalar_function> sfunc() const {
         return _agg.aggregation_function;

@@ -352,7 +352,12 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, const tab
 {
 }
 
-cql3::description keyspace_metadata::describe(const replica::database& db) const {
+cql3::description keyspace_metadata::describe(const replica::database& db, cql3::with_create_statement with_create_statement) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_create_statement) {
+            return std::nullopt;
+        }
+
     std::ostringstream os;
 
     os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
@@ -376,16 +381,19 @@ cql3::description keyspace_metadata::describe(const replica::database& db) const
     }
     os << ";";
 
+        return std::move(os).str();
+    });
+
     return cql3::description {
         .keyspace = name(),
         .type = "keyspace",
         .name = name(),
-        .create_statement = std::move(os).str()
+        .create_statement = std::move(maybe_create_statement)
     };
 }
 
 std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
-    auto desc = describe(db);
+    auto desc = describe(db, cql3::with_create_statement::yes);
     os << *desc.create_statement;
     return os;
 }
