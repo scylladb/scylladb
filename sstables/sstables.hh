@@ -710,6 +710,8 @@ private:
     // Reload components from which memory was previously reclaimed
     future<> reload_reclaimed_components();
 
+    future<uint64_t> bytes_on_storage_uncached() const noexcept;
+
 public:
     // Finds first position_in_partition in a given partition.
     // If reversed is false, then the first position is actually the first row (can be the static one).
