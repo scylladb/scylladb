@@ -3241,17 +3241,17 @@ cql3::description user_type_impl::describe(cql3::with_create_statement with_crea
             return std::nullopt;
         }
 
-    std::ostringstream os;
+        std::ostringstream os;
 
-    os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
-    for (size_t i = 0; i < _string_field_names.size(); i++) {
-        os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
-        if (i < _string_field_names.size() - 1) {
-            os << ",";
+        os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
+        for (size_t i = 0; i < _string_field_names.size(); i++) {
+            os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
+            if (i < _string_field_names.size() - 1) {
+                os << ",";
+            }
+            os << "\n";
         }
-        os << "\n";
-    }
-    os << ");";
+        os << ");";
 
         return std::move(os).str();
     });

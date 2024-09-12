@@ -362,33 +362,33 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
             return std::nullopt;
         }
 
-    auto ks = cql3::util::maybe_quote(name().keyspace);
-    auto na = cql3::util::maybe_quote(name().name);
+        auto ks = cql3::util::maybe_quote(name().keyspace);
+        auto na = cql3::util::maybe_quote(name().name);
 
-    std::ostringstream os;
+        std::ostringstream os;
 
-    os << "CREATE AGGREGATE " << ks << "." << na << "(";
-    auto a = arg_types();
-    for (size_t i = 0; i < a.size(); i++) {
-        if (i > 0) {
-            os << ", ";
+        os << "CREATE AGGREGATE " << ks << "." << na << "(";
+        auto a = arg_types();
+        for (size_t i = 0; i < a.size(); i++) {
+            if (i > 0) {
+                os << ", ";
+            }
+            os << a[i]->cql3_type_name();
         }
-        os << a[i]->cql3_type_name();
-    }
-    os << ")\n";
+        os << ")\n";
 
-    os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
-       << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
-    if (is_reducible()) {
-        os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
-    }
-    if (has_finalfunc()) {
-        os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
-    }
-    if (_agg.initial_state) {
-        os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
-    }
-    os << ";";
+        os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
+           << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
+        if (is_reducible()) {
+            os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
+        }
+        if (has_finalfunc()) {
+            os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
+        }
+        if (_agg.initial_state) {
+            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
+        }
+        os << ";";
 
         return std::move(os).str();
     });

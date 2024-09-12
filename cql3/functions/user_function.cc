@@ -73,31 +73,31 @@ description user_function::describe(with_create_statement with_stmt) const {
             return std::nullopt;
         }
 
-    auto ks = cql3::util::maybe_quote(name().keyspace);
-    auto na = cql3::util::maybe_quote(name().name);
+        auto ks = cql3::util::maybe_quote(name().keyspace);
+        auto na = cql3::util::maybe_quote(name().name);
 
-    std::ostringstream os;
+        std::ostringstream os;
 
-    os << "CREATE FUNCTION " << ks << "." << na << "(";
-    for (size_t i = 0; i < _arg_names.size(); i++) {
-        if (i > 0) {
-            os << ", ";
+        os << "CREATE FUNCTION " << ks << "." << na << "(";
+        for (size_t i = 0; i < _arg_names.size(); i++) {
+            if (i > 0) {
+                os << ", ";
+            }
+            os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
         }
-        os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
-    }
-    os << ")\n";
+        os << ")\n";
 
-    if (_called_on_null_input) {
-        os << "CALLED";
-    } else {
-        os << "RETURNS NULL";
-    }
-    os << " ON NULL INPUT\n"
-       << "RETURNS " << _return_type->cql3_type_name() << "\n"
-       << "LANGUAGE " << _language << "\n"
-       << "AS $$\n"
-       << _body << "\n"
-       << "$$;";
+        if (_called_on_null_input) {
+            os << "CALLED";
+        } else {
+            os << "RETURNS NULL";
+        }
+        os << " ON NULL INPUT\n"
+           << "RETURNS " << _return_type->cql3_type_name() << "\n"
+           << "LANGUAGE " << _language << "\n"
+           << "AS $$\n"
+           << _body << "\n"
+           << "$$;";
 
         return std::move(os).str();
     });

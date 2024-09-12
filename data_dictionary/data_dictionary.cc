@@ -358,28 +358,28 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
             return std::nullopt;
         }
 
-    std::ostringstream os;
+        std::ostringstream os;
 
-    os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
-       << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
-    for (const auto& opt: _strategy_options) {
-        os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
-    }
-    if (!_storage_options->is_local_type()) {
-        os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));
-        for (const auto& e : _storage_options->to_map()) {
-            os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
+        os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
+           << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
+        for (const auto& opt: _strategy_options) {
+            os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
         }
-    }
-    os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
-    if (db.features().tablets) {
-        if (!_initial_tablets.has_value()) {
-            os << " AND tablets = {'enabled': false}";
-        } else if (_initial_tablets.value() > 0) {
-            os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
+        if (!_storage_options->is_local_type()) {
+            os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));
+            for (const auto& e : _storage_options->to_map()) {
+                os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
+            }
         }
-    }
-    os << ";";
+        os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
+        if (db.features().tablets) {
+            if (!_initial_tablets.has_value()) {
+                os << " AND tablets = {'enabled': false}";
+            } else if (_initial_tablets.value() > 0) {
+                os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
+            }
+        }
+        os << ";";
 
         return std::move(os).str();
     });
