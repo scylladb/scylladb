@@ -208,6 +208,7 @@ with Tablets enabled.
 ```{eval-rst}
 .. toctree::
     :maxdepth: 2
+    :hidden:
 
     getting-started
     compatibility

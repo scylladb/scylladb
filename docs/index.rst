@@ -56,6 +56,7 @@ In addition, you can read our `blog <https://www.scylladb.com/blog/>`_ and atten
   operating-scylla/index
   using-scylla/index
   cql/index
+  alternator/alternator
   features/index
   architecture/index
   troubleshooting/index
@@ -63,4 +64,4 @@ In addition, you can read our `blog <https://www.scylladb.com/blog/>`_ and atten
   reference/index
   faq
   Contribute to ScyllaDB <contribute>
-  alternator/alternator
+
