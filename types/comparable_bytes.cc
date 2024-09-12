@@ -15,11 +15,21 @@
 
 logging::logger cblogger("comparable_bytes");
 
+template <std::integral T>
+static void write_native_int(bytes_ostream& out, T value) {
+    out.write(bytes_view(reinterpret_cast<const signed char*>(&value), sizeof(T)));
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
     managed_bytes_view& serialized_bytes_view;
     bytes_ostream& out;
+
+    void operator()(const boolean_type_impl&) {
+        // Any non zero byte value is encoded as 1 else 0
+        write_native_int(out, uint8_t(read_simple_native<uint8_t>(serialized_bytes_view) != 0));
+    }
 
     // TODO: Handle other types
 
@@ -49,6 +59,12 @@ comparable_bytes_opt comparable_bytes::from_data_value(const data_value& value) 
 struct from_comparable_bytes_visitor {
     managed_bytes_view& comparable_bytes_view;
     bytes_ostream& out;
+
+    void operator()(const boolean_type_impl&) {
+        // return a byte without changing anything
+        out.write(comparable_bytes_view.prefix(1));
+        comparable_bytes_view.remove_prefix(1);
+    }
 
     // TODO: Handle other types
 
