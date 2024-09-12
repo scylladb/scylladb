@@ -1058,7 +1058,7 @@ public:
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT);
-            auto f = qp.execute_direct(query, _query_state, *opts);
+            auto f = qp.execute_direct(query, _query_state, cql3::dialect{}, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
                 ret->accept(visitor);
@@ -1101,7 +1101,7 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)](auto&& stmt) {
+            return _query_processor.local().prepare(query, _query_state, cql3::dialect()).then([cob = std::move(cob)](auto&& stmt) {
                 prepared_result_visitor visitor;
                 stmt->accept(visitor);
                 cob(visitor.result());
@@ -1115,7 +1115,7 @@ public:
 
     void execute_prepared_cql3_query(thrift_fn::function<void(CqlResult const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
         with_exn_cob(std::move(exn_cob), [&] {
-            cql3::prepared_cache_key_type cache_key(itemId);
+            cql3::prepared_cache_key_type cache_key(itemId, cql3::dialect{});
             bool needs_authorization = false;
 
             auto prepared = _query_processor.local().get_prepared(_query_state.get_client_state().user(), cache_key);

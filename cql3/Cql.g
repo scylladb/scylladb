@@ -68,6 +68,7 @@ options {
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selectable-expr.hh"
+#include "cql3/dialect.hh"
 #include "cql3/keyspace_element_name.hh"
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
@@ -148,6 +149,8 @@ using uexpression = uninitialized<expression>;
 
     listener_type* listener;
 
+    dialect _dialect;
+
     // Keeps the names of all bind variables. For bind variables without a name ('?'), the name is nullptr.
     // Maps bind_index -> name.
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variable_names;
@@ -171,9 +174,14 @@ using uexpression = uninitialized<expression>;
         return s;
     }
 
+    void set_dialect(dialect d) {
+        _dialect = d;
+    }
+
     bind_variable new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        if (name && _named_bind_variables_indexes.contains(*name)) {
+        if (_dialect.duplicate_bind_variable_names_refer_to_same_variable
+                && name && _named_bind_variables_indexes.contains(*name)) {
             return bind_variable{_named_bind_variables_indexes[*name]};
         }
         auto marker = bind_variable{_bind_variable_names.size()};

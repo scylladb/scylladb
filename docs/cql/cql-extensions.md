@@ -377,6 +377,20 @@ FINALFUNC final_fct
 INITCOND (0, 0);
 ```
 
+### Behavior of bind variables references with the same name
+
+If a bind variable is referred to twice (example: `WHERE aa = :var AND bb = :var`; `:var`
+is referenced twice), ScyllaDB and Cassandra treat it differently:
+
+ - Cassandra ignores the double reference and treats the two as two separate variables. They
+   can have different types, and occupy two slots in the bind variable metadata (used by
+   drivers when the user provides a bind variable tuple rather than a map)
+ - ScyllaDB treats the two references as referring to the same variable. The two references
+   must have the same type, and occupy one slot in the bind variable metadata.
+
+ScyllaDB can revert to the Cassandra treatment by setting the configuration item
+`cql_duplicate_bind_variable_names_refer_to_same_variable` to `false`.
+
 ### Lists elements for filtering
 
 Subscripting a list in a WHERE clause is supported as are maps.

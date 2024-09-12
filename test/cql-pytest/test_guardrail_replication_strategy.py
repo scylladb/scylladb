@@ -44,8 +44,8 @@ def test_given_default_config_when_creating_ks_should_only_produce_warning_for_s
 
 def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_error(cql, this_dc):
     with ExitStack() as config_modifications:
-        config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list', ''))
-        config_modifications.enter_context(config_value_context(cql, 'replication_strategy_fail_list', ''))
+        config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list', '[]'))
+        config_modifications.enter_context(config_value_context(cql, 'replication_strategy_fail_list', '[]'))
 
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
@@ -56,8 +56,7 @@ def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_er
 def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed_strategy_used(cql, this_dc):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list',
-                                                                'SimpleStrategy, LocalStrategy, '
-                                                                'NetworkTopologyStrategy, EverywhereStrategy'))
+                                                                'SimpleStrategy,LocalStrategy,NetworkTopologyStrategy,EverywhereStrategy'))
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
@@ -67,10 +66,10 @@ def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed
 def test_given_non_empty_warn_and_fail_lists_when_creating_ks_should_fail_query_when_listed_strategy_used(cql, this_dc):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(
-            config_value_context(cql, 'replication_strategy_warn_list', 'SimpleStrategy, EverywhereStrategy'))
+            config_value_context(cql, 'replication_strategy_warn_list', 'SimpleStrategy,EverywhereStrategy'))
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_fail_list',
-                                                                'SimpleStrategy, LocalStrategy, '
-                                                                'NetworkTopologyStrategy, EverywhereStrategy'))
+                                                                'SimpleStrategy,LocalStrategy,'
+                                                                'NetworkTopologyStrategy,EverywhereStrategy'))
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             # note: even though warn list is not empty, no warnings should be generated, because failures come first -
