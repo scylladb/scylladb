@@ -15,6 +15,7 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include <memory>
 #include <seastar/core/future-util.hh>
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_sstables_registry.hh"
@@ -737,7 +738,9 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = co_await create_keyspace_metadata(proxy, v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        auto ks = co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        insert_keyspace(std::move(ks));
+        co_return;
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -930,7 +933,8 @@ future<> database::create_local_system_table(
                 std::nullopt,
                 durable
                 );
-        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+        auto ks = co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+        insert_keyspace(std::move(ks));
     }
     auto& ks = find_keyspace(ks_name);
     auto cfg = ks.make_column_family_config(*table, *this);
@@ -1369,27 +1373,32 @@ std::vector<view_ptr> database::get_views() const {
             | std::views::transform([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
+future<std::unique_ptr<keyspace>> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm, system);
-    keyspace ks(ksm, std::move(kscfg), erm_factory);
-    co_await ks.create_replication_strategy(get_shared_token_metadata());
-    _keyspaces.emplace(ksm->name(), std::move(ks));
+    auto ks(std::make_unique<keyspace>(ksm, std::move(kscfg), erm_factory));
+    co_await ks->create_replication_strategy(get_shared_token_metadata());
+    co_return ks;
 }
 
-future<>
+future<std::unique_ptr<keyspace>>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
-    if (_keyspaces.contains(ksm->name())) {
-        co_return;
-    }
-
-    co_await create_in_memory_keyspace(ksm, erm_factory, system);
     co_await get_sstables_manager(system).init_keyspace_storage(ksm->get_storage_options(), ksm->name());
+    co_return co_await create_in_memory_keyspace(ksm, erm_factory, system);
+}
+
+void database::insert_keyspace(std::unique_ptr<keyspace> ks) {
+    auto& name = ks->metadata()->name();
+    if (_keyspaces.contains(name)) {
+        return;
+    }
+    _keyspaces.emplace(name, std::move(*ks));
 }
 
 future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
-        co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        auto ks = co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        db.insert_keyspace(std::move(ks));
     });
 }
 
