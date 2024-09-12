@@ -330,7 +330,7 @@ Invariants:
    on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
    by the proper use of the topology guard mechanism (see the "Topology guards" section).
 
-# Tablet splitting
+# Tablet resize
 
 Each table has its resize metadata stored in group0.
 
@@ -344,6 +344,8 @@ for a given table, which can be done by dividing average table size[1] by the ta
 
 [1]: The average size of a table is the total size across all DCs divided by the number of replicas across
 all DCs.
+
+## Tablet splitting
 
 A table will need split if its average size surpasses the split threshold, which is 100% of the target
 tablet size, which defaults to 5G. The reasoning is that after split we want average size to return
@@ -375,6 +377,55 @@ process e.g. repair will be holding stale metadata when finalizing split. After 
 which is a result of splitting each preexisting tablet into two, is committed to group0.
 The replicas will react to that by remapping its compaction groups into a new set which is, at least,
 twice as large as the old one.
+
+## Tablet merging
+
+A table will need merge if its average size is below the merge threshold, which is 50% of the target
+tablet size, which defaults to 5G. The reasoning is that after merge we want average size to return
+to the target size. This hysteresis is important to avoid oscillations between splits and merges.
+
+The initial tablet count (the parameter in schema) is respected while the table is in "growing mode".
+Every table starts in this  mode and will leave it if for example there was a need to split beyond
+the initial tablet count. After a table leaves the mode, the average size can be trusted to determine
+that the table is shrinking.
+
+When the load balancer decides to merge a table, the resize_type field in tablet metadata will be set
+to 'merge' and resize_seq_number is bumped to the next sequence number.
+Similar to split, the load balancer might decide to revoke an ongoing merge if it realizes that after
+merge, a split will be needed.
+
+The merge preparation phase is done by co-locating replicas of sibling tablets on the same node:shard,
+through migrations (the mechanism). Unlike split, all the preparation is done by the coordinator.
+We say that a pair of tablets are siblings if they will become one after merge. This is built on the
+power-of-two constraint. For example, if a table has 4 tablets, the siblings are (0, 1) and (2, 3).
+The co-location algorithm is simple. The balancer will produce a migration for "odd" tablet to follow the
+"even" one. For example, a replica of tablet 1 will be moved to where a replica of tablet 0 lives.
+If the "odd" tablet lives on the same node but on different shard, an intra-node migration is performed.
+
+Without co-location, the merge completion handler wouldn't be able to find data of replicas to be merged
+in the same location. Making it impossible for coordinator to merge the replica sets, and the replica
+layer to combine the data together.
+
+Merge has low priority, so the co-location migrations will be emitted when there's no more important
+work to do (e.g. node draining or regular balancing). The regular balancing will not undo the co-location
+work done so far by migrating co-located replicas together (treating them as merged).
+
+Once the balancer realizes replicas of all sibling tablets are co-located, a decision will be emitted
+to finalize the merge. A pair of sibling tablets is considered co-located if their replica sets are
+equal, i.e. (s1 + s2) == s1.  The finalization is serialized with migration, as shrinking tablet count
+would interfere with the migration process that requires tablet id stability.
+
+When the coordinator leaves the migration track, and there are tables waiting for merge to be finalized,
+the state machine will transition into `tablet_resize_finalization` state. At this moment, there will
+be no migration running in the system. A global token metadata barrier is executed to make sure that no
+process will hold stale topology when resizing the tablet map. That's important since the requests must
+find a replica state consistent with the one in group0.
+The handler of `tablet_resize_finalization` state will check if the decision is still to merge for a
+table, and if so, the tablet map will have its size reduced by a factor of 2. When replicas of sibling
+tablets are co-located, their replica sets can be merged into one, since (s1 + s2) == s1.
+Once the new map is committed to group0, replicas will react to that by resizing their internal structure
+to match the new tablet count, and also merging the compaction groups (sstable(s) + memtable) that
+belonged to sibling tablets together.
 
 # Sharding with tablets
 
