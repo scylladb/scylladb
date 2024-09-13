@@ -45,6 +45,7 @@ struct stats {
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 
 class client : public enable_shared_from_this<client> {
+    class multipart_upload;
     class upload_sink_base;
     class upload_sink;
     class upload_jumbo_sink;
