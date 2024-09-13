@@ -59,8 +59,6 @@ class large_data_handler;
 
 namespace sstables {
 
-class random_access_reader;
-
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
