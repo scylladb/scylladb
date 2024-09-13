@@ -15,11 +15,30 @@
 
 logging::logger cblogger("comparable_bytes");
 
+// Encode/Decode the given signed fixed-length integer into byte comparable format.
+// To encode, invert the sign bit so that negative numbers are ordered before the positive ones.
+template <std::signed_integral T>
+static void convert_signed_fixed_length_integer(managed_bytes_view& src, bytes_ostream& out) {
+    constexpr auto sign_mask = T(1) << (sizeof(T) * 8 - 1);
+    out.write<T>(read_simple<T>(src) ^ sign_mask);
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
     managed_bytes_view& serialized_bytes_view;
     bytes_ostream& out;
+
+    // Fixed length signed integers encoding
+    template <std::signed_integral T>
+    void operator()(const integer_type_impl<T>& type) {
+        convert_signed_fixed_length_integer<T>(serialized_bytes_view, out);
+    }
+
+    void operator()(const long_type_impl&) {
+        // Unimplemented
+        SCYLLA_ASSERT(false);
+    }
 
     // TODO: Handle other types
 
@@ -54,6 +73,18 @@ comparable_bytes_opt comparable_bytes::from_data_value(const data_value& value) 
 struct from_comparable_bytes_visitor {
     managed_bytes_view& comparable_bytes_view;
     bytes_ostream& out;
+
+    template <std::signed_integral T>
+    void operator()(const integer_type_impl<T>& type) {
+        // First bit (sign bit) is inverted for the fixed length signed integers.
+        // Reuse encode logic to unflip the sign bit
+        convert_signed_fixed_length_integer<T>(comparable_bytes_view, out);
+    }
+
+    void operator()(const long_type_impl&) {
+        // Unimplemented
+        SCYLLA_ASSERT(false);
+    }
 
     // TODO: Handle other types
 
