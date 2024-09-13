@@ -2570,11 +2570,9 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
 }
 
 future<> table::write_schema_as_cql(database& db, sstring dir) const {
-    std::ostringstream ss;
+    auto schema_desc = this->schema()->describe(db, cql3::describe_option::STMTS);
 
-    this->schema()->describe(db, ss, false);
-
-    auto schema_description = ss.str();
+    auto schema_description = std::move(*schema_desc.create_statement);
     auto schema_file_name = dir + "/schema.cql";
     auto f = co_await open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate);
     auto out = co_await make_file_output_stream(std::move(f));

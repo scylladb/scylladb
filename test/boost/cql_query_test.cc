@@ -4225,10 +4225,9 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
         for (auto &&ct : cql_create_tables) {
             e.execute_cql(ct.second).get();
             auto schema = e.local_db().find_schema("ks", ct.first);
-            std::ostringstream ss;
+            auto schema_desc = schema->describe(e.local_db(), cql3::describe_option::STMTS);
 
-            schema->describe(e.local_db(), ss, false);
-            BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
+            BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
         }
     }, describe_test_config());
 }
@@ -4293,15 +4292,14 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
         for (auto &&ct : cql_create_tables) {
             e.execute_cql(ct.second).get();
             auto schema = e.local_db().find_schema("KS", ct.first);
-            std::ostringstream ss;
+            auto schema_desc = schema->describe(e.local_db(), cql3::describe_option::STMTS);
 
-            schema->describe(e.local_db(), ss, false);
-            BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
+            BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
 
             auto base_schema = e.local_db().find_schema("KS", "cF");
-            std::ostringstream base_ss;
-            base_schema->describe(e.local_db(), base_ss, false);
-            BOOST_CHECK_EQUAL(normalize_white_space(base_ss.str()), normalize_white_space(base_table));
+            auto base_schema_desc = base_schema->describe(e.local_db(), cql3::describe_option::STMTS);
+
+            BOOST_CHECK_EQUAL(normalize_white_space(*base_schema_desc.create_statement), normalize_white_space(base_table));
         }
     }, describe_test_config());
 }
