@@ -532,6 +532,7 @@ enum class scylla_metadata_type : uint32_t {
     SSTableOrigin = 6,
     ScyllaBuildId = 7,
     ScyllaVersion = 8,
+    ExtTimestampStats = 9,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -566,12 +567,22 @@ struct large_data_stats_entry {
     auto describe_type(sstable_version_types v, Describer f) { return f(max_value, threshold, above_threshold); }
 };
 
+// Types of extended timestamp statistics.
+//
+// Note: For extensibility, never reuse an identifier,
+// only add new ones, since these are stored on stable storage.
+enum class ext_timestamp_stats_type : uint32_t {
+    min_live_timestamp = 1,
+    min_live_row_marker_timestamp = 2,
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
     using sstable_origin = disk_string<uint32_t>;
     using scylla_build_id = disk_string<uint32_t>;
     using scylla_version = disk_string<uint32_t>;
+    using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -581,7 +592,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataStats, large_data_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableOrigin, sstable_origin>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaBuildId, scylla_build_id>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -608,6 +620,9 @@ struct scylla_metadata {
     std::optional<run_id> get_optional_run_identifier() const {
         auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
         return m ? std::make_optional(m->id) : std::nullopt;
+    }
+    const ext_timestamp_stats* get_ext_timestamp_stats() const {
+        return data.get<scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>();
     }
 
     template <typename Describer>

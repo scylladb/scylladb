@@ -93,6 +93,12 @@ public:
     api::timestamp_type min_memtable_timestamp() const override {
         return table().min_memtable_timestamp();
     }
+    api::timestamp_type min_memtable_live_timestamp() const override {
+        return table().min_memtable_live_timestamp();
+    }
+    api::timestamp_type min_memtable_live_row_marker_timestamp() const override {
+        return table().min_memtable_live_row_marker_timestamp();
+    }
     bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().try_get_table_state_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);

@@ -1082,12 +1082,15 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         maybe_record_large_cells(_sst, *_partition_key, clustering_key, cdef, size, 0);
     }
 
-    _c_stats.update_timestamp(cell.timestamp());
+    auto timestamp = cell.timestamp();
     if (is_deleted) {
+        _c_stats.update_timestamp(timestamp, is_live::no);
         _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.deletion_time());
         _sst.get_stats().on_cell_tombstone_write();
         return;
     }
+
+    _c_stats.update_timestamp(timestamp, is_live::yes);
 
     if (is_cell_expiring) {
         _c_stats.update_ttl(cell.ttl());
@@ -1107,7 +1110,12 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     }
 
     api::timestamp_type timestamp = marker.timestamp();
-    _c_stats.update_timestamp(timestamp);
+    if (marker.is_live()) {
+        _c_stats.update_timestamp(timestamp, is_live::yes);
+        _c_stats.update_live_row_marker_timestamp(timestamp);
+    } else {
+        _c_stats.update_timestamp(timestamp, is_live::no);
+    }
     write_delta_timestamp(writer, timestamp);
 
     auto write_expiring_liveness_info = [this, &writer] (gc_clock::duration ttl, gc_clock::time_point ldt) {
@@ -1486,7 +1494,10 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats));
+    std::optional<scylla_metadata::ext_timestamp_stats> ts_stats(scylla_metadata::ext_timestamp_stats{
+        .map = _collector.get_ext_timestamp_stats()
+    });
+    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), std::move(ts_stats));
     _sst.seal_sstable(_cfg.backup).get();
 }
 

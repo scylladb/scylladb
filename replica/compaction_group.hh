@@ -120,6 +120,10 @@ public:
     size_t memtable_count() const noexcept;
     // Returns minimum timestamp from memtable list
     api::timestamp_type min_memtable_timestamp() const;
+    // Returns minimum timestamp of live data from memtable list
+    api::timestamp_type min_memtable_live_timestamp() const;
+    // Returns minimum timestamp of live row markers from memtable list
+    api::timestamp_type min_memtable_live_row_marker_timestamp() const;
     // Returns true if memtable(s) contains key.
     bool memtable_has_key(const dht::decorated_key& key) const;
     // Add sstable to main set
@@ -234,6 +238,8 @@ public:
     future<> flush() noexcept;
     bool can_flush() const;
     api::timestamp_type min_memtable_timestamp() const;
+    api::timestamp_type min_memtable_live_timestamp() const;
+    api::timestamp_type min_memtable_live_row_marker_timestamp() const;
 
     bool compaction_disabled() const;
     // Returns true when all compacted sstables were already deleted.

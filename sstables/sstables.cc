@@ -1356,6 +1356,10 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     if (origin) {
         _origin = sstring(to_sstring_view(bytes_view(origin->value)));
     }
+    auto* ts_stats = _components->scylla_metadata->data.get<scylla_metadata_type::ExtTimestampStats, scylla_metadata::ext_timestamp_stats>();
+    if (ts_stats) {
+        _ext_timestamp_stats.emplace(*ts_stats);
+    }
     _open_mode.emplace(open_flags::ro);
     _stats.on_open_for_reading();
 
@@ -1817,7 +1821,7 @@ sstable::read_scylla_metadata() noexcept {
 
 void
 sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
-        std::optional<scylla_metadata::large_data_stats> ld_stats) {
+        std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
@@ -1851,6 +1855,25 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     scylla_metadata::scylla_build_id build_id;
     build_id.value = bytes(to_bytes_view(sstring_view(get_build_id())));
     _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaBuildId>(std::move(build_id));
+    if (ts_stats) {
+        if (sstlog.is_enabled(log_level::debug)) {
+            std::optional<api::timestamp_type> min_live_timestamp;
+            std::optional<api::timestamp_type> min_live_row_marker_timestamp;
+            if (auto it = ts_stats->map.find(sstables::ext_timestamp_stats_type::min_live_timestamp); it != ts_stats->map.end()) {
+                min_live_timestamp = it->second;
+            }
+            if (auto it = ts_stats->map.find(sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp); it != ts_stats->map.end()) {
+                min_live_row_marker_timestamp = it->second;
+            }
+            sstlog.debug("Storing sstable {}: min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}",
+                    get_filename(),
+                    get_stats_metadata().min_timestamp,
+                    min_live_timestamp,
+                    min_live_row_marker_timestamp);
+        }
+
+        _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
+    }
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
@@ -3256,6 +3279,13 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
         }
     }
     return std::make_optional<large_data_stats_entry>();
+}
+
+scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats() const noexcept {
+    if (_ext_timestamp_stats) {
+        return _ext_timestamp_stats->map;
+    }
+    return scylla_metadata::ext_timestamp_stats::map_type{};
 }
 
 // The gc_before returned by the function can only be used to estimate if the

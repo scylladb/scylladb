@@ -13,6 +13,7 @@
 #include "gc_clock.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/compact_and_expire_result.hh"
+#include "compaction/compaction_garbage_collector.hh"
 #include <iosfwd>
 #include <forward_list>
 

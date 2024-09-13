@@ -133,8 +133,23 @@ private:
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
         min_max_tracker<api::timestamp_type> min_max_timestamp;
+        min_tracker<api::timestamp_type> min_live_timestamp;
+        min_tracker<api::timestamp_type> min_live_row_marker_timestamp;
 
-        void update_timestamp(api::timestamp_type ts) noexcept;
+        void update_timestamp(api::timestamp_type ts, is_live is_live) noexcept {
+            if (ts == api::missing_timestamp) {
+                return;
+            }
+            encoding_stats_collector::update_timestamp(ts);
+            min_max_timestamp.update(ts);
+            if (is_live) {
+                min_live_timestamp.update(ts);
+            }
+        }
+
+        void update_live_row_marker_timestamp(api::timestamp_type ts) noexcept {
+            min_live_row_marker_timestamp.update(ts);
+        }
 
     public:
         memtable_encoding_stats_collector() noexcept;
@@ -154,6 +169,14 @@ private:
 
         api::timestamp_type get_max_timestamp() const noexcept {
             return min_max_timestamp.max();
+        }
+
+        api::timestamp_type get_min_live_timestamp() const noexcept {
+            return min_live_timestamp.get();
+        }
+
+        api::timestamp_type get_min_live_row_marker_timestamp() const noexcept {
+            return min_live_row_marker_timestamp.get();
         }
     } _stats_collector;
 
@@ -215,6 +238,14 @@ public:
 
     api::timestamp_type get_max_timestamp() const noexcept {
         return _stats_collector.get_max_timestamp();
+    }
+
+    api::timestamp_type get_min_live_timestamp() const noexcept {
+        return _stats_collector.get_min_live_timestamp();
+    }
+
+    api::timestamp_type get_min_live_row_marker_timestamp() const noexcept {
+        return _stats_collector.get_min_live_row_marker_timestamp();
     }
 
     mutation_cleaner& cleaner() noexcept {

@@ -30,6 +30,7 @@ in individual sections
         | sstable_origin
         | scylla_build_id
         | scylla_version
+        | ext_timestamp_stats
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -54,6 +55,9 @@ Scylla executable that created the sstable.
 
 `scylla_version` (tag 8): a string containing the version of the
 Scylla executable that created the sstable.
+
+`ext_timestamp_stats` (tag 9): a `map<ext_timestamp_stats_type, int64_t>` with statistics
+about timestamps in the sstable, like: `min_live_timestamp`, and `min_live_row_marker_timestamp`.
 
 ## sharding_metadata subcomponent
 

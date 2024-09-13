@@ -11,6 +11,7 @@
 #pragma once
 
 #include "sstables/types.hh"
+#include "timestamp.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/murmur_hash.hh"
 #include "hyperloglog.hh"
@@ -43,6 +44,12 @@ struct column_stats {
 
     /** the largest/smallest (client-supplied) timestamp in the partition */
     min_max_tracker<api::timestamp_type> timestamp_tracker;
+    /** the largest/smallest (client-supplied) timestamp of live data in the partition, for the purpose of tombstone garbage collection **/
+    min_tracker<api::timestamp_type> min_live_timestamp_tracker;
+    /** the largest/smallest (client-supplied) timestamp of live data that would shadow shadowable tomebstones in the partition,
+     ** for the purpose of tombstone garbage collection of shadowable tombstones **/
+    min_tracker<api::timestamp_type> min_live_row_marker_timestamp_tracker;
+
     min_max_tracker<int32_t> local_deletion_time_tracker;
     min_max_tracker<int32_t> ttl_tracker;
     /** histogram of tombstone drop time */
@@ -59,6 +66,8 @@ struct column_stats {
         dead_rows_count(0),
         start_offset(0),
         partition_size(0),
+        min_live_timestamp_tracker(api::max_timestamp),
+        min_live_row_marker_timestamp_tracker(api::max_timestamp),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
         has_legacy_counter_shards(false)
         {
@@ -68,8 +77,15 @@ struct column_stats {
         *this = column_stats();
     }
 
-    void update_timestamp(api::timestamp_type value) {
+    void update_timestamp(api::timestamp_type value, is_live is_live) {
         timestamp_tracker.update(value);
+        if (is_live) {
+            min_live_timestamp_tracker.update(value);
+        }
+    }
+
+    void update_live_row_marker_timestamp(api::timestamp_type value) {
+        min_live_row_marker_timestamp_tracker.update(value);
     }
 
     void update_local_deletion_time(int32_t value) {
@@ -89,7 +105,7 @@ struct column_stats {
         ttl_tracker.update(gc_clock::as_int32(value));
     }
     void do_update(const tombstone& t) {
-        update_timestamp(t.timestamp);
+        update_timestamp(t.timestamp, is_live::no);
         update_local_deletion_time_and_tombstone_histogram(t.deletion_time);
     }
     void update(const tombstone& t) {
@@ -117,6 +133,8 @@ private:
     utils::estimated_histogram _estimated_cells_count{114};
     db::replay_position _replay_position;
     min_max_tracker<api::timestamp_type> _timestamp_tracker;
+    min_tracker<api::timestamp_type> _min_live_timestamp_tracker;
+    min_tracker<api::timestamp_type> _min_live_row_marker_timestamp_tracker;
     min_max_tracker<int32_t> _local_deletion_time_tracker{std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()};
     min_max_tracker<int32_t> _ttl_tracker{0, 0};
     double _compression_ratio = NO_COMPRESSION_RATIO;
@@ -142,6 +160,8 @@ public:
         : _schema(schema)
         , _name(name)
         , _host_id(host_id)
+        , _min_live_timestamp_tracker(api::max_timestamp)
+        , _min_live_row_marker_timestamp_tracker(api::max_timestamp)
     {
         if (!schema.clustering_key_size()) {
             _min_clustering_pos.emplace(position_in_partition_view::before_all_clustered_rows());
@@ -195,6 +215,8 @@ public:
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
+        _min_live_timestamp_tracker.update(stats.min_live_timestamp_tracker);
+        _min_live_row_marker_timestamp_tracker.update(stats.min_live_row_marker_timestamp_tracker);
         _local_deletion_time_tracker.update(stats.local_deletion_time_tracker);
         _ttl_tracker.update(stats.ttl_tracker);
         add_partition_size(stats.partition_size);
@@ -229,6 +251,13 @@ public:
         m.columns_count = _columns_count;
         m.rows_count = _rows_count;
         m.originating_host_id = _host_id;
+    }
+
+    scylla_metadata::ext_timestamp_stats::map_type get_ext_timestamp_stats() {
+        return scylla_metadata::ext_timestamp_stats::map_type{
+            { ext_timestamp_stats_type::min_live_timestamp, _min_live_timestamp_tracker.get() },
+            { ext_timestamp_stats_type::min_live_row_marker_timestamp, _min_live_row_marker_timestamp_tracker.get() },
+        };
     }
 };
 

@@ -926,6 +926,8 @@ public:
     virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
     virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
+    virtual api::timestamp_type min_memtable_live_timestamp() const override { return api::min_timestamp; }
+    virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const override { return api::min_timestamp; }
     virtual bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
@@ -1434,6 +1436,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
         case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
+        case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
     }
     std::abort();
 }
@@ -1445,6 +1448,14 @@ const char* to_string(sstables::large_data_type t) {
         case sstables::large_data_type::cell_size: return "cell_size";
         case sstables::large_data_type::rows_in_partition: return "rows_in_partition";
         case sstables::large_data_type::elements_in_collection: return "elements_in_collection";
+    }
+    std::abort();
+}
+
+const char* to_string(sstables::ext_timestamp_stats_type t) {
+    switch (t) {
+        case sstables::ext_timestamp_stats_type::min_live_timestamp: return "min_live_timestamp";
+        case sstables::ext_timestamp_stats_type::min_live_row_marker_timestamp: return "min_live_row_marker_timestamp";
     }
     std::abort();
 }
@@ -1525,6 +1536,14 @@ public:
             _writer.Key("above_threshold");
             _writer.Uint(v.above_threshold);
             _writer.EndObject();
+        }
+        _writer.EndObject();
+    }
+    void operator()(const sstables::scylla_metadata::ext_timestamp_stats& val) const {
+        _writer.StartObject();
+        for (const auto& [k, v] : val.map) {
+            _writer.Key(to_string(k));
+            _writer.Int64(v);
         }
         _writer.EndObject();
     }

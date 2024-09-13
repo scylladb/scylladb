@@ -36,6 +36,7 @@
 #include "sstables/shareable_components.hh"
 #include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/types.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
@@ -596,6 +597,7 @@ private:
     // information in their scylla metadata.
     std::optional<scylla_metadata::large_data_stats> _large_data_stats;
     sstring _origin;
+    std::optional<scylla_metadata::ext_timestamp_stats> _ext_timestamp_stats;
 
     // Total reclaimable memory from all the components of the SSTable.
     // It is initialized to 0 to prevent the sstables manager from reclaiming memory
@@ -648,7 +650,8 @@ private:
     void write_scylla_metadata(shard_id shard,
                                sstable_enabled_features features,
                                run_identifier identifier,
-                               std::optional<scylla_metadata::large_data_stats> ld_stats);
+                               std::optional<scylla_metadata::large_data_stats> ld_stats,
+                               std::optional<scylla_metadata::ext_timestamp_stats> ts_stats);
 
     future<> read_filter(sstable_open_config cfg = {});
 
@@ -963,6 +966,10 @@ public:
     // iff _large_data_stats is available and the requested entry is in
     // the map.  Otherwise, return a disengaged optional.
     std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
+
+    // Return the extended timestamp statistics map.
+    // Some or all entries may be missing if not present in scylla_metadata
+    scylla_metadata::ext_timestamp_stats::map_type get_ext_timestamp_stats() const noexcept;
 
     const sstring& get_origin() const noexcept {
         return _origin;

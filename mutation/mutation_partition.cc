@@ -20,6 +20,7 @@
 #include "mutation_compactor.hh"
 #include "counters.hh"
 #include "row_cache.hh"
+#include "timestamp.hh"
 #include "view_info.hh"
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
@@ -32,6 +33,7 @@
 #include "utils/unconst.hh"
 #include "mutation/async_utils.hh"
 
+logging::logger mclog("mutation_compactor");
 logging::logger mplog("mutation_partition");
 
 mutation_partition::mutation_partition(const schema& s, const mutation_partition& x)
@@ -203,7 +205,6 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
 
         while (i != end) {
             rows_entry& e = *i;
-            can_gc_fn never_gc = [](tombstone) { return false; };
 
             ++app_stats.rows_compacted_with_tombstones;
             bool all_dead = e.dummy() || !e.row().compact_and_expire(s,
@@ -1278,8 +1279,8 @@ uint32_t mutation_partition::do_compact(const schema& s,
     auto gc_before = drop_tombstones_unconditionally ? gc_clock::time_point::max() :
         gc_state.get_gc_before_for_key(s.shared_from_this(), dk, query_time);
 
-    auto should_purge_tombstone = [&] (const tombstone& t) {
-        return t.deletion_time < gc_before && can_gc(t);
+    auto should_purge_tombstone = [&] (const tombstone& t, is_shadowable is_shadowable) {
+        return t.deletion_time < gc_before && can_gc(t, is_shadowable);
     };
 
     bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, row_tombstone(_tombstone),
@@ -1307,9 +1308,11 @@ uint32_t mutation_partition::do_compact(const schema& s,
     }
 
     _row_tombstones.erase_where([&] (auto&& rt) {
-        return should_purge_tombstone(rt.tomb) || rt.tomb <= _tombstone;
+        // Only row tombstones can be shadowable, range tombstones aren't
+        return should_purge_tombstone(rt.tomb, is_shadowable::no) || rt.tomb <= _tombstone;
     });
-    if (should_purge_tombstone(_tombstone)) {
+    // The partition tombstone is never shadowable
+    if (should_purge_tombstone(_tombstone, is_shadowable::no)) {
         _tombstone = tombstone();
     }
 
@@ -1423,7 +1426,6 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
 }
 
 void rows_entry::compact(const schema& s, tombstone t) {
-    can_gc_fn never_gc = [] (tombstone) { return false; };
     row().compact_and_expire(s,
                              t + _range_tombstone,
                              gc_clock::time_point::min(),  // no TTL expiration
@@ -1614,7 +1616,8 @@ compact_and_expire_result row::compact_and_expire(
         if (def.is_atomic()) {
             atomic_cell_view cell = c.as_atomic_cell(def);
             auto can_erase_cell = [&] {
-                return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
+                // Only row tombstones can be shadowable, (collection) cell tombstones aren't
+                return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
             };
 
             if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
@@ -1709,7 +1712,7 @@ bool deletable_row::compact_and_expire(const schema& s,
                                        compaction_garbage_collector* collector)
 {
     auto should_purge_row_tombstone = [&] (const row_tombstone& t) {
-        return t.max_deletion_time() < gc_before && can_gc(t.tomb());
+        return t.max_deletion_time() < gc_before && can_gc(t.tomb(), t.is_shadowable());
     };
 
     apply(tomb);
@@ -1788,7 +1791,9 @@ bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
         _expiry -= _ttl;
         _ttl = dead;
     }
-    if (_ttl == dead && _expiry < gc_before && can_gc(tombstone(_timestamp, _expiry))) {
+    // The row marker itself is not shadowable.
+    // Only the deletable_row.row_rombstone may be shadowable
+    if (_ttl == dead && _expiry < gc_before && can_gc(tombstone(_timestamp, _expiry), is_shadowable::no)) {
         if (collector) {
             collector->collect(*this);
         }
@@ -2518,6 +2523,10 @@ future<> mutation_cleaner_impl::drain() {
     });
 }
 
-can_gc_fn always_gc = [] (tombstone) { return true; };
+can_gc_fn always_gc = [] (tombstone, is_shadowable) { return true; };
+can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
+
+max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) { return api::max_timestamp; };
+max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) { return api::min_timestamp; };
 
 logging::logger compound_logger("compound");

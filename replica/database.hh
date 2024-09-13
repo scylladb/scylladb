@@ -804,6 +804,9 @@ public:
     // Allow an action to be performed on each active memtable, each of which belongs to a different compaction group.
     void for_each_active_memtable(noncopyable_function<void(memtable&)> action);
     api::timestamp_type min_memtable_timestamp() const;
+    api::timestamp_type min_memtable_live_timestamp() const;
+    api::timestamp_type min_memtable_live_row_marker_timestamp() const;
+
     const row_cache& get_row_cache() const {
         return _cache;
     }

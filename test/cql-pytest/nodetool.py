@@ -84,12 +84,34 @@ def flush_keyspace(cql, ks):
     else:
         run_nodetool(cql, "flush", ks)
 
-def compact(cql, table):
+def flush_all(cql):
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/storage_service/flush')
+    else:
+        run_nodetool(cql, "flush")
+
+def compact(cql, table, flush_memtables=True):
     ks, cf = table.split('.')
     if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params={'cf' : cf})
+        params = {'cf': cf}
+        if not flush_memtables:
+            params["flush_memtables"] = "false"
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
     else:
-        run_nodetool(cql, "compact", ks, cf)
+        args = [] if not flush_memtables else ["--flush-memtables", "false"]
+        args.extend([ks, cf])
+        run_nodetool(cql, "compact", *args)
+
+def compact_keyspace(cql, ks, flush_memtables=True):
+    if has_rest_api(cql):
+        params = None
+        if not flush_memtables:
+            params = {"flush_memtables": "false"}
+        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
+    else:
+        args = [] if not flush_memtables else ["--flush-memtables", "false"]
+        args.extend([ks, cf])
+        run_nodetool(cql, "compact", *args)
 
 def take_snapshot(cql, table, tag, skip_flush):
     ks, cf = table.split('.')
@@ -120,6 +142,12 @@ def disablebinary(cql):
         requests.delete(f'{rest_api_url(cql)}/storage_service/native_transport')
     else:
         run_nodetool(cql, "disablebinary")
+
+def setlogginglevel(cql, logger, level):
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/system/logger/{logger}', params={'level': level})
+    else:
+        run_nodetool(cql, "setlogginglevel", ["--logger", logger, "--level", level])
 
 def parse_keyspace_table(name, separator_chars = '.'):
     pat = rf"(?P<keyspace>\w+)(?:[{separator_chars}](?P<table>\w+))?"
