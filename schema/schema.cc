@@ -792,17 +792,6 @@ static bool is_index(const replica::database& db, const table_id& id, const sche
     return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
-sstring schema::element_type(replica::database& db) const {
-    if (is_view()) {
-        if (is_index(db, view_info()->base_id(), *this)) {
-            return "index";
-        } else {
-            return "view";
-        }
-    }
-    return "table";
-}
-
 static void describe_index_columns(std::ostream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
     auto index_name = secondary_index::index_name_from_table_name(index_schema.cf_name());
     if (!base_schema->all_indices().contains(index_name)) {
@@ -995,12 +984,6 @@ cql3::description schema::describe(const replica::database& db, cql3::describe_o
                 ? std::nullopt
                 : std::make_optional(get_create_statement(db, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
     };
-}
-
-std::ostream& schema::describe(replica::database& db, std::ostream& os, bool with_internals) const {
-    auto desc = describe(db, with_internals ? cql3::describe_option::STMTS_AND_INTERNALS : cql3::describe_option::STMTS);
-    os << *desc.create_statement;
-    return os;
 }
 
 std::ostream& schema::schema_properties(const replica::database& db, std::ostream& os) const {

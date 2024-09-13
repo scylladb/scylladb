@@ -23,7 +23,6 @@
  *  - generic_describe_statements - DESC
  *
  *  Keyspace element means: UDT, UDF, UDA, index, view or table
- *  (see `data_dictionary/keyspace_element.hh`)
  */
 
 namespace replica {

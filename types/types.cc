@@ -3264,12 +3264,6 @@ cql3::description user_type_impl::describe(cql3::with_create_statement with_crea
     };
 }
 
-std::ostream& user_type_impl::describe(std::ostream& os) const {
-    auto desc = describe(cql3::with_create_statement::yes);
-    os << *desc.create_statement;
-    return os;
-}
-
 data_type
 user_type_impl::freeze() const {
     if (_is_multi_cell) {

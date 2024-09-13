@@ -335,9 +335,9 @@ lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const data_dictionary::da
 }
 
 /**
- *  Lists `keyspace_element` for given keyspace
+ *  Lists keyspace elements for given keyspace
  *
- *  @return vector of `description` for specified `keyspace_element` in specified keyspace.
+ *  @return vector of `description` for the specified keyspace element type in the specified keyspace.
             Descriptions don't contain create_statements.
  *  @throw `invalid_request_exception` if there is no such keyspace
  */
@@ -359,9 +359,9 @@ future<std::vector<description>> list_elements(const data_dictionary::database& 
 
 
 /**
- *  Describe specified `keyspace_element` in given keyspace
+ *  Describe specified keyspace element type in given keyspace
  *
- *  @return `description` of specified `keyspace_element` in specified keyspace.
+ *  @return `description` of the specified keyspace element type in the specified keyspace.
             Description contains create_statement.
  *  @throw `invalid_request_exception` if there is no such keyspace or there is no element with given name
  */

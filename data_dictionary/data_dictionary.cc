@@ -392,12 +392,6 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
     };
 }
 
-std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
-    auto desc = describe(db, cql3::with_create_statement::yes);
-    os << *desc.create_statement;
-    return os;
-}
-
 } // namespace data_dictionary
 
 template <>

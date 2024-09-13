@@ -401,12 +401,6 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
     };
 }
 
-std::ostream& user_aggregate::describe(std::ostream& os) const {
-    auto desc = describe(with_create_statement::yes);
-    os << *desc.create_statement;
-    return os;
-}
-
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {
     return make_shared<db::functions::aggregate_function>(

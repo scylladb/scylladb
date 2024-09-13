@@ -33,7 +33,6 @@
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "schema_fwd.hh"
-#include "data_dictionary/keyspace_element.hh"
 
 namespace dht {
 
@@ -544,7 +543,7 @@ struct schema_static_props {
  * Not safe to access across cores because of shared_ptr's.
  * Use global_schema_ptr for safe across-shard access.
  */
-class schema final : public enable_lw_shared_from_this<schema>, public data_dictionary::keyspace_element {
+class schema final : public enable_lw_shared_from_this<schema> {
     friend class v3_columns;
 public:
     struct dropped_column {
@@ -899,11 +898,9 @@ public:
     // Search for an existing index with same kind and options.
     std::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend fmt::formatter<schema>;
-    virtual sstring keypace_name() const override { return ks_name(); }
-    virtual sstring element_name() const override { return cf_name(); }
-    virtual sstring element_type(replica::database& db) const override;
+
     /*!
-     * \brief stream the CQL DESCRIBE output.
+     * \brief generate the CQL DESCRIBE output.
      *
      * The output of DESCRIBE is the CQL command to create the described table with its indexes and views.
      *
@@ -915,12 +912,10 @@ public:
      * or "CREATE INDEX" depends on the type of index that schema describes (ie. Materialized View, Global
      * Index or Local Index).
      *
-     * When `with_internals` is true, the description is extended with table's id and dropped columns.
-     * The dropped columns are present in column definitions and also the `ALTER DROP` statement 
-     * (and `ALTER ADD` if the column has been re-added) to the description.
+     * When `cql3::describe_option::WITH_STMTS_AND_INTERNALS` is used, the description is extended with
+     * table's id and dropped columns. The dropped columns are present in column definitions and also the `ALTER DROP`
+     * statement (and `ALTER ADD` if the column has been re-added) to the description.
      */
-    virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
-
     cql3::description describe(const replica::database& db, cql3::describe_option) const;
 
     // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.

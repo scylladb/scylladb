@@ -110,11 +110,5 @@ description user_function::describe(with_create_statement with_stmt) const {
     };
 }
 
-std::ostream& user_function::describe(std::ostream& os) const {
-    auto desc = describe(with_create_statement::yes);
-    os << *desc.create_statement;
-    return os;
-}
-
 }
 }
