@@ -724,9 +724,9 @@ private:
                                                         const query::partition_slice& slice,
                                                         tracing::trace_state_ptr,
                                                         streamed_mutation::forwarding fwd,
-                                                        mutation_reader::forwarding) const = 0;
+                                                        mutation_reader::forwarding) = 0;
 
-    mutation_reader setup_sstable_reader() const {
+    mutation_reader setup_sstable_reader() {
         if (!_owned_ranges_checker) {
             return make_sstable_reader(_schema,
                                        _permit,
@@ -1149,7 +1149,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_local_shard_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
@@ -1296,7 +1296,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_local_shard_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
@@ -1600,7 +1600,7 @@ private:
     std::string _scrub_start_description;
     mutable std::string _scrub_finish_description;
     uint64_t _bucket_count = 0;
-    mutable uint64_t _validation_errors = 0;
+    uint64_t _validation_errors = 0;
 
 public:
     scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options, compaction_progress_monitor& progress_monitor)
@@ -1627,7 +1627,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
@@ -1728,7 +1728,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_range_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
