@@ -2602,6 +2602,9 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
 }
 
 future<uint32_t> sstable::read_digest() {
+    if (_components->digest) {
+        co_return *_components->digest;
+    }
     sstring digest_str;
 
     co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
@@ -2622,7 +2625,8 @@ future<uint32_t> sstable::read_digest() {
         maybe_rethrow_exception(std::move(ex));
     });
 
-    co_return boost::lexical_cast<uint32_t>(digest_str);
+    _components->digest = boost::lexical_cast<uint32_t>(digest_str);
+    co_return *_components->digest;
 }
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum() {
