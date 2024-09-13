@@ -483,27 +483,6 @@ schema::schema(reversed_tag, const schema& o)
 {
 }
 
-lw_shared_ptr<const schema> make_shared_schema(std::optional<table_id> id, std::string_view ks_name,
-    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
-    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
-    data_type regular_column_name_type, sstring comment) {
-    schema_builder builder(std::move(ks_name), std::move(cf_name), std::move(id), std::move(regular_column_name_type));
-    for (auto&& column : partition_key) {
-        builder.with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
-    }
-    for (auto&& column : clustering_key) {
-        builder.with_column(std::move(column.name), std::move(column.type), column_kind::clustering_key);
-    }
-    for (auto&& column : regular_columns) {
-        builder.with_column(std::move(column.name), std::move(column.type));
-    }
-    for (auto&& column : static_columns) {
-        builder.with_column(std::move(column.name), std::move(column.type), column_kind::static_column);
-    }
-    builder.set_comment(comment);
-    return builder.build();
-}
-
 schema::~schema() {
     if (_registry_entry) {
         _registry_entry->detach_schema();

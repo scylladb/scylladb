@@ -398,8 +398,11 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, "ks", "cf",
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        auto s = schema_builder("ks", "cf")
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", int32_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
         auto sst_gen = env.make_sst_factory(s);
 
         auto key = tests::generate_partition_key(s);
@@ -531,21 +534,12 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
 
 static schema_ptr tombstone_overlap_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab"), "try1", "tab",
-        // partition key
-        {{"pk", utf8_type}},
-        // clustering key
-        {{"ck1", utf8_type}, {"ck2", utf8_type}},
-        // regular columns
-        {{"data", utf8_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("try1", "tab", generate_legacy_id("try1", "tab"));
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+        builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+        builder.with_column("data", utf8_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
@@ -687,21 +681,13 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
 static schema_ptr tombstone_overlap_schema2() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab2"), "try1", "tab2",
-        // partition key
-        {{"pk", utf8_type}},
-        // clustering key
-        {{"ck1", utf8_type}, {"ck2", utf8_type}, {"ck3", utf8_type}},
-        // regular columns
-        {{"data", utf8_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("try1", "tab2", generate_legacy_id("try1", "tab2"));
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+        builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+        builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+        builder.with_column("data", utf8_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }
@@ -769,21 +755,12 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 // Reproducer for #4783
 static schema_ptr buffer_overflow_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
-        // partition key
-        {{"pk", int32_type}},
-        // clustering key
-        {{"ck1", int32_type}, {"ck2", int32_type}},
-        // regular columns
-        {{"data", utf8_type}},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("test_ks", "test_tab", generate_legacy_id("test_ks", "test_tab"));
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck1", int32_type, column_kind::clustering_key);
+        builder.with_column("ck2", int32_type, column_kind::clustering_key);
+        builder.with_column("data", utf8_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }

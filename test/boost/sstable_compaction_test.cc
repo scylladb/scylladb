@@ -152,9 +152,11 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
 SEASTAR_TEST_CASE(compaction_manager_basic_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
-
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", utf8_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
     auto cf = env.make_table_for_tests(s);
     auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
@@ -317,8 +319,10 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async(
             [&env, sstables = std::move(sstables_to_compact), create_sstables, min_sstable_size, strategy] () mutable {
-        schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+        schema_builder builder(some_keyspace, some_column_family);
+        builder.with_column("p1", utf8_type, column_kind::partition_key);
+        builder.with_column("c1", utf8_type, column_kind::clustering_key);
+        builder.with_column("r1", utf8_type);
         builder.set_compressor_params(compression_parameters::no_compression());
         builder.set_min_compaction_threshold(4);
         auto s = builder.build(schema_builder::compact_storage::no);
@@ -405,9 +409,11 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
 static future<> check_compacted_sstables(test_env& env, compact_sstables_result res) {
     return seastar::async([&env, res = std::move(res)] {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
-
+        auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", utf8_type, column_kind::clustering_key)
+                .with_column("r1", utf8_type)
+                .build();
         BOOST_REQUIRE_EQUAL(res.output_sstables.size(), 1);
         auto sst = env.reusable_sst(s, res.output_sstables[0]).get();
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
@@ -843,8 +849,8 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
 
 SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
   return test_env::do_with_async([] (test_env& env) {
-    schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    schema_builder builder(some_keyspace, some_column_family);
+    builder.with_column("p1", utf8_type, column_kind::partition_key);
     builder.set_min_compaction_threshold(4);
     auto s = builder.build(schema_builder::compact_storage::no);
 
@@ -1339,8 +1345,11 @@ SEASTAR_TEST_CASE(mv_tombstone_purge_test) {
 SEASTAR_TEST_CASE(sstable_rewrite) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", utf8_type, column_kind::clustering_key)
+                .with_column("r1", utf8_type)
+                .build();
         auto sst_gen = env.make_sst_factory(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -3753,9 +3762,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
 
 SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
   return test_env::do_with_async([] (test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
-
+    auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
     const auto keys = tests::generate_partition_keys(10, s);
 
     auto sst_gen = [&env, s] (const dht::decorated_key& first, const dht::decorated_key& last) mutable {
@@ -4540,8 +4547,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 
 SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-                                    {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
         const auto keys = tests::generate_partition_keys(8, s);
 

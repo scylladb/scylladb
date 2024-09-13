@@ -82,8 +82,11 @@ static void assert_sstable_set_size(const sstable_set& s, size_t expected_size) 
 SEASTAR_TEST_CASE(datafile_generation_09) {
     // Test that generated sstable components can be successfully loaded.
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -369,9 +372,12 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
 
 SEASTAR_TEST_CASE(datafile_generation_41) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type);
-
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .with_column("r2", int32_type)
+                    .build();
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
         mutation m(s, key);
@@ -392,9 +398,11 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
 SEASTAR_TEST_CASE(datafile_generation_47) {
     // Tests the problem in which the sstable row parser would hang.
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
-
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", utf8_type)
+                    .build();
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -1841,8 +1849,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
 
 SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
   return test_env::do_with([] (test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     const auto decorated_keys = tests::generate_partition_keys(8, s);
 
@@ -1917,8 +1924,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
 
 SEASTAR_TEST_CASE(sstable_set_erase) {
   return test_env::do_with([] (test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
     const auto key = tests::generate_partition_key(s).key();
 
     // check that sstable_set::erase is capable of working properly when a non-existing element is given.
@@ -2090,9 +2096,11 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
 
 SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
-
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", int32_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
         const column_definition& r1_col = *s->get_column_definition("r1");
         std::vector<mutation> mutations;
         auto keys_written = 0;
@@ -2709,8 +2717,7 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
 
 SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
     return test_env::do_with([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
 
         lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(cs.make_sstable_set(s));

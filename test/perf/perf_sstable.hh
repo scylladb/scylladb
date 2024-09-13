@@ -131,26 +131,12 @@ private:
     std::vector<shared_sstable> _sst;
 
     schema_ptr create_schema(sstables::compaction_strategy_type type) {
-        std::vector<schema::column> columns;
-
+        schema_builder builder("ks", "perf-test", generate_legacy_id("ks", "perf-test"));
+        builder.with_column("name", utf8_type, column_kind::partition_key);
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
-            columns.push_back(schema::column{ to_bytes(format("column{:04d}", i)), utf8_type });
+            builder.with_column(to_bytes(format("column{:04d}", i)), utf8_type);
         }
-
-        schema_builder builder(make_shared_schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
-            // partition key
-            {{"name", utf8_type}},
-            // clustering key
-            {},
-            // regular columns
-            { columns },
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "Perf tests"
-        ));
+        builder.set_comment("Perf tests");
         builder.set_compaction_strategy(type);
         return builder.build(schema_builder::compact_storage::no);
     }

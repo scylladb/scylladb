@@ -46,22 +46,10 @@ public:
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_shared_schema(
-                generate_legacy_id("ks", "cf"), "ks", "cf",
-        // partition key
-        {{"p", bytes_type}},
-        // clustering key
-        {},
-        // regular columns
-        {{"c", int32_type}},
-        // static columns
-        {},
-        // regular column name type
-        bytes_type,
-        // comment
-        ""
-       ));
-       return builder.build(schema_builder::compact_storage::no);
+        schema_builder builder("ks", "cf", generate_legacy_id("ks", "cf"), bytes_type);
+        builder.with_column("p", bytes_type, column_kind::partition_key);
+        builder.with_column("c", int32_type);
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
 }

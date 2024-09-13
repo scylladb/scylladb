@@ -120,8 +120,11 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", int32_type, column_kind::clustering_key)
+                    .with_column("r1", int32_type)
+                    .build();
 
         auto mt = make_lw_shared<replica::memtable>(s);
 
@@ -145,10 +148,13 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
 }
 
 SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}},
-        {{"c1", int32_type}, {"c2", int32_type}, {"c3", int32_type}},
-        {{"r1", int32_type}}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", int32_type, column_kind::clustering_key)
+                .with_column("c2", int32_type, column_kind::clustering_key)
+                .with_column("c3", int32_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
 
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
@@ -180,8 +186,12 @@ SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
 }
 
 SEASTAR_TEST_CASE(test_row_tombstone_updates) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}, {"c2", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", int32_type, column_kind::clustering_key)
+                .with_column("c2", int32_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
 
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto c_key1 = clustering_key::from_deeply_exploded(*s, {1, 0});
@@ -225,8 +235,11 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", int32_type, column_kind::clustering_key)
+                    .with_column("s1", my_map_type, column_kind::static_column)
+                    .build();
         auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
@@ -263,8 +276,11 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", int32_type, column_kind::clustering_key)
+                    .with_column("s1", my_set_type, column_kind::static_column)
+                    .build();
         auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
@@ -301,8 +317,11 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto my_list_type = list_type_impl::get_instance(int32_type, true);
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", int32_type, column_kind::clustering_key)
+                    .with_column("s1", my_list_type, column_kind::static_column)
+                    .build();
         auto mt = make_lw_shared<replica::memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
@@ -344,8 +363,11 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
             {int32_type, utf8_type, long_type, utf8_type},
             true);
 
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", ut}}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", int32_type, column_kind::clustering_key)
+                .with_column("s1", ut, column_kind::static_column)
+                .build();
     auto mt = make_lw_shared<replica::memtable>(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
@@ -497,8 +519,11 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", utf8_type, column_kind::partition_key)
+                .with_column("c1", int32_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
     replica::column_family::config cfg = env.make_table_config();
@@ -629,8 +654,11 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+    auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("p1", int32_type, column_kind::partition_key)
+                .with_column("c1", int32_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
 
     auto cf_stats = make_lw_shared<replica::cf_stats>();
 
@@ -1329,8 +1357,10 @@ SEASTAR_TEST_CASE(test_large_blobs) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("s1", bytes_type, column_kind::static_column)
+                    .build();
 
         auto mt = make_lw_shared<replica::memtable>(s);
 
@@ -1947,8 +1977,10 @@ SEASTAR_TEST_CASE(test_trim_rows) {
 
 SEASTAR_TEST_CASE(test_collection_cell_diff) {
     return seastar::async([] {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p", utf8_type}}, {}, {{"v", list_type_impl::get_instance(bytes_type, true)}}, {}, utf8_type);
+        auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p", utf8_type, column_kind::partition_key)
+                    .with_column("v", list_type_impl::get_instance(bytes_type, true))
+                    .build();
 
         auto& col = s->column_at(column_kind::regular_column, 0);
         auto k = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
