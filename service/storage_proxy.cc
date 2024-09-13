@@ -6068,6 +6068,19 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     replica::table& table = _db.local().find_column_family(schema->id());
     auto erm = table.get_effective_replication_map();
 
+    // Bypass the whole range-scan coordinator-side machinery for local tables.
+    // Simply forward the request to the replica, it can serve it all locally.
+    if (erm->get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+        auto res = co_await query_nonsingular_data_locally(
+                std::move(schema),
+                std::move(cmd),
+                std::move(partition_ranges),
+                query::result_options::only_result(),
+                std::move(query_options.trace_state),
+                query_options.timeout(*this));
+        co_return storage_proxy_coordinator_query_result(std::get<0>(std::move(res)));
+    }
+
     // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
     // (which can be expensive in clusters with vnodes)
     auto merge_tokens = !erm->get_replication_strategy().natural_endpoints_depend_on_token();
