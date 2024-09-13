@@ -942,8 +942,8 @@ class client::do_upload_file : private multipart_upload {
         req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
         req.query_parameters.emplace("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
-        req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size] (output_stream<char>&& out_) mutable {
-            auto input = make_file_input_stream(std::move(f), offset, part_size, input_stream_options());
+        req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size] (output_stream<char>&& out_) {
+            auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size);
         });
