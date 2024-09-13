@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/util/closeable.hh>
+
 #include "mutation.hh"
 #include "query-result-writer.hh"
 #include "mutation_rebuilder.hh"
@@ -284,7 +286,9 @@ future<> split_mutation(mutation source, std::vector<mutation>& target, size_t m
         auto reader = make_mutation_reader_from_mutations_v2(s,
             sem.make_tracking_only_permit(s, "split_mutation", db::no_timeout, {}),
             std::move(source));
-        co_await reader.consume(mutation_by_size_splitter(s, target, max_size));
+        co_await with_closeable(std::move(reader), [&] (mutation_reader& reader) {
+            return reader.consume(mutation_by_size_splitter(s, target, max_size));
+        });
     }
     co_await sem.stop();
 }
