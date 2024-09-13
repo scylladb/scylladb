@@ -1333,6 +1333,13 @@ using user_types_metadata = data_dictionary::user_types_metadata;
 
 using keyspace_metadata = data_dictionary::keyspace_metadata;
 
+// Encapsulates objects needed to update keyspace schema
+struct keyspace_change {
+    lw_shared_ptr<keyspace_metadata> metadata;
+    locator::replication_strategy_ptr strategy;
+    locator::vnode_effective_replication_map_ptr erm;
+};
+
 class keyspace {
 public:
     struct config {
@@ -1364,21 +1371,26 @@ private:
     locator::effective_replication_map_factory& _erm_factory;
 
 public:
-    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
+    explicit keyspace(config cfg, locator::effective_replication_map_factory& erm_factory);
     keyspace(const keyspace&) = delete;
     void operator=(const keyspace&) = delete;
     keyspace(keyspace&&) = default;
 
     future<> shutdown() noexcept;
 
-    future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
+    void apply(keyspace_change kc);
 
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    future<> create_replication_strategy(const locator::shared_token_metadata& stm);
+
+    static locator::replication_strategy_ptr create_replication_strategy(
+            lw_shared_ptr<keyspace_metadata> metadata);
+    future<locator::vnode_effective_replication_map_ptr> create_effective_replication_map(
+            locator::replication_strategy_ptr strategy,
+            const locator::shared_token_metadata& stm) const;
     void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
 
     /**
@@ -1664,7 +1676,8 @@ private:
     void insert_keyspace(std::unique_ptr<keyspace> ks);
     future<> remove(table&) noexcept;
     void drop_keyspace(const sstring& name);
-    future<> update_keyspace(const keyspace_metadata& tmp_ksm);
+    future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
+    void update_keyspace(keyspace_change change);
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
