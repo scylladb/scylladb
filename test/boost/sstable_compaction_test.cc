@@ -1980,6 +1980,7 @@ static std::deque<mutation_fragment_v2> explode(reader_permit permit, std::vecto
     std::deque<mutation_fragment_v2> frags;
 
     auto mr = make_mutation_reader_from_mutations_v2(schema, permit, std::move(muts));
+    auto close_mr = deferred_close(mr);
     mr.consume_pausable([&frags] (mutation_fragment_v2&& mf) {
         frags.emplace_back(std::move(mf));
         return stop_iteration::no;
