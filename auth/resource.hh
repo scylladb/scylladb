@@ -18,7 +18,6 @@
 #include <unordered_set>
 
 #include <fmt/core.h>
-#include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
 #include "auth/permission.hh"
