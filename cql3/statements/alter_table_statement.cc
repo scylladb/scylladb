@@ -466,11 +466,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
                 _renames,
                 std::move(prepared_attrs)
             ),
-            ctx,
-            // since alter table is `cql_statement_no_metadata` (it doesn't return any metadata when preparing)
-            // and bind markers cannot be a part of partition key,
-            // we can pass empty vector as partition_key_bind_indices
-            std::vector<uint16_t>()); 
+            ctx);
 }
 
 }

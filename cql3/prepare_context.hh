@@ -56,6 +56,7 @@ private:
     // the function call results.
     bool _processing_pk_restrictions = false;
 
+    schema_ptr _schema;
 public:
 
     prepare_context() = default;
@@ -66,13 +67,16 @@ public:
 
     std::vector<lw_shared_ptr<column_specification>> get_variable_specifications() &&;
 
-    std::vector<uint16_t> get_partition_key_bind_indexes(const schema& schema) const;
+    std::vector<uint16_t> get_partition_key_bind_indexes() const;
 
     void add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
     void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names);
 
     void clear_pk_function_calls_cache();
+
+    // Required if set_bound_variables() is used
+    void set_schema(schema_ptr s) { _schema = s; }
 
     // Record a new function call, which evaluates a partition key constraint.
     // Also automatically assigns an id to the AST node for caching purposes.

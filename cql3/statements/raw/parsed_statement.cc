@@ -38,26 +38,17 @@ void parsed_statement::set_bound_variables(const std::vector<::shared_ptr<column
 }
 
 prepared_statement::prepared_statement(
-        ::shared_ptr<cql_statement> statement_, std::vector<lw_shared_ptr<column_specification>> bound_names_,
-        std::vector<uint16_t> partition_key_bind_indices, std::vector<sstring> warnings)
+        ::shared_ptr<cql_statement> statement_,
+        const prepare_context& ctx,
+        std::vector<sstring> warnings)
     : statement(std::move(statement_))
-    , bound_names(std::move(bound_names_))
-    , partition_key_bind_indices(std::move(partition_key_bind_indices))
+    , bound_names(ctx.get_variable_specifications())
+    , partition_key_bind_indices(ctx.get_partition_key_bind_indexes())
     , warnings(std::move(warnings))
 { }
 
-prepared_statement::prepared_statement(
-        ::shared_ptr<cql_statement> statement_, const prepare_context& ctx,
-        const std::vector<uint16_t>& partition_key_bind_indices, std::vector<sstring> warnings)
-    : prepared_statement(statement_, ctx.get_variable_specifications(), partition_key_bind_indices, std::move(warnings))
-{ }
-
-prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices)
-    : prepared_statement(statement_, std::move(ctx).get_variable_specifications(), std::move(partition_key_bind_indices))
-{ }
-
 prepared_statement::prepared_statement(::shared_ptr<cql_statement>&& statement_)
-    : prepared_statement(statement_, std::vector<lw_shared_ptr<column_specification>>(), std::vector<uint16_t>())
+    : statement(statement_)
 { }
 
 }
