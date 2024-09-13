@@ -2748,3 +2748,46 @@ SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_up
 
     execute_tablet_for_new_rf_test(config);
 }
+<<<<<<< HEAD
+=======
+
+SEASTAR_TEST_CASE(test_tablet_count_metric) {
+    auto cfg = tablet_cql_test_config();
+    for (unsigned n = 1; n <= smp::count; n *= 2) {
+        cfg.initial_tablets = n;
+    }
+    return do_with_cql_env_thread([cfg] (cql_test_env& e) {
+        auto tid = add_table(e).get();
+        auto total = e.db().map_reduce0([&] (replica::database& db) {
+            auto count = db.find_column_family(tid).get_stats().tablet_count;
+            testlog.debug("shard table_count={}", count);
+            return count;
+        }, int64_t(0), std::plus<int64_t>()).get();
+        BOOST_REQUIRE_EQUAL(total, cfg.initial_tablets);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        // Create a table.
+        e.execute_cql("create table ks.cf (pk int, ck int, primary key (pk, ck))").get();
+
+        size_t all_tablets = 0;
+        // Double cleanup the tablet.
+        e.db().invoke_on_all([&] (replica::database& db) -> future<> {
+            auto& cf = db.find_column_family("ks", "cf");
+            auto& sys_ks = e.get_system_keyspace().local();
+            auto tablet_count = cf.get_stats().tablet_count;
+            all_tablets += tablet_count;
+            if (tablet_count > 0) {
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+                co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
+            }
+        }).get();
+        assert(all_tablets);
+    }, cfg);
+}
+>>>>>>> 2c4b1d6b45 (test: check if cleanup of deallocated sg is ignored)
