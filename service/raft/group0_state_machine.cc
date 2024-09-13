@@ -211,6 +211,40 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
 }
 
+static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
+    auto validate_schema = [&db](const std::vector<canonical_mutation>& mutations) {
+        for (const auto& mut : mutations) {
+            // Get the schema for the column family
+            auto schema = db.find_schema(mut.column_family_id());
+            if (!schema) {
+                on_internal_error(slogger, "ensure_group0_schema: schema not found");
+            }
+
+            if (!schema->static_props().is_group0_table) {
+                on_internal_error(slogger, fmt::format("ensure_group0_schema: schema is not group0: {}", schema->cf_name()));
+            }
+        }
+    };
+
+    std::visit(overloaded_functor{
+            [validate_schema](const schema_change& change) {
+                validate_schema(change.mutations);
+            },
+            [](const broadcast_table_query&) {
+                // no mutations to validate
+            },
+            [validate_schema](const topology_change& change) {
+                validate_schema(change.mutations);
+            },
+            [validate_schema](const write_mutations& change) {
+                validate_schema(change.mutations);
+            },
+            [validate_schema](const mixed_change& change) {
+                validate_schema(change.mutations);
+            },
+        }, cmd.change);
+}
+
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
 
@@ -226,6 +260,12 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
         auto cmd = ser::deserialize(is, boost::type<group0_command>{});
+
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+        // Ensure that the schema of the mutations is a group0 schema.
+        // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
+        ensure_group0_schema(cmd, _client.sys_ks().local_db());
+#endif
 
         slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
                 cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);

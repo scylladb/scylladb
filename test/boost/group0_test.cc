@@ -13,6 +13,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 
+#include "schema/schema_builder.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
@@ -243,6 +244,14 @@ SEASTAR_TEST_CASE(test_group0_batch) {
     return do_with_cql_env([] (cql_test_env& e) -> future<> {
         auto& rclient = e.get_raft_group0_client();
         abort_source as;
+
+        // mark the table as group0 to pass the mutation apply check
+        // (group0 mutations are not allowed on non-group0 tables)
+        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+            if (cf_name == "test_group0_batch") {
+                props.is_group0_table = true;
+            }
+        });
 
         co_await e.execute_cql("CREATE TABLE test_group0_batch (key int, part int, PRIMARY KEY (key, part))");
 
