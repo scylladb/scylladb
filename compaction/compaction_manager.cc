@@ -1833,7 +1833,7 @@ protected:
     }
 private:
     future<> run_cleanup_job(sstables::compaction_descriptor descriptor) {
-        co_await coroutine::switch_to(_cm.compaction_sg());
+        co_await coroutine::switch_to(_cm.maintenance_sg());
 
         // Releases reference to cleaned files such that respective used disk space can be freed.
         using update_registration = compacting_sstable_registration::update_me;
@@ -1853,9 +1853,6 @@ private:
         };
         release_exhausted on_replace{_compacting, descriptor};
         for (;;) {
-            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
-            _cm.register_backlog_tracker(user_initiated);
-
             std::exception_ptr ex;
             try {
                 setup_new_compaction(descriptor.run_identifier);
