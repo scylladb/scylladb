@@ -611,6 +611,11 @@ storage_group& storage_group_manager::storage_group_for_id(const schema_ptr& s, 
     return *it->second.get();
 }
 
+storage_group* storage_group_manager::maybe_storage_group_for_id(const schema_ptr& s, size_t i) const {
+    auto it = _storage_groups.find(i);
+    return it != _storage_groups.end() ? &*it->second.get() : nullptr;
+}
+
 class single_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     storage_group* _single_sg;
@@ -3688,8 +3693,14 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
 
 future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
-    auto& sg = storage_group_for_id(tid.value());
 
+    auto sgp = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sgp) {
+        tlogger.warn("Storage group for tablet {} is deallocated. Ignore cleanup.", tid);
+        co_return;
+    }
+
+    auto& sg = *sgp;
     co_await clear_inactive_reads_for_tablet(db, sg);
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
