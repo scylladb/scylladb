@@ -1640,16 +1640,17 @@ private:
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
     future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    void insert_keyspace(std::unique_ptr<keyspace> ks);
     future<> remove(table&) noexcept;
-    void drop_keyspace(const sstring& name);
     future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
-    void update_keyspace(keyspace_change change);
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
     friend class ::sigquit_handler; // wants access to all semaphores to dump diagnostics
 public:
+    void insert_keyspace(std::unique_ptr<keyspace> ks);
+    void update_keyspace(std::unique_ptr<keyspace_change> change);
+    void drop_keyspace(const sstring& name);
+
     static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
