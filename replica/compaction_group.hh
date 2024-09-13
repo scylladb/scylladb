@@ -297,8 +297,13 @@ public:
 
     future<> stop_storage_groups() noexcept;
     void remove_storage_group(size_t id);
+<<<<<<< HEAD
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
+=======
+    storage_group& storage_group_for_id(const schema_ptr&, size_t i) const;
+    storage_group* maybe_storage_group_for_id(const schema_ptr&, size_t i) const;
+>>>>>>> 20d6cf55f2 (replica: ignore cleanup of deallocated storage group)
 
     // Caller must keep the current effective_replication_map_ptr valid
     // until the storage_group_manager finishes update_effective_replication_map
