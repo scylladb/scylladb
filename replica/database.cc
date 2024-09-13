@@ -864,17 +864,17 @@ future<keyspace_change> database::prepare_update_keyspace(const keyspace& ks, lw
     };
 }
 
-void database::update_keyspace(keyspace_change change) {
-    auto& ks = find_keyspace(change.metadata->name());
+void database::update_keyspace(std::unique_ptr<keyspace_change> change) {
+    auto& ks = find_keyspace(change->metadata->name());
     bool old_durable_writes = ks.metadata()->durable_writes();
-    bool new_durable_writes = change.metadata->durable_writes();
+    bool new_durable_writes = change->metadata->durable_writes();
     if (old_durable_writes != new_durable_writes) {
-        for (auto& [cf_name, cf_schema] : change.metadata->cf_meta_data()) {
+        for (auto& [cf_name, cf_schema] : change->metadata->cf_meta_data()) {
             auto& cf = find_column_family(cf_schema);
             cf.set_durable_writes(new_durable_writes);
         }
     }
-    ks.apply(change);
+    ks.apply(*change);
 }
 
 future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm) {
@@ -884,7 +884,7 @@ future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, 
                 ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), std::move(ks.metadata()->user_types()), ksm.get_storage_options());
 
         auto change = co_await db.prepare_update_keyspace(ks, new_ksm);
-        db.update_keyspace(std::move(change));
+        db.update_keyspace(std::make_unique<keyspace_change>(std::move(change)));
         co_return;
     });
 }
