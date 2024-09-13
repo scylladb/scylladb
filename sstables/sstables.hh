@@ -73,7 +73,6 @@ namespace fs = std::filesystem;
 extern logging::logger sstlog;
 class sstable_writer;
 class sstables_manager;
-class metadata_collector;
 
 struct foreign_sstable_open_info;
 
