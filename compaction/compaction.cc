@@ -193,7 +193,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
             if (it != ts_stats.end()) {
                 min_timestamp = it->second;
             } else {
-                // Do not throw an expection in production, just use the legacy min_timestamp set above
+                // Do not throw an exception in production, just use the legacy min_timestamp set above
                 on_internal_error_noexcept(clogger, format("Missing extended timestamp statstics: stat={} is_shadowable={}", int(stat), bool(is_shadowable)));
             }
         }
