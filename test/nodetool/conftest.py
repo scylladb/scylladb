@@ -42,10 +42,10 @@ class ServerAddress(NamedTuple):
 
 
 @pytest.fixture(scope="session")
-def server_address(request):
+def server_address():
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
-    if request.config.getoption('--run-within-unshare'):
+    if os.environ.get('RUN_IN_UNSHARE'):
         try:
             args = "ip link set lo up".split()
             subprocess.run(args, check=True)

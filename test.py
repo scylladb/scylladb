@@ -12,6 +12,7 @@ import collections
 import colorama
 import difflib
 import filecmp
+import fnmatch
 import glob
 import itertools
 import logging
@@ -683,12 +684,28 @@ class UnitTest(Test):
 
     def __init__(self, test_no: int, shortname: str, suite, args: str) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = path_to(self.mode, "test", suite.name, shortname.split('.')[0])
-        self.args = shlex.split(args) + UnitTest.standard_args
+        run_in_unshare = any(fnmatch.fnmatch(shortname, pattern)
+                             for pattern in suite.cfg.get("run_in_unshare", []))
+        cmd_args = []
+        if run_in_unshare:
+            cmd_args += ["unshare", "--map-root-user", "--net"]
+        cmd_args += [path_to(self.mode, "test", suite.name, shortname.split('.')[0])]
+        cmd_args += self._get_args()
+        cmd_args += shlex.split(args) + UnitTest.standard_args
+        self.path, *self.args = cmd_args
+        if run_in_unshare:
+            self.env["RUN_IN_UNSHARE"] = "1"
         if self.mode == "coverage":
             self.env.update(coverage.env(self.path))
 
         UnitTest._reset(self)
+
+    def _get_args(self) -> list[str]:
+        # return the command line arguments passed right after the test
+        # executable, the argument customized using "custom_args" are passed
+        # after these arguments. please note this method is called in the
+        # constructor of UnitTest.
+        return []
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
@@ -711,22 +728,31 @@ class BoostTest(UnitTest):
 
     def __init__(self, test_no: int, shortname: str, suite, args: str,
                  casename: Optional[str], allows_compaction_groups : bool) -> None:
-        boost_args = []
         if casename:
             shortname += '.' + casename
-            boost_args += ['--run_test=' + casename]
+        # self._get_args() references self.casename
+        self.casename = casename
         super().__init__(test_no, shortname, suite, args)
-        self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        BoostTest._reset(self)
+        self.__test_case_elements: list[ET.Element] = []
+        self.allows_compaction_groups = allows_compaction_groups
+
+    @property
+    def xmlout(self) -> str:
+        # defined as a property method, so that self._get_args() can be called
+        # even before this property is initialized.
+        return os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+
+    def _get_args(self) -> list[str]:
+        boost_args = []
+        if self.casename:
+            boost_args += ['--run_test=' + self.casename]
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
         boost_args += ['--color_output=false']
         boost_args += ['--']
-        self.args = boost_args + self.args
-        self.casename = casename
-        BoostTest._reset(self)
-        self.__test_case_elements: list[ET.Element] = []
-        self.allows_compaction_groups = allows_compaction_groups
+        return boost_args
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
