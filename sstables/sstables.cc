@@ -2601,9 +2601,12 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
     co_return valid;
 }
 
-future<uint32_t> sstable::read_digest() {
+future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
+    }
+    if (!has_component(component_type::Digest)) {
+        co_return std::nullopt;
     }
     sstring digest_str;
 
@@ -2626,7 +2629,7 @@ future<uint32_t> sstable::read_digest() {
     });
 
     _components->digest = boost::lexical_cast<uint32_t>(digest_str);
-    co_return *_components->digest;
+    co_return _components->digest;
 }
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum() {
@@ -2672,6 +2675,9 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
 
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
     const auto digest = co_await sst->read_digest();
+    if (!digest) {
+        throw std::runtime_error(seastar::format("No digest available for SSTable: {}", sst->get_filename()));
+    }
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr, sstable::raw_stream::yes);
 
@@ -2682,9 +2688,9 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     try {
         if (sst->get_compression()) {
             if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
+                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, *digest);
             } else {
-                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
+                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, *digest);
             }
         } else {
             auto checksum = co_await sst->read_checksum();
@@ -2692,9 +2698,9 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                 sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
                 ret = validate_checksums_result::no_checksum;
             } else if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, digest);
+                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, *digest);
             } else {
-                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, digest);
+                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, *digest);
             }
         }
     } catch (...) {
