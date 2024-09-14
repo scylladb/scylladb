@@ -180,13 +180,13 @@ future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bu
     // We can explicitly write a partition-start fragment when the partition has
     // a partition tombstone.
     if (mf.is_partition_start()) {
-        return writer.consume(std::move(mf)).then([this, bucket = it->first, &writer] {
+        return writer.consume(std::move(mf)).then([this, bucket, &writer] {
             writer.set_has_current_partition();
             _buckets_used_for_current_partition.push_back(bucket);
         });
     }
 
-    return writer.consume(mutation_fragment_v2(*_schema, _permit, partition_start(_current_partition_start))).then([this, bucket = it->first, &writer, mf = std::move(mf)] () mutable {
+    return writer.consume(mutation_fragment_v2(*_schema, _permit, partition_start(_current_partition_start))).then([this, bucket, &writer, mf = std::move(mf)] () mutable {
         writer.set_has_current_partition();
         _buckets_used_for_current_partition.push_back(bucket);
         return writer.consume(std::move(mf));
