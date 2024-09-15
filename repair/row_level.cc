@@ -2014,7 +2014,7 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
     }
 }
 
-static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
+static future<> repair_put_row_diff_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         gms::inet_address from,
         uint32_t src_cpu_id,
@@ -2029,7 +2029,7 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
     if (row.cmd == repair_stream_cmd::row_data) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got row_data", from);
         current_rows.push_back(std::move(row.row));
-        co_return stop_iteration::no;
+        co_return;
     } else if (row.cmd == repair_stream_cmd::end_of_current_rows) {
         rlogger.trace("Got repair_rows_on_wire from peer={}, got end_of_current_rows", from);
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
@@ -2046,7 +2046,7 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
         });
         co_await sink(repair_stream_cmd::put_rows_done);
         co_await sink.flush();
-        co_return stop_iteration::no;
+        co_return;
     } else {
         throw std::runtime_error("Got unexpected repair_stream_cmd");
     }
