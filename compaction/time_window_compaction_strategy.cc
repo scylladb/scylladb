@@ -296,7 +296,8 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             // When trimming, let's keep sstables with overlapping time window, so as to reduce write amplification.
             // For example, if there are N sstables spanning window W, where N <= 32, then we can produce all data for W
             // in a single compaction round, removing the need to later compact W to reduce its number of files.
-            boost::partial_sort(multi_window, multi_window.begin() + max_sstables, [](const shared_sstable &a, const shared_sstable &b) {
+            auto sort_size = std::min(max_sstables, multi_window.size());
+            boost::partial_sort(multi_window, multi_window.begin() + sort_size, [](const shared_sstable &a, const shared_sstable &b) {
                 return a->get_stats_metadata().max_timestamp < b->get_stats_metadata().max_timestamp;
             });
             maybe_trim_job(multi_window, job_size, disjoint);
