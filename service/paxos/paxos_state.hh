@@ -56,6 +56,7 @@ private:
         guard(key_lock_map& map, const dht::token& key, clock_type::time_point timeout) : _map(map), _key(key), _timeout(timeout) {};
         guard(guard&& o) = default;
         ~guard() {
+            _units.return_all();
             _map.release_semaphore_for_key(_key);
         }
     };
