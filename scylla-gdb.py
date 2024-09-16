@@ -5664,6 +5664,77 @@ class scylla_sstable_index_cache(gdb.Command):
         gdb.write("Total: {} page(s) ({} loaded, {} loading)\n".format(loaded_pages + loading_pages, loaded_pages, loading_pages))
 
 
+class cached_file:
+    def __init__(self, file):
+        self.file = file
+        self.pages = dict((int(page['idx']), page['_lsa_buf']['_buf']) for page in bplus_tree(file['_cache']))
+        self.page_size = 4096
+
+    def has_page(self, page):
+        return page in self.pages
+
+    def read(self, offset, size):
+        page = offset // self.page_size
+        page_offset = offset % self.page_size
+        if page_offset + size > self.page_size:
+            size1 = self.page_size - page_offset
+            return self.read(offset, size1) + self.read(offset + size1, size - size1)
+        return self.get_page(page)[page_offset:page_offset + size]
+
+    def get_page(self, page_idx):
+        inf = gdb.selected_inferior()
+        return bytes(inf.read_memory(self.pages[page_idx], self.page_size))
+
+
+class scylla_sstable_promoted_index(gdb.Command):
+    """
+    Prints promoted index contents using cached index file contents
+
+    Usage:
+
+        $1 = (sstables::cached_promoted_index*) 0x7f7f7f7f7f7f
+        (gdb) scylla sstable-promoted-index *$1
+
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-promoted-index', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        pi = gdb.parse_and_eval(arg)
+
+        pi_start = int(pi['_promoted_index_start'])
+
+        offsets_end = pi_start + int(pi['_promoted_index_size'])
+        offsets_start = offsets_end - int(pi['_blocks_count']) * 4
+        cf = cached_file(pi['_cached_file'])
+
+        idx = 0
+        offsets = dict()
+        for off in range(offsets_start, offsets_end, 4):
+            try:
+                offset_bytes = cf.read(off, 4)
+                offsets[idx] = int.from_bytes(offset_bytes, byteorder='big')
+            except KeyError:
+                pass
+            idx += 1
+
+        last_block = int(pi['_blocks_count']) - 1
+        for i, off in offsets.items():
+            if i == last_block:
+                end = offsets_end
+            elif not i + 1 in offsets:
+                continue
+            else:
+                end = offsets[i + 1]
+            try:
+                idx_off = pi_start + off
+                buf = cf.read(idx_off, end - off)
+                gdb.write(f'[{i}] offset={off} {buf.hex()}\n')
+            except KeyError:
+                pass
+
+
 class permit_stats:
     def __init__(self, *args):
         if len(args) == 2:
@@ -6266,6 +6337,7 @@ scylla_schema()
 scylla_read_stats()
 scylla_get_config_value()
 scylla_range_tombstones()
+scylla_sstable_promoted_index()
 
 
 # Convenience functions
