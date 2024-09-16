@@ -1248,6 +1248,9 @@ class interval_printer(gdb.printing.PrettyPrinter):
         has_start, start_inclusive, start_value = self.inspect_bound(self.val['_start'])
         has_end, end_inclusive, end_value = self.inspect_bound(self.val['_end'])
 
+        if self.val['_singular']:
+            return '{{{}}}'.format(str(start_value))
+
         return '{}{}, {}{}'.format(
             '[' if start_inclusive else '(',
             str(start_value) if has_start else '-inf',
