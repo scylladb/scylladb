@@ -89,6 +89,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
         auto m2 = make_memtable(s, {mut});
         m->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
+        auto close_reader = deferred_close(reader);
         std::list<frozen_mutation_fragment> mfs;
         reader.consume_pausable([s, &mfs](mutation_fragment mf) {
             if ((mf.is_partition_start() && !mf.as_partition_start().partition_tombstone()) || mf.is_end_of_partition()) {
