@@ -504,6 +504,26 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     };
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
+
+    if (uses_secondary_indexing()) {
+        auto cf = db.find_column_family(schema);
+        auto& sim = cf.get_index_manager();
+        auto [index_opt, used_index_restrictions] = find_idx(sim);
+        if (!index_opt) {
+            throw std::runtime_error("No index found.");
+        }
+
+        const auto& im = index_opt->metadata();
+        sstring index_table_name = im.name() + "_index";
+        schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
+        _view_schema = view_schema;
+
+        if (im.local()) {
+            prepare_indexed_local(*view_schema);
+        } else {
+            prepare_indexed_global(*view_schema);
+        }
+    }
 }
 
 bool
@@ -1926,7 +1946,7 @@ bool statement_restrictions::need_filtering() const {
     return clustering_key_restrictions_need_filtering();
 }
 
-void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
+void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) const {
     if (key_is_in_relation()) {
         throw exceptions::invalid_request_exception(
             "Index cannot be used if the partition key is restricted with IN clause. This query would require filtering instead.");

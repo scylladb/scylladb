@@ -982,15 +982,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
         throw std::runtime_error("No index found.");
     }
 
-    const auto& im = index_opt->metadata();
-    sstring index_table_name = im.name() + "_index";
-    schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
-
-    if (im.local()) {
-        restrictions->prepare_indexed_local(*view_schema);
-    } else {
-        restrictions->prepare_indexed_global(*view_schema);
-    }
+    schema_ptr view_schema = restrictions->get_view_schema();
 
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
