@@ -100,10 +100,6 @@ public:
         return std::move(_sst->_components->summary);
     }
 
-    future<> read_toc() noexcept {
-        return _sst->read_toc();
-    }
-
     auto& get_components() {
         return _sst->_recognized_components;
     }
