@@ -5735,6 +5735,24 @@ class scylla_sstable_promoted_index(gdb.Command):
                 pass
 
 
+class scylla_sstable_dump_cached_index(gdb.Command):
+    """
+    Dumps cached index contents to a file named "index.dump"
+    Uncached pages will contain zeros.
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla sstable-dump-cached-index', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        pi = gdb.parse_and_eval(arg)
+        cf = cached_file(pi['_cached_file'])
+
+        with open('./index.dump', 'wb') as file:
+            for i in cf.pages.keys():
+                file.seek(i * cf.page_size)
+                file.write(cf.get_page(i))
+
+
 class permit_stats:
     def __init__(self, *args):
         if len(args) == 2:
@@ -6338,6 +6356,7 @@ scylla_read_stats()
 scylla_get_config_value()
 scylla_range_tombstones()
 scylla_sstable_promoted_index()
+scylla_sstable_dump_cached_index()
 
 
 # Convenience functions
