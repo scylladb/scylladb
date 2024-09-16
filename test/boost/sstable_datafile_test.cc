@@ -100,8 +100,8 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         auto sst2 = env.reusable_sst(sst).get();
 
         sstables::test(sst2).read_summary().get();
-        summary& sst1_s = sstables::test(sst).get_summary();
-        summary& sst2_s = sstables::test(sst2).get_summary();
+        const summary& sst1_s = sst->get_summary();
+        const summary& sst2_s = sst2->get_summary();
 
         BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
@@ -2115,7 +2115,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
 
         auto sst = make_sstable_containing(env.make_sstable(s), mutations);
 
-        summary& sum = sstables::test(sst).get_summary();
+        const summary& sum = sst->get_summary();
         BOOST_REQUIRE(sum.entries.size() == 1);
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
@@ -2319,7 +2319,7 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
 
         sstables::test(sst).remove_component(component_type::Summary).get();
         sst = env.reusable_sst(sst).get();
-        summary& s2 = sstables::test(sst).get_summary();
+        const summary& s2 = sst->get_summary();
 
         BOOST_REQUIRE(::memcmp(&s1.header, &s2.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(s1.positions == s2.positions);

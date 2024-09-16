@@ -153,7 +153,7 @@ SEASTAR_TEST_CASE(missing_summary_interval_1_query_ok) {
 
 SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 2, [] (test_env& env, shared_sstable ptr) {
-        auto& summary = sstables::test(ptr).get_summary();
+        const auto& summary = ptr->get_summary();
         BOOST_REQUIRE(summary.header.size == 1);
         BOOST_REQUIRE(summary.positions.size() == 1);
         BOOST_REQUIRE(summary.entries.size() == 1);
@@ -205,8 +205,8 @@ SEASTAR_TEST_CASE(check_summary_func) {
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_summary().get();
 
-        summary& sst1_s = sstables::test(sst1).get_summary();
-        summary& sst2_s = sstables::test(sst2).get_summary();
+        const summary& sst1_s = sst1->get_summary();
+        const summary& sst2_s = sst2->get_summary();
 
         BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);

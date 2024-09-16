@@ -96,10 +96,6 @@ public:
         return _sst->read_summary_entry(i);
     }
 
-    summary& get_summary() {
-        return _sst->_components->summary;
-    }
-
     summary move_summary() {
         return std::move(_sst->_components->summary);
     }
