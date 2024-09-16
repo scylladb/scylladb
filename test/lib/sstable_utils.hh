@@ -88,10 +88,6 @@ public:
         return _sst->read_statistics();
     }
 
-    statistics& get_statistics() {
-        return _sst->_components->statistics;
-    }
-
     future<> read_summary() noexcept {
         return _sst->read_summary();
     }
