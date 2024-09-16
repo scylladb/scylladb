@@ -150,6 +150,7 @@ public:
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
         virtual bool set_value(sstring, config_source = config_source::Internal) = 0;
+        virtual void reset_value_to_default() = 0;
         virtual future<> set_value_on_all_shards(const YAML::Node&) = 0;
         virtual future<bool> set_value_on_all_shards(sstring, config_source = config_source::Internal) = 0;
         virtual value_status status() const noexcept = 0;
@@ -177,6 +178,7 @@ public:
         };
         liveness _liveness;
         std::vector<T> _allowed_values;
+        T _default_value;
     protected:
         updateable_value_source<T>& the_value() {
             any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
@@ -197,7 +199,8 @@ public:
             : config_src(file, name, alias, &config_type_for<T>, desc)
             , _value_status(vs)
             , _liveness(liveness_)
-            , _allowed_values(std::move(allowed_values)) {
+            , _allowed_values(std::move(allowed_values))
+            , _default_value(t) {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
         }
         named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
@@ -259,6 +262,7 @@ public:
         void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&) override;
         bool set_value(sstring, config_source = config_source::Internal) override;
+        void reset_value_to_default() override;
         // For setting a single value on all shards,
         // without having to call broadcast_to_all_shards
         // that broadcasts all values to all shards.
