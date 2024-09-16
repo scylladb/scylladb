@@ -2314,7 +2314,8 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
 
         auto sst = make_sstable_containing(env.make_sstable(s), mutations);
 
-        summary s1 = sstables::test(sst).move_summary();
+        summary s1 = std::move(sstables::test(sst)._summary());
+        BOOST_REQUIRE(!(bool)sstables::test(sst)._summary()); // make sure std::move above took place
         BOOST_REQUIRE(s1.entries.size() > 1);
 
         sstables::test(sst).remove_component(component_type::Summary).get();
