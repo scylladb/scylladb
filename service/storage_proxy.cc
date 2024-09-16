@@ -399,7 +399,7 @@ public:
         return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
     }
 
-    future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
+    future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
         if (!_gossiper.get_unreachable_token_owners().empty()) {
             slogger.info("Cannot perform truncate, some hosts are down");
             // Since the truncate operation is so aggressive and is typically only
@@ -413,7 +413,7 @@ public:
         }
 
         auto all_endpoints = _gossiper.get_live_token_owners();
-        auto timeout = clock_type::now() + timeout_in_ms.value_or(std::chrono::milliseconds(_sp._db.local().get_config().truncate_request_timeout_in_ms()));
+        auto timeout = clock_type::now() + timeout_in_ms;
 
         slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
 
@@ -6568,7 +6568,7 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
     return type == db::write_type::VIEW ? _hints_for_views_manager : _hints_manager;
 }
 
-future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
+future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
     slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
     if (local_db().find_keyspace(keyspace).get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
