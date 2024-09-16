@@ -250,7 +250,7 @@ SEASTAR_TEST_CASE(check_toc_func) {
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto& env, auto sstp) {
-        temporary_buffer<char> buf = sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).get();
+        temporary_buffer<char> buf = sstp->data_read(97, 6, env.make_reader_permit()).get();
         BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
     });
 }
@@ -258,7 +258,7 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 SEASTAR_TEST_CASE(compressed_random_access_read) {
     auto s = make_schema_for_compressed_sstable();
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto& env, auto sstp) {
-        temporary_buffer<char> buf = sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).get();
+        temporary_buffer<char> buf = sstp->data_read(97, 6, env.make_reader_permit()).get();
         BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
     });
 }

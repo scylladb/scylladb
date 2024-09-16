@@ -47,10 +47,6 @@ public:
         return _sst->_components->summary;
     }
 
-    future<temporary_buffer<char>> data_read(reader_permit permit, uint64_t pos, size_t len) {
-        return _sst->data_read(pos, len, std::move(permit));
-    }
-
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
         return std::make_unique<index_reader>(_sst, std::move(permit));
     }
