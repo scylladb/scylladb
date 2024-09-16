@@ -13,7 +13,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/index_reader.hh"
-#include "sstables/binary_search.hh"
 #include "sstables/writer.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/memtable-sstable.hh"
@@ -98,11 +97,6 @@ public:
 
     auto& get_components() {
         return _sst->_recognized_components;
-    }
-
-    template <typename T>
-    int binary_search(const dht::i_partitioner& p, const T& entries, const key& sk) {
-        return sstables::binary_search(p, entries, sk);
     }
 
     void change_generation_number(sstables::generation_type generation) {
