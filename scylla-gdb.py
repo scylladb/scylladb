@@ -474,6 +474,32 @@ class std_map:
         return self.size
 
 
+class std_set:
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        self.value_type = gdb.parse_and_eval(f'(({container_type}::value_type*)0)').type.target()
+        self.root = ref['_M_t']['_M_impl']['_M_header']['_M_parent']
+        self.size = int(ref['_M_t']['_M_impl']['_M_node_count'])
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['_M_left']):
+                yield n
+
+            value = (node + 1).cast(self.value_type.pointer()).dereference()
+            yield value
+
+            for n in self.__visit(node['_M_right']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
+    def __len__(self):
+        return self.size
+
+
 class std_array:
     def __init__(self, ref):
         self.ref = ref
