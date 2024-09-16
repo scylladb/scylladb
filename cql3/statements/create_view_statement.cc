@@ -164,6 +164,15 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
                 "before being replayed.", column_family(), _base_name.get_column_family()));
     }
 
+    if (_properties.properties()->get_gc_grace_seconds() == 0) {
+        throw exceptions::invalid_request_exception(fmt::format(
+                "Cannot create materialized view '{}' with gc_grace_seconds "
+                "of 0 for base table '{}' , since this value is "
+                "used to TTL undelivered updates. Setting gc_grace_seconds "
+                "too low might cause undelivered updates to expire "
+                "before being replayed.", column_family(), _base_name.get_column_family()));
+    }
+
     // Gather all included columns, as specified by the select clause
     auto included = boost::copy_range<std::unordered_set<const column_definition*>>(_select_clause | boost::adaptors::transformed([&](auto&& selector) {
         if (selector->alias) {

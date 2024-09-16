@@ -288,6 +288,30 @@ def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
+# In Cassandra's implementation of materialized views, base replicas use a batchlog
+# to increase durability of view updates. Similarly, Scylla uses hinted handoff
+# to replay failed view updates. In both cases, batchlog entries / hints expire
+# after gc_grace_seconds of the view. Therefore, it doesn't make sense to set
+# gc_grace_seconds to a small value as this causes entries / hints to expire
+# immediately.
+#
+# Scylla inherited a check from Cassandra implemented in CASSANDRA-9917 which
+# forbids altering an existing view to set its gc_grace_seconds equal to 0.
+# However, it is not forbidden to create a materialized view with gc_grace_seconds=0.
+# Given the intention of the original issue - forbid using an obviously wrong
+# setting of gc_grace_seconds=0 - this looks like an oversight.
+#
+# This test verifies that we have this additional check and it is forbidden
+# to create a MV with gc_grace_seconds=0.
+def test_zero_gc_grace_seconds_for_view_is_forbidden(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match=f"Cannot create materialized view '{mv}' with gc_grace_seconds of 0"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT NULL PRIMARY KEY (p) WITH gc_grace_seconds = 0")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+
 # Test that a view can be altered with synchronous_updates property and that
 # the synchronous updates code path is then reached for such view.
 # The synchronous_updates feature is a ScyllaDB extension, so this is a
