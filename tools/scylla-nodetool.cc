@@ -2057,7 +2057,6 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto leaving = get_nodes_of_state(client, "leaving");
     const auto moving = get_nodes_of_state(client, "moving");
     const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
-    const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
 
     const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
 
@@ -2076,6 +2075,9 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         tokens_endpoint_params["cf"] = *table;
     }
     const auto tokens_endpoint_res = client.get("/storage_service/tokens_endpoint", std::move(tokens_endpoint_params));
+
+    const auto endpoint_host_id = rjson_to_map<sstring>(client.get("/storage_service/host_id"));
+
     for (const auto& te : tokens_endpoint_res.GetArray()) {
         const auto ep = sstring(rjson::to_string_view(te["value"]));
          // We are not printing the actual tokens, so it is enough just to count them.
