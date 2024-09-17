@@ -17,6 +17,7 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include <limits>
 #include <utility>
 #include <fmt/ranges.h>
 #include <absl/container/flat_hash_map.h>
@@ -1120,9 +1121,19 @@ public:
 
             // Drop targets which would increase max rack load.
 
-            max_rack_load = std::max_element(rack_load.begin(), rack_load.end(),
-                                                  [] (auto& a, auto& b) { return a.second < b.second; })->second;
+            int min_rack_load = std::numeric_limits<int>::min();
+            int max_rack_load = std::numeric_limits<int>::max();
+            for (const auto& [_, load] : rack_load) {
+                if (min_rack_load < load) {
+                    min_rack_load = load;
+                }
+                if (max_rack_load > load) {
+                    max_rack_load = load;
+                }
+            }
 
+          // FIXME: indentation
+          if (min_rack_load < max_rack_load) {
             for (auto i = viable_targets.begin(); i != viable_targets.end(); ) {
                 auto target = *i;
                 auto& t_info = nodes[target];
@@ -1130,10 +1141,12 @@ public:
                 if (src_info.rack() != t_info.rack()) {
                     auto new_rack_load = rack_load[t_info.rack()] + 1;
                     if (new_rack_load > max_rack_load) {
+                        lblogger.debug("Erasing {} from viable_targets as it would increase max rack load: rack_load={} min_rack_load={}", *old_i, rack_load[t_info.rack()], min_rack_load);
                         viable_targets.erase(old_i);
                     }
                 }
             }
+          }
 
             return viable_targets;
         };
