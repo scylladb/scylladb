@@ -38,7 +38,8 @@ query::clustering_row_ranges slice(
             ctx,
             /*contains_only_static_columns=*/false,
             /*for_view=*/false,
-            /*allow_filtering=*/true)
+            /*allow_filtering=*/true,
+            restrictions::check_indexes::yes)
             .get_clustering_bounds(query_options({}));
 }
 

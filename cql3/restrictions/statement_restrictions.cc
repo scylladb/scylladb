@@ -450,6 +450,60 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
     }
+
+    calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db);
+
+    if (pk_restrictions_need_filtering()) {
+        auto partition_key_filter = expr::conjunction{
+            .children = _single_column_partition_key_restrictions
+                    | std::ranges::views::values
+                    | std::ranges::to<std::vector>(),
+        };
+        _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(partition_key_filter));
+    }
+
+    if (ck_restrictions_need_filtering()) {
+        auto clustering_key_filter = expr::conjunction{
+            .children = _single_column_clustering_key_restrictions
+                    | std::ranges::views::values
+                    | std::ranges::to<std::vector>(),
+        };
+        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(clustering_key_filter));
+    }
+
+    auto check_column_kind = [] (column_kind kind, const expr::single_column_restrictions_map::value_type& v) -> bool {
+        return v.first->kind == kind;
+    };
+
+    auto make_column_kind_checker = [&] (column_kind kind) {
+        return std::bind_front(check_column_kind, kind);
+    };
+
+    auto static_columns_filter = expr::conjunction{
+        .children = _single_column_nonprimary_key_restrictions
+                | std::ranges::views::filter(make_column_kind_checker(column_kind::static_column))
+                | std::ranges::views::values
+                | std::ranges::to<std::vector>(),
+    };
+
+    _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(static_columns_filter));
+
+    auto regular_columns_filter = expr::conjunction{
+        .children = _single_column_nonprimary_key_restrictions
+                | std::ranges::views::filter(make_column_kind_checker(column_kind::regular_column))
+                | std::ranges::views::values
+                | std::ranges::to<std::vector>(),
+    };
+
+    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
+
+    auto multi_column_restrictions = expr::conjunction{
+        .children = expr::boolean_factors(_clustering_columns_restrictions)
+                | std::ranges::views::filter(expr::contains_multi_column_restriction)
+                | std::ranges::to<std::vector>()
+    };
+
+    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
 }
 
 bool
@@ -533,6 +587,10 @@ int statement_restrictions::score(const secondary_index::index& index) const {
 }
 
 std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
+    if (!_uses_secondary_indexing) {
+        return {std::nullopt, expr::conjunction({})};
+    }
+
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
     expr::expression chosen_index_restrictions = expr::conjunction({});
@@ -576,6 +634,10 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
+    return _column_defs_for_filtering;
+}
+
+void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db) {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
@@ -598,6 +660,8 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                 }
                 if (!column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
+                } else {
+                    _single_column_partition_key_restrictions.erase(it);
                 }
             }
         }
@@ -607,22 +671,28 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                     num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
                 const expr::expression* single_col_restr = nullptr;
-                auto it = _single_column_partition_key_restrictions.find(cdef);
-                if (it != _single_column_partition_key_restrictions.end()) {
+                auto it = _single_column_clustering_key_restrictions.find(cdef);
+                if (it != _single_column_clustering_key_restrictions.end()) {
                     single_col_restr = &it->second;
                 }
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, single_col_restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
+                } else {
+                    _single_column_clustering_key_restrictions.erase(it);
                 }
             }
         }
-        for (auto&& [cdef, cur_restr] : _single_column_nonprimary_key_restrictions) {
+        for (auto it = _single_column_nonprimary_key_restrictions.begin(); it != _single_column_nonprimary_key_restrictions.end();) {
+            auto&& [cdef, cur_restr] = *it;
             if (!column_uses_indexing(cdef, &cur_restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
+                ++it;
+            } else {
+                it = _single_column_nonprimary_key_restrictions.erase(it);
             }
         }
     }
-    return column_defs_for_filtering;
+    _column_defs_for_filtering = std::move(column_defs_for_filtering);
 }
 
 void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
@@ -1861,17 +1931,6 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
         throw exceptions::invalid_request_exception(
             "Index cannot be used if the partition key is restricted with IN clause. This query would require filtering instead.");
     }
-}
-
-const expr::single_column_restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
-    return _single_column_partition_key_restrictions;
-}
-
-/**
- * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
- */
-const expr::single_column_restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
-    return _single_column_clustering_key_restrictions;
 }
 
 void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {

@@ -208,10 +208,9 @@ public:
     class restrictions_filter {
         const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
         const query_options& _options;
-        const bool _skip_pk_restrictions;
-        const bool _skip_ck_restrictions;
-        mutable bool _current_partition_key_does_not_match = false;
-        mutable bool _current_static_row_does_not_match = false;
+        const expr::expression& _partition_level_filter;
+        const expr::expression& _clustering_row_level_filter;
+        mutable bool _current_partition_does_not_match = false;
         mutable uint64_t _rows_dropped = 0;
         mutable uint64_t _remaining;
         schema_ptr _schema;

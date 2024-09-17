@@ -41,6 +41,7 @@ private:
     expr::expression _partition_key_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_partition_key_restrictions;
+    expr::expression _partition_level_filter = expr::conjunction({});
 
     /**
      * Restrictions on clustering columns
@@ -48,6 +49,7 @@ private:
     expr::expression _clustering_columns_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
+    expr::expression _clustering_row_level_filter = expr::conjunction({});
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
@@ -55,6 +57,9 @@ private:
     expr::expression _nonprimary_key_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
+
+    expr::expression _regular_columns_filter = expr::conjunction({});
+
 
     std::unordered_set<const column_definition*> _not_null_columns;
 
@@ -114,6 +119,7 @@ private:
 
 
     check_indexes _check_indexes = check_indexes::yes;
+    std::vector<const column_definition*> _column_defs_for_filtering;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -129,9 +135,9 @@ public:
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
-        bool for_view = false,
-        bool allow_filtering = false,
-        check_indexes do_check_indexes = check_indexes::yes);
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
 
     const std::vector<expr::expression>& index_restrictions() const;
 
@@ -286,7 +292,7 @@ private:
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
-
+    void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db);
 public:
     /**
      * Returns the specified range of the partition key.
@@ -343,15 +349,19 @@ public:
         return _single_column_nonprimary_key_restrictions;
     }
 
-    /**
-     * @return partition key restrictions split into single column restrictions (e.g. for filtering support).
-     */
-    const expr::single_column_restrictions_map& get_single_column_partition_key_restrictions() const;
+    // Returns any filter that needs to be applied to a row, but if it fails, it will fail for all rows in the partition.
+    // If a column is used for a secondary index, it will not be in the filter.
+    //
+    // This filter will only reference partition key columns and static columns.
+    const expr::expression& get_partition_level_filter() const {
+        return _partition_level_filter;
+    }
 
-    /**
-     * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
-     */
-    const expr::single_column_restrictions_map& get_single_column_clustering_key_restrictions() const;
+    // Returns any filter that needs to be applied to each clustering row. If one of the column restrictions is translated
+    // to read_command, it will not be in the filter.
+    const expr::expression& get_clustering_row_level_filter() const {
+        return _clustering_row_level_filter;
+    }
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().
