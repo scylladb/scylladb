@@ -20,6 +20,21 @@ using namespace std::chrono_literals;
 
 namespace node_ops {
 
+static sstring request_type_to_task_type(const std::optional<service::topology_request>& request_type) {
+    return request_type.transform([] (auto type) -> sstring {
+        switch (type) {
+            case service::topology_request::join:
+                return "bootstrap";
+            case service::topology_request::remove:
+                return "remove node";
+            case service::topology_request::leave:
+                return "decommission";
+            default:
+                return fmt::to_string(type);
+        }
+    }).value_or("");
+}
+
 static tasks::task_manager::task_state get_state(const db::system_keyspace::topology_requests_entry& entry) {
     if (!entry.id) {
         return tasks::task_manager::task_state::created;
@@ -59,10 +74,9 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_help
     if (!started && !get_pending_ids(topology).contains(id)) {
         co_return std::nullopt;
     }
-    auto type = entry.request_type ? fmt::format("{}", entry.request_type.value()) : "";
     co_return tasks::task_status{
         .task_id = id,
-        .type = std::move(type),
+        .type = request_type_to_task_type(entry.request_type),
         .kind = tasks::task_kind::cluster,
         .scope = "cluster",
         .state = get_state(entry),
@@ -121,10 +135,9 @@ future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
             | boost::adaptors::transformed([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
-        auto type = entry.request_type ? fmt::format("{}", entry.request_type.value()) : "";
         return tasks::task_stats {
             .task_id = tasks::task_id{id},
-            .type = std::move(type),
+            .type = node_ops::request_type_to_task_type(entry.request_type),
             .kind = tasks::task_kind::cluster,
             .scope = "cluster",
             .state = get_state(entry),

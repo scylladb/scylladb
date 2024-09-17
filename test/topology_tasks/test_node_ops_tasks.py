@@ -80,12 +80,12 @@ async def check_bootstrap_tasks_tree(tm: TaskManagerClient, module_name: str, se
 
     for virtual_task in virtual_tasks:
         if virtual_task.id in bootstrap_with_streaming:
-            check_virtual_task_status(virtual_task, "done", "join", 1)
+            check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
 
             child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
             check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
         else:
-            check_virtual_task_status(virtual_task, "done", "join", 0)
+            check_virtual_task_status(virtual_task, "done", "bootstrap", 0)
 
     return (servers, [vt.id for vt in virtual_tasks])
 
@@ -148,7 +148,7 @@ async def check_remove_node_tasks_tree(manager: ManagerClient, tm: TaskManagerCl
 
     virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, 1)
     virtual_task = virtual_tasks[0]
-    check_virtual_task_status(virtual_task, "done", "remove", len(servers))
+    check_virtual_task_status(virtual_task, "done", "remove node", len(servers))
 
     child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
     check_regular_task_status(child, "done", "removenode: streaming", "node", virtual_task.id, 0)
@@ -180,7 +180,7 @@ async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerC
 
         virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, 1)
         virtual_task = virtual_tasks[0]
-        check_virtual_task_status(virtual_task, "running", "leave", 1)
+        check_virtual_task_status(virtual_task, "running", "decommission", 1)
 
         child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
         check_regular_task_status(child, "running", "decommission: streaming", "node", virtual_task.id, 0)
@@ -233,7 +233,7 @@ async def test_node_ops_task_wait(manager: ManagerClient):
         await manager.decommission_node(server.server_id)
 
     async def _wait_for_task(tm: TaskManagerClient, module_name: str, server: ServerInfo, handler: InjectionHandler):
-        task = await poll_for_task(tm, module_name, servers[1], "cluster", "leave")
+        task = await poll_for_task(tm, module_name, servers[1], "cluster", "decommission")
         assert task.state == "running"
 
         await handler.message()
