@@ -29,8 +29,6 @@ stats::stats() : api_operations{} {
 						                        seastar::metrics::description("Latency summary of an operation via Alternator API"), [this]{return to_metrics_summary(api_operations.name.summary());})(op(CamelCaseName)).set_skip_when_empty(),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
-            OPERATION(batch_get_item_batch_total, "BatchGetItemSize")
-            OPERATION(batch_write_item_batch_total, "BatchWriteItemSize")
             OPERATION(create_backup, "CreateBackup")
             OPERATION(create_global_table, "CreateGlobalTable")
             OPERATION(create_table, "CreateTable")
@@ -98,6 +96,10 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of rows read and matched during filtering operations")),
             seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
                     seastar::metrics::description("number of rows read and dropped during filtering operations")),
+                    seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchWriteItem")},
+                            api_operations.batch_write_item_batch_total).set_skip_when_empty(),
+                    seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchGetItem")},
+                            api_operations.batch_get_item_batch_total).set_skip_when_empty(),
     });
 }
 
