@@ -478,7 +478,8 @@ class PythonTestSuite(TestSuite):
                 config_options=config_options,
                 property_file=create_cfg.property_file,
                 append_env=self.base_env,
-                server_encryption=create_cfg.server_encryption)
+                server_encryption=create_cfg.server_encryption,
+                endpoint_snitch=create_cfg.endpoint_snitch)
 
             return server
 

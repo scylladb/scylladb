@@ -294,7 +294,8 @@ class ManagerClient():
                                 seeds: Optional[List[IPAddress]],
                                 expected_error: Optional[str],
                                 server_encryption: Optional[str],
-                                expected_server_up_state: Optional[ServerUpState]) -> dict[str, Any]:
+                                expected_server_up_state: Optional[ServerUpState],
+                                endpoint_snitch: Optional[str]) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -312,6 +313,8 @@ class ManagerClient():
             data['server_encryption'] = server_encryption
         if expected_server_up_state:
             data['expected_server_up_state'] = expected_server_up_state.name
+        if endpoint_snitch:
+            data['endpoint_snitch'] = endpoint_snitch
         return data
 
     async def server_add(self,
@@ -324,7 +327,8 @@ class ManagerClient():
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
-                         expected_server_up_state: Optional[ServerUpState] = None) -> ServerInfo:
+                         expected_server_up_state: Optional[ServerUpState] = None,
+                         endpoint_snitch: Optional[str] = None) -> ServerInfo:
         """Add a new server"""
         try:
             data = self._create_server_add_data(
@@ -337,6 +341,7 @@ class ManagerClient():
                 expected_error,
                 server_encryption,
                 expected_server_up_state,
+                endpoint_snitch,
             )
 
             # If we replace, we should wait until other nodes see the node being
@@ -351,7 +356,7 @@ class ManagerClient():
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=timeout)
         except Exception as exc:
-            raise Exception("Failed to add server") from exc
+            raise Exception(f"Failed to add server: {exc}") from exc
         try:
             s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
                                 IPAddress(server_info["ip_addr"]),
@@ -374,7 +379,8 @@ class ManagerClient():
                           seeds: Optional[List[IPAddress]] = None,
                           driver_connect_opts: dict[str, Any] = {},
                           expected_error: Optional[str] = None,
-                          server_encryption: str = "none") -> List[ServerInfo]:
+                          server_encryption: str = "none",
+                          endpoint_snitch: Optional[str] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
@@ -382,12 +388,12 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption, None)
+            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption, None, endpoint_snitch)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
         except Exception as exc:
-            raise Exception("Failed to add servers") from exc
+            raise Exception(f"Failed to add servers: {exc}") from exc
 
         assert len(server_infos) == servers_num, f"servers_add requested adding {servers_num} servers but " \
                                     f"got server data about {len(server_infos)} servers: {server_infos}"

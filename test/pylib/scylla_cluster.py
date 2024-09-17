@@ -67,7 +67,7 @@ class ReplaceConfig(NamedTuple):
 
 
 def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str,
-                     socket_path: str, server_encryption: str) -> dict[str, object]:
+                     socket_path: str, server_encryption: str, endpoint_snitch: Optional[str]) -> dict[str, object]:
     # We significantly increase default timeouts to allow running tests on a very slow
     # setup (but without network losses). These timeouts can impact the running time of
     # topology tests. For example, the barrier_and_drain topology command waits until
@@ -77,7 +77,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
     # we increase the CQL driver's client-side timeout in conftest.py.
     request_timeout_in_ms = 180000 if mode in {'debug', 'sanitize'} else 30000
 
-    return {
+    res = {
         'cluster_name': cluster_name,
         'workdir': str(workdir.resolve()),
         'listen_address': host_addr,
@@ -138,6 +138,11 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         },
 
     }
+
+    if endpoint_snitch:
+        res["endpoint_snitch"] = endpoint_snitch
+
+    return res
 
 # Seastar options can not be passed through scylla.yaml, use command line
 # for them. Keep everything else in the configuration file to make
@@ -268,7 +273,8 @@ class ScyllaServer:
                  config_options: Dict[str, Any],
                  property_file: Dict[str, Any],
                  append_env: Dict[str,Any],
-                 server_encryption: str) -> None:
+                 server_encryption: str,
+                 endpoint_snitch: Optional[str]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         # this variable needed to make a cleanup after server is not needed anymore
@@ -298,6 +304,7 @@ class ScyllaServer:
         self.resourcesdir = pathlib.Path.cwd() / "test/pylib/resources"
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
+        self.endpoint_snitch = endpoint_snitch or "GossipingPropertyFileSnitch" if property_file else None
 
         # Sum of basic server configuration and the user-provided config options.
         self.config = make_scylla_conf(
@@ -307,7 +314,8 @@ class ScyllaServer:
                 seed_addrs = self.seeds,
                 cluster_name = self.cluster_name,
                 server_encryption = server_encryption,
-                socket_path=self.maintenance_socket_path) \
+                socket_path=self.maintenance_socket_path,
+                endpoint_snitch = self.endpoint_snitch) \
             | config_options
         self.property_file = property_file
         self.append_env = append_env
@@ -788,10 +796,11 @@ class ScyllaCluster:
         cluster_name: str
         ip_addr: IPAddress
         seeds: List[str]
-        property_file: dict[str, Any]
+        property_file: dict[str, Any] | None
         config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
         server_encryption: str
+        endpoint_snitch: Optional[str]
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
                  host_registry: HostRegistry, replicas: int,
@@ -894,7 +903,8 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                         endpoint_snitch: Optional[str] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -944,8 +954,9 @@ class ScyllaCluster:
             seeds = seeds,
             property_file = property_file,
             config_from_test = extra_config,
+            cmdline_from_test = cmdline or [],
             server_encryption = server_encryption,
-            cmdline_from_test = cmdline or []
+            endpoint_snitch = endpoint_snitch,
         )
 
         server = None
@@ -988,11 +999,12 @@ class ScyllaCluster:
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           server_encryption: str = "none",
-                          expected_error: Optional[str] = None) -> List[ServerInfo]:
+                          expected_error: Optional[str] = None,
+                          endpoint_snitch: Optional[str] = None) -> List[ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error)
+        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error, endpoint_snitch=endpoint_snitch)
                                       for _ in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -1535,6 +1547,7 @@ class ScyllaClusterManager:
             server_encryption=data.get("server_encryption", "none"),
             expected_error=data.get("expected_error"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
+            endpoint_snitch=data.get("endpoint_snitch"),
         )
         return {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
 
@@ -1544,7 +1557,8 @@ class ScyllaClusterManager:
         data = await request.json()
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
                                                  data.get('property_file'), data.get('start', True),
-                                                 data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None))
+                                                 data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None),
+                                                 endpoint_snitch=data.get('endpoint_snitch'))
         return [
             {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
             for s_info in s_infos
