@@ -10,6 +10,7 @@
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "auth/permission.hh"
+#include "auth/resource.hh"
 #include "cdc/log.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
@@ -558,44 +559,34 @@ future<> verify_permission(
     const service::client_state& client_state,
     const schema_ptr& schema,
     auth::permission permission_to_check) {
-    // Using exceptions for errors makes this function faster in the success
-    // path (when the operation is allowed). Using a continuation instead of
-    // co_await makes it faster (no allocation) in the happy path where
-    // permissions are cached and check_has_permissions() doesn't yield.
-    return client_state.check_has_permission(auth::command_desc(
-            permission_to_check,
-            auth::make_data_resource(schema->ks_name(), schema->cf_name()))).then(
-        [permission_to_check, &schema, &client_state] (bool allowed) {
-            if (!allowed) {
-                sstring username = "anonymous";
-                if (client_state.user() && client_state.user()->name) {
-                    username = client_state.user()->name.value();
-                }
-                throw api_error::access_denied(format(
-                    "{} access on table {}.{} is denied to role {}",
-                    auth::permissions::to_string(permission_to_check),
-                    schema->ks_name(), schema->cf_name(), username));
-            }
-        });
+    auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
+    if (!co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
+        sstring username = "anonymous";
+        if (client_state.user() && client_state.user()->name) {
+            username = client_state.user()->name.value();
+        }
+        // Using exceptions for errors makes this function faster in the
+        // success path (when the operation is allowed).
+        throw api_error::access_denied(format(
+            "{} access on table {}.{} is denied to role {}",
+            auth::permissions::to_string(permission_to_check),
+            schema->ks_name(), schema->cf_name(), username));
+    }
 }
 
 // Similar to verify_permission() above, but just for CREATE operations.
 // Those do not operate on any specific table, so require permissions on
 // ALL KEYSPACES instead of any specific table.
 future<> verify_create_permission(const service::client_state& client_state) {
-    return client_state.check_has_permission(auth::command_desc(
-            auth::permission::CREATE,
-            auth::resource(auth::resource_kind::data))).then(
-        [&client_state] (bool allowed) {
-            if (!allowed) {
-                sstring username = "anonymous";
-                if (client_state.user() && client_state.user()->name) {
-                    username = client_state.user()->name.value();
-                }
-                throw api_error::access_denied(format(
-                    "CREATE access on ALL KEYSPACES is denied to role {}", username));
-            }
-        });
+    auto resource = auth::resource(auth::resource_kind::data);
+    if (!co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
+        sstring username = "anonymous";
+        if (client_state.user() && client_state.user()->name) {
+            username = client_state.user()->name.value();
+        }
+        throw api_error::access_denied(format(
+            "CREATE access on ALL KEYSPACES is denied to role {}", username));
+    }
 }
 
 future<executor::request_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
@@ -643,11 +634,11 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         // to the group0_batch and back to the pair :-(
         service::group0_batch mc(std::move(group0_guard));
         mc.add_mutations(std::move(m));
-        co_await auth::revoke_all(*cs.get().get_auth_service(),
-            auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
+        auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
+        co_await auth::revoke_all(*cs.get().get_auth_service(), resource, mc);
         for (const view_ptr& v : tbl->views()) {
-            co_await auth::revoke_all(*cs.get().get_auth_service(),
-                auth::make_data_resource(v->ks_name(), v->cf_name()), mc);
+            resource = auth::make_data_resource(v->ks_name(), v->cf_name());
+            co_await auth::revoke_all(*cs.get().get_auth_service(), resource, mc);
         }
         std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
@@ -1274,13 +1265,15 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // between the pair to the group0_batch and back to the pair :-(
     service::group0_batch mc(std::move(group0_guard));
     mc.add_mutations(std::move(schema_mutations));
-    co_await auth::grant_applicable_permissions(
-        *client_state.get_auth_service(), *client_state.user(),
-        auth::make_data_resource(schema->ks_name(), schema->cf_name()), mc);
-    for (const schema_builder& view_builder : view_builders) {
+    if (client_state.user()) {
+        auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
         co_await auth::grant_applicable_permissions(
-            *client_state.get_auth_service(), *client_state.user(),
-            auth::make_data_resource(view_builder.ks_name(), view_builder.cf_name()), mc);
+            *client_state.get_auth_service(), *client_state.user(), resource, mc);
+        for (const schema_builder& view_builder : view_builders) {
+            resource = auth::make_data_resource(view_builder.ks_name(), view_builder.cf_name());
+            co_await auth::grant_applicable_permissions(
+                *client_state.get_auth_service(), *client_state.user(), resource, mc);
+        }
     }
     std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
 
