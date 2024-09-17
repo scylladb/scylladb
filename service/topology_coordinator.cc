@@ -2466,6 +2466,9 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
     if (plan.finalize_resize.empty()) {
         co_return false;
     }
+    if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
+        co_return false;
+    }
 
     std::vector<canonical_mutation> updates;
 
