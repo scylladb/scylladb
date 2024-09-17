@@ -975,26 +975,19 @@ template <typename Process>
                                    bool,
                                    cql3::computed_function_values,
                                    cql3::dialect>
-future<cql_server::result_with_foreign_response_ptr>
-cql_server::connection::process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-        service::client_state& cs, tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn) {
-    return _server.container().invoke_on(shard, _server._config.bounce_request_smp_service_group,
-            [this, is, cs = cs.move_to_other_shard(), stream, process_fn,
-             gt = tracing::global_trace_state_ptr(std::move(trace_state)),
-             cached_vals, dialect] (cql_server& server) {
-        service::client_state client_state = cs.get();
-        return do_with(bytes_ostream(), std::move(client_state), cached_vals,
-                [this, &server, is = is, stream, process_fn,
-                 trace_state = tracing::trace_state_ptr(gt), dialect] (bytes_ostream& linearization_buffer,
-                    service::client_state& client_state,
-                    cql3::computed_function_values& cached_vals) mutable {
-            request_reader in(is, linearization_buffer);
-            return process_fn(client_state, server._query_processor, in, stream, _version,
-                    /* FIXME */empty_service_permit(), std::move(trace_state), false, cached_vals, dialect).then([] (auto msg) {
-                // result here has to be foreign ptr
-                return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
-            });
-        });
+future<cql_server::process_fn_return_type>
+cql_server::connection::process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
+                tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn) {
+    auto sg = _server._config.bounce_request_smp_service_group;
+    auto gcs = cs.move_to_other_shard();
+    auto gt = tracing::global_trace_state_ptr(std::move(trace_state));
+    co_return co_await _server.container().invoke_on(shard, sg, [&, stream, dialect] (cql_server& server) -> future<process_fn_return_type> {
+        bytes_ostream linearization_buffer;
+        request_reader in(is, linearization_buffer);
+        auto client_state = gcs.get();
+        auto trace_state = gt.get();
+        co_return co_await process_fn(client_state, server._query_processor, in, stream, _version,
+                /* FIXME */empty_service_permit(), std::move(trace_state), false, cached_vals, dialect);
     });
 }
 
@@ -1027,7 +1020,7 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     if (bounce_msg) {
         auto shard = (*bounce_msg)->move_to_shard().value();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-        co_return co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
+        msg = co_await process_on_shard(shard, stream, is, client_state, trace_state, dialect, std::move(cached_vals), process_fn);
     }
     co_return std::get<cql_server::result_with_foreign_response_ptr>(std::move(msg));
 }

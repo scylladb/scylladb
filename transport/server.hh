@@ -314,7 +314,7 @@ private:
                                            bool,
                                            cql3::computed_function_values,
                                            cql3::dialect>
-        future<result_with_foreign_response_ptr>
+        future<process_fn_return_type>
         process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
                 tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn);
 
