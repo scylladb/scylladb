@@ -145,6 +145,11 @@ struct to_comparable_bytes_visitor {
     managed_bytes_view& serialized_bytes_view;
     bytes_ostream& out;
 
+    void operator()(const boolean_type_impl&) {
+        // Any non zero byte value is encoded as 1 else 0
+        out.write<uint8_t>(read_simple<uint8_t>(serialized_bytes_view) != 0);
+    }
+
     // Fixed length signed integers encoding
     template <std::signed_integral T>
     void operator()(const integer_type_impl<T>& type) {
@@ -188,6 +193,11 @@ comparable_bytes_opt comparable_bytes::from_data_value(const data_value& value) 
 struct from_comparable_bytes_visitor {
     managed_bytes_view& comparable_bytes_view;
     bytes_ostream& out;
+
+    void operator()(const boolean_type_impl&) {
+        // return as it is;
+        out.write<uint8_t>(read_simple<uint8_t>(comparable_bytes_view));
+    }
 
     template <std::signed_integral T>
     void operator()(const integer_type_impl<T>& type) {

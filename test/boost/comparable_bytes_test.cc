@@ -21,6 +21,17 @@ BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_managed_bytes(*int32_type, managed_bytes_opt()) == comparable_bytes_opt());
 }
 
+BOOST_AUTO_TEST_CASE(test_bool) {
+    for (bool value : {true, false}) {
+        auto comparable_bytes = comparable_bytes::from_data_value(value);
+        BOOST_REQUIRE_EQUAL(comparable_bytes->size(), 1);
+        BOOST_REQUIRE_MESSAGE(comparable_bytes->as_managed_bytes_view().front() == uint8_t(value ? 1 : 0),
+                              fmt::format("comparable bytes encode failed for bool value : {}", value));
+        BOOST_REQUIRE_MESSAGE(value == comparable_bytes->to_data_value(boolean_type),
+                              fmt::format("comparable bytes decode failed for bool value : {}", value));
+    }
+}
+
 // abstract data generator for the testcases
 struct test_data_generator {
     const std::vector<data_value>& test_data() const {
