@@ -299,6 +299,9 @@ class ScyllaServer:
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
+        if property_file and not "endpoint_snitch" in config_options:
+            config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
+
         # Sum of basic server configuration and the user-provided config options.
         self.config = make_scylla_conf(
                 mode = mode,
@@ -788,7 +791,7 @@ class ScyllaCluster:
         cluster_name: str
         ip_addr: IPAddress
         seeds: List[str]
-        property_file: dict[str, Any]
+        property_file: dict[str, Any] | None
         config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
         server_encryption: str
