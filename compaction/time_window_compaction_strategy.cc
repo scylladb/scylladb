@@ -16,7 +16,6 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
-#include <boost/range/algorithm/partial_sort.hpp>
 
 #include <ranges>
 
@@ -297,8 +296,8 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             // For example, if there are N sstables spanning window W, where N <= 32, then we can produce all data for W
             // in a single compaction round, removing the need to later compact W to reduce its number of files.
             auto sort_size = std::min(max_sstables, multi_window.size());
-            boost::partial_sort(multi_window, multi_window.begin() + sort_size, [](const shared_sstable &a, const shared_sstable &b) {
-                return a->get_stats_metadata().max_timestamp < b->get_stats_metadata().max_timestamp;
+            std::ranges::partial_sort(multi_window, multi_window.begin() + sort_size, std::ranges::less(), [] (const shared_sstable &a) {
+                return a->get_stats_metadata().max_timestamp;
             });
             maybe_trim_job(multi_window, job_size, disjoint);
         }
@@ -521,9 +520,7 @@ std::vector<shared_sstable>
 time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold) {
     auto n = std::min(bucket.size(), size_t(max_threshold));
     // Trim the largest sstables off the end to meet the maxThreshold
-    boost::partial_sort(bucket, bucket.begin() + n, [] (auto& i, auto& j) {
-        return i->ondisk_data_size() < j->ondisk_data_size();
-    });
+    std::ranges::partial_sort(bucket, bucket.begin() + n, std::ranges::less(), std::mem_fn(&sstable::ondisk_data_size));
     bucket.resize(n);
     return bucket;
 }

@@ -8,12 +8,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include "utils/assert.hh"
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/find_if.hpp>
-#include <boost/range/algorithm/sort.hpp>
 
 #include "clustering_bounds_comparator.hh"
 #include "replica/database_fwd.hh"
@@ -132,7 +133,7 @@ static std::vector<sstring> get_keyspaces(const schema& s, const replica::databa
     };
     auto keyspaces = db.get_non_system_keyspaces();
     auto cmp = keyspace_less_comparator(s);
-    boost::sort(keyspaces, cmp);
+    std::ranges::sort(keyspaces, cmp);
     return boost::copy_range<std::vector<sstring>>(
         range.slice(keyspaces, std::move(cmp)) | boost::adaptors::filtered([&s] (const auto& ks) {
             // If this is a range query, results are divided between shards by the partition key (keyspace_name).
@@ -209,7 +210,7 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db, 
         for (auto&& r : ranges) {
             local_ranges.push_back(token_range{to_bytes(r.start()), to_bytes(r.end())});
         }
-        boost::sort(local_ranges, [] (auto&& tr1, auto&& tr2) {
+        std::ranges::sort(local_ranges, [] (auto&& tr1, auto&& tr2) {
             return utf8_type->less(tr1.start, tr2.start);
         });
         return local_ranges;
@@ -313,7 +314,7 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
     auto cf_names = boost::copy_range<std::vector<bytes>>(cfs | boost::adaptors::transformed([] (auto&& cf) {
         return utf8_type->decompose(cf.first);
     }));
-    boost::sort(cf_names, [] (auto&& n1, auto&& n2) {
+    std::ranges::sort(cf_names, [] (auto&& n1, auto&& n2) {
         return utf8_type->less(n1, n2);
     });
     std::vector<db::system_keyspace::range_estimates> estimates;

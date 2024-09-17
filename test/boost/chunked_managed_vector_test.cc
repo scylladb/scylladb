@@ -11,11 +11,12 @@
 
 #include <deque>
 #include <random>
+#include <algorithm>
+
 #include "utils/lsa/chunked_managed_vector.hh"
 #include "utils/managed_ref.hh"
 #include "test/lib/log.hh"
 
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/range/irange.hpp>
@@ -73,8 +74,8 @@ SEASTAR_TEST_CASE(test_random_walk) {
                 break;
             }
             case 4: {
-                boost::sort(c);
-                boost::sort(d);
+                std::ranges::sort(c);
+                std::ranges::sort(d);
                 break;
             }
             case 5: {

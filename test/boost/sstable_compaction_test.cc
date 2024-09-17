@@ -57,7 +57,6 @@
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/algorithm/cxx11/is_sorted.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"

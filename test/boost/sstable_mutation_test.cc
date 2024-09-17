@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/net/inet_address.hh>
@@ -34,7 +35,6 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 
-#include <boost/range/algorithm/sort.hpp>
 #include "readers/from_fragments_v2.hh"
 
 using namespace sstables;
@@ -1456,7 +1456,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
                 atomic_cell::make_live(*int32_type, 1511270919978347, int32_type->decompose(6), {}));
 
             std::vector<mutation> muts = {m1, m2};
-            boost::sort(muts, mutation_decorated_key_less_comparator{});
+            std::ranges::sort(muts, mutation_decorated_key_less_comparator{});
 
             auto ms = make_sstable_mutation_source(env, s, muts, version);
 

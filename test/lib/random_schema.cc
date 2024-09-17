@@ -6,8 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include <boost/algorithm/string/join.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/unique.hpp>
 
 #include "cql3/cql3_type.hh"
@@ -1200,7 +1201,7 @@ future<std::vector<mutation>> generate_random_mutations(
         }
         muts.emplace_back(mut.build(random_schema.schema()));
     }
-    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+    std::ranges::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
             return a.decorated_key().less_compare(*s, b.decorated_key());
             });
     auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {

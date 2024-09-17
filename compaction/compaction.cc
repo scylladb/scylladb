@@ -229,17 +229,11 @@ static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& 
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*table_s.main_sstable_set().all());
     auto& compacted_undeleted = table_s.compacted_undeleted_sstables();
     all_sstables.insert(all_sstables.end(), compacted_undeleted.begin(), compacted_undeleted.end());
-    boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
-        return x->generation() < y->generation();
-    });
-    std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
-        return x->generation() < y->generation();
-    });
+    std::ranges::sort(all_sstables, std::ranges::less(), std::mem_fn(&sstable::generation));
+    std::ranges::sort(sstables, std::ranges::less(), std::mem_fn(&sstable::generation));
     std::vector<shared_sstable> not_compacted_sstables;
-    boost::set_difference(all_sstables, sstables,
-        std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
-            return x->generation() < y->generation();
-        });
+    std::ranges::set_difference(all_sstables, sstables, std::back_inserter(not_compacted_sstables),
+            std::ranges::less(), std::mem_fn(&sstable::generation), std::mem_fn(&sstable::generation));
     return not_compacted_sstables;
 }
 

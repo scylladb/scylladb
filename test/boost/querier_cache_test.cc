@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include "querier.hh"
 #include "mutation_query.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -21,7 +23,6 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/util/closeable.hh>
 
-#include <boost/range/algorithm/sort.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
 
@@ -97,7 +98,7 @@ private:
             mutations.emplace_back(std::move(mut));
         }
 
-        boost::sort(mutations, [] (const mutation& a, const mutation& b) {
+        std::ranges::sort(mutations, [] (const mutation& a, const mutation& b) {
             return a.decorated_key().tri_compare(*a.schema(), b.decorated_key()) < 0;
         });
 

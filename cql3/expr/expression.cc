@@ -18,10 +18,11 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm/unique.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/numeric.hpp>
 #include <fmt/ostream.h>
 #include <unordered_map>
+#include <algorithm>
+#include <ranges>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"

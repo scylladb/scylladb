@@ -12,8 +12,6 @@
 #include "combine.hh"
 #include "log.hh"
 
-#include <boost/range/algorithm/sort.hpp>
-
 logging::logger cell_locker_log("cell_locker");
 
 auto fmt::formatter<counter_shard_view>::format(const counter_shard_view& csv,
@@ -30,7 +28,7 @@ auto fmt::formatter<counter_cell_view>::format(const counter_cell_view& ccv,
 
 void counter_cell_builder::do_sort_and_remove_duplicates()
 {
-    boost::range::sort(_shards, [] (auto& a, auto& b) { return a.id() < b.id(); });
+    std::ranges::sort(_shards, std::ranges::less(), std::mem_fn(&counter_shard::id));
 
     std::vector<counter_shard> new_shards;
     new_shards.reserve(_shards.size());

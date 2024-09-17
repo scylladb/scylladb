@@ -10,6 +10,7 @@
 #include <list>
 #include <random>
 #include <source_location>
+#include <algorithm>
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -52,7 +53,6 @@
 #include "utils/ranges.hh"
 #include "mutation/mutation_rebuilder.hh"
 
-#include <boost/range/algorithm/sort.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/from_fragments_v2.hh"
@@ -3235,7 +3235,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     simple_schema s;
     auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
     auto pkeys = s.make_pkeys(6);
-    boost::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
+    std::ranges::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
 
     auto ms = mutation_source([&] (schema_ptr schema,
             reader_permit permit,

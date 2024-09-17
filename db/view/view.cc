@@ -14,11 +14,11 @@
 #include <optional>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
 
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
@@ -2269,8 +2269,8 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     }
 
     for (auto& [_, build_step] : _base_to_build_step) {
-        boost::sort(build_step.build_status, [] (view_build_status s1, view_build_status s2) {
-            return *s1.next_token < *s2.next_token;
+        std::ranges::sort(build_step.build_status, std::ranges::less(), [] (const view_build_status& s) {
+            return *s.next_token;
         });
         if (!build_step.build_status.empty()) {
             build_step.current_key = dht::decorated_key{*build_step.build_status.front().next_token, partition_key::make_empty()};

@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include <set>
 #include <iterator>
+#include <algorithm>
 
 #include <boost/test/unit_test.hpp>
 
@@ -41,7 +42,6 @@
 #include "db/large_data_handler.hh"
 #include "readers/combined.hh"
 
-#include <boost/range/algorithm/sort.hpp>
 #include <fmt/ranges.h>
 
 using namespace sstables;
@@ -3700,7 +3700,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
     for (auto version : test_sstable_versions) {
         lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts);
         auto sst = compressed ? write_sstables(env, s, mt, version) : write_and_compare_sstables(env, s, mt, table_name, version);
-        boost::sort(muts, mutation_decorated_key_less_comparator());
+        std::ranges::sort(muts, mutation_decorated_key_less_comparator());
         validate_read(env, sst, muts);
     }
   });
@@ -3869,7 +3869,7 @@ SEASTAR_TEST_CASE(test_write_counter_table) {
         counter_id{utils::UUID{"e079a6fe-eb79-4bdf-97ca-c87a2c387d5c"}},
         counter_id{utils::UUID{"bbba5897-78b6-4cdc-9a0d-ea9e9a3b833f"}},
     };
-    boost::range::sort(ids);
+    std::ranges::sort(ids);
 
     const column_definition& cdef1 = *s->get_column_definition("rc1");
     const column_definition& cdef2 = *s->get_column_definition("rc2");

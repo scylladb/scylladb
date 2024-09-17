@@ -9,6 +9,8 @@
  */
 
 #include <random>
+#include <algorithm>
+
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
@@ -43,7 +45,6 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/numeric.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/empty.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -4894,7 +4895,7 @@ public:
 
         do {
             // after this sort reply with largest key is at the beginning
-            boost::sort(_data_results, cmp);
+            std::ranges::sort(_data_results, cmp);
             if (_data_results.front().result->partitions().empty()) {
                 break; // if top of the heap is empty all others are empty too
             }
@@ -4914,9 +4915,7 @@ public:
                 }
             }
 
-            boost::sort(v, [] (const version& x, const version& y) {
-                return x.from < y.from;
-            });
+            std::ranges::sort(v, std::less<gms::inet_address>(), std::mem_fn(&version::from));
         } while(true);
 
         std::vector<mutation_and_live_row_count> reconciled_partitions;

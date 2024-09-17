@@ -10,13 +10,13 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "interval.hh"
 #include "log.hh"
-#include <boost/range/algorithm/sort.hpp>
-#include <boost/range/algorithm/partial_sort.hpp>
 
 class leveled_manifest {
     table_state& _table_s;
@@ -387,7 +387,7 @@ private:
             candidates = get_level(0);
             if (candidates.size() > MAX_COMPACTING_L0) {
                 // limit to only the MAX_COMPACTING_L0 oldest candidates
-                boost::partial_sort(candidates, candidates.begin() + MAX_COMPACTING_L0, [] (auto& i, auto& j) {
+                std::ranges::partial_sort(candidates, candidates.begin() + MAX_COMPACTING_L0, [] (auto& i, auto& j) {
                     return i->compare_by_max_timestamp(*j) < 0;
                 });
                 candidates.resize(MAX_COMPACTING_L0);
@@ -430,7 +430,7 @@ private:
         const schema& s = *_schema;
         // for non-L0 compactions, pick up where we left off last time
         auto& sstables = get_level(level);
-        boost::sort(sstables, [] (auto& i, auto& j) {
+        std::ranges::sort(sstables, [] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
 

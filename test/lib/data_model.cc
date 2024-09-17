@@ -6,11 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include "utils/assert.hh"
 #include "test/lib/data_model.hh"
 
 #include <boost/algorithm/string/join.hpp>
-#include <boost/range/algorithm/sort.hpp>
 
 #include "schema/schema_builder.hh"
 #include "concrete_types.hh"
@@ -279,7 +280,7 @@ std::vector<mutation> table_description::build_mutations(schema_ptr s) const {
             return md.build(s);
         })
     );
-    boost::sort(ms, mutation_decorated_key_less_comparator());
+    std::ranges::sort(ms, mutation_decorated_key_less_comparator());
     return ms;
 }
 

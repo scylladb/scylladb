@@ -6,13 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include "utils/assert.hh"
 #include <seastar/util/defer.hh>
 
 #include <boost/icl/interval_map.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/sort.hpp>
 
 #include "sstables.hh"
 
@@ -111,8 +112,8 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     }
 
     auto frags = boost::copy_range<std::vector<shared_sstable>>(run.all());
-    boost::sort(frags, [] (const shared_sstable& x, const shared_sstable& y) {
-        return x->get_first_decorated_key().token() < y->get_first_decorated_key().token();
+    std::ranges::sort(frags, std::ranges::less(), [] (const shared_sstable& x) {
+        return x->get_first_decorated_key().token();
     });
     os << "  Fragments = {\n";
     for (auto& frag : frags) {

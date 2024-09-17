@@ -10,6 +10,7 @@
 #include <concepts>
 #include <vector>
 #include <limits>
+#include <algorithm>
 #include <fmt/ranges.h>
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
@@ -53,8 +54,6 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm_ext/is_sorted.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/regex.hpp>
 #include <seastar/core/align.hh>
 #include "mutation/range_tombstone_list.hh"
@@ -598,7 +597,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
         co_await parse(schema, v, in, s.offsets);
         // Old versions of Scylla do not respect the order.
         // See https://github.com/scylladb/scylla/issues/3937
-        boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
+        std::ranges::sort(s.offsets.elements, std::ranges::less(), std::mem_fn(&std::pair<metadata_type, unsigned int>::first));
         for (auto val : s.offsets.elements) {
             auto type = val.first;
             co_await in.seek(val.second);
@@ -725,7 +724,7 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     // look for commit with title 'streaming_histogram: fix update' for more details.
     auto possibly_broken_histogram = length == sh.max_bin_size;
     auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
-    if (possibly_broken_histogram && !boost::is_sorted(a.elements, less_comp)) {
+    if (possibly_broken_histogram && !std::ranges::is_sorted(a.elements, less_comp)) {
         co_return;
     }
 
@@ -1697,7 +1696,7 @@ void
 populate_statistics_offsets(sstable_version_types v, statistics& s) {
     // copy into a sorted vector to guarantee consistent order
     auto types = boost::copy_range<std::vector<metadata_type>>(s.contents | boost::adaptors::map_keys);
-    boost::sort(types);
+    std::ranges::sort(types);
 
     // populate the hash with garbage so we can calculate its size
     for (auto t : types) {

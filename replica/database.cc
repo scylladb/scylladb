@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include "log.hh"
@@ -35,7 +37,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
 #include "mutation/frozen_mutation.hh"
@@ -187,7 +188,7 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
         min_element = &*boost::min_element(res, less);
     });
 
-    boost::sort(res, less);
+    std::ranges::sort(res, less);
 
     return res;
 }
@@ -1674,7 +1675,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         });
     }
 
-    boost::sort(regular_columns);
+    std::ranges::sort(regular_columns);
     regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()),
                           regular_columns.end());
 

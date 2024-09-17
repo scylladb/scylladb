@@ -179,12 +179,14 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
 }
 
-template<typename Range>
+template<std::ranges::range Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
     BOOST_CONCEPT_ASSERT((boost::ForwardRangeConcept<Range>));
     value_list tmp(r.begin(), r.end()); // Need random-access range to sort (r is not necessarily random-access).
-    const auto unique = boost::unique(boost::sort(tmp, comparator));
-    return value_list(unique.begin(), unique.end());
+    std::ranges::sort(tmp, comparator);
+    auto last = std::unique(tmp.begin(), tmp.end());
+    tmp.resize(last - tmp.begin());
+    return tmp;
 }
 
 const auto non_null = boost::adaptors::filtered([] (const managed_bytes_opt& b) { return b.has_value(); });

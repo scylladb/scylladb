@@ -5,11 +5,11 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/iterator_range_core.hpp>
 
 #include "cdc/cdc_options.hh"
@@ -264,8 +264,8 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     result.push_back(schema->describe(db.real_database(), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS));
 
     // indexes
-    boost::sort(idxs, [] (const auto& a, const auto& b) {
-        return a.metadata().name() < b.metadata().name();
+    std::ranges::sort(idxs, std::ranges::less(), [] (const auto& a) {
+        return a.metadata().name();
     });
     for (const auto& idx: idxs) {
         result.push_back(index(db, ks, idx.metadata().name(), with_internals));
@@ -273,9 +273,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     }
 
     //views
-    boost::sort(views, [] (const auto& a, const auto& b) {
-        return a->cf_name() < b->cf_name();
-    });
+    std::ranges::sort(views, std::ranges::less(), std::mem_fn(&schema::cf_name));
     for (const auto& v: views) {
         if(!is_index(db, v)) {
             result.push_back(view(db, ks, v->cf_name(), with_internals));
@@ -298,9 +296,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
     auto tables = boost::copy_range<std::vector<schema_ptr>>(ks->tables() | boost::adaptors::filtered([&replica_db] (const schema_ptr& s) {
         return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name());
     }));
-    boost::sort(tables, [] (const auto& a, const auto& b) {
-        return a->cf_name() < b->cf_name();
-    });
+    std::ranges::sort(tables, std::ranges::less(), std::mem_fn(&schema::cf_name));
 
     if (with_internals) {
         std::vector<description> result;
@@ -513,8 +509,8 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
     auto [list_type, map_type] = range_ownership_type();
 
     auto ranges = co_await proxy.describe_ring(ks);
-    boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
-        return std::stol(l._start_token) < std::stol(r._start_token);
+    std::ranges::sort(ranges, std::ranges::less(), [] (const dht::token_range_endpoints& r) {
+        return std::stol(r._start_token);
     });
 
     auto ring_ranges = boost::copy_range<std::vector<std::pair<data_value, data_value>>>(ranges | boost::adaptors::transformed([list_type = std::move(list_type)] (auto& range) {
@@ -651,7 +647,7 @@ future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe
         keyspaces.push_back(raw_ks);
     } else {
         keyspaces = db.get_all_keyspaces();
-        boost::sort(keyspaces);
+        std::ranges::sort(keyspaces);
     }
 
     std::vector<description> result;

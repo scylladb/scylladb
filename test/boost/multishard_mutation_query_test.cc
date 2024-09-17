@@ -31,8 +31,8 @@
 #include "test/lib/scylla_test_case.hh"
 
 #include <fmt/ranges.h>
-#include <boost/range/algorithm/sort.hpp>
 #include <utility>
+#include <algorithm>
 
 const sstring KEYSPACE_NAME = "ks";
 
@@ -519,8 +519,8 @@ void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutati
     auto mut_less = [] (const mutation& a, const mutation& b) {
         return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
     };
-    boost::sort(results1, mut_less);
-    boost::sort(results2, mut_less);
+    std::ranges::sort(results1, mut_less);
+    std::ranges::sort(results2, mut_less);
     for (unsigned i = 0; i < results1.size(); ++i) {
         testlog.trace("Comparing mutation #{:d}", i);
         assert_that(results2[i]).is_equal_to(results1[i]);

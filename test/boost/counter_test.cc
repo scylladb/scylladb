@@ -14,8 +14,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/testing/random.hh>
 
-#include <boost/range/algorithm/sort.hpp>
-
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "schema/schema_builder.hh"
@@ -42,7 +40,7 @@ void verify_shard_order(counter_cell_view ccv) {
 std::vector<counter_id> generate_ids(unsigned count) {
     std::vector<counter_id> id;
     std::generate_n(std::back_inserter(id), count, counter_id::create_random_id);
-    boost::range::sort(id);
+    std::ranges::sort(id);
     return id;
 }
 

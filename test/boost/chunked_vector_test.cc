@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <optional>
 #include <variant>
+#include <algorithm>
 #include <fmt/format.h>
 
 #include <boost/test/included/unit_test.hpp>
@@ -19,7 +20,6 @@
 #include "utils/chunked_vector.hh"
 #include "utils/amortized_reserve.hh"
 
-#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/range/irange.hpp>
@@ -69,8 +69,8 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
             break;
         }
         case 4: {
-            boost::sort(c);
-            boost::sort(d);
+            std::ranges::sort(c);
+            std::ranges::sort(d);
             break;
         }
         case 5: {

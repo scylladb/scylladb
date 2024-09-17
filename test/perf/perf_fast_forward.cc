@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include "utils/assert.hh"
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -14,7 +16,6 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm/sort.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"
@@ -1297,9 +1298,7 @@ public:
                 return a + b.aio_reads() + b.aio_writes();
             }) / (result.empty() ? 1 : result.size());
 
-            boost::sort(result, [] (const test_result& a, const test_result& b) {
-                return a.fragment_rate() < b.fragment_rate();
-            });
+            std::ranges::sort(result, std::ranges::less(), std::mem_fn(&test_result::fragment_rate));
             auto median = result[result.size() / 2];
             auto fragment_rate_min = result[0].fragment_rate();
             auto fragment_rate_max = result[result.size() - 1].fragment_rate();

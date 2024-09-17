@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
 
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptors.hpp>
@@ -70,7 +71,7 @@ SEASTAR_TEST_CASE(test_functions) {
             validator v;
             msg->accept(v);
             // No boost::adaptors::sorted
-            boost::sort(v.res);
+            std::ranges::sort(v.res);
             BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
         }).then([&] {
             return e.execute_cql("select sum(c1), count(c1) from cf where p1 = 'key1';");

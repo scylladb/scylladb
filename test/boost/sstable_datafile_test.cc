@@ -437,7 +437,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
 
         std::vector<counter_id> ids;
         std::generate_n(std::back_inserter(ids), 3, counter_id::create_random_id);
-        boost::range::sort(ids);
+        std::ranges::sort(ids);
 
         counter_cell_builder b1;
         b1.add_shard(counter_shard(ids[0], 5, 1));

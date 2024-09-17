@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <algorithm>
+
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/string.hpp>
@@ -158,12 +160,10 @@ public:
     future<> emit_ring(result_collector& result, const dht::decorated_key& dk, const sstring& table_name, std::vector<dht::token_range_endpoints> ranges) {
 
         co_await result.emit_partition_start(dk);
-        boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
-            return l._start_token < r._start_token;
-        });
+        std::ranges::sort(ranges, std::ranges::less(), std::mem_fn(&dht::token_range_endpoints::_start_token));
 
         for (dht::token_range_endpoints& range : ranges) {
-            boost::sort(range._endpoint_details, endpoint_details_cmp());
+            std::ranges::sort(range._endpoint_details, endpoint_details_cmp());
 
             for (const dht::endpoint_details& detail : range._endpoint_details) {
                 clustering_row cr(make_clustering_key(table_name, range._start_token, detail._host));
@@ -197,10 +197,7 @@ public:
                     return decorated_keyspace_name{ks, make_partition_key(ks)};
         }));
 
-        boost::sort(keyspace_names, [less = dht::ring_position_less_comparator(*_s)]
-                (const decorated_keyspace_name& l, const decorated_keyspace_name& r) {
-            return less(l.key, r.key);
-        });
+        std::ranges::sort(keyspace_names, dht::ring_position_less_comparator(*_s), std::mem_fn(&decorated_keyspace_name::key));
 
         for (const decorated_keyspace_name& e : keyspace_names) {
             auto&& dk = e.key;
@@ -649,10 +646,7 @@ class db_config_table final : public streaming_virtual_table {
             }
         }
 
-        boost::sort(cfg, [less = dht::ring_position_less_comparator(*_s)]
-                (const config_entry& l, const config_entry& r) {
-            return less(l.key, r.key);
-        });
+        std::ranges::sort(cfg, dht::ring_position_less_comparator(*_s), std::mem_fn(&config_entry::key));
 
         for (auto&& c : cfg) {
             co_await result.emit_partition_start(c.key);
@@ -818,7 +812,7 @@ class clients_table : public streaming_virtual_table {
             co_await result.emit_partition_start(dip.key);
             auto& clients = cd_map[dip.ip];
 
-            boost::sort(clients, [] (const client_data& a, const client_data& b) {
+            std::ranges::sort(clients, [] (const client_data& a, const client_data& b) {
                 return a.port < b.port || a.client_type_str() < b.client_type_str();
             });
 
