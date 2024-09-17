@@ -1123,7 +1123,10 @@ public:
 
             int min_rack_load = std::numeric_limits<int>::min();
             int max_rack_load = std::numeric_limits<int>::max();
-            for (const auto& [_, load] : rack_load) {
+            for (const auto& [rack, load] : rack_load) {
+                if (rack == src_info.rack()) {
+                    continue;
+                }
                 if (min_rack_load < load) {
                     min_rack_load = load;
                 }
@@ -1132,21 +1135,18 @@ public:
                 }
             }
 
-          // FIXME: indentation
-          if (min_rack_load < max_rack_load) {
-            for (auto i = viable_targets.begin(); i != viable_targets.end(); ) {
-                auto target = *i;
-                auto& t_info = nodes[target];
-                auto old_i = i++;
-                if (src_info.rack() != t_info.rack()) {
-                    auto new_rack_load = rack_load[t_info.rack()] + 1;
-                    if (new_rack_load > max_rack_load) {
-                        lblogger.debug("Erasing {} from viable_targets as it would increase max rack load: rack_load={} min_rack_load={}", *old_i, rack_load[t_info.rack()], min_rack_load);
-                        viable_targets.erase(old_i);
+            if (min_rack_load < max_rack_load) {
+                for (auto i = viable_targets.begin(); i != viable_targets.end(); ) {
+                    const auto& target = *i;
+                    const auto& t_rack = nodes[target].rack();
+                    if (src_info.rack() != t_rack && rack_load[t_rack] == max_rack_load) {
+                        lblogger.debug("Erasing {} from viable_targets as it would increase max rack load: rack_load={} min_rack_load={}", target, rack_load[t_rack], min_rack_load);
+                        i = viable_targets.erase(i);
+                    } else {
+                        ++i;
                     }
                 }
             }
-          }
 
             return viable_targets;
         };
