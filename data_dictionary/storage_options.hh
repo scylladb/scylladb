@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <map>
 #include <variant>
 #include <seastar/core/sstring.hh>
@@ -17,6 +18,7 @@ namespace data_dictionary {
 
 struct storage_options {
     struct local {
+        std::filesystem::path dir;
         static constexpr std::string_view name = "LOCAL";
 
         static local from_map(const std::map<sstring, sstring>&);
@@ -26,6 +28,7 @@ struct storage_options {
     struct s3 {
         sstring bucket;
         sstring endpoint;
+        sstring prefix;
         static constexpr std::string_view name = "S3";
 
         static s3 from_map(const std::map<sstring, sstring>&);
@@ -45,5 +48,11 @@ struct storage_options {
 
     static value_type from_map(std::string_view type, std::map<sstring, sstring> values);
 };
+
+inline storage_options make_local_options(std::filesystem::path dir) {
+    storage_options so;
+    so.value = data_dictionary::storage_options::local { .dir = std::move(dir) };
+    return so;
+}
 
 } // namespace data_dictionary

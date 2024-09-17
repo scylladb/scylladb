@@ -1252,13 +1252,11 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
-    co_await coroutine::parallel_for_each(_config.all_datadirs, [this] (sstring cfdir) -> future<> {
-        co_await _sstables_manager.init_table_storage(*_storage_opts, cfdir);
-    });
+    _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
 }
 
 future<> table::destroy_storage() {
-    return _sstables_manager.destroy_table_storage(*_storage_opts, _config.datadir);
+    return _sstables_manager.destroy_table_storage(*_storage_opts);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {

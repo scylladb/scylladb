@@ -33,6 +33,7 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
+#include "replica/database.hh" // need to move format_table_directory_name here eventually
 
 #include "checked-file-impl.hh"
 
@@ -645,28 +646,54 @@ future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs
     co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
 }
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir, sstable_state state) {
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state) {
     return std::visit(overloaded_functor {
-        [dir, state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::filesystem_storage>(std::move(dir), state);
+        [state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
+            if (loc.dir.empty()) {
+                on_internal_error(sstlog, "Local storage options is missing 'dir'");
+            }
+            return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
-        [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::move(dir));
+        [&manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
+            if (os.prefix.empty()) {
+                on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+            }
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.prefix);
         }
     }, s_opts.value);
 }
 
-future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir) {
-    co_await std::visit(overloaded_functor {
-        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
-            co_await io_check([&dir] { return recursive_touch_directory(dir); });
-            co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-            co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
-        },
-        [] (const data_dictionary::storage_options::s3&) -> future<> {
-            co_return;
-        }
-    }, so.value);
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
+    std::vector<sstring> dirs;
+    for (const auto& dd : mgr.config().data_file_directories()) {
+        auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
+        dirs.emplace_back(std::move(dir));
+    }
+    co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
+        co_await io_check([&dir] { return recursive_touch_directory(dir); });
+        co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+        co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+    });
+
+    data_dictionary::storage_options nopts;
+    nopts.value = data_dictionary::storage_options::local {
+        .dir = fs::path(std::move(dirs[0])),
+    };
+    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+}
+
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
+    data_dictionary::storage_options nopts;
+    nopts.value = data_dictionary::storage_options::s3 {
+        .bucket = so.bucket,
+        .endpoint = so.endpoint,
+        .prefix = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
+    };
+    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+}
+
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
+    co_return co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
@@ -684,10 +711,13 @@ future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionar
     }, so.value);
 }
 
-future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir) {
+future<> destroy_table_storage(const data_dictionary::storage_options& so) {
     co_await std::visit(overloaded_functor {
-        [&dir] (const data_dictionary::storage_options::local&) -> future<> {
-            co_await sstables::remove_table_directory_if_has_no_snapshots(fs::path(dir));
+        [] (const data_dictionary::storage_options::local& so) -> future<> {
+            if (so.dir.empty()) {
+                on_internal_error(sstlog, "Non-table local storage options");
+            }
+            co_await sstables::remove_table_directory_if_has_no_snapshots(so.dir);
         },
         [] (const data_dictionary::storage_options::s3&) -> future<> {
             co_return;

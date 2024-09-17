@@ -25,9 +25,13 @@
 #include "utils/disk-error-handler.hh"
 #include "sstables/sstable_directory.hh"
 
+class schema;
+
 namespace data_dictionary {
 class storage_options;
 }
+
+namespace db { class config; }
 
 namespace sstables {
 
@@ -118,9 +122,9 @@ public:
     virtual sstring prefix() const  = 0;
 };
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring table_dir, sstable_state state);
-future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
-future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state);
+future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
+future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
 
 } // namespace sstables

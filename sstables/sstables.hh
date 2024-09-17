@@ -194,7 +194,6 @@ public:
     using integrity_check = bool_class<class integrity_check_tag>;
 public:
     sstable(schema_ptr schema,
-            sstring table_dir,
             const data_dictionary::storage_options& storage,
             generation_type generation,
             sstable_state state,

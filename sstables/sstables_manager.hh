@@ -133,7 +133,7 @@ public:
                               noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
-    shared_sstable make_sstable(schema_ptr schema, sstring table_dir,
+    shared_sstable make_sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
             generation_type generation,
             sstable_state state = sstable_state::normal,
@@ -186,8 +186,8 @@ public:
     }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
-    future<> init_table_storage(const data_dictionary::storage_options& so, sstring dir);
-    future<> destroy_table_storage(const data_dictionary::storage_options& so, sstring dir);
+    future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
+    future<> destroy_table_storage(const data_dictionary::storage_options& so);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
 
     void validate_new_keyspace_storage_options(const data_dictionary::storage_options&);

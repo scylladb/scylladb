@@ -137,9 +137,15 @@ schema_ptr table_for_tests::make_default_schema() {
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
+    // FIXME -- the storage options here are from sstables::test_env that should have
+    // initialized it properly
+    std::visit(overloaded_functor {
+        [&cfg] (data_dictionary::storage_options::local& o) { o.dir = cfg.datadir; },
+        [&cfg] (data_dictionary::storage_options::s3& o) { o.prefix = cfg.datadir; },
+    }, storage.value);
     cfg.cf_stats = &_data->cf_stats;
     _data->s = s ? s : make_default_schema();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
     _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
     cm.add(*_data->table_s);
@@ -342,7 +348,14 @@ shared_sstable
 test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
         sstable::version_types v, sstable::format_types f,
         size_t buffer_size, gc_clock::time_point now) {
-    return _impl->mgr.make_sstable(std::move(schema), dir, _impl->storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
+    // FIXME -- most of the callers work with _impl->dir's path, so
+    // test_env can initialize the .dir/.prefix only once, when constructed
+    auto storage = _impl->storage;
+    std::visit(overloaded_functor {
+        [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
+        [&dir] (data_dictionary::storage_options::s3& o) { o.prefix = dir; },
+    }, storage.value);
+    return _impl->mgr.make_sstable(std::move(schema), storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
 
 shared_sstable
