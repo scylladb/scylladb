@@ -41,7 +41,7 @@ With the recent addition of the `ScyllaDB Advisor <http://monitoring.docs.scylla
 Install ScyllaDB Manager
 ------------------------
 
-Install and use `ScyllaDB Manager <https://manager.docs.scylladb.com>` together with the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_.
+Install and use `ScyllaDB Manager <https://manager.docs.scylladb.com>`_ together with the `ScyllaDB Monitoring Stack <http://monitoring.docs.scylladb.com/>`_.
 ScyllaDB Manager provides automated backups and repairs of your database.
 ScyllaDB Manager can manage multiple ScyllaDB clusters and run cluster-wide tasks in a controlled and predictable way.
 For example, with ScyllaDB Manager you can control the intensity of a repair, increasing it to speed up the process, or lower the intensity to ensure it minimizes impact on ongoing operations.
