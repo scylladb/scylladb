@@ -137,6 +137,25 @@ std::string json_string::to_json() const {
     return _value;
 }
 
+executor::executor(gms::gossiper& gossiper,
+         service::storage_proxy& proxy,
+         service::migration_manager& mm,
+         db::system_distributed_keyspace& sdks,
+         cdc::metadata& cdc_metadata,
+         smp_service_group ssg,
+         utils::updateable_value<uint32_t> default_timeout_in_ms)
+    : _gossiper(gossiper),
+      _proxy(proxy),
+      _mm(mm),
+      _sdks(sdks),
+      _cdc_metadata(cdc_metadata),
+      _enforce_authorization(_proxy.data_dictionary().get_config().alternator_enforce_authorization()),
+      _ssg(ssg)
+{
+    s_default_timeout_in_ms = std::move(default_timeout_in_ms);
+}
+
+
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::add(descr, "TableStatus", "ACTIVE");
@@ -556,9 +575,13 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
 // SELECT, DROP, etc.) on the given table. When permission is denied an
 // appropriate user-readable api_error::access_denied is thrown.
 future<> verify_permission(
+    bool enforce_authorization,
     const service::client_state& client_state,
     const schema_ptr& schema,
     auth::permission permission_to_check) {
+    if (!enforce_authorization) {
+        co_return;
+    }
     auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
     if (!co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
         sstring username = "<anonymous>";
@@ -577,7 +600,10 @@ future<> verify_permission(
 // Similar to verify_permission() above, but just for CREATE operations.
 // Those do not operate on any specific table, so require permissions on
 // ALL KEYSPACES instead of any specific table.
-future<> verify_create_permission(const service::client_state& client_state) {
+future<> verify_create_permission(bool enforce_authorization, const service::client_state& client_state) {
+    if (!enforce_authorization) {
+        co_return;
+    }
     auto resource = auth::resource(auth::resource_kind::data);
     if (!co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
         sstring username = "<anonymous>";
@@ -604,7 +630,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
 
     schema_ptr schema = get_table(_proxy, request);
     rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
-    co_await verify_permission(client_state, schema, auth::permission::DROP);
+    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::DROP);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
@@ -898,7 +924,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     if (tags->Size() < 1) {
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
-    co_await verify_permission(client_state, schema, auth::permission::ALTER);
+    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::ALTER);
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
@@ -918,7 +944,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     }
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-    co_await verify_permission(client_state, schema, auth::permission::ALTER);
+    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::ALTER);
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
     });
@@ -1001,7 +1027,7 @@ static std::unordered_set<std::string> validate_attribute_definitions(const rjso
     return seen_attribute_names;
 }
 
-static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
+static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1195,7 +1221,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     }
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
-    co_await verify_create_permission(client_state);
+    co_await verify_create_permission(enforce_authorization, client_state);
 
     schema_ptr schema = builder.build();
     for (auto& view_builder : view_builders) {
@@ -1290,9 +1316,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard()]
+    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization)]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local());
+        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization);
     });
 }
 
@@ -1317,7 +1343,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), client_state_other_shard = client_state.move_to_other_shard()]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), client_state_other_shard = client_state.move_to_other_shard()]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
@@ -1348,7 +1374,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
 
         auto schema = builder.build();
-        co_await verify_permission(client_state_other_shard.get(), schema, auth::permission::ALTER);
+        co_await verify_permission(enforce_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER);
         auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
@@ -1907,7 +1933,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
-    co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
+    co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
@@ -1999,7 +2025,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
-    co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
+    co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
@@ -2226,7 +2252,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     }
 
     for (const auto& b : mutation_builders) {
-        co_await verify_permission(client_state, b.first, auth::permission::MODIFY);
+        co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
     }
 
     _stats.api_operations.batch_write_item_batch_total += batch_size;
@@ -3274,7 +3300,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
-    co_await verify_permission(client_state, op->schema(), auth::permission::MODIFY);
+    co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
@@ -3373,7 +3399,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
-    co_await verify_permission(client_state, schema, auth::permission::SELECT);
+    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
@@ -3494,7 +3520,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     }
 
     for (const table_requests& tr : requests) {
-        co_await verify_permission(client_state, tr.schema, auth::permission::SELECT);
+        co_await verify_permission(_enforce_authorization, client_state, tr.schema, auth::permission::SELECT);
     }
 
     _stats.api_operations.batch_get_item_batch_total += requests.size();
@@ -3909,7 +3935,8 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
         tracing::trace_state_ptr trace_state,
-        service_permit permit) {
+        service_permit permit,
+        bool enforce_authorization) {
     lw_shared_ptr<service::pager::paging_state> old_paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
@@ -3936,7 +3963,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
-    co_await verify_permission(client_state, table_schema, auth::permission::SELECT);
+    co_await verify_permission(enforce_authorization, client_state, table_schema, auth::permission::SELECT);
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             table_schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
@@ -4080,7 +4107,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
+            std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit), _enforce_authorization);
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -4560,7 +4587,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
+            std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit), _enforce_authorization);
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {

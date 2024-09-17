@@ -158,6 +158,7 @@ class executor : public peering_sharded_service<executor> {
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
     cdc::metadata& _cdc_metadata;
+    utils::updateable_value<bool> _enforce_authorization;
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
@@ -176,10 +177,7 @@ public:
              db::system_distributed_keyspace& sdks,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
-             utils::updateable_value<uint32_t> default_timeout_in_ms)
-        : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {
-        s_default_timeout_in_ms = std::move(default_timeout_in_ms);
-    }
+             utils::updateable_value<uint32_t> default_timeout_in_ms);
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
@@ -265,6 +263,6 @@ bool is_big(const rjson::value& val, int big_size = 100'000);
 // Check CQL's Role-Based Access Control (RBAC) permission (MODIFY,
 // SELECT, DROP, etc.) on the given table. When permission is denied an
 // appropriate user-readable api_error::access_denied is thrown.
-future<> verify_permission(const service::client_state&, const schema_ptr&, auth::permission);
+future<> verify_permission(bool enforce_authorization, const service::client_state&, const schema_ptr&, auth::permission);
 
 }
