@@ -75,8 +75,6 @@ public:
 class storage {
     friend class test;
 
-    mutable opened_directory _base_dir;    // Local base directory (of table)
-
     // Internal, but can also be used by tests
     virtual future<> change_dir_for_test(sstring nd) {
         SCYLLA_ASSERT(false && "Changing directory not implemented");
@@ -89,15 +87,10 @@ class storage {
     }
 
 public:
-    explicit storage(std::string_view base_dir) : _base_dir(base_dir) {}
     virtual ~storage() {}
 
     using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
-
-    opened_directory& base_dir() const {
-        return _base_dir;
-    }
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen = {}) const = 0;
