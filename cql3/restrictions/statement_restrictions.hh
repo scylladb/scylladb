@@ -132,6 +132,18 @@ public:
      */
     statement_restrictions(schema_ptr schema, bool allow_filtering);
 
+    friend statement_restrictions analyze_statement_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
+
+private:
     statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
@@ -141,6 +153,7 @@ public:
         bool for_view,
         bool allow_filtering,
         check_indexes do_check_indexes);
+public:
 
     const std::vector<expr::expression>& index_restrictions() const;
 
@@ -396,6 +409,18 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const;
 };
+
+statement_restrictions analyze_statement_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
+
 
 }
 

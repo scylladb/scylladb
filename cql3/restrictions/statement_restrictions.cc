@@ -2164,5 +2164,19 @@ const std::unordered_set<const column_definition*> statement_restrictions::get_n
     return _not_null_columns;
 }
 
+statement_restrictions
+analyze_statement_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes) {
+    return statement_restrictions(db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+}
+
 } // namespace restrictions
 } // namespace cql3

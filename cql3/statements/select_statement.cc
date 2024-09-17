@@ -2164,8 +2164,8 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        restrictions::check_indexes do_check_indexes)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
+        return ::make_shared<restrictions::statement_restrictions>(restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes));
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));
