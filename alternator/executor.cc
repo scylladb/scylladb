@@ -561,7 +561,7 @@ future<> verify_permission(
     auth::permission permission_to_check) {
     auto resource = auth::make_data_resource(schema->ks_name(), schema->cf_name());
     if (!co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
-        sstring username = "anonymous";
+        sstring username = "<anonymous>";
         if (client_state.user() && client_state.user()->name) {
             username = client_state.user()->name.value();
         }
@@ -580,7 +580,7 @@ future<> verify_permission(
 future<> verify_create_permission(const service::client_state& client_state) {
     auto resource = auth::resource(auth::resource_kind::data);
     if (!co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
-        sstring username = "anonymous";
+        sstring username = "<anonymous>";
         if (client_state.user() && client_state.user()->name) {
             username = client_state.user()->name.value();
         }
