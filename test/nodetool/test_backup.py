@@ -37,11 +37,13 @@ def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
     bucket = "bucket-foo"
     prefix = "foo/bar/baz"
     keyspace = "ks"
+    table = "cf"
     snapshot = "ss"
     params = {"endpoint": endpoint,
               "bucket": bucket,
               "prefix": prefix,
               "keyspace": keyspace,
+              "table": table,
               "snapshot": snapshot}
     task_id = "2c4a3e5f"
     start_time = "2024-08-08T14:29:25Z"
@@ -74,6 +76,7 @@ def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
             "--bucket", bucket,
             "--prefix", prefix,
             "--keyspace", keyspace,
+            "--table", table,
             "--snapshot", snapshot]
     if nowait:
         args.append("--nowait")

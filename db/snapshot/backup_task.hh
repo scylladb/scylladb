@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include "tasks/task_manager.hh"
 
 namespace s3 { class client; }
@@ -23,11 +24,9 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     shared_ptr<s3::client> _client;
     sstring _bucket;
     sstring _prefix;
-    sstring _ks;
-    sstring _snapshot_name;
+    std::filesystem::path _snapshot_dir;
     std::exception_ptr _ex;
-
-    future<> run(sstring data_dir);
+    void do_backup();
 
 protected:
     virtual future<> run() override;
@@ -39,7 +38,7 @@ public:
                      sstring bucket,
                      sstring prefix,
                      sstring ks,
-                     sstring snapshot_name) noexcept;
+                     std::filesystem::path snapshot_dir) noexcept;
 
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;

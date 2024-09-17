@@ -63,7 +63,7 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', s3_server.address, s3_server.bucket_name, prefix)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
@@ -106,7 +106,7 @@ async def test_backup_is_abortable(manager: ManagerClient, s3_server):
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, 'backup', s3_server.address, s3_server.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', s3_server.address, s3_server.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for('backup task: waiting', from_mark=mark)
@@ -154,7 +154,7 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     orig_rows = { x.name: x.value for x in orig_res }
 
     prefix = f'{cf}/{snap_name}'
-    tid = await manager.api.backup(server.ip_addr, ks, snap_name, s3_server.address, s3_server.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
