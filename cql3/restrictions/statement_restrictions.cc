@@ -451,6 +451,12 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         validate_secondary_index_selections(selects_only_static_columns);
     }
 
+    if (_check_indexes) {
+        auto cf = db.find_column_family(_schema);
+        auto& sim = cf.get_index_manager();
+        std::tie(_idx_opt, _idx_restrictions) = do_find_idx(sim);
+    }
+
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db);
 
     if (pk_restrictions_need_filtering()) {
@@ -506,9 +512,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
 
     if (uses_secondary_indexing()) {
-        auto cf = db.find_column_family(schema);
-        auto& sim = cf.get_index_manager();
-        auto [index_opt, used_index_restrictions] = find_idx(sim);
+        auto& index_opt = _idx_opt;
         if (!index_opt) {
             throw std::runtime_error("No index found.");
         }
@@ -606,7 +610,7 @@ int statement_restrictions::score(const secondary_index::index& index) const {
     return 1;
 }
 
-std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
+std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::do_find_idx(const secondary_index::secondary_index_manager& sim) const {
     if (!_uses_secondary_indexing) {
         return {std::nullopt, expr::conjunction({})};
     }
@@ -645,6 +649,11 @@ std::pair<std::optional<secondary_index::index>, expr::expression> statement_res
     return {chosen_index, chosen_index_restrictions};
 }
 
+std::pair<std::optional<secondary_index::index>, expr::expression>
+statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
+    return {_idx_opt, _idx_restrictions};
+}
+
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
     if (!_where.has_value()) {
         return false;
@@ -662,9 +671,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
         if (_check_indexes) {
-            auto cf = db.find_column_family(_schema);
-            auto& sim = cf.get_index_manager();
-            opt_idx = std::get<0>(find_idx(sim));
+            opt_idx = _idx_opt;
         }
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
