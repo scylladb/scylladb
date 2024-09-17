@@ -556,9 +556,9 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
-    _enforce_authorization = enforce_authorization;
+    _enforce_authorization = std::move(enforce_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
