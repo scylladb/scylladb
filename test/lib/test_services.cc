@@ -479,7 +479,6 @@ table_for_tests
 test_env::make_table_for_tests(schema_ptr s, sstring dir) {
     maybe_start_compaction_manager();
     auto cfg = make_table_config();
-    cfg.datadir = dir;
     cfg.enable_commitlog = false;
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
