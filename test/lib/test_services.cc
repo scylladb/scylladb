@@ -492,11 +492,7 @@ test_env::make_table_for_tests(schema_ptr s, sstring dir) {
 
 table_for_tests
 test_env::make_table_for_tests(schema_ptr s) {
-    maybe_start_compaction_manager();
-    auto cfg = make_table_config();
-    cfg.datadir = _impl->dir.path().native();
-    cfg.enable_commitlog = false;
-    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+    return make_table_for_tests(std::move(s), _impl->dir.path().native());
 }
 
 void test_env::request_abort() {
