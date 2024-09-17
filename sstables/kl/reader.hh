@@ -41,7 +41,7 @@ mutation_reader make_reader(
 
 // A reader which doesn't use the index at all. It reads everything from the
 // sstable and it doesn't support skipping.
-mutation_reader make_crawling_reader(
+mutation_reader make_full_scan_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,

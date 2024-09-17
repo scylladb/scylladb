@@ -2933,7 +2933,7 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
     });
 }
 
-SEASTAR_TEST_CASE(test_crawling_reader_out_of_range_last_range_tombstone_change) {
+SEASTAR_TEST_CASE(test_full_scan_reader_out_of_range_last_range_tombstone_change) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema table;
 
@@ -2947,11 +2947,11 @@ SEASTAR_TEST_CASE(test_crawling_reader_out_of_range_last_range_tombstone_change)
 
         auto sst = make_sstable_containing(env.make_sstable(table.schema()), {mut});
 
-        assert_that(sst->make_crawling_reader(table.schema(), env.make_reader_permit())).has_monotonic_positions();
+        assert_that(sst->make_full_scan_reader(table.schema(), env.make_reader_permit())).has_monotonic_positions();
     });
 }
 
-SEASTAR_TEST_CASE(test_crawling_reader_random_schema_random_mutations) {
+SEASTAR_TEST_CASE(test_full_scan_reader_random_schema_random_mutations) {
     return test_env::do_with_async([] (test_env& env) {
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
@@ -2969,14 +2969,14 @@ SEASTAR_TEST_CASE(test_crawling_reader_random_schema_random_mutations) {
         auto sst = make_sstable_containing(env.make_sstable(schema), muts);
 
         {
-            auto rd = assert_that(sst->make_crawling_reader(schema, env.make_reader_permit()));
+            auto rd = assert_that(sst->make_full_scan_reader(schema, env.make_reader_permit()));
 
             for (const auto& mut : muts) {
                 rd.produces(mut);
             }
         }
 
-        assert_that(sst->make_crawling_reader(schema, env.make_reader_permit())).has_monotonic_positions();
+        assert_that(sst->make_full_scan_reader(schema, env.make_reader_permit())).has_monotonic_positions();
     });
 }
 

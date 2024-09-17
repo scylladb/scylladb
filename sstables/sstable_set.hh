@@ -241,7 +241,7 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator(),
         const sstable_predicate& p = default_sstable_predicate()) const;
 
-    mutation_reader make_crawling_reader(
+    mutation_reader make_full_scan_reader(
             schema_ptr,
             reader_permit,
             tracing::trace_state_ptr,

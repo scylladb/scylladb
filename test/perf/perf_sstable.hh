@@ -147,7 +147,7 @@ private:
     }
 
     enum class sst_reader {
-        crawling,
+        full_scan,
         partitioned,
     };
 
@@ -163,11 +163,11 @@ private:
         // do not compact when performing streaming, as we focus on the read
         // performance
         auto reader = mutation_reader{nullptr};
-        if (reader_type == sst_reader::crawling) {
-            reader = sst_set->make_crawling_reader(s,
-                                                   _env.make_reader_permit(),
-                                                   tracing::trace_state_ptr{},
-                                                   default_read_monitor_generator());
+        if (reader_type == sst_reader::full_scan) {
+            reader = sst_set->make_full_scan_reader(s,
+                                                    _env.make_reader_permit(),
+                                                    tracing::trace_state_ptr{},
+                                                    default_read_monitor_generator());
         } else {
             const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
             auto& slice = s->full_slice();
@@ -341,8 +341,8 @@ public:
         });
     }
 
-    future<double> crawling_streaming(int idx) {
-        return do_streaming(sst_reader::crawling);
+    future<double> full_scan_streaming(int idx) {
+        return do_streaming(sst_reader::full_scan);
     }
 
     future<double> partitioned_streaming(int idx) {

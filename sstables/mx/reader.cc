@@ -1737,7 +1737,19 @@ mutation_reader make_reader(
             value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
-class mx_crawling_sstable_mutation_reader : public mp_row_consumer_reader_mx {
+/// a reader which does not support seeking to given position.
+///
+/// unlike mx_sstable_mutation_reader which allows fast forwarding read,
+/// mx_sstable_full_scan_reader
+///
+/// - always reads the full range, and it is not able to read a subset of the
+///   sstable
+/// - does not support fast forwarding
+///
+/// It is designed to be used in conditions where:
+/// - the index is not reliable, or
+/// - the consumer reads the whole sstable
+class mx_sstable_full_scan_reader : public mp_row_consumer_reader_mx {
     using DataConsumeRowsContext = data_consume_rows_context_m<mp_row_consumer_m>;
     using Consumer = mp_row_consumer_m;
     static_assert(RowConsumer<Consumer>);
@@ -1745,7 +1757,7 @@ class mx_crawling_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     std::unique_ptr<DataConsumeRowsContext> _context;
     read_monitor& _monitor;
 public:
-    mx_crawling_sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
+    mx_sstable_full_scan_reader(shared_sstable sst, schema_ptr schema,
              reader_permit permit,
              tracing::trace_state_ptr trace_state,
              read_monitor& mon,
@@ -1759,13 +1771,13 @@ public:
 public:
     void on_out_of_clustering_range() override { }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        on_internal_error(sstlog, "mx_crawling_sstable_mutation_reader: doesn't support fast_forward_to(const dht::partition_range&)");
+        on_internal_error(sstlog, "mx_sstable_full_scan_reader: doesn't support fast_forward_to(const dht::partition_range&)");
     }
     virtual future<> fast_forward_to(position_range cr) override {
-        on_internal_error(sstlog, "mx_crawling_sstable_mutation_reader: doesn't support fast_forward_to(position_range)");
+        on_internal_error(sstlog, "mx_sstable_full_scan_reader: doesn't support fast_forward_to(position_range)");
     }
     virtual future<> next_partition() override {
-        on_internal_error(sstlog, "mx_crawling_sstable_mutation_reader: doesn't support next_partition()");
+        on_internal_error(sstlog, "mx_sstable_full_scan_reader: doesn't support next_partition()");
     }
     virtual future<> fill_buffer() override {
         if (_end_of_stream) {
@@ -1783,19 +1795,19 @@ public:
         }
         _monitor.on_read_completed();
         return _context->close().handle_exception([_ = std::move(_context)] (std::exception_ptr ep) {
-            sstlog.warn("Failed closing of mx_crawling_sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
+            sstlog.warn("Failed closing of mx_sstable_full_scan_reader: {}. Ignored since the reader is already done.", ep);
         });
     }
 };
 
-mutation_reader make_crawling_reader(
+mutation_reader make_full_scan_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         sstable::integrity_check integrity) {
-    return make_mutation_reader<mx_crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
+    return make_mutation_reader<mx_sstable_full_scan_reader>(std::move(sstable), std::move(schema), std::move(permit),
             std::move(trace_state), monitor, integrity);
 }
 
