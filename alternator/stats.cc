@@ -94,6 +94,10 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of rows read and matched during filtering operations")),
             seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
                     seastar::metrics::description("number of rows read and dropped during filtering operations")),
+                    seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchWriteItem")},
+                            api_operations.batch_write_item_batch_total).set_skip_when_empty(),
+                    seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchGetItem")},
+                            api_operations.batch_get_item_batch_total).set_skip_when_empty(),
     });
 }
 
