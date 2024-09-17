@@ -56,3 +56,9 @@ inline storage_options make_local_options(std::filesystem::path dir) {
 }
 
 } // namespace data_dictionary
+
+template <>
+struct fmt::formatter<data_dictionary::storage_options> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const data_dictionary::storage_options&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
