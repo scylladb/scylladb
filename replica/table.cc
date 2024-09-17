@@ -2663,7 +2663,12 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
 }
 
 future<bool> table::snapshot_exists(sstring tag) {
-    sstring jsondir = _config.datadir + "/snapshots/" + tag;
+    auto* so = std::get_if<storage_options::local>(&_storage_opts->value);
+    if (so == nullptr || so->dir.empty()) {
+        co_return false; // Technically it doesn't as snapshots only work for local storage
+    }
+
+    sstring jsondir = (so->dir / sstables::snapshots_dir / tag).native();
     bool exists = false;
     try {
         auto sd = co_await io_check(file_stat, jsondir, follow_symlink::no);
