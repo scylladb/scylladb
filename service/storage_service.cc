@@ -4062,6 +4062,11 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("removenode: request remove for {}", id));
 
         request_id = guard.new_group0_state_id();
+
+        if (auto itr = _topology_state_machine._topology.requests.find(id);
+                itr != _topology_state_machine._topology.requests.end() && itr->second == topology_request::remove) {
+            throw std::runtime_error("Removenode failed. Concurrent request for removal already in progress");
+        }
         try {
             // Make non voter during request submission for better HA
             co_await _group0->make_nonvoters(ignored_ids, _group0_as, raft_timeout{});
