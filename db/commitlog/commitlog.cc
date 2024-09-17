@@ -1588,7 +1588,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
 
     std::vector<std::pair<sseg_ptr, uint64_t>> maybe_clear;
 
-    assert(_request_controller.available_units() <= ssize_t(max_request_controller_units()));
+    SCYLLA_ASSERT(_request_controller.available_units() <= ssize_t(max_request_controller_units()));
     auto fut = get_units(_request_controller, max_request_controller_units(), timeout);
     if (_request_controller.waiters()) {
         totals.requests_blocked_memory++;
@@ -1597,7 +1597,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
     scope_increment_counter allocating(totals.active_allocations);
 
     auto permit = co_await std::move(fut);
-    assert(_request_controller.available_units() == 0);
+    SCYLLA_ASSERT(_request_controller.available_units() == 0);
 
     decltype(permit) fake_permit; // can't have allocate+sync release semaphore.
     bool failed = false;
@@ -1858,10 +1858,13 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
             }
         }
     }
-    assert(_request_controller.available_units() == 0);
-
+    SCYLLA_ASSERT(_request_controller.available_units() == 0);
+    SCYLLA_ASSERT(permit.count() == max_request_controller_units());
+    auto nw = _request_controller.waiters();
     permit.return_all();
-    assert(_request_controller.available_units() == ssize_t(max_request_controller_units()));
+    // #20633 cannot guarantee controller avail is now full, since we could have had waiters when doing
+    // return all -> now will be less avail
+    SCYLLA_ASSERT(nw > 0 || _request_controller.available_units() == ssize_t(max_request_controller_units()));
 
     if (!failed) {
         clogger.trace("Oversized allocation succeeded.");
