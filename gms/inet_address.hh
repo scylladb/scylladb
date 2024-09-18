@@ -58,9 +58,9 @@ public:
     bytes_view bytes() const noexcept {
         return bytes_view(reinterpret_cast<const int8_t*>(_addr.data()), _addr.size());
     }
-    friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept = default;
-    friend inline bool operator<(const inet_address& x, const inet_address& y) noexcept {
-        return x.bytes() < y.bytes();
+    constexpr bool operator==(const inet_address&) const noexcept = default;
+    constexpr auto operator<=>(const inet_address& o) const noexcept {
+        return bytes() <=> o.bytes();
     }
     friend struct std::hash<inet_address>;
 
