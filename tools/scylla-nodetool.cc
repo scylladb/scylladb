@@ -135,17 +135,26 @@ struct api_request_failed : public std::runtime_error {
     {}
 };
 
+struct request_body {
+    sstring content_type;
+    sstring content;
+};
+
 class scylla_rest_client {
     sstring _host;
     uint16_t _port;
     sstring _host_name;
     http::experimental::client _api_client;
 
-    rjson::value do_request(sstring type, sstring path, std::unordered_map<sstring, sstring> params) {
+    rjson::value do_request(sstring type, sstring path,
+                            std::unordered_map<sstring, sstring> params,
+                            std::optional<request_body> body = {}) {
         auto req = http::request::make(type, _host_name, path);
         auto url = req.get_url();
         req.query_parameters = params;
-
+        if (body) {
+            req.write_body(body->content_type, body->content);
+        }
         nlog.trace("Making {} request to {} with parameters {}", type, url, params);
 
 
@@ -189,8 +198,8 @@ public:
         _api_client.close().get();
     }
 
-    rjson::value post(sstring path, std::unordered_map<sstring, sstring> params = {}) {
-        return do_request("POST", std::move(path), std::move(params));
+    rjson::value post(sstring path, std::unordered_map<sstring, sstring> params = {}, std::optional<request_body> body = {}) {
+        return do_request("POST", std::move(path), std::move(params), std::move(body));
     }
 
     rjson::value get(sstring path, std::unordered_map<sstring, sstring> params = {}) {
