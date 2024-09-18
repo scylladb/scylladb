@@ -433,7 +433,7 @@ select_statement::do_execute(query_processor& qp,
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = page_size <= 0 ? internal_paging_size : std::min(page_size, internal_paging_size);
+        page_size = page_size <= 0 ? internal_paging_size : page_size;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
