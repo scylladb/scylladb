@@ -79,6 +79,11 @@ public:
 
     class components_lister {
     public:
+        /// process all SSTable components found by the lister
+        ///
+        /// @li process all the listed valid TOC components with the given @c directory
+        /// @li removes safe-to-remove stale components
+        /// @li reports abnomalities if encounter
         virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
         virtual future<> prepare(sstable_directory&, process_flags, storage&) = 0;
