@@ -77,26 +77,71 @@ Reader concurrency semaphore diagnostic dumps
 When a read waiting to obtain a permit times out, or if the wait queue of the reader concurrency semaphore overflows, the reader concurrency semaphore will dump diagnostics to the logs, with the aim of helping users to diagnose the problem.
 Example diagnostics dump:
 
-    [shard 1] reader_concurrency_semaphore - Semaphore _read_concurrency_sem with 35/100 count and 14858525/209715200 memory resources: timed out, dumping permit diagnostics:
-    permits count   memory  table/operation/state
-    34  34  14M ks1.table1_mv_0/data-query/active/await
-    1   1   16K ks1.table1_mv_0/data-query/active/need_cpu
-    7   0   0B  ks1.table1/data-query/waiting
-    1251    0   0B  ks1.table1_mv_0/data-query/waiting
+INFO  2024-09-12 08:09:48,046 [shard  0:main] reader_concurrency_semaphore - Semaphore reader_concurrency_semaphore_dump_reader_diganostics with 8/10 count and 106192275/32768 memory resources: timed out, dumping permit diagnostics:
+Trigger permit: count=0, memory=0, table=ks.tbl0, operation=mutation-query, state=waiting_for_admission
+Identified bottleneck(s): memory
 
-    1293    35  14M total
+permits count   memory  table/operation/state
+3       2       26M     *.*/push-view-updates-2/active
+3       2       16M     ks.tbl1/push-view-updates-1/active
+1       1       15M     ks.tbl2/push-view-updates-1/active
+1       0       13M     ks.tbl1/multishard-mutation-query/active
+1       0       12M     ks.tbl0/push-view-updates-1/active
+1       1       10M     ks.tbl3/push-view-updates-2/active
+1       1       6060K   ks.tbl3/multishard-mutation-query/active
+2       1       1930K   ks.tbl0/push-view-updates-2/active
+1       0       1216K   ks.tbl0/multishard-mutation-query/active
+6       0       0B      ks.tbl1/shard-reader/waiting_for_admission
+3       0       0B      *.*/data-query/waiting_for_admission
+9       0       0B      ks.tbl0/mutation-query/waiting_for_admission
+2       0       0B      ks.tbl2/shard-reader/waiting_for_admission
+4       0       0B      ks.tbl0/shard-reader/waiting_for_admission
+9       0       0B      ks.tbl0/data-query/waiting_for_admission
+7       0       0B      ks.tbl3/mutation-query/waiting_for_admission
+5       0       0B      ks.tbl1/mutation-query/waiting_for_admission
+2       0       0B      ks.tbl2/mutation-query/waiting_for_admission
+8       0       0B      ks.tbl1/data-query/waiting_for_admission
+1       0       0B      *.*/mutation-query/waiting_for_admission
+26      0       0B      permits omitted for brevity
 
-    Total: 1293 permits with 35 count and 14M memory resources
+96      8       101M    total
+
+Stats:
+permit_based_evictions: 0
+time_based_evictions: 0
+inactive_reads: 0
+total_successful_reads: 0
+total_failed_reads: 0
+total_reads_shed_due_to_overload: 0
+total_reads_killed_due_to_kill_limit: 0
+reads_admitted: 1
+reads_enqueued_for_admission: 82
+reads_enqueued_for_memory: 0
+reads_admitted_immediately: 1
+reads_queued_because_ready_list: 0
+reads_queued_because_need_cpu_permits: 82
+reads_queued_because_memory_resources: 0
+reads_queued_because_count_resources: 0
+reads_queued_with_eviction: 0
+total_permits: 97
+current_permits: 96
+need_cpu_permits: 0
+awaits_permits: 0
+disk_reads: 0
+sstables_read: 0
 
 Note that the diagnostics dump logging is rate limited to 1 in 30 seconds (as timeouts usually come in bursts). You might also see a message to this effect.
 
 The dump contains the following information:
-* The semaphore's name: `_read_concurrency_sem`;
-* Currently used count resources: 35;
-* Limit of count resources: 100;
-* Currently used memory resources: 14858525;
-* Limit of memory resources: 209715200;
-* Dump of the permit states;
+* The semaphore's name: `user`.
+* Currently used count resources: 8.
+* Limit of count resources: 10.
+* Currently used memory resources: 106192275.
+* Limit of memory resources: 32768.
+* Trigger permit: the details of the permit which triggered the dump, usually by timing out. This section may be missing if the dump was not triggered by a particular permit.
+* The identified bottleneck: list the identified bottlenecks when it is possible to identify one or more bottlenecks as the cause for permits being queued. Potential bottlenecks are: disk (count resources are exhausted), memory (memory resources are exhausted), CPU (there are active/need_cpu permits). This section will be missing if no bottlenecks were identified.
+* Dump of the permit states.
+* Dump of the semaphore stats.
 
 Permits are grouped by table, operation (see below), and state, while groups are sorted by memory consumption.
 The first group in this example contains 34 permits, all for reads against table `ks1.table1_mv_0`, all data-query reads and in state `active/await`.
@@ -106,7 +151,11 @@ The dump can reveal what the bottleneck holding up the reads is:
 * Disk - count resource is maxed out by active/await permits using up all count resources;
 * Memory - memory resource is maxed out (usually even above the limit);
 
+The semaphore tries to self-diagnose on what the bottleneck is, see the "identified bottleneck(s)" section of the dump above.
+
 There might be inactive reads if CPU is a bottleneck; otherwise, there shouldn't be any (they should be evicted to free up resources).
+
+The stats section contains a dump of the semaphore's internal stats. See the list of stats and their explanation in [reader_concurrency_semaphore.hh](https://github.com/scylladb/scylladb/blob/master/reader_concurrency_semaphore.hh), look for `struct stats`.
 
 ### Operations
 
