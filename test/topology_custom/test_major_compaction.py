@@ -141,3 +141,56 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
     # for the second time, all tables should be flushed only if
     # compaction_flush_all_tables_before_major_seconds == 2 as only 2 seconds have passed
     await check_all_table_flush_in_major_compaction(compaction_flush_all_tables_before_major_seconds == 2)
+
+# Testcase for https://github.com/scylladb/scylladb/issues/20197
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_shutdown_drain_during_compaction(manager: ManagerClient):
+    """
+    Test drain/shutdown during compaction doesn't throw any unexpected errors
+    1. Create a single node cluster.
+    2. Create a table and populate it.
+    3. Inject error to make compaction wait right before updating compaction_history table
+    4. Start compaction, wait for it to reach injection point
+    5. Shutdown server and resume compaction.
+    6. Verify that the shutdown did not throw any error except 'seastar::abort_requested_exception'
+    """
+    logger.info("Bootstrapping cluster")
+    server = await manager.server_add(cmdline=['--smp=1'])
+
+    logger.info("Creating table")
+    ks = "test_shutdown_drain_during_compaction"
+    cf = "t1"
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY);")
+    await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
+
+    logger.info("Populating table")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{cf} (pk) VALUES ({k});") for k in range(100)])
+    await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+
+    # inject error to make compaction wait just before it updates the compaction_history table
+    injection = "update_history_wait"
+    injection_handler = await inject_error_one_shot(manager.api, server.ip_addr, injection)
+
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    # start compaction and wait for it to pause at the injection point
+    logger.info("Start compaction")
+    compaction_task = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, cf))
+    await log.wait_for("update_history_wait: waiting", mark, 30)
+
+    mark = await log.mark()
+    # Start server shutdown
+    logger.info("Shutdown server")
+    stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+    # wait until the shutdown drain request is sent to compaction_manager
+    await log.wait_for("Asked to drain", mark, 30)
+    # now resume compaction and let shutdown complete
+    await injection_handler.message()
+    # wait server to shutdown
+    await stop_task
+    # During shutdown, errors mentioning 'seastar::abort_requested_exception' is expected as we do abort the compaction midway.
+    # Verify that the shutdown completed without any other unexpected errors
+    assert len(await log.grep(expr="ERROR .*", filter_expr=".* seastar::abort_requested_exception \(abort requested\)", from_mark=mark)) == 0
