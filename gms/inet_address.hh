@@ -58,10 +58,6 @@ public:
     bytes_view bytes() const noexcept {
         return bytes_view(reinterpret_cast<const int8_t*>(_addr.data()), _addr.size());
     }
-    // TODO remove
-    uint32_t raw_addr() const {
-        return addr().as_ipv4_address().ip;
-    }
     friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept = default;
     friend inline bool operator<(const inet_address& x, const inet_address& y) noexcept {
         return x.bytes() < y.bytes();
