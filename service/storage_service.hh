@@ -194,6 +194,7 @@ private:
     future<> do_tablet_operation(locator::global_tablet_id tablet,
                                  sstring op_name,
                                  std::function<future<>(locator::tablet_metadata_guard&)> op);
+    future<> repair_tablet(locator::global_tablet_id);
     future<> stream_tablet(locator::global_tablet_id);
     // Clones storage of leaving tablet into pending one. Done in the context of intra-node migration,
     // when both of which sit on the same node. So all the movement is local.
