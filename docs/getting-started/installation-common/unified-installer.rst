@@ -1,8 +1,3 @@
-.. |SCYLLADB_VERSION| replace:: 5.2
-
-.. update the version folder URL below (variables won't work):
-    https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.2/
-
 ====================================================
 Install ScyllaDB Without root Privileges
 ====================================================
@@ -24,14 +19,17 @@ Note that if you're on CentOS 7, only root offline installation is supported.
 Download and Install
 -----------------------
 
-#. Download the latest tar.gz file for ScyllaDB |SCYLLADB_VERSION| (x86 or ARM) from https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.2/.
+#. Download the latest tar.gz file for ScyllaDB version (x86 or ARM) from ``https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-<version>/``.
+
+   Example for version 6.1: https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-6.1/
+
 #. Uncompress the downloaded package.
 
-   The following example shows the package for ScyllaDB 5.2.4 (x86):
+   The following example shows the package for ScyllaDB 6.1.1 (x86):
 
    .. code:: console
 
-    tar xvfz scylla-unified-5.2.4-0.20230623.cebbf6c5df2b.x86_64.tar.gz
+    tar xvfz scylla-unified-6.1.1-0.20240814.8d90b817660a.x86_64.tar.gz
 
 #. Install OpenJDK 8 or 11.
 
