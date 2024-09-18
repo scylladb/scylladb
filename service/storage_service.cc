@@ -5939,6 +5939,34 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     }
 }
 
+future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
+    return do_tablet_operation(tablet, "Repair", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+        slogger.debug("Executing repair for tablet={}", tablet);
+        auto& tmap = guard.get_tablet_map();
+        auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+        // Check if the request is still valid.
+        // If there is mismatch, it means this repair was canceled and the coordinator moved on.
+        if (!trinfo) {
+            throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
+        }
+        if (trinfo->stage != locator::tablet_transition_stage::repair) {
+            throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
+        }
+        if (trinfo->session_id) {
+            // TODO: Propagate session id to repair
+            slogger.debug("repair_tablet: tablet={} session_id={}", tablet, trinfo->session_id);
+        } else {
+            throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
+        }
+
+        utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
+            [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
+        co_await _repair.local().repair_tablet(guard, tablet);
+        co_return;
+    });
+}
+
 future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
     if (leaving.host != pending.host) {
         throw std::runtime_error(fmt::format("Leaving and pending tablet replicas belong to different nodes, {} and {} respectively",
@@ -6945,6 +6973,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
         return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
             return ss.stream_tablet(tablet);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+            return ss.repair_tablet(tablet);
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {

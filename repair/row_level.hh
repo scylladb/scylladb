@@ -20,6 +20,7 @@
 #include <seastar/util/bool_class.hh>
 #include "service/raft/raft_address_map.hh"
 #include "utils/user_provided_param.hh"
+#include "locator/tablet_metadata_guard.hh"
 
 using namespace seastar;
 
@@ -178,6 +179,7 @@ private:
 public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<gms::inet_address> hosts = {}, std::unordered_set<gms::inet_address> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
+    future<> repair_tablet(locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(

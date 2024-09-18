@@ -37,6 +37,8 @@ data_type get_tablet_info_type();
 
 schema_ptr make_tablets_schema();
 
+void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db);
+
 std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set& replicas);
 
 /// Converts information in tablet_map to mutations of system.tablets.

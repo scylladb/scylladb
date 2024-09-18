@@ -2390,6 +2390,66 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
     auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
 }
 
+// It is called by the repair_tablet rpc verb to repair the given tablet
+future<> repair_service::repair_tablet(locator::tablet_metadata_guard& guard, locator::global_tablet_id gid) {
+    auto id = _repair_module->new_repair_uniq_id();
+    rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
+    auto& db = get_db().local();
+    auto table_id = gid.table;
+    auto tablet_id = gid.tablet;
+
+    auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
+        auto ip = addr_map.local().find(raft::server_id(host.uuid()));
+        if (!ip) {
+            throw std::runtime_error(format("Could not get ip address for host {} from raft_address_map", host));
+        }
+        co_return *ip;
+    };
+
+    auto t = db.get_tables_metadata().get_table_if_exists(table_id);
+    if (!t) {
+        co_return;
+    }
+    auto& tmap = guard.get_tablet_map();
+    auto s = t->schema();
+    auto keyspace_name = s->ks_name();
+    auto table_name = s->cf_name();
+    std::vector<sstring> table_names = {table_name};
+    auto myhostid = guard.get_token_metadata()->get_my_id();
+
+    auto range = tmap.get_token_range(tablet_id);
+    auto& info = tmap.get_tablet_info(tablet_id);
+    auto replicas = info.replicas;
+    std::vector<gms::inet_address> nodes;
+    std::vector<shard_id> shards;
+    shard_id master_shard_id;
+    for (auto& r : replicas) {
+        auto shard = r.shard;
+        if (r.host != myhostid) {
+            auto ip = co_await host2ip(r.host);
+            nodes.push_back(ip);
+            shards.push_back(shard);
+        } else {
+            master_shard_id = r.shard;
+        }
+    }
+
+    std::vector<tablet_repair_task_meta> task_metas;
+    auto ranges_parallelism = std::nullopt;
+    auto start = std::chrono::steady_clock::now();
+    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
+    co_await task->done();
+    auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
+    if (delay) {
+        rlogger.debug("Exceute tablet_repair_add_delay_in_ms={}", *delay);
+        co_await seastar::sleep(std::chrono::milliseconds(*delay));
+    }
+    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
+    rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={}",
+            id.uuid(), keyspace_name, table_name, range, duration, replicas, gid);
+}
+
 void repair::tablet_repair_task_impl::release_resources() noexcept {
     _metas_size = _metas.size();
     _metas = {};

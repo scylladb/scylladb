@@ -40,6 +40,10 @@ public:
     tablet_mutation_builder& del_session(dht::token last_token);
     tablet_mutation_builder& del_transition(dht::token last_token);
     tablet_mutation_builder& set_resize_decision(locator::resize_decision);
+    tablet_mutation_builder& set_repair_scheduler_config(locator::repair_scheduler_config);
+    tablet_mutation_builder& set_repair_time(dht::token last_token, db_clock::time_point repair_time);
+    tablet_mutation_builder& set_repair_task_info(dht::token last_token, locator::tablet_task_info info);
+    tablet_mutation_builder& del_repair_task_info(dht::token last_token);
 
     mutation build() {
         return std::move(_m);

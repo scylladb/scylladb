@@ -17,6 +17,8 @@
 #include "utils/stall_free.hh"
 #include "db/config.hh"
 #include "locator/load_sketch.hh"
+#include "replica/database.hh"
+#include "gms/feature_service.hh"
 #include <utility>
 #include <fmt/ranges.h>
 #include <absl/container/flat_hash_map.h>
@@ -520,6 +522,7 @@ class load_balancer {
     const size_t max_write_streaming_load = 2;
     const size_t max_read_streaming_load = 4;
 
+    replica::database& _db;
     token_metadata_ptr _tm;
     std::optional<locator::load_sketch> _load_sketch;
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
@@ -550,6 +553,10 @@ private:
                 return true;
             case tablet_transition_stage::streaming:
                 return true;
+            case tablet_transition_stage::repair:
+                return true;
+            case tablet_transition_stage::end_repair:
+                return false;
             case tablet_transition_stage::write_both_read_new:
                 return false;
             case tablet_transition_stage::use_new:
@@ -567,8 +574,9 @@ private:
     }
 
 public:
-    load_balancer(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
+    load_balancer(replica::database& db, token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
+        , _db(db)
         , _tm(std::move(tm))
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
@@ -585,10 +593,14 @@ public:
             lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));
         }
+
+        // Make plans for repair jobs
+        plan.set_repair_plan(co_await make_repair_plan(plan));
+
         plan.set_resize_plan(co_await make_resize_plan());
 
-        lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s)",
-                      plan.size(), plan.tablet_migration_count(), plan.resize_decision_count());
+        lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
+                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());
         co_return std::move(plan);
     }
 
@@ -602,6 +614,155 @@ public:
         }
         auto it = _table_load_stats->tables.find(id);
         return (it != _table_load_stats->tables.end()) ? &it->second : nullptr;
+    }
+
+    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
+            const locator::repair_scheduler_config& config, const db_clock::time_point& now, db_clock::duration& diff) {
+        co_return false;
+    }
+
+    future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_repair_plan");
+
+        auto ret = tablet_repair_plan();
+
+        if (!_db.features().tablet_repair_scheduler) {
+            lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
+            co_return ret;
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+
+        // Populate the load of the migration that is already in the plan
+        node_load_map nodes;
+        // TODO: share code with make_plan()
+        auto ensure_node = [&] (host_id host) {
+            if (nodes.contains(host)) {
+                return;
+            }
+            auto* node = topo.find_node(host);
+            if (!node) {
+                on_internal_error(lblogger, format("Node {} not found in topology", host));
+            }
+            node_load& load = nodes[host];
+            load.id = host;
+            load.node = node;
+            load.shard_count = node->get_shard_count();
+            load.shards.resize(load.shard_count);
+            if (!load.shard_count) {
+                throw std::runtime_error(format("Shard count of {} not found in topology", host));
+            }
+        };
+        // TODO: share code with make_plan()
+        topo.for_each_node([&] (const locator::node* node_ptr) {
+            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
+                              || node_ptr->get_state() == locator::node::state::being_removed;
+            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
+                ensure_node(node_ptr->host_id());
+            }
+        });
+
+        // Consider load that is already scheduled
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = *tmap_;
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                if (is_streaming(&trinfo)) {
+                    auto& tinfo = tmap.get_tablet_info(tid);
+                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
+                }
+            }
+        }
+
+        // Consider load that is about to be scheduled
+        auto& tablet_meta = _tm->tablets();
+        for (const tablet_migration_info& tmi : mplan.migrations()) {
+            co_await coroutine::maybe_yield();
+            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
+            auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
+            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
+            apply_load(nodes, streaming_info);
+        }
+
+        struct repair_plan {
+            locator::global_tablet_id gid;
+            locator::tablet_info tinfo;
+            dht::token_range range;
+            dht::token last_token;
+            db_clock::duration repair_time_diff;
+        };
+
+        std::vector<repair_plan> plans;
+        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = *tmap_;
+            co_await coroutine::maybe_yield();
+            auto& config = tmap.repair_scheduler_config();
+            auto now = db_clock::now();
+            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+                auto gid = locator::global_tablet_id{table, id};
+                // Skip tablet that is in transitions.
+                auto* tti = tmap.get_tablet_transition_info(id);
+                if (tti) {
+                    lblogger.debug("Skipped tablet repair for tablet={} which is already in transition={}", gid, tti->transition);
+                    co_return;
+                }
+
+                // Skip the tablet that is about to be in transition.
+                if (migration_tablet_ids.contains(gid)) {
+                    co_return;
+                }
+
+                // Skip the tablet that has excluded replica node.
+                auto& tinfo = tmap.get_tablet_info(id);
+                if (tablet_has_excluded_node(topo, tinfo)) {
+                    co_return;
+                }
+
+                // Avoid rescheduling a failed tablet repair in a loop
+                // TODO: Allow user to config
+                const auto min_reschedule_time = std::chrono::seconds(5);
+                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                    lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
+                    co_return;
+                }
+
+                db_clock::duration diff;
+                auto is_user_reuqest = info.repair_task_info.is_user_request();
+                if (is_user_reuqest) {
+                    // This means the user has issued a repair request manually. Select it for repair scheduling.
+                } else {
+                    auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff);
+                    if (!auto_repair) {
+                        co_return;
+                    }
+                }
+                auto range = tmap.get_token_range(id);
+                auto last_token = tmap.get_last_token(id);
+                plans.push_back(repair_plan{gid, info, range, last_token, diff});
+            });
+        }
+
+        // TODO: we could add other factors in addition to the repair time when
+        // picking which tablet to repair, e.g., higher repair priority
+        // specified by user, tablet with higher purgeable tombstone ratio.
+        std::sort(plans.begin(), plans.end(), [] (const repair_plan& x, const repair_plan& y) {
+            return x.repair_time_diff > y.repair_time_diff;
+        });
+
+        auto trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
+                locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
+        for (auto& plan : plans) {
+            co_await coroutine::maybe_yield();
+            tablet_migration_streaming_info tmsi;
+            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
+            if (can_accept_load(nodes, tmsi)) {
+                apply_load(nodes, tmsi);
+                ret.add(plan.gid);
+            }
+        }
+
+        co_return ret;
     }
 
     future<table_resize_plan> make_resize_plan() {
@@ -1845,8 +2006,14 @@ public:
         }
 
         for (auto&& [host, load] : nodes) {
-            lblogger.info("Node {}: rack={} avg_load={}, tablets={}, shards={}, state={}",
-                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state());
+            size_t read = 0;
+            size_t write = 0;
+            for (auto& shard_load : load.shards) {
+                read += shard_load.streaming_read_load;
+                write += shard_load.streaming_write_load;
+            }
+            lblogger.info("Node {}: rack={} avg_load={} tablets={} shards={} state={} stream_read={} stream_write={}",
+                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state(), read, write);
         }
 
         if (!min_load_node) {
@@ -1953,7 +2120,7 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        load_balancer lb(tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
+        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         co_return co_await lb.make_plan();
     }
@@ -2032,6 +2199,19 @@ public:
 
     // FIXME: Handle materialized views.
 };
+
+future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migration_tablet_ids() const {
+    std::unordered_set<locator::global_tablet_id> tablets;
+    for (auto& m : _migrations) {
+        co_await coroutine::maybe_yield();
+        tablets.insert(m.tablet);
+    }
+    for (auto& gid : _repair_plan._repairs) {
+        co_await coroutine::maybe_yield();
+        tablets.insert(gid);
+    }
+    co_return tablets;
+}
 
 tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db)
     : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db)) {
