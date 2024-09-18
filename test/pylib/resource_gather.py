@@ -154,10 +154,10 @@ def get_resource_gather(is_switched_on: bool, test, tmpdir: str) -> ResourceGath
     else:
         return ResourceGatherOff(test, tmpdir)
 
-def _is_cgroup_rw(path: Path) -> bool:
+def _is_cgroup_rw() -> bool:
     with open('/proc/mounts', 'r') as f:
         for line in f.readlines():
-            if line.startswith('cgroup2'):
+            if 'cgroup2' in line :
                 options = line.split(' ')[3].split(',')
                 if 'rw' in options:
                     return True
@@ -170,11 +170,8 @@ def setup_cgroup(is_required: bool) -> None:
         # check where the process is executed in podman or in docker
         is_podman = os.access("/run/.containerenv", os.F_OK)
         is_docker = os.access("/.dockerenv", os.F_OK)
-        is_cgroup_ro = _is_cgroup_rw('/sys/fs/cgroup')
-        if is_podman or is_docker:
-            subprocess.run(['sudo', 'chown', '-R', f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup'],
-                           check=True)
-        if is_cgroup_ro and is_docker:
+
+        if _is_cgroup_rw() and is_docker:
             subprocess.run(
                 [
                     "sudo",
@@ -185,6 +182,10 @@ def setup_cgroup(is_required: bool) -> None:
                 ],
                 check=True,
             )
+
+        if is_podman or is_docker:
+            subprocess.run(['sudo', 'chown', '-R', f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup'],
+                           check=True)
 
         for directory in [CGROUP_INITIAL, CGROUP_TESTS]:
             if directory.exists():
