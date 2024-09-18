@@ -920,7 +920,11 @@ private:
     future<> track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
 
     future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
+    future<service::group0_guard> wait_for_tablet_migration();
+    future<bool> exec_tablet_migration(service::group0_guard guard, std::vector<canonical_mutation> updates, sstring reason);
 public:
+    future<std::unordered_map<sstring, sstring>> add_repair_tablet_request(table_id table, utils::chunked_vector<dht::token> tokens, bool all_tokens);
+    future<> del_repair_tablet_request(table_id table, locator::tablet_task_id);
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
