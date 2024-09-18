@@ -1083,7 +1083,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     auto& last_base_pk = last_pos.partition;
     auto* last_base_ck = last_pos.position.has_key() ? &last_pos.position.key() : nullptr;
 
-    bytes_opt indexed_column_value = expr::value_for(*cdef, _used_index_restrictions, options);
+    bytes_opt indexed_column_value = restrictions::value_for(*cdef, _used_index_restrictions, options);
 
     auto index_pk = [&]() {
         if (_index.metadata().local()) {
@@ -1288,7 +1288,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    bytes_opt value = expr::value_for(*cdef, _used_index_restrictions, options);
+    bytes_opt value = restrictions::value_for(*cdef, _used_index_restrictions, options);
     if (value) {
         auto pk = partition_key::from_single_value(*_view_schema, *value);
         auto dk = dht::decorate_key(*_view_schema, pk);
@@ -2412,8 +2412,8 @@ static bool needs_allow_filtering_anyway(
     const auto& pk_restrictions = restrictions.get_partition_key_restrictions();
     // Even if no filtering happens on the coordinator, we still warn about poor performance when partition
     // slice is defined but in potentially unlimited number of partitions (see #7608).
-    if ((expr::is_empty_restriction(pk_restrictions) || restrictions.has_token_restrictions()) // Potentially unlimited partitions.
-        && !expr::is_empty_restriction(ck_restrictions) // Slice defined.
+    if ((restrictions::is_empty_restriction(pk_restrictions) || restrictions.has_token_restrictions()) // Potentially unlimited partitions.
+        && !restrictions::is_empty_restriction(ck_restrictions) // Slice defined.
         && !restrictions.uses_secondary_indexing()) { // Base-table is used. (Index-table use always limits partitions.)
         if (strict_allow_filtering == flag_t::WARN) {
             warnings.emplace_back("This query should use ALLOW FILTERING and will be rejected in future versions.");

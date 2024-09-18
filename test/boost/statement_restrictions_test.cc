@@ -410,7 +410,7 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     column_definition col_r3 = make_column("r3", column_kind::regular_column, 2);
 
     // Empty input test
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(conjunction{}, col_pk1), {});
+    assert_expr_vec_eq(cql3::restrictions::extract_single_column_restrictions_for_column(conjunction{}, col_pk1), {});
 
     // BIG_WHERE test
     // big_where contains:
@@ -494,24 +494,24 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
 
     expression big_where_expr = conjunction{std::move(big_where)};
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_pk1),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_pk1),
         {pk1_restriction});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_pk2),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_pk2),
         {pk2_restriction, pk2_restriction2});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_ck1),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_ck1),
         {ck1_restriction});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_ck2),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_ck2),
         {ck2_restriction});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r1),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_r1),
         {r1_restriction, r1_restriction2, r1_restriction3});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r2),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_r2),
         {r2_restriction});
 
-    assert_expr_vec_eq(extract_single_column_restrictions_for_column(big_where_expr, col_r3),
+    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where_expr, col_r3),
         {});
 }
