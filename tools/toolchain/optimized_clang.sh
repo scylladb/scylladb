@@ -39,8 +39,12 @@ fi
 echo "CLANG_ARCHIVE: ${CLANG_ARCHIVE}"
 if [[ "${ARCH}" = "x86_64" ]]; then
     LLVM_TARGET_ARCH=X86
+    LLVM_CXX_FLAGS="-march=x86-64-v3"
 elif [[ "${ARCH}" = "aarch64" ]]; then
     LLVM_TARGET_ARCH=AArch64
+    # Based on https://community.arm.com/arm-community-blogs/b/tools-software-ides-blog/posts/compiler-flags-across-architectures-march-mtune-and-mcpu
+    # and https://github.com/aws/aws-graviton-getting-started/blob/main/c-c%2B%2B.md
+    LLVM_CXX_FLAGS="-march=armv8.2-a+crc+crypto"
 else
     echo "Unsupported architecture: ${ARCH}"
     exit 1
@@ -85,6 +89,7 @@ CLANG_OPTS=(
     -DCMAKE_INSTALL_PREFIX="/usr/local"
     -DLLVM_LIBDIR_SUFFIX=64
     -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON
+    -DCMAKE_CXX_FLAGS="${LLVM_CXX_FLAGS}"
 )
 SCYLLA_OPTS=(
     --date-stamp "$(date "+%Y%m%d")"
