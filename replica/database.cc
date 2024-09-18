@@ -2273,6 +2273,13 @@ future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, std:
     return flush_table_on_all_shards(sharded_db, sharded_db.local().find_uuid(ks_name, table_name));
 }
 
+static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1, std::unique_ptr<db::commitlog>& cl2) {
+    co_await cl1->force_new_active_segment();
+    if (cl2) {
+        co_await cl2->force_new_active_segment();
+    }
+}
+
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names) {
     /**
      * #14870 
@@ -2283,7 +2290,7 @@ future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std
      * as sstable-ish a universe as we can, as soon as we can.
     */
     return sharded_db.invoke_on_all([] (replica::database& db) {
-        return db._commitlog->force_new_active_segment();
+        return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
     }).then([&, ks_name, table_names = std::move(table_names)] {
         return parallel_for_each(table_names, [&, ks_name] (const auto& table_name) {
             return flush_table_on_all_shards(sharded_db, ks_name, table_name);
@@ -2294,7 +2301,7 @@ future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std
 future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
     // see above
     return sharded_db.invoke_on_all([] (replica::database& db) {
-        return db._commitlog->force_new_active_segment();
+        return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
     }).then([&, ks_name] {
         auto& ks = sharded_db.local().find_keyspace(ks_name);
         return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
