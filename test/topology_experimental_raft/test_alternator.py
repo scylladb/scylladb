@@ -349,6 +349,37 @@ async def test_alternator_enforce_authorization_false(manager: ManagerClient):
     table.get_item(Key={'p': 42})
     table.delete()
 
+async def test_alternator_enforce_authorization_false2(manager: ManagerClient):
+    """A variant of the above test for alternator_enforce_authorization=false
+       Here we check what happens when CQL's authenticator/authorizer are
+       enabled (in the previous test they were disabled).
+       This combination of configuration options isn't very useful (setting
+       authenticator/authorizer is only needed for RBAC, so why set it when
+       RBAC is not supposed to be enabled?), but it also shouldn't break
+       alternator_enfore_authorization=false - requests should be allowed
+       regardless of how they are signed.
+       Reproduces issue #20619.
+    """
+    config = alternator_config | {
+        'alternator_enforce_authorization': False,
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer'
+    }
+    servers = await manager.servers_add(1, config=config,
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
+    # Requests from a non-existent user with garbage password work,
+    # and can perform privildged operations like CreateTable, etc.
+    # It is important to exercise CreateTable as well, because it has
+    # special auto-grant code that we want to check as well.
+    alternator = get_alternator(servers[0].ip_addr, 'nonexistent_user', 'garbage')
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    table.put_item(Item={'p': 42})
+    table.get_item(Key={'p': 42})
+    table.delete()
+
 def get_secret_key(cql, user):
     """The secret key used for a user in Alternator is its role's salted_hash.
        This function retrieves it from the system table.
