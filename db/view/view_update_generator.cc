@@ -22,6 +22,7 @@
 #include "utils/pretty_printers.hh"
 #include "readers/from_mutations_v2.hh"
 #include "service/storage_proxy.hh"
+#include "db/config.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -450,7 +451,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         // the one which limits the number of incoming client requests by delaying the response to the client.
         if (batch_num > 0) {
             update_backlog local_backlog = _db.get_view_update_backlog();
-            std::chrono::microseconds throttle_delay =  calculate_view_update_throttling_delay(local_backlog, timeout);
+            std::chrono::microseconds throttle_delay =  calculate_view_update_throttling_delay(local_backlog, timeout, _db.get_config().view_flow_control_delay_limit_in_ms());
 
             co_await seastar::sleep(throttle_delay);
 
