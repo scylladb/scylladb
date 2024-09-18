@@ -462,6 +462,13 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
         auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
+
+        co_await utils::get_local_injector().inject("update_history_wait", [](auto& handler) -> future<> {
+            cmlog.info("update_history_wait: waiting");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{120});
+            cmlog.info("update_history_wait: released");
+        });
+
         co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
                 ended_at.count(), res.stats.start_size, res.stats.end_size, std::unordered_map<int32_t, int64_t>{});
     }
@@ -1111,10 +1118,13 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
 
 future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
-    if (*_early_abort_subscription) {
+    if (_state == state::enabled) {
+        // This is a drain request and not a shutdown request.
+        // Disable the state so that it can be enabled later if requested.
         _state = state::disabled;
-        co_await stop_ongoing_compactions("drain");
     }
+    // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
+    co_await stop_ongoing_compactions("drain");
     cmlog.info("Drained");
 }
 
