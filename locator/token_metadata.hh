@@ -79,6 +79,10 @@ struct host_id_or_endpoint {
 
 using host_id_or_endpoint_list = std::vector<host_id_or_endpoint>;
 
+[[nodiscard]] inline bool check_host_ids_contain_only_uuid(const auto& host_ids) {
+    return std::ranges::none_of(host_ids, [](const auto& node_str) { return locator::host_id_or_endpoint{node_str}.has_endpoint(); });
+}
+
 class token_metadata_impl;
 struct topology_change_info;
 
