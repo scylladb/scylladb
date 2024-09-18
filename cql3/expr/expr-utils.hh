@@ -41,48 +41,6 @@ extern bool is_satisfied_by(
         const expression& restr, const evaluation_inputs& inputs);
 
 
-/// A set of discrete values.
-using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
-
-/// General set of values.  Empty set and single-element sets are always value_list.  interval is
-/// never singular and never has start > end.  Universal set is a interval with both bounds null.
-using value_set = std::variant<value_list, interval<managed_bytes>>;
-
-/// A set of all column values that would satisfy an expression. The _token_values variant finds
-/// matching values for the partition token function call instead of the column.
-///
-/// An expression restricts possible values of a column or token:
-/// - `A>5` restricts A from below
-/// - `A>5 AND A>6 AND B<10 AND A=12 AND B>0` restricts A to 12 and B to between 0 and 10
-/// - `A IN (1, 3, 5)` restricts A to 1, 3, or 5
-/// - `A IN (1, 3, 5) AND A>3` restricts A to just 5
-/// - `A=1 AND A<=0` restricts A to an empty list; no value is able to satisfy the expression
-/// - `A>=NULL` also restricts A to an empty list; all comparisons to NULL are false
-/// - an expression without A "restricts" A to unbounded range
-extern value_set possible_column_values(const column_definition*, const expression&, const query_options&);
-extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
-
-/// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
-extern interval<managed_bytes> to_range(const value_set&);
-
-/// A range of all X such that X op val.
-interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val);
-
-/// True iff the index can support the entire expression.
-extern bool is_supported_by(const expression&, const secondary_index::index&);
-
-/// True iff any of the indices from the manager can support the entire expression.  If allow_local, use all
-/// indices; otherwise, use only global indices.
-extern bool has_supporting_index(
-        const expression&, const secondary_index::secondary_index_manager&, allow_local_index allow_local);
-
-// Looks at each column individually and checks whether some index can support restrictions on this single column.
-// Expression has to consist only of single column restrictions.
-extern bool index_supports_some_column(
-    const expression&,
-    const secondary_index::secondary_index_manager&,
-    allow_local_index allow_local);
-
 extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
 
 // Looks into the expression and finds the given expression variant
@@ -138,15 +96,6 @@ inline const binary_operator* find(const expression& e, oper_t op) {
     return find_binop(e, [&] (const binary_operator& o) { return o.op == op; });
 }
 
-inline bool needs_filtering(oper_t op) {
-    return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) ;
-}
-
-inline auto find_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
-}
-
 inline bool is_slice(oper_t op) {
     return (op == oper_t::LT) || (op == oper_t::LTE) || (op == oper_t::GT) || (op == oper_t::GTE);
 }
@@ -169,10 +118,6 @@ inline bool is_compare(oper_t op) {
     }
 }
 
-inline bool is_multi_column(const binary_operator& op) {
-    return expr::is<tuple_constructor>(op.lhs);
-}
-
 // Check whether the given expression represents
 // a call to the token() function.
 bool is_token_function(const function_call&);
@@ -188,10 +133,6 @@ bool is_partition_token_for_schema(const expression&, const schema&);
 /// For expression: "p1 = token(1, 2, 3) AND c = 2" return false
 inline bool has_partition_token(const expression& e, const schema& table_schema) {
     return find_binop(e, [&] (const binary_operator& o) { return is_partition_token_for_schema(o.lhs, table_schema); });
-}
-
-inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
 
 inline bool is_clustering_order(const binary_operator& op) {
@@ -210,9 +151,6 @@ std::vector<expression> boolean_factors(expression e);
 /// Run the given function for each element in the top level conjunction.
 void for_each_boolean_factor(const expression& e, const noncopyable_function<void (const expression&)>& for_each_func);
 
-/// True iff binary_operator involves a collection.
-extern bool is_on_collection(const binary_operator&);
-
 // Checks whether the given column occurs in the expression.
 // Uses column_defintion::operator== for comparison, columns with the same name but different schema will not be equal.
 bool contains_column(const column_definition& column, const expression& e);
@@ -220,12 +158,6 @@ bool contains_column(const column_definition& column, const expression& e);
 // Checks whether this expression contains a nonpure function.
 // The expression must be prepared, so that function names are converted to function pointers.
 bool contains_nonpure_function(const expression&);
-
-// Checks whether the given column has an EQ restriction in the expression.
-// EQ restriction is `col = ...` or `(col, col2) = ...`
-// IN restriction is NOT an EQ restriction, this function will not look for IN restrictions.
-// Uses column_defintion::operator== for comparison, columns with the same name but different schema will not be equal.
-bool has_eq_restriction_on_column(const column_definition& column, const expression& e);
 
 /// Replaces every column_definition in an expression with this one.  Throws if any LHS is not a single
 /// column_value.
@@ -281,14 +213,6 @@ inline oper_t pick_operator(statements::bound b, bool inclusive) {
             (inclusive ? oper_t::LTE : oper_t::LT);
 }
 
-// Extracts all binary operators which have the given column on their left hand side.
-// Extracts only single-column restrictions.
-// Does not include multi-column restrictions.
-// Does not include token() restrictions.
-// Does not include boolean constant restrictions.
-// For example "WHERE c = 1 AND (a, c) = (2, 1) AND token(p) < 2 AND FALSE" will return {"c = 1"}.
-std::vector<expression> extract_single_column_restrictions_for_column(const expression&, const column_definition&);
-
 std::optional<bool> get_bool_value(const constant&);
 
 utils::chunked_vector<managed_bytes_opt> get_list_elements(const cql3::raw_value&);
@@ -316,37 +240,15 @@ void fill_prepare_context(expression&, cql3::prepare_context&);
 // For example an expression can contain calls to nonpure functions.
 bool contains_bind_marker(const expression& e);
 
-// Checks whether this expression contains restrictions on one single column.
-// There might be more than one restriction, but exactly one column.
-// The expression must be prepared.
-bool is_single_column_restriction(const expression&);
-
-// Gets the only column from a single_column_restriction expression.
-const column_value& get_the_only_column(const expression&);
-
 // Extracts column_defs from the expression and sorts them using schema_pos_column_definition_comparator.
 std::vector<const column_definition*> get_sorted_column_defs(const expression&);
 
 // Extracts column_defs and returns the last one according to schema_pos_column_definition_comparator.
 const column_definition* get_last_column_def(const expression&);
 
-// Extracts map of single column restrictions for each column from expression
-single_column_restrictions_map get_single_column_restrictions_map(const expression&);
-
-// Checks whether this expression is empty - doesn't restrict anything
-bool is_empty_restriction(const expression&);
-
 // Finds common columns between both expressions and prints them to a string.
 // Uses schema_pos_column_definition_comparator for comparison.
 sstring get_columns_in_commons(const expression& a, const expression& b);
-
-// Finds the value of the given column in the expression
-// In case of multpiple possible values calls on_internal_error
-bytes_opt value_for(const column_definition&, const expression&, const query_options&);
-
-bool contains_multi_column_restriction(const expression&);
-
-bool has_only_eq_binops(const expression&);
 
 /// Finds the data type of writetime(x) or ttl(x)
 data_type column_mutation_attribute_type(const column_mutation_attribute& e);

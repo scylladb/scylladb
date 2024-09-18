@@ -422,6 +422,22 @@ statement_restrictions analyze_statement_restrictions(
         check_indexes do_check_indexes);
 
 
+// Extracts all binary operators which have the given column on their left hand side.
+// Extracts only single-column restrictions.
+// Does not include multi-column restrictions.
+// Does not include token() restrictions.
+// Does not include boolean constant restrictions.
+// For example "WHERE c = 1 AND (a, c) = (2, 1) AND token(p) < 2 AND FALSE" will return {"c = 1"}.
+std::vector<expr::expression> extract_single_column_restrictions_for_column(const expr::expression&, const column_definition&);
+
+
+// Checks whether this expression is empty - doesn't restrict anything
+bool is_empty_restriction(const expr::expression&);
+
+// Finds the value of the given column in the expression
+// In case of multpiple possible values calls on_internal_error
+bytes_opt value_for(const column_definition&, const expr::expression&, const query_options&);
+
 }
 
 }
