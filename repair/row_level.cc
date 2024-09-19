@@ -361,11 +361,6 @@ repair_reader::repair_reader(
 future<mutation_fragment_opt>
 repair_reader::read_mutation_fragment() {
     ++_reads_issued;
-    // Use a very long timeout for the reader to break out any eventual
-    // deadlock within the reader. Thirty minutes should be more than
-    // enough to read a single mutation fragment.
-    auto timeout = db::timeout_clock::now() + std::chrono::minutes(30);
-    _reader.set_timeout(timeout);   // reset to db::no_timeout in pause()
     return _reader().then_wrapped([this] (future<mutation_fragment_opt> f) {
         try {
             auto mfopt = f.get();
@@ -411,7 +406,6 @@ void repair_reader::check_current_dk() {
 }
 
 void repair_reader::pause() {
-    _reader.set_timeout(db::no_timeout);
     if (_reader_handle) {
         _reader_handle->pause();
     }
