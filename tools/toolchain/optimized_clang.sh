@@ -57,7 +57,7 @@ SCYLLA_BUILD_DIR_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_BUILD_DIR}"
 SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 
 # Which LLVM release to build in order to compile Scylla
-LLVM_CLANG_TAG=18.1.6
+LLVM_CLANG_TAG=18.1.8
 CLANG_SUFFIX=18
 
 CLANG_ARCHIVE=$(cd "${SCYLLA_DIR}" && realpath -m "${CLANG_ARCHIVE}")
@@ -122,8 +122,12 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     rm -rf "${CLANG_BUILD_DIR}"
     git clone https://github.com/llvm/llvm-project --branch llvmorg-"${LLVM_CLANG_TAG}" --depth=1 "${CLANG_BUILD_DIR}"
 
+    patch="$PWD/tools/toolchain/0001-Instrumentation-Fix-EdgeCounts-vector-size-in-SetBra.patch"
+
     echo "[clang-stage1] build the compiler for collecting PGO profile"
     cd "${CLANG_BUILD_DIR}"
+    git apply "$patch"
+
     rm -rf build
     cmake -B build -S llvm "${CLANG_OPTS[@]}" -DLLVM_BUILD_INSTRUMENTED=IR
     DISTRIBUTION_COMPONENTS=$(cd build && _get_distribution_components | paste -sd\;)

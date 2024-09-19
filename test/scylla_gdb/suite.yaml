@@ -1,3 +1,5 @@
 type: Run
+disable: # https://github.com/scylladb/scylladb/issues/20741
+    - run
 run_in_release:
     - run

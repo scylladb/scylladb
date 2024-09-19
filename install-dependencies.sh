@@ -111,6 +111,7 @@ fedora_packages=(
     wabt
     binaryen
     lcov
+    java-11-openjdk-devel # for tools/java
 )
 
 # lld is not available on s390x, see
