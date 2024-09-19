@@ -77,6 +77,8 @@ struct host_id_or_endpoint {
     gms::inet_address resolve_endpoint(const token_metadata&) const;
 };
 
+using host_id_or_endpoint_list = std::vector<host_id_or_endpoint>;
+
 class token_metadata_impl;
 struct topology_change_info;
 

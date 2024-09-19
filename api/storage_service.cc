@@ -898,7 +898,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(req->get_query_param("ignore_nodes"));
         apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
-        auto ignore_nodes = std::list<locator::host_id_or_endpoint>();
+        locator::host_id_or_endpoint_list ignore_nodes;
+        ignore_nodes.reserve(ignore_nodes_strs.size());
         for (const sstring& n : ignore_nodes_strs) {
             try {
                 auto hoep = locator::host_id_or_endpoint(n);

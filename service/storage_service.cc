@@ -126,6 +126,27 @@ session_manager& get_topology_session_manager() {
     return topology_session_manager;
 }
 
+namespace {
+
+[[nodiscard]] locator::host_id_or_endpoint_list string_list_to_endpoint_list(const std::vector<sstring>& src_node_strings) {
+    locator::host_id_or_endpoint_list resulting_node_list;
+    resulting_node_list.reserve(src_node_strings.size());
+    for (const sstring& n : src_node_strings) {
+        try {
+            resulting_node_list.emplace_back(n);
+        } catch (...) {
+            throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {}", src_node_strings, n, std::current_exception()));
+        }
+    }
+    return resulting_node_list;
+}
+
+[[nodiscard]] locator::host_id_or_endpoint_list parse_node_list(const std::string_view comma_separated_list) {
+    return string_list_to_endpoint_list(utils::split_comma_separated_list(comma_separated_list));
+}
+
+} // namespace
+
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
 storage_service::storage_service(abort_source& abort_source,
@@ -1175,7 +1196,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
     }
 }
 
-std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps) {
+std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const {
     std::unordered_set<raft::server_id> ids;
     for (const auto& hoep : hoeps) {
         std::optional<raft::server_id> id;
@@ -1196,16 +1217,8 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
 }
 
 std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_params(const join_node_request_params& params) {
-    std::unordered_set<raft::server_id> ignored_nodes;
-
-    if (!params.ignore_nodes.empty()) {
-        std::list<locator::host_id_or_endpoint> ignore_nodes_params;
-        for (const auto& n : params.ignore_nodes) {
-            ignore_nodes_params.emplace_back(n);
-        }
-
-        ignored_nodes = find_raft_nodes_from_hoeps(ignore_nodes_params);
-    }
+    const locator::host_id_or_endpoint_list ignore_nodes_params = string_list_to_endpoint_list(params.ignore_nodes);
+    std::unordered_set<raft::server_id> ignored_nodes{find_raft_nodes_from_hoeps(ignore_nodes_params)};
 
     if (params.replaced_id) {
         // insert node that should be replaced to ignore list so that other topology operations
@@ -2182,19 +2195,6 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
         rtlogger.error("failed to start one of the raft-related background fibers: {}", std::current_exception());
         abort();
     }
-}
-
-std::list<locator::host_id_or_endpoint> storage_service::parse_node_list(sstring comma_separated_list) {
-    std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(std::move(comma_separated_list));
-    std::list<locator::host_id_or_endpoint> ignore_nodes;
-    for (const sstring& n : ignore_nodes_strs) {
-        try {
-            ignore_nodes.push_back(locator::host_id_or_endpoint(n));
-        } catch (...) {
-            throw std::runtime_error(::format("Failed to parse node list: {}: invalid node={}: {}", ignore_nodes_strs, n, std::current_exception()));
-        }
-    }
-    return ignore_nodes;
 }
 
 // Runs inside seastar::async context
@@ -3993,7 +3993,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     }
 }
 
-future<> storage_service::raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
+future<> storage_service::raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
     auto id = raft::server_id{host_id.uuid()};
     utils::UUID request_id;
 
@@ -4099,7 +4099,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, std::list<lo
     }
 }
 
-future<> storage_service::removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params) {
+future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
     return run_with_api_lock_conditionally(sstring("removenode"), !raft_topology_change_enabled(), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
@@ -7335,8 +7335,8 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
         {"removenode", streaming::stream_reason::removenode},
         {"rebuild", streaming::stream_reason::rebuild},
     };
-    auto enabled_list_str = _db.local().get_config().allowed_repair_based_node_ops();
-    std::vector<sstring> enabled_list = utils::split_comma_separated_list(std::move(enabled_list_str));
+    const sstring& enabled_list_str = _db.local().get_config().allowed_repair_based_node_ops();
+    std::vector<sstring> enabled_list = utils::split_comma_separated_list(enabled_list_str);
     std::unordered_set<streaming::stream_reason> enabled_set;
     for (const sstring& op : enabled_list) {
         try {
