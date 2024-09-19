@@ -1577,7 +1577,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         rtlogger.info("entered `{}` transition state", *tstate);
         switch (*tstate) {
             case topology::transition_state::join_group0: {
-                auto [node, accepted] = co_await finish_accepting_node(get_node_to_work_on(std::move(guard)));
+                    auto node = get_node_to_work_on(std::move(guard));
+                    if (node.rs->state == node_state::replacing) {
+                        // Make sure all nodes are no longer trying to write to a node being replaced. This is important
+                        // if the new node have the same IP, so that old write will not go to the new node by mistake after this point.
+                        // It is important to do so before the call to finish_accepting_node() below since after this call the new node becomes
+                        // a full member of the cluster and it starts loading an initial snapshot. Since snapshot loading is not atomic any queries
+                        // that are done in parallel may see a partial state.
+                        try {
+                            node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
+                        } catch (term_changed_error&) {
+                            throw;
+                        } catch (group0_concurrent_modification&) {
+                            throw;
+                        } catch (...) {
+                            rtlogger.error("transition_state::join_group0, "
+                                            "global_token_metadata_barrier failed, error {}",
+                                            std::current_exception());
+                            _rollback = fmt::format("global_token_metadata_barrier failed in join_group0 state {}", std::current_exception());
+                            break;
+                        }
+                    }
+
+                bool accepted;
+                std::tie(node, accepted) = co_await finish_accepting_node(std::move(node));
 
                 // If responding to the joining node failed, move the node to the left state and
                 // stop the topology transition.
@@ -1649,22 +1672,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                     case node_state::replacing: {
                         SCYLLA_ASSERT(!node.rs->ring);
-                        // Make sure all nodes are no longer trying to write to a node being replaced. This is important if the new node have the same IP, so that old write will not
-                        // go to the new node by mistake
-                        try {
-                            node = retake_node(co_await global_token_metadata_barrier(std::move(node.guard), get_excluded_nodes(node)), node.id);
-                        } catch (term_changed_error&) {
-                            throw;
-                        } catch (group0_concurrent_modification&) {
-                            throw;
-                        } catch (...) {
-                            rtlogger.error("transition_state::join_group0, "
-                                            "global_token_metadata_barrier failed, error {}",
-                                            std::current_exception());
-                            _rollback = fmt::format("global_token_metadata_barrier failed in join_group0 state {}", std::current_exception());
-                            break;
-                        }
-
                         auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
                         auto it = _topo_sm._topology.normal_nodes.find(replaced_id);
                         SCYLLA_ASSERT(it != _topo_sm._topology.normal_nodes.end());
