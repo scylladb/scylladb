@@ -181,6 +181,8 @@ public:
     // The caller must ensure that pos remains valid until the future resolves.
     virtual future<std::optional<skip_info>> advance_to(position_in_partition_view pos) = 0;
 
+    virtual skip_info current_block() = 0;
+
     // Determines the data file offset relative to the start of the partition such that fragments
     // from the range (-inf, pos] are located before that offset.
     //

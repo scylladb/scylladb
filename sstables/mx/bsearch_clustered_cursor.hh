@@ -431,6 +431,8 @@ class bsearch_clustered_cursor : public clustered_index_cursor {
     // Points to the upper bound of the cursor.
     std::optional<position_in_partition> _current_pos;
 
+    skip_info _skip_info = {0, tombstone(), position_in_partition::before_all_clustered_rows()};
+
     tracing::trace_state_ptr _trace_state;
 private:
     // Advances the cursor to the nearest block whose start position is > pos.
@@ -513,6 +515,10 @@ public:
 
     cached_promoted_index& promoted_index() { return _promoted_index; }
 
+    skip_info current_block() override {
+        return _skip_info;
+    }
+
     future<std::optional<skip_info>> advance_to(position_in_partition_view pos) override {
         position_in_partition::less_compare less(_s);
 
@@ -537,8 +543,8 @@ public:
                 offset_in_partition datafile_offset = block->data_file_offset;
                 sstlog.trace("mc_bsearch_clustered_cursor {}: datafile_offset={}", fmt::ptr(this), datafile_offset);
                 if (_current_idx < 2) {
-                    return make_ready_future<std::optional<skip_info>>(
-                        skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()});
+                    _skip_info = skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
+                    return make_ready_future<std::optional<skip_info>>(_skip_info);
                 }
                 // _current_idx points to the block whose start is > than the cursor (upper bound).
                 // The cursor is in _current_idx - 1. We will tell the data file reader to skip to
@@ -552,11 +558,13 @@ public:
                     // as we walk so that memory footprint is not O(N) but O(log(N)).
                     _promoted_index.invalidate_prior(block, _trace_state);
                     if (!block->end_open_marker) {
-                        return skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
+                        _skip_info = skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
+                        return _skip_info;
                     }
                     auto tomb = tombstone(*block->end_open_marker);
                     sstlog.trace("mc_bsearch_clustered_cursor {}: tombstone={}, pos={}", fmt::ptr(this), tomb, *block->end);
-                    return skip_info{datafile_offset, tomb, *block->end};
+                    _skip_info = skip_info{datafile_offset, tomb, *block->end};
+                    return _skip_info;
                 });
             });
         });
