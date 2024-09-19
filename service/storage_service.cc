@@ -558,12 +558,16 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
                 // FIXME: What if not known?
                 on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
             }
+<<<<<<< HEAD
             assert(existing_ip);
+=======
+            SCYLLA_ASSERT(existing_ip);
+            const auto replaced_host_id = locator::host_id(replaced_id.uuid());
+            tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
+            tmptr->add_replacing_endpoint(replaced_host_id, host_id);
+>>>>>>> c0939d86f9 (topology coordinator:: mark node as being replaced earlier)
             if (rs.ring.has_value()) {
-                const auto replaced_host_id = locator::host_id(replaced_id.uuid());
-                tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
                 update_topology(host_id, ip, rs);
-                tmptr->add_replacing_endpoint(replaced_host_id, host_id);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             } else {
                 // After adding replacing endpoint above the node will no longer be reported for reads and writes,
