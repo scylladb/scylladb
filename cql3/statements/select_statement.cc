@@ -982,15 +982,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
         throw std::runtime_error("No index found.");
     }
 
-    const auto& im = index_opt->metadata();
-    sstring index_table_name = im.name() + "_index";
-    schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
-
-    if (im.local()) {
-        restrictions->prepare_indexed_local(*view_schema);
-    } else {
-        restrictions->prepare_indexed_global(*view_schema);
-    }
+    schema_ptr view_schema = restrictions->get_view_schema();
 
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
@@ -2172,8 +2164,8 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        restrictions::check_indexes do_check_indexes)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
+        return ::make_shared<restrictions::statement_restrictions>(restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes));
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));

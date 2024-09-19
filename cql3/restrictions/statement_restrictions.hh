@@ -120,6 +120,9 @@ private:
 
     check_indexes _check_indexes = check_indexes::yes;
     std::vector<const column_definition*> _column_defs_for_filtering;
+    schema_ptr _view_schema;
+    std::optional<secondary_index::index> _idx_opt;
+    expr::expression _idx_restrictions = expr::conjunction({});
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -129,6 +132,18 @@ public:
      */
     statement_restrictions(schema_ptr schema, bool allow_filtering);
 
+    friend statement_restrictions analyze_statement_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
+
+private:
     statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
@@ -138,6 +153,7 @@ public:
         bool for_view,
         bool allow_filtering,
         check_indexes do_check_indexes);
+public:
 
     const std::vector<expr::expression>& index_restrictions() const;
 
@@ -256,7 +272,10 @@ public:
      * @return the <code>column_definition</code> for the unrestricted column.
      */
     const column_definition& unrestricted_column(column_kind kind) const;
+
+    schema_ptr get_view_schema() const { return _view_schema; }
 private:
+    std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(const secondary_index::secondary_index_manager& sim) const;
     void add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
     void add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view);
     void add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
@@ -314,7 +333,7 @@ public:
      */
     bool need_filtering() const;
 
-    void validate_secondary_index_selections(bool selects_only_static_columns);
+    void validate_secondary_index_selections(bool selects_only_static_columns) const;
 
     /**
      * Checks if the query has some restrictions on the clustering columns.
@@ -363,6 +382,7 @@ public:
         return _clustering_row_level_filter;
     }
 
+private:
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().
     void prepare_indexed_local(const schema& idx_tbl_schema);
@@ -371,6 +391,7 @@ public:
     /// get_global_index_clustering_ranges() or get_global_index_token_clustering_ranges().
     void prepare_indexed_global(const schema& idx_tbl_schema);
 
+public:
     /// Calculates clustering ranges for querying a global-index table.
     std::vector<query::clustering_range> get_global_index_clustering_ranges(
             const query_options& options, const schema& idx_tbl_schema) const;
@@ -388,6 +409,18 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const;
 };
+
+statement_restrictions analyze_statement_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool for_view,
+        bool allow_filtering,
+        check_indexes do_check_indexes);
+
 
 }
 
