@@ -19,6 +19,7 @@
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "service/qos/qos_common.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -206,7 +207,18 @@ select_statement::select_statement(schema_ptr schema,
 }
 
 db::timeout_clock::duration select_statement::get_timeout(const service::client_state& state, const query_options& options) const {
-    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : state.get_timeout_config().*get_timeout_config_selector();
+    if (_attrs->is_timeout_set()) {
+        return _attrs->get_timeout(options);
+    }
+
+    if (_attrs->is_service_level_set()) {
+        auto slo = _attrs->get_service_level(state.get_service_level_controller());
+        if (auto* timeout = std::get_if<lowres_clock::duration>(&slo.timeout)) {
+            return *timeout;
+        }
+    }
+
+    return state.get_timeout_config().*get_timeout_config_selector();
 }
 
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {

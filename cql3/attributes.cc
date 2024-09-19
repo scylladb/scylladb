@@ -13,22 +13,26 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "exceptions/exceptions.hh"
+#include "service/qos/service_level_controller.hh"
+#include "types/types.hh"
 #include <optional>
 
 namespace cql3 {
 
 std::unique_ptr<attributes> attributes::none() {
-    return std::unique_ptr<attributes>{new attributes{{}, {}, {}}};
+    return std::unique_ptr<attributes>{new attributes{{}, {}, {}, {}}};
 }
 
 attributes::attributes(std::optional<cql3::expr::expression>&& timestamp,
                        std::optional<cql3::expr::expression>&& time_to_live,
-                       std::optional<cql3::expr::expression>&& timeout)
+                       std::optional<cql3::expr::expression>&& timeout,
+                       std::optional<sstring> service_level)
     : _timestamp_unset_guard(timestamp)
     , _timestamp{std::move(timestamp)}
     , _time_to_live_unset_guard(time_to_live)
     , _time_to_live{std::move(time_to_live)}
     , _timeout{std::move(timeout)}
+    , _service_level(std::move(service_level))
 { }
 
 bool attributes::is_timestamp_set() const {
@@ -41,6 +45,10 @@ bool attributes::is_time_to_live_set() const {
 
 bool attributes::is_timeout_set() const {
     return bool(_timeout);
+}
+
+bool attributes::is_service_level_set() const {
+    return bool(_service_level);
 }
 
 int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
@@ -107,6 +115,14 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
     return std::chrono::duration_cast<db::timeout_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
 }
 
+qos::service_level_options attributes::get_service_level(qos::service_level_controller& sl_controller) const {
+    auto sl_name = *_service_level;
+    if (!sl_controller.has_service_level(sl_name)) {
+        throw exceptions::invalid_request_exception(format("Service level {} doesn't exist", sl_name));
+    }
+    return sl_controller.get_service_level(sl_name).slo;
+}
+
 void attributes::fill_prepare_context(prepare_context& ctx) {
     if (_timestamp.has_value()) {
         expr::fill_prepare_context(*_timestamp, ctx);
@@ -137,7 +153,7 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
         verify_no_aggregate_functions(*timeout, "USING clause");
     }
 
-    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};
+    return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to), std::move(service_level)}};
 }
 
 lw_shared_ptr<column_specification> attributes::raw::timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const {
