@@ -106,8 +106,14 @@ async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
                                           parameters=[k, v],
                                           host=host2)
     finish_time = time.time()
-    await replace_future
+    s = await replace_future
     logger.info(f"done, writes count {next_id}, took {finish_time - start_time} seconds")
+
+    # make sure that after we start snapshot transfer we no longer have stale writes
+    log = await manager.server_open_log(s.server_id)
+    m = await log.wait_for("group0_raft_sm - transfer snapshot from ")
+    errs = await log.grep("storage_proxy - Failed to apply mutation from", from_mark=m)
+    assert len(errs) == 0
 
     result_set = await manager.get_cql().run_async(SimpleStatement("select * from ks.test_table",
                                                                    consistency_level=ConsistencyLevel.QUORUM),
