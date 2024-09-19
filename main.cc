@@ -255,21 +255,22 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     } else {
         file = db::config::get_conf_sub("scylla.yaml").string();
     }
-    return check_direct_io_support(file).then([file, &cfg] {
-        return cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
+    try {
+        co_await check_direct_io_support(file);
+        co_await cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
             auto level = log_level::warn;
             if (auto value = status.value_or(db::config::value_status::Invalid);
                 value != db::config::value_status::Invalid && value != db::config::value_status::Deprecated) {
                 level = log_level::error;
             }
             startlog.log(level, "{} : {}", msg, opt);
-        }).then([&cfg] {
-            return read_object_storage_config(cfg);
         });
-    }).handle_exception([file](auto ep) {
+        co_await read_object_storage_config(cfg);
+    } catch (...) {
+        auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);
-        return make_exception_future<>(ep);
-    });
+        std::rethrow_exception(ep);
+    }
 }
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
