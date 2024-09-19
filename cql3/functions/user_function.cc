@@ -95,9 +95,7 @@ description user_function::describe(with_create_statement with_stmt) const {
         os << " ON NULL INPUT\n"
            << "RETURNS " << _return_type->cql3_type_name() << "\n"
            << "LANGUAGE " << _language << "\n"
-           << "AS $$\n"
-           << _body << "\n"
-           << "$$;";
+           << "AS $$" << _body << "$$;";
 
         return std::move(os).str();
     });
