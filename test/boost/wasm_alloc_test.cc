@@ -10,6 +10,7 @@
 #include "lang/wasm_instance_cache.hh"
 #include "rust/wasmtime_bindings.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/signal.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -56,7 +57,7 @@ SEASTAR_TEST_CASE(test_allocation_failures) {
     // to do this in the test case and not in the main Scylla code.
     // Other signals that may need to be unblocked in future test cases
     // are SIGFPE and SIGBUS.
-    engine().handle_signal(SIGILL, [] {});
+    handle_signal(SIGILL, [] {});
     int errors_during_compilation = 0;
     int errors_during_execution = 0;
     wasm::alien_thread_runner alien_runner;
