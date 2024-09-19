@@ -99,3 +99,6 @@ test/raft/* @kbr-scylla @gleb-cloudius @kostja
 
 # HEAT-WEIGHTED LOAD BALANCING
 db/heat_load_balance.* @nyh @gleb-cloudius
+
+# Tools
+tools/* @denesb
