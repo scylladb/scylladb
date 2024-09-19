@@ -316,6 +316,62 @@ modification_statement::execute_without_condition(query_processor& qp, service::
     });
 }
 
+namespace {
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+process_forced_rebounce(unsigned shard, query_processor& qp, const query_options& options) {
+    static int64_t counter = {0};
+    static logging::logger logger("modification_statement");
+    if (counter <= 0) {
+        const auto counter_opt = utils::get_local_injector().inject_parameter<decltype(counter)>("forced_bounce_to_shard_counter");
+        decltype(counter) counter_value = 0;
+        if (!counter_opt) {
+            logger.warn("forced_bounce_to_shard_counter is not set. Using default value 1.");
+        } else {
+            try {
+                counter_value = boost::lexical_cast<decltype(counter_value)>(*counter_opt);
+            } catch (const boost::bad_lexical_cast& e) {
+                logger.warn("Incorrect forced_bounce_to_shard_counter value: [{}]. Using default value 1.", *counter_opt);
+            }
+        }
+        if (counter_value <= 0) {
+            counter_value = 1;
+        }
+        counter = counter_value;
+    }
+
+    const auto prev_counter_value = counter;
+    if (prev_counter_value <= 1) {
+        logger.info("Disabling forced_bounce_to_shard_counter.");
+        co_await utils::error_injection_type::disable_on_all("forced_bounce_to_shard_counter");
+        counter = 0;
+    } else {
+        --counter;
+    }
+
+    // While counter > 1 select a different shard to re-bounce to.
+    // On the last iteration, re-bounce to the correct shard.
+    if (counter != 0) {
+        const auto shard_num = smp::count;
+        assert(shard_num > 0);
+        const auto local_shard = this_shard_id();
+        auto target_shard = local_shard + 1;
+        if (target_shard == shard) {
+            ++target_shard;
+        }
+        if (target_shard > shard_num - 1) {
+            target_shard = 0;
+        }
+        shard = target_shard;
+    }
+
+    logger.info("Applying forced_bounce_to_shard_counter, re-bouncing to shard {}.", shard);
+    co_return co_await make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+        qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
+}
+
+} // namespace
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
 
@@ -349,6 +405,11 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     auto token = request->key()[0].start()->value().as_decorated_key().token();
 
     auto shard = service::storage_proxy::cas_shard(*s, token);
+
+    if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
+        return process_forced_rebounce(shard, qp, options);
+    }
+
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
