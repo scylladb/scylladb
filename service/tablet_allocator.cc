@@ -1601,8 +1601,16 @@ public:
                 if (skip) {
                     if (src_node_info.drained && skip->viable_targets.empty()) {
                         auto replicas = tmap.get_tablet_info(source_tablet.tablet).replicas;
-                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
-                                                        source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                        int number_of_replicas = std::size(replicas);
+                        int number_of_nodes = std::size(nodes);
+                        if (number_of_replicas == number_of_nodes) {
+                            throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {}"
+                                "A decommission is not supported when replication-factor is equal to number of nodes in DC (nodes {}, replicas {})", source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                        }
+                        else {
+                            throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
+                                source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                        }  
                     }
                     src_node_info.skipped_candidates.emplace_back(src, source_tablet, std::move(skip->viable_targets));
                     continue;
