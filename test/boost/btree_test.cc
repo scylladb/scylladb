@@ -185,7 +185,8 @@ BOOST_AUTO_TEST_CASE(test_find_all) {
     t.clear_and_dispose(key_deleter);
 }
 
-static void test_lower_bound_sz(int nkeys) {
+BOOST_DATA_TEST_CASE(test_lower_bound_sz,
+                     boost::unit_test::data::make({1, 3, 16}), nkeys) {
     test_tree t;
 
     for (int i = 0; i < nkeys; i++) {
@@ -222,12 +223,6 @@ static void test_lower_bound_sz(int nkeys) {
             BOOST_REQUIRE(!match && *it == i);
         }
     }
-}
-
-BOOST_AUTO_TEST_CASE(test_lower_bound_all) {
-    test_lower_bound_sz(1);
-    test_lower_bound_sz(3);
-    test_lower_bound_sz(16);
 }
 
 BOOST_AUTO_TEST_CASE(test_upper_bound_all) {
