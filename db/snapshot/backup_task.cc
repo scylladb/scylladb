@@ -56,32 +56,32 @@ void backup_task_impl::do_backup() {
     gate uploads;
     auto wait = defer([&uploads] { uploads.close().get(); });
 
-            auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
-            auto close_snapshot_dir_lister = deferred_close(snapshot_dir_lister);
+    auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    auto close_snapshot_dir_lister = deferred_close(snapshot_dir_lister);
 
-            while (auto component_ent = snapshot_dir_lister.get().get()) {
-                auto gh = uploads.hold();
-                auto component_name = _snapshot_dir / component_ent->name;
-                auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, component_ent->name);
-                snap_log.trace("Upload {} to {}", component_name.native(), destination);
-                // Start uploading in the background. The caller waits for these fibers
-                // with the _uploads gate.
-                // Parallelism is implicitly controlled in two ways:
-                //  - s3::client::claim_memory semaphore
-                //  - http::client::max_connections limitation
-                // FIXME -- s3::client is not abortable yet, but when it will be, need to
-                // propagate impl::_as abort requests into upload_file's fibers
-                std::ignore = _client->upload_file(component_name, destination).handle_exception([comp = component_name] (auto ex) {
-                    snap_log.error("Error uploading {}: {}", comp.native(), ex);
-                    std::rethrow_exception(ex);
-                }).finally([gh = std::move(gh)] {});
-                thread::maybe_yield();
-                utils::get_local_injector().inject("backup_task_pause", [] (auto& handler) {
-                    snap_log.info("backup task: waiting");
-                    return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-                }).get();
-                impl::_as.check();
-            }
+    while (auto component_ent = snapshot_dir_lister.get().get()) {
+        auto gh = uploads.hold();
+        auto component_name = _snapshot_dir / component_ent->name;
+        auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, component_ent->name);
+        snap_log.trace("Upload {} to {}", component_name.native(), destination);
+        // Start uploading in the background. The caller waits for these fibers
+        // with the _uploads gate.
+        // Parallelism is implicitly controlled in two ways:
+        //  - s3::client::claim_memory semaphore
+        //  - http::client::max_connections limitation
+        // FIXME -- s3::client is not abortable yet, but when it will be, need to
+        // propagate impl::_as abort requests into upload_file's fibers
+        std::ignore = _client->upload_file(component_name, destination).handle_exception([comp = component_name] (auto ex) {
+            snap_log.error("Error uploading {}: {}", comp.native(), ex);
+            std::rethrow_exception(ex);
+        }).finally([gh = std::move(gh)] {});
+        thread::maybe_yield();
+        utils::get_local_injector().inject("backup_task_pause", [] (auto& handler) {
+            snap_log.info("backup task: waiting");
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+        }).get();
+        impl::_as.check();
+    }
 }
 
 future<> backup_task_impl::run() {
