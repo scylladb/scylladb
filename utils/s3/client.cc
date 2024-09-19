@@ -16,9 +16,7 @@
 #else
 #include <rapidxml/rapidxml.hpp>
 #endif
-#include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -35,6 +33,7 @@
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
 #include "utils/assert.hh"
+#include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 #include "utils/div_ceil.hh"
 #include "utils/http.hh"
@@ -80,6 +79,15 @@ static constexpr unsigned aws_maximum_parts_in_piece = 10'000;
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
     co_await util::skip_entire_stream(in);
+}
+
+static future<> look_for_errors(const http::reply&, input_stream<char>&& in_) {
+    auto in = std::move(in_);
+    auto body = co_await util::read_entire_stream_contiguous(in);
+    auto possible_error = aws::aws_error::parse(std::move(body));
+    if (possible_error.get_error_type() != aws::aws_error_type::OK) {
+        throw std::system_error(std::error_code(EIO, std::generic_category()), possible_error.get_error_message());
+    }
 }
 
 client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag)
@@ -712,7 +720,7 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req));
+    co_await _client->make_request(std::move(req), look_for_errors);
     _upload_id = ""; // now upload_started() returns false
 }
 
