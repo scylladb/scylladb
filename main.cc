@@ -18,6 +18,7 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "tasks/task_manager.hh"
@@ -141,13 +142,13 @@ private:
 public:
     stop_signal() {
         _abort_sources.start().get();
-        engine().handle_signal(SIGINT, [this] { signaled(); });
-        engine().handle_signal(SIGTERM, [this] { signaled(); });
+        handle_signal(SIGINT, [this] { signaled(); });
+        handle_signal(SIGTERM, [this] { signaled(); });
     }
     ~stop_signal() {
         // There's no way to unregister a handler yet, so register a no-op handler instead.
-        engine().handle_signal(SIGINT, [] {});
-        engine().handle_signal(SIGTERM, [] {});
+        handle_signal(SIGINT, [] {});
+        handle_signal(SIGTERM, [] {});
         _broadcasts_to_abort_sources_done.get();
         _abort_sources.stop().get();
     }
@@ -296,7 +297,7 @@ public:
     // Installs the signal handler. Must call stop() (and wait for it) before destruction.
     sighup_handler(bpo::variables_map& opts, db::config& cfg) : _opts(opts), _cfg(cfg) {
         startlog.info("installing SIGHUP handler");
-        engine().handle_signal(SIGHUP, [this] { reread_config(); });
+        handle_signal(SIGHUP, [this] { reread_config(); });
     }
 private:
     void reread_config() {
@@ -337,7 +338,7 @@ public:
     // to complete. After this is waited for, the object can be destroyed.
     future<> stop() {
         // No way to unregister yet
-        engine().handle_signal(SIGHUP, [] {});
+        handle_signal(SIGHUP, [] {});
         _pending = false;
         _stopping = true;
         _cond.broadcast();
