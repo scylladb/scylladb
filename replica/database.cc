@@ -2912,7 +2912,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
         return make_multishard_combining_reader_v2(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
-                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr);
+                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, read_ahead::no);
     });
     auto&& full_slice = schema->full_slice();
     return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
@@ -2931,7 +2931,10 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         std::move(erm),
         std::move(permit),
         range,
-        full_slice);
+        full_slice,
+        {},
+        mutation_reader::forwarding::no,
+        read_ahead::no);
 }
 
 auto fmt::formatter<gc_clock::time_point>::format(gc_clock::time_point tp, fmt::format_context& ctx) const
