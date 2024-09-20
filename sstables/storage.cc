@@ -69,8 +69,10 @@ private:
     }
 
 public:
+    static thread_local storage_stats filesystem_stats;
     explicit filesystem_storage(sstring dir, sstable_state state)
-        : _base_dir(dir)
+        : storage(filesystem_stats)
+        , _base_dir(dir)
         , _dir(make_path(dir, state))
     {}
 
@@ -515,8 +517,10 @@ class s3_storage : public sstables::storage {
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
 public:
+    static thread_local storage_stats s3_stats;
     s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
-        : _client(std::move(client))
+        : storage(s3_stats)
+        , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(dir))
     {
@@ -725,6 +729,23 @@ future<> destroy_table_storage(const data_dictionary::storage_options& so) {
             co_return;
         }
     }, so.value);
+}
+
+thread_local storage_stats filesystem_storage::filesystem_stats;
+thread_local storage_stats s3_storage::s3_stats;
+static const seastar::metrics::label storage_label("storage_class");
+static thread_local seastar::metrics::metric_groups metrics;
+
+future<> init_storage_metrics() {
+    return seastar::smp::invoke_on_all([] {
+        namespace sm = seastar::metrics;
+        metrics.add_group("storage", {
+            sm::make_current_bytes("bytes_occupied", [] { return filesystem_storage::filesystem_stats.bytes_occupied; },
+                sm::description("Bytes occupied by sstables"), { storage_label("filesystem") }),
+            sm::make_current_bytes("bytes_occupied", [] { return s3_storage::s3_stats.bytes_occupied; },
+                sm::description("Bytes occupied by sstables"), { storage_label("s3") }),
+        });
+    });
 }
 
 } // namespace sstables

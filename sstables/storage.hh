@@ -76,8 +76,14 @@ public:
     }
 };
 
+struct storage_stats {
+    uint64_t bytes_occupied = 0;
+};
+
 class storage {
     friend class test;
+
+    storage_stats& _stats;
 
     // Internal, but can also be used by tests
     virtual future<> change_dir_for_test(sstring nd) {
@@ -91,10 +97,14 @@ class storage {
     }
 
 public:
+    explicit storage(storage_stats& stats) : _stats(stats) {}
     virtual ~storage() {}
 
     using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
+
+    void credit_bytes(uint64_t bytes) noexcept { _stats.bytes_occupied += bytes; }
+    void debit_bytes(uint64_t bytes) noexcept { _stats.bytes_occupied -= bytes; }
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen = {}) const = 0;
@@ -119,5 +129,6 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
+future<> init_storage_metrics();
 
 } // namespace sstables

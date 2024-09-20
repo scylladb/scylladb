@@ -1590,6 +1590,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
+            sstables::init_storage_metrics().get();
 
             db::sstables_format_listener sst_format_listener(gossiper.local(), feature_service, sst_format_selector);
 
