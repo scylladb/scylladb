@@ -1104,7 +1104,7 @@ future<> multishard_combining_reader_v2::handle_empty_reader_buffer() {
         // If we crossed shards and the next reader has an empty buffer we
         // double concurrency so the next time we cross shards we will have
         // more chances of hitting the reader's buffer.
-        if (_crossed_shards) {
+        if (_crossed_shards && _read_ahead == read_ahead::yes) {
             _concurrency = std::min(_concurrency * 2, _sharder.shard_count());
 
             // Read ahead shouldn't change the min selection heap so we work on a local copy.
