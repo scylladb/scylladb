@@ -311,7 +311,7 @@ mutation_reader repair_reader::make_reader(
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
-            }, compaction_time, multishard_reader_buffer_size, read_ahead::yes);
+            }, compaction_time, multishard_reader_buffer_size, read_ahead(dbconfig.repair_multishard_reader_enable_read_ahead()));
         }
         case read_strategy::multishard_filter: {
             return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time, {}, read_ahead::yes),
