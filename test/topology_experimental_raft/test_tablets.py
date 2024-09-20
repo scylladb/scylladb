@@ -5,7 +5,7 @@
 #
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -20,6 +20,8 @@ import time
 import random
 import os
 import glob
+from collections import defaultdict
+from collections.abc import Iterable
 
 
 logger = logging.getLogger(__name__)
@@ -1037,16 +1039,28 @@ async def get_tablet_tokens_from_host_on_shard(manager: ManagerClient, server: S
     return tokens
 
 async def get_tablet_count_per_shard_for_host(manager: ManagerClient, server: ServerInfo, full_tables: dict[str, list[str]], shards_count: int = 2) -> list[int]:
-    host = await manager.get_host_id(server.server_id)
-    result = [0] * shards_count
+    dict_result = await get_tablet_count_per_shard_for_hosts(manager, [server], full_tables, shards_count)
+    return dict_result[server.server_id]
+
+async def get_tablet_count_per_shard_for_hosts(manager: ManagerClient, servers: Iterable[ServerInfo], full_tables: dict[str, list[str]], shards_per_node: int = 2) -> dict[ServerNum, list[int]]:
+    result = dict[ServerNum, list[int]]()
+    hosts = dict[HostID, ServerNum]()
+    server1 = None
+
+    for server in servers:
+        if not server1:
+            server1 = server
+        result[server.server_id] = [0] * shards_per_node
+        hosts[await manager.get_host_id(server.server_id)] = server.server_id
 
     for keyspace, tables in full_tables.items():
         for table in tables:
-            table_tablets = await get_all_tablet_replicas(manager, server, keyspace, table)
+            table_tablets = await get_all_tablet_replicas(manager, server1, keyspace, table)
             for tablet_replica in table_tablets:
                 for host_id, shard_id in tablet_replica.replicas:
-                    if host_id == host:
-                        result[shard_id] += 1;
+                    if host_id in hosts:
+                        result[hosts[host_id]][shard_id] += 1
+
     return result
 
 def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
@@ -1296,3 +1310,190 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     logger.info("Verify that the table's disk usage on first node shrunk by about half.")
     size_after = await manager.server_get_sstables_disk_usage(servers[0].server_id, "test", "test")
     assert size_before * 0.33 < size_after < size_before * 0.66
+
+
+async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, nodes_per_rack: int) -> dict[ServerNum, ServerInfo]:
+    logger.debug(f"Creating cluster: num_dcs={num_dcs} num_racks={num_racks} nodes_per_rack={nodes_per_rack}")
+    servers: dict[ServerNum, ServerInfo] = dict()
+    for dc in range(1, num_dcs + 1):
+        for rack in range(1, num_racks + 1):
+            rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
+            for s in rack_servers:
+                servers[s.server_id] = s
+    logger.debug(f"Created servers={list(servers.values())}")
+    return servers
+
+
+async def create_and_populate_table(manager: ManagerClient, ks: str = "ks", table: str = "test", rf: int = 3, initial_tablets: int = 64, num_keys: int|None = None) -> tuple[str, str, int, int]:
+    logger.info(f"Creating table and populating data {ks}.{table}: rf={rf} initial_tablets={initial_tablets} num_keys={num_keys}")
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}};")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int);")
+
+    if not num_keys:
+        num_keys = initial_tablets * 4
+
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({k}, 1);") for k in range(num_keys)])
+
+    return ks, table, initial_tablets, num_keys
+
+
+def get_expected_replicas_per_server(live_servers: Iterable[ServerInfo], dead_servers: Iterable[ServerInfo], initial_tablets: int, rf: int) -> dict[ServerNum, float]:
+    total_replicas = initial_tablets * rf
+    nodes_per_rack: defaultdict[str, set[ServerNum]] = defaultdict(set)
+    for s in live_servers:
+        nodes_per_rack[s.rack].add(s.server_id)
+    replicas_per_rack = total_replicas / len(nodes_per_rack.keys())
+    result: dict[ServerNum, float] = dict()
+    for rack_servers in nodes_per_rack.values():
+        replicas_per_node = replicas_per_rack / len(rack_servers)
+        for id in rack_servers:
+            result[id] = replicas_per_node
+    for s in dead_servers:
+        result[s.server_id] = 0
+    return result
+
+
+def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[ServerNum, float], tablet_count: dict[ServerNum, list[int]], initial_tablets: int, rf: int, shards_per_node: int = 2):
+    logger.debug(f"{desc}: expected_replicas_per_server={expected_replicas_per_server} tablet_count={tablet_count}")
+    total = 0
+    for server_id, host_replicas in tablet_count.items():
+        expected_replicas_per_shard = expected_replicas_per_server[server_id] / shards_per_node
+        for i in host_replicas:
+            total += i
+            assert abs(i - expected_replicas_per_shard) <= 1
+    assert total == initial_tablets * rf
+
+
+@pytest.mark.asyncio
+async def test_decommission_rack_basic(manager: ManagerClient):
+    """
+    Test decommissioning of all nodes in a rack
+    when there are enough remaining racks to satisfy
+    the replication factor.
+    """
+    logger.info("Bootstrapping multi-rack cluster")
+    num_racks = 3
+    nodes_per_rack = 2
+    rf = num_racks - 1
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    ks, table, initial_tablets, _ = await create_and_populate_table(manager, rf=rf)
+
+    logger.info("Verify tablet replicas distribution")
+    tables = {ks: [table]}
+    expected_replicas_per_server = get_expected_replicas_per_server(all_servers.values(), [], initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
+    verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
+
+    decommision_rack = f"rack{num_racks}"
+    logger.debug(f"Decommissioning rack={decommision_rack}")
+    live_servers: dict[ServerNum, ServerInfo] = dict()
+    dead_servers: dict[ServerNum, ServerInfo] = dict()
+    for id, s in all_servers.items():
+        if s.rack == decommision_rack:
+            logger.debug(f"Decommissioning server={s}")
+            await manager.decommission_node(s.server_id)
+            dead_servers[id] = s
+        else:
+            live_servers[id] = s
+
+    logger.info("Verify tablet replicas distribution")
+    expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, live_servers.values(), tables)
+    verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
+
+@pytest.mark.asyncio
+async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
+    """
+    Test decommissioning a rack, after a rack with new nodes is added
+    """
+    logger.info("Bootstrapping multi-rack cluster")
+    initial_num_racks = 3
+    num_racks = initial_num_racks + 1
+    nodes_per_rack = 2
+    rf = initial_num_racks
+
+    initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack)
+    ks, table, initial_tablets, _ = await create_and_populate_table(manager, rf=rf)
+
+    logger.debug("Temporarily disable tablet load balancing")
+    node1 = sorted(initial_servers.values(), key=lambda s: s.server_id)[0]
+    await manager.api.disable_tablet_balancing(node1.ip_addr)
+
+    logger.info("Add a new rack")
+    new_rack = f"rack{num_racks}"
+    # copy initial_servers into all_servers, don't just assign it (by reference)
+    all_servers: list[ServerInfo] = list(initial_servers.values())
+    new_rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": "dc1", "rack": new_rack})
+    all_servers.extend(new_rack_servers)
+
+    logger.info("Verify tablet replicas distribution")
+    tables = {ks: [table]}
+    expected_replicas_per_server = get_expected_replicas_per_server(initial_servers.values(), new_rack_servers, initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers, tables)
+    verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
+
+    logger.debug("Reenable tablet load balancing")
+    await manager.api.enable_tablet_balancing(node1.ip_addr)
+
+    live_servers: dict[ServerNum, ServerInfo] = dict()
+    dead_servers: dict[ServerNum, ServerInfo] = dict()
+    decommision_rack = f"rack{initial_num_racks}"
+    logger.debug(f"Decommissioning rack={decommision_rack}")
+    for s in all_servers:
+        if s.rack == decommision_rack:
+            logger.debug(f"Decommissioning server={s}")
+            await manager.decommission_node(s.server_id)
+            dead_servers[s.server_id] = s
+        else:
+            live_servers[s.server_id] = s
+
+    logger.info("Verify tablet replicas distribution")
+    expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers, tables)
+    verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
+
+@pytest.mark.asyncio
+async def test_decommission_not_enough_racks(manager: ManagerClient):
+    """
+    Test that decommissioning a rack fails if the number of rack is
+    insufficient to satisfy replication factor, even if the number of
+    nodes is sufficient.
+    Reproduces https://github.com/scylladb/scylladb/issues/19475
+    """
+    logger.info("Bootstrapping multi-rack cluster")
+    num_racks = 3
+    nodes_per_rack = 2
+    rf = num_racks
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    ks, table, initial_tablets, _ = await create_and_populate_table(manager, rf=rf)
+
+    logger.info("Verify tablet replicas distribution")
+    tables = {ks: [table]}
+    expected_replicas_per_server = get_expected_replicas_per_server(all_servers.values(), [], initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
+    verify_replicas_per_server("Before decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
+
+    live_servers: dict[ServerNum, ServerInfo] = dict()
+    dead_servers: dict[ServerNum, ServerInfo] = dict()
+    decommision_rack = f"rack{num_racks}"
+    decommision_count = 0
+    for s in all_servers.values():
+        if s.rack == decommision_rack:
+            logger.debug(f"Decommissioning server={s}")
+            decommision_count += 1
+            expected_error = "Unable to find new replica for tablet" if decommision_count == nodes_per_rack else None
+            await manager.decommission_node(s.server_id, expected_error=expected_error)
+            if not expected_error:
+                dead_servers[s.server_id] = s
+            else:
+                live_servers[s.server_id] = s
+        else:
+            live_servers[s.server_id] = s
+
+    logger.info("Verify tablet replicas distribution")
+    expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), initial_tablets, rf)
+    tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
+    verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, initial_tablets, rf)
