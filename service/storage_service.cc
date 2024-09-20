@@ -144,7 +144,6 @@ namespace {
 [[nodiscard]] locator::host_id_or_endpoint_list parse_node_list(const std::string_view comma_separated_list) {
     return string_list_to_endpoint_list(utils::split_comma_separated_list(comma_separated_list));
 }
-
 } // namespace
 
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
@@ -1818,6 +1817,11 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
     if (raft_replace_info) {
         join_params.replaced_id = raft_replace_info->raft_id;
         join_params.ignore_nodes = utils::split_comma_separated_list(_db.local().get_config().ignore_dead_nodes_for_replace());
+        if (!locator::check_host_ids_contain_only_uuid(join_params.ignore_nodes)) {
+            slogger.warn("Warning: Using IP addresses for '--ignore-dead-nodes-for-replace' is deprecated and will"
+                         " be disabled in a future release. Please use host IDs instead. Provided values: {}",
+                         _db.local().get_config().ignore_dead_nodes_for_replace());
+        }
     }
 
     // if the node is bootstrapped the function will do nothing since we already created group0 in main.cc
@@ -3373,12 +3377,14 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         .address = replace_address,
     };
 
+    bool node_ip_specified = false;
     for (auto& hoep : parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace())) {
         locator::host_id host_id;
         gms::loaded_endpoint_state st;
         // Resolve both host_id and endpoint
         if (hoep.has_endpoint()) {
             st.endpoint = hoep.endpoint();
+            node_ip_specified = true;
         } else {
             host_id = hoep.id();
             auto res = _gossiper.get_nodes_with_host_id(host_id);
@@ -3402,6 +3408,12 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         st.tokens = esp->get_tokens();
         st.opt_dc_rack = esp->get_dc_rack();
         ri.ignore_nodes.emplace(host_id, std::move(st));
+    }
+
+    if (node_ip_specified) {
+        slogger.warn("Warning: Using IP addresses for '--ignore-dead-nodes-for-replace' is deprecated and will"
+                     " be disabled in the next release. Please use host IDs instead. Provided values: {}",
+                     _db.local().get_config().ignore_dead_nodes_for_replace());
     }
 
     slogger.info("Host {}/{} is replacing {}/{} ignore_nodes={}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address,
