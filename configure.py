@@ -21,7 +21,7 @@ from shutil import which
 from typing import NamedTuple
 
 
-configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=')])
+configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=') and not x.startswith('--out-final-name=')])
 
 # distribution "internationalization", converting package names.
 # Fedora name is key, values is distro -> package name dict.
