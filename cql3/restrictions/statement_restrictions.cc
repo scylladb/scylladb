@@ -27,6 +27,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/request_validations.hh"
+#include "cql3/functions/token_fct.hh"
 #include "dht/i_partitioner.hh"
 #include "types/tuple.hh"
 
@@ -2748,14 +2749,27 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
     }
 
+    if (std::ranges::any_of(*_idx_tbl_ck_prefix | std::views::drop(1), is_empty_restriction)) {
+        // If the partition key is not fully restricted, the index clustering key is of no use.
+        (*_idx_tbl_ck_prefix) = std::vector<expr::expression>();
+        return;
+    }
+
     add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);
+
+    auto pk_expressions = (*_idx_tbl_ck_prefix)
+            | std::views::drop(1)   // skip the token restriction
+            | std::views::take(_schema->partition_key_size()) // take only the partition key restrictions
+            | std::views::transform(expr::as<expr::binary_operator>) // we know it's an EQ
+            | std::views::transform(std::mem_fn(&expr::binary_operator::rhs)) // "solve" for the column value
+            | std::ranges::to<std::vector>();
+
+    auto token_func = make_shared<cql3::functions::token_fct>(_schema);
 
     (*_idx_tbl_ck_prefix)[0] = binary_operator(
             column_value(token_column),
             oper_t::EQ,
-            // TODO: This should be a unique marker whose value we set at execution time.  There is currently no
-            // handy mechanism for doing that in query_options.
-            expr::constant::make_null(token_column->type));
+            expr::function_call{.func = std::move(token_func), .args = std::move(pk_expressions)});
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
@@ -2837,25 +2851,6 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
         on_internal_error(
                 rlogger, "statement_restrictions::get_global_index_clustering_ranges called with unprepared index");
     }
-    std::vector<managed_bytes> pk_value(_schema->partition_key_size());
-    for (const auto& e : _partition_range_restrictions) {
-        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
-        if (vals.empty()) { // Case of C=1 AND C=2.
-            return {};
-        }
-        pk_value[_schema->position(*col)] = std::move(vals[0]);
-    }
-    std::vector<bytes> pkv_linearized(pk_value.size());
-    std::transform(pk_value.cbegin(), pk_value.cend(), pkv_linearized.begin(),
-                   [] (const managed_bytes& mb) { return to_bytes(mb); });
-    auto& token_column = idx_tbl_schema.clustering_column_at(0);
-    bytes token_bytes = token_column.get_computation().compute_value(*_schema, pkv_linearized);
-
-    // WARNING: We must not yield to another fiber from here until the function's end, lest this RHS be
-    // overwritten.
-    const_cast<expr::expression&>(expr::as<binary_operator>((*_idx_tbl_ck_prefix)[0]).rhs) =
-            expr::constant(raw_value::make_value(token_bytes), token_column.type);
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
