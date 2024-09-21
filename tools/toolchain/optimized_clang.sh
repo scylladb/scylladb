@@ -1,4 +1,4 @@
-#!/bin/bash -uex
+#!/bin/bash -ue
 
 case "${CLANG_BUILD}" in
     "SKIP")
@@ -54,6 +54,8 @@ SCYLLA_DIR=/mnt
 CLANG_ROOT_DIR="${SCYLLA_DIR}"/clang_build
 CLANG_CHECKOUT_NAME=llvm-project-"${ARCH}"
 CLANG_BUILD_DIR="${CLANG_ROOT_DIR}"/"${CLANG_CHECKOUT_NAME}"
+CLANG_SYSROOT_NAME=optimized_clang-"${ARCH}"
+CLANG_SYSROOT_DIR="${CLANG_ROOT_DIR}"/"${CLANG_SYSROOT_NAME}"
 
 SCYLLA_BUILD_DIR=build_profile
 SCYLLA_NINJA_FILE=build_profile.ninja
@@ -125,6 +127,7 @@ _get_distribution_components() {
 
 if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     rm -rf "${CLANG_BUILD_DIR}"
+    rm -rf "${CLANG_SYSROOT_DIR}"
     git clone https://github.com/llvm/llvm-project --branch llvmorg-"${LLVM_CLANG_TAG}" --depth=1 "${CLANG_BUILD_DIR}"
 
     patch="$PWD/tools/toolchain/0001-Instrumentation-Fix-EdgeCounts-vector-size-in-SetBra.patch"
@@ -169,16 +172,21 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     cmake -B build -S llvm "${CLANG_OPTS[@]}" -DLLVM_PROFDATA_FILE="$(realpath combined.prof)" -DCMAKE_EXE_LINKER_FLAGS="-Wl,--emit-relocs"
     ninja -C build
 
+    mkdir -p "${CLANG_SYSROOT_DIR}"
+    DESTDIR="${CLANG_SYSROOT_DIR}" ninja -C build install-distribution-stripped
     cd "${CLANG_ROOT_DIR}"
-    rm -rf "${CLANG_BUILD_DIR}"/{build/profiles,*.prof,prof.fdata}
-    tar -cpzf "${CLANG_ARCHIVE}" "${CLANG_CHECKOUT_NAME}"
-elif [[ "${CLANG_BUILD}" = "INSTALL_FROM" ]]; then
-    mkdir -p "${CLANG_ROOT_DIR}"
-    tar -C "${CLANG_ROOT_DIR}" -xpzf "${CLANG_ARCHIVE}"
+    tar -C "${CLANG_SYSROOT_NAME}" -cpzf "${CLANG_ARCHIVE}" .
 fi
 
-cd "${CLANG_BUILD_DIR}"
-ninja -C build install-distribution-stripped
+# make sure it is correct archive, before extracting to /
+set +e
+tar -tpf "${CLANG_ARCHIVE}" ./usr/local/bin/clang > /dev/null 2>&1
+if [[ $? -ne 0 ]]; then
+    echo "Unable to detect prebuilt clang on ${CLANG_ARCHIVE}, aborted."
+    exit 1
+fi
+set -e
+tar -C / -xpzf "${CLANG_ARCHIVE}"
 dnf remove -y clang clang-libs
 # above package removal might have removed those symbolic links, which will cause ccache not to work later on. Manually restore them.
 ln -sf /usr/bin/ccache /usr/lib64/ccache/clang
