@@ -13,6 +13,5 @@ add_custom_target(dist-check
 add_dependencies(dist-check
   dist-server-rpm
   dist-python3-rpm
-  dist-jmx-rpm
   dist-tools-rpm
   dist-cqlsh-rpm)
