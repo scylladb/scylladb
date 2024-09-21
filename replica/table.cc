@@ -720,6 +720,35 @@ private:
     size_t tablet_id_for_token(dht::token t) const noexcept {
         return tablet_map().get_tablet_id(t).value();
     }
+<<<<<<< HEAD
+=======
+
+    std::pair<size_t, locator::tablet_range_side> storage_group_of(dht::token t) const {
+        auto [id, side] = tablet_map().get_tablet_id_and_range_side(t);
+        auto idx = id.value();
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+        if (idx >= tablet_count()) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
+                                                    idx, log2_storage_groups(), tablet_count(), t));
+        }
+        auto& sg = storage_group_for_id(idx);
+        if (!t.is_minimum() && !t.is_maximum() && !sg.token_range().contains(t, dht::token_comparator())) {
+            on_fatal_internal_error(tlogger, format("storage_group_of: storage_group idx={} range={} does not contain token={}",
+                                                    idx, sg.token_range(), t));
+        }
+#endif
+        return { idx, side };
+    }
+
+    storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
+        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
+        auto sg = make_lw_shared<storage_group>(std::move(cg));
+        if (tmap.needs_split()) {
+            sg->set_split_mode();
+        }
+        return sg;
+    }
+>>>>>>> 999f1f1318 (replica: Fix tablet split execute after restart)
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
@@ -736,8 +765,7 @@ public:
 
             if (tmap.has_replica(tid, local_replica)) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
-                auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
-                ret[tid.value()] = make_lw_shared<storage_group>(std::move(cg));
+                ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
             }
         }
         _storage_groups = std::move(ret);
@@ -859,6 +887,7 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
     if (set_split_mode()) {
         co_return;
     }
+    co_await utils::get_local_injector().inject("delay_split_compaction", 5s);
 
     if (_main_cg->empty()) {
         co_return;
@@ -2291,8 +2320,7 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         auto transition_info = transition.second;
         if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
             auto range = new_tablet_map->get_token_range(tid);
-            auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
-            _storage_groups[tid.value()] = make_lw_shared<storage_group>(std::move(cg));
+            _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
         }
     }
