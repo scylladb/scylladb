@@ -123,8 +123,8 @@ def test_timers(gdb):
 def schema(gdb, scylla_gdb):
     db = scylla_gdb.sharded(gdb.parse_and_eval('::debug::the_database')).local()
     table = next(scylla_gdb.for_each_table(db))
-    gdb.set_convenience_variable('schema', 
-        table['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer()))
+    gdb.set_convenience_variable('schema',
+        scylla_gdb.seastar_lw_shared_ptr(table['_schema']).get())
     yield '$schema'
 
 @pytest.fixture(scope="module")
