@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from cassandra.protocol import ConfigurationException, InvalidRequest
+from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -389,14 +389,15 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
 
-    # Tablets are only possible when enabled and the replication strategy is NetworkTopology one
-    tablets_possible = (replication_strategy == 'NetworkTopologyStrategy') and with_tablets
+    # Tablets are only possible when the replication strategy is NetworkTopology
+    tablets_possible = (replication_strategy == 'NetworkTopologyStrategy')
+    tablets_enabled_by_default = tablets_possible and with_tablets
 
     # First, check if a kesypace is able to be created with default CQL statement that
     # doesn't contain tablets parameters. When possible, tablets should be activated
     await cql.run_async(f"CREATE KEYSPACE test_d WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}};")
     res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test_d'").one()
-    if tablets_possible:
+    if tablets_enabled_by_default:
         assert res.initial_tablets == 0
     else:
         assert res is None
@@ -434,3 +435,9 @@ async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerCli
     res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks_name}'").one()
     logger.info(res)
     await cql.run_async(f"DROP KEYSPACE {ks_name}")
+
+    for enabled in ["false", "true"]:
+        expected = r"Error from server: code=2000 \[Syntax error in CQL query\] message=\"line 1:126 no viable alternative at input 'tablets'\""
+        with pytest.raises(SyntaxException, match=expected):
+            ks_name = unique_name()
+            await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")

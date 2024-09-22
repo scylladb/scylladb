@@ -1938,9 +1938,7 @@ public:
         if (_config.initial_tablets_scale == 0) {
             throw std::runtime_error("Initial tablets scale must be positive");
         }
-        if (db.get_config().enable_tablets()) {
-            _migration_notifier.register_listener(this);
-        }
+        _migration_notifier.register_listener(this);
     }
 
     tablet_allocator_impl(tablet_allocator_impl&&) = delete; // "this" captured.

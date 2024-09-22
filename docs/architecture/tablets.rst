@@ -77,13 +77,14 @@ to a new node.
 Enabling Tablets
 -------------------
 
-ScyllaDB now uses tablets by default for data distribution. This functionality is
+ScyllaDB now uses tablets by default for data distribution.
+Enabling tablets by default when creating new keyspaces is
 controlled by the :confval:`enable_tablets` option. However, tablets only work if
-enabled on all nodes within the cluster.
+supported on all nodes within the cluster.
 
-When creating a new keyspace with tablets enabled (the default), you can still disable
-them on a per-keyspace basis. The recommended ``NetworkTopologyStrategy`` for keyspaces
-remains *required* when using tablets.
+When creating a new keyspace with tablets enabled by default, you can still opt-out
+on a per-keyspace basis. The recommended ``NetworkTopologyStrategy`` for keyspaces
+remains *required* even if tablets are disabled.
 
 You can create a keyspace with tablets
 disabled with the ``tablets = {'enabled': false}`` option:
@@ -98,6 +99,21 @@ disabled with the ``tablets = {'enabled': false}`` option:
         'enabled': false
     };
 
+When creating a new keyspace with tablets disabled by default, you can still opt-in
+on a per-keyspace basis. The recommended ``NetworkTopologyStrategy`` for keyspaces
+remains *required* when using tablets.
+
+You can create a keyspace with tablets enabled with the ``tablets = {'enabled': true}`` option:
+
+.. code:: cql
+
+    CREATE KEYSPACE my_keyspace
+    WITH replication = {
+        'class': 'NetworkTopologyStrategy',
+        'replication_factor': 3
+    } AND tablets = {
+        'enabled': true
+    };
 
 
 .. warning::
