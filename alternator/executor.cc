@@ -48,6 +48,7 @@
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
@@ -84,7 +85,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1288,7 +1289,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
-    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map);
+    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
     // Alternator Streams doesn't yet work when the table uses tablets (#16317)
     if (stream_specification && stream_specification->IsObject()) {
         auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -4770,7 +4771,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -4796,7 +4797,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     // used by default on new Alternator tables. Change this initialization
     // to 0 enable tablets by default, with automatic number of tablets.
     std::optional<unsigned> initial_tablets;
-    if (sp.get_db().local().get_config().enable_tablets()) {
+    if (feat.tablets) {
         auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
         if (it != tags_map.end()) {
             // Tag set. If it's a valid number, use it. If not - e.g., it's
