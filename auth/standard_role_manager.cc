@@ -241,35 +241,37 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 }
 
 future<> standard_role_manager::start() {
-    return once_among_shards([this] {
-        return futurize_invoke([this] () {
-            if (legacy_mode(_qp)) {
-                return create_legacy_metadata_tables_if_missing();
-            }
-            return make_ready_future<>();
-        }).then([this] {
-            _stopped = auth::do_after_system_ready(_as, [this] {
-                return seastar::async([this] {
-                    if (legacy_mode(_qp)) {
-                        _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
+    return once_among_shards([this] () -> future<> {
+        if (legacy_mode(_qp)) {
+            co_await create_legacy_metadata_tables_if_missing();
+        }
 
-                        if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                            if (legacy_metadata_exists()) {
-                                log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
-                            }
+        auto handler = [this] () -> future<> {
+            try {
+                if (legacy_mode(_qp)) {
+                    co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
-                            return;
-                        }
-
+                    if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
                         if (legacy_metadata_exists()) {
-                            migrate_legacy_metadata().get();
-                            return;
+                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }
+                        co_return;
                     }
-                    create_default_role_if_missing().get();
-                });
-            });
-        });
+
+                    if (legacy_metadata_exists()) {
+                        co_await migrate_legacy_metadata();
+                        co_return;
+                    }
+                }
+                co_await create_default_role_if_missing();
+            } catch (...) {
+                log.error("Failed to create default role: unknown error");
+                throw;
+            }
+        };
+
+        _stopped = auth::do_after_system_ready(_as, handler);
+        co_return;
     });
 }
 
