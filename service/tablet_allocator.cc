@@ -1601,7 +1601,7 @@ public:
                 if (skip) {
                     if (src_node_info.drained && skip->viable_targets.empty()) {
                         auto replicas = tmap.get_tablet_info(source_tablet.tablet).replicas;
-                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
+                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
                     src_node_info.skipped_candidates.emplace_back(src, source_tablet, std::move(skip->viable_targets));
