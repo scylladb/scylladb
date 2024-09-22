@@ -10,7 +10,7 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.internal_types import HostID
 
 import pytest
 import asyncio
