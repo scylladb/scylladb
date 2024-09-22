@@ -28,7 +28,6 @@ public:
         , _ss(ss)
     {}
     virtual tasks::task_manager::task_group get_group() const noexcept override;
-    virtual future<std::set<tasks::task_id>> get_ids() const override;
     virtual future<bool> contains(tasks::task_id task_id) const override;
     virtual future<tasks::is_abortable> is_abortable() const override;
 

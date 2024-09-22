@@ -436,10 +436,6 @@ task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl) noexcept
     SCYLLA_ASSERT(this_shard_id() == 0);
 }
 
-future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
-    return _impl->get_ids();
-}
-
 future<bool> task_manager::virtual_task::contains(tasks::task_id task_id) const {
     return _impl->contains(task_id);
 }
