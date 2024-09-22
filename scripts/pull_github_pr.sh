@@ -10,6 +10,7 @@
 set -e
 
 gh_hosts=~/.config/gh/hosts.yml
+jenkins_url="https://jenkins.scylladb.com"
 
 if [[ ( -z "$GITHUB_LOGIN" || -z "$GITHUB_TOKEN" ) && -f "$gh_hosts" ]]; then
 	GITHUB_LOGIN=$(awk '/user:/ { print $2 }' "$gh_hosts")
@@ -35,6 +36,45 @@ curl() {
     fi
     command curl "${opts[@]}" "$@"
 }
+
+set_jenkins_job() {
+  branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # Set parameters based on branch name
+  if [[ "$branch" == "next" ]]; then
+    jenkins_job="scylla-master/job/next"
+  fi
+  if [[ "$branch" == next-* ]]; then
+    version="${branch#next-}"
+    jenkins_job="scylla-$version/job/next"
+  fi
+}
+
+check_jenkins_job_status() {
+  set_jenkins_job
+  echo "Checking Jenkins job status for job: $jenkins_job"
+
+  # Fetch Jenkins job last build status without passing credentials explicitly
+  lastCompletedBuild="${jenkins_url}/job/${jenkins_job}/lastCompletedBuild/api/json?tree=result"
+  lastCompleted=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedBuild | jq -r '.result')
+  # Handle the case where authentication fails
+  if [[ "$lastCompleted" == *"Authentication required"* ]]; then
+      echo "Failed to authenticate with Jenkins. Please check your session or credentials."
+      exit 1
+  fi
+
+  # Check if build failed
+  if [[ "$lastCompleted" == "SUCCESS" ]]; then
+      echo "$jenkins_job is stable"
+  else
+    ORANGE='\033[0;33m'
+    NC='\033[0m'
+    echo -e "${ORANGE}\nWARNING:${NC} $jenkins_job is not stable"
+    exit 1
+  fi
+}
+
+check_jenkins_job_status
 
 NL=$'\n'
 
