@@ -110,6 +110,23 @@ future<std::set<tasks::task_id>> node_ops_virtual_task::get_ids() const {
         | std::ranges::to<std::set>();
 }
 
+future<bool> node_ops_virtual_task::contains(tasks::task_id task_id) const {
+    if (!task_id.uuid().is_timestamp()) {
+        // Task id of node ops operation is always a timestamp.
+        co_return false;
+    }
+
+    service::topology& topology = _ss._topology_state_machine._topology;
+    for (auto& request : topology.requests) {
+        if (topology.find(request.first)->second.request_id == task_id.uuid()) {
+            co_return true;
+        }
+    }
+
+    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(task_id.uuid(), false);
+    co_return bool(entry.id);
+}
+
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable() const {
     return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
 }

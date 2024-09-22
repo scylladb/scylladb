@@ -440,6 +440,10 @@ future<std::set<task_id>> task_manager::virtual_task::get_ids() const {
     return _impl->get_ids();
 }
 
+future<bool> task_manager::virtual_task::contains(tasks::task_id task_id) const {
+    return _impl->contains(task_id);
+}
+
 task_manager::module_ptr task_manager::virtual_task::get_module() const noexcept {
     return _impl->get_module();
 }
@@ -721,7 +725,7 @@ future<task_manager::foreign_task_ptr> task_manager::lookup_task_on_all_shards(s
 future<task_manager::virtual_task_ptr> task_manager::lookup_virtual_task(task_manager& tm, task_id id) {
     auto vts = tm.get_virtual_tasks();
     for (auto [_, vt]: tm.get_virtual_tasks()) {
-        if ((co_await vt->get_ids()).contains(id)) {
+        if (co_await vt->contains(id)) {
             co_return vt;
         }
     }
