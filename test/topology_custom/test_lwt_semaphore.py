@@ -10,8 +10,10 @@ from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 from cassandra.protocol import WriteTimeout
+from test.topology.conftest import skip_mode
 
 @pytest.mark.asyncio
+@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cas_semaphore(manager):
     """ This is a regression test for scylladb/scylladb#19698 """
     servers = await manager.servers_add(1, cmdline=['--smp', '1', '--write-request-timeout-in-ms', '500'])
