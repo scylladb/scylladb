@@ -39,7 +39,11 @@ abstract_replication_strategy::abstract_replication_strategy(
     replication_strategy_params params,
     replication_strategy_type my_type)
         : _config_options(params.options)
-        , _my_type(my_type) {}
+        , _my_type(my_type) {
+    if (params.initial_tablets.has_value()) {
+        _uses_tablets = true;
+    }
+}
 
 abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
     try {
