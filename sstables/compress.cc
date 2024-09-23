@@ -157,7 +157,9 @@ void compression::segmented_offsets::state::update_position_trackers(std::size_t
 }
 
 void compression::segmented_offsets::init(uint32_t chunk_size) {
-    SCYLLA_ASSERT(chunk_size != 0);
+    if (chunk_size == 0) {
+        throw sstables::malformed_sstable_exception("Segmented offsets chunk size is zero.");
+    }
 
     _chunk_size = chunk_size;
 
