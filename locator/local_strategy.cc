@@ -9,6 +9,7 @@
 #include <algorithm>
 #include "local_strategy.hh"
 #include "utils/class_registrator.hh"
+#include "exceptions/exceptions.hh"
 
 
 namespace locator {
@@ -23,6 +24,9 @@ future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, 
 }
 
 void local_strategy::validate_options(const gms::feature_service&) const {
+    if (_uses_tablets) {
+        throw exceptions::configuration_exception("LocalStrategy doesn't support tablet replication");
+    }
 }
 
 std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(const topology&) const {
