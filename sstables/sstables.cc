@@ -2489,12 +2489,15 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
     if (_components->checksum && integrity == integrity_check::yes) {
         auto checksum = get_checksum();
         auto file_len = data_size();
+        integrity_error_handler_t error_handler = [] (sstring msg) {
+            throw malformed_sstable_exception(msg);
+        };
         if (_version >= sstable_version_types::mc) {
              return make_checksummed_file_m_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options), digest);
+                *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
             return make_checksummed_file_k_l_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options), digest);
+                *checksum, pos, len, std::move(options), digest, error_handler);
         }
     }
     return make_file_input_stream(f, pos, len, std::move(options));
