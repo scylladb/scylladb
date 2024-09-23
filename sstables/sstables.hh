@@ -37,6 +37,7 @@
 #include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/types.hh"
+#include "sstables/checksummed_data_source.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
@@ -731,10 +732,16 @@ public:
     //
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
+    //
+    // The `error_handler` parameter allows to customize the error handling
+    // logic when a checksum or digest mismatch is detected on an
+    // integrity-checked stream with no compression. The parameter is ignored
+    // if integrity checking is disabled or the SSTable is compressed.
     using raw_stream = bool_class<class raw_stream_tag>;
     input_stream<char> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
-            raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no);
+            raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+            integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
