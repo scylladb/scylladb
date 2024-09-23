@@ -69,6 +69,9 @@ void simple_strategy::validate_options(const gms::feature_service&) const {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
     }
     parse_replication_factor(it->second);
+    if (_uses_tablets) {
+        throw exceptions::configuration_exception("SimpleStrategy doesn't support tablet replication");
+    }
 }
 
 std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(const topology&) const {
