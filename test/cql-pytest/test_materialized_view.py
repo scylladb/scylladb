@@ -5,12 +5,21 @@
 # Tests for materialized views
 
 import time
+import re
 import pytest
 
 from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics
-from cassandra.protocol import InvalidRequest, SyntaxException
+from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 
 import nodetool
+
+def get_id_of_cf(cql, cf_name):
+    ks, cf = cf_name.split(".")
+    return cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().id
+
+def get_id_of_mv(cql, mv_name):
+    ks, mv = mv_name.split(".")
+    return cql.execute(f"SELECT id FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{mv}'").one().id
 
 # Test that building a view with a large value succeeds. Regression test
 # for a bug where values larger than 10MB were rejected during building (#9047)
@@ -1238,4 +1247,58 @@ def test_create_mv_with(cql, test_keyspace):
         # isn't tested here).
         with pytest.raises(InvalidRequest, match="COMPACT STORAGE"):
             with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with compact storage") as mv:
+                pass
+
+# Verify that creating a materialized view with an ID that is already used fails.
+#
+# We mark this function as `cassandra_bug` because trying to create an MV with
+# an existing ID against Cassandra results in a server error.
+#
+# Note that Scylla's behavior is consistent with how we handle `WITH ID`
+# in the case of regular tables.
+def test_creating_mv_with_existing_id(cassandra_bug, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Case 1. Try to create an MV with the ID of another MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+            with pytest.raises(InvalidRequest, match=f'Table with ID {mv_id} already exists: {mv}'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+        # Case 2. Try to create an MV with the ID of a regular table.
+        cf_id = get_id_of_cf(cql, table)
+        with pytest.raises(InvalidRequest, match=f'Table with ID {cf_id} already exists: {table}'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {cf_id}'):
+                pass
+
+# Verify that creating an MV with a specified ID succeeds and the MV really bears it.
+def test_creating_mv_with_given_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Step 1. We need an unused ID for the MV. Create a materialized view, obtain a statement
+        #         to restore it, and extract its ID. Drop the MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+
+        # Step 2. Create a new MV with a specific ID. Verify that it really uses it.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}') as mv:
+            assert mv_id == get_id_of_mv(cql, mv)
+
+# Verify that creating an MV fails when provided an invalid ID.
+def test_creating_mv_with_invalid_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        for mv_id in ["'null'", "'something'", "'!@?'"]:
+            with pytest.raises(ConfigurationException, match='Invalid table id'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+# Verify that creating an MV fails when the provided ID is null.
+#
+# This test is Scylla-only because Cassandra treats `WITH ID = null` as a special case,
+# and it's not a ConfigurationException, but a syntax error.
+# Note that creating a table in Scylla using `WITH ID = null` also results in a ConfigurationException,
+# so MVs are consistent with that.
+def test_creating_mv_with_null_id(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        with pytest.raises(ConfigurationException, match='Invalid table id'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', 'WITH ID = null'):
                 pass

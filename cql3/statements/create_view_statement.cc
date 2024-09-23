@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "exceptions/exceptions.hh"
 #include "utils/assert.hh"
 #include <unordered_set>
 #include <vector>
@@ -324,7 +325,16 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         warnings.emplace_back(std::move(warning_text));
     }
 
-    schema_builder builder{keyspace(), column_family()};
+    const auto maybe_id = _properties.properties()->get_id();
+    if (maybe_id && db.try_find_table(*maybe_id)) {
+        const auto schema_ptr = db.find_schema(*maybe_id);
+        const auto& ks_name = schema_ptr->ks_name();
+        const auto& cf_name = schema_ptr->cf_name();
+
+        throw exceptions::invalid_request_exception(seastar::format("Table with ID {} already exists: {}.{}", *maybe_id, ks_name, cf_name));
+    }
+
+    schema_builder builder{keyspace(), column_family(), maybe_id};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
             auto&& type = _properties.get_reversable_type(*def->column_specification->name, def->type);
