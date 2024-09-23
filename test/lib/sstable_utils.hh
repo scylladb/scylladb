@@ -13,7 +13,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/index_reader.hh"
-#include "sstables/binary_search.hh"
 #include "sstables/writer.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/memtable-sstable.hh"
@@ -45,10 +44,6 @@ public:
 
     summary& _summary() {
         return _sst->_components->summary;
-    }
-
-    future<temporary_buffer<char>> data_read(reader_permit permit, uint64_t pos, size_t len) {
-        return _sst->data_read(pos, len, std::move(permit));
     }
 
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
@@ -92,10 +87,6 @@ public:
         return _sst->read_statistics();
     }
 
-    statistics& get_statistics() {
-        return _sst->_components->statistics;
-    }
-
     future<> read_summary() noexcept {
         return _sst->read_summary();
     }
@@ -104,25 +95,8 @@ public:
         return _sst->read_summary_entry(i);
     }
 
-    summary& get_summary() {
-        return _sst->_components->summary;
-    }
-
-    summary move_summary() {
-        return std::move(_sst->_components->summary);
-    }
-
-    future<> read_toc() noexcept {
-        return _sst->read_toc();
-    }
-
     auto& get_components() {
         return _sst->_recognized_components;
-    }
-
-    template <typename T>
-    int binary_search(const dht::i_partitioner& p, const T& entries, const key& sk) {
-        return sstables::binary_search(p, entries, sk);
     }
 
     void change_generation_number(sstables::generation_type generation) {

@@ -31,6 +31,7 @@
 #include "test/lib/tmpdir.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/sstable_mutation_reader.hh"
+#include "sstables/binary_search.hh"
 
 #include <boost/range/combine.hpp>
 
@@ -153,7 +154,7 @@ SEASTAR_TEST_CASE(missing_summary_interval_1_query_ok) {
 
 SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 2, [] (test_env& env, shared_sstable ptr) {
-        auto& summary = sstables::test(ptr).get_summary();
+        const auto& summary = ptr->get_summary();
         BOOST_REQUIRE(summary.header.size == 1);
         BOOST_REQUIRE(summary.positions.size() == 1);
         BOOST_REQUIRE(summary.entries.size() == 1);
@@ -205,8 +206,8 @@ SEASTAR_TEST_CASE(check_summary_func) {
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_summary().get();
 
-        summary& sst1_s = sstables::test(sst1).get_summary();
-        summary& sst2_s = sstables::test(sst2).get_summary();
+        const summary& sst1_s = sst1->get_summary();
+        const summary& sst2_s = sst2->get_summary();
 
         BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
@@ -224,8 +225,8 @@ SEASTAR_TEST_CASE(check_statistics_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_statistics().get();
-        statistics& sst1_s = sstables::test(sst1).get_statistics();
-        statistics& sst2_s = sstables::test(sst2).get_statistics();
+        const statistics& sst1_s = sst1->get_statistics();
+        const statistics& sst2_s = sst2->get_statistics();
 
         BOOST_REQUIRE(sst1_s.offsets.elements.size() == sst2_s.offsets.elements.size());
         BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
@@ -240,7 +241,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
-        sstables::test(sst2).read_toc().get();
+        sst2->read_toc().get();
         auto& sst1_c = sstables::test(sst1).get_components();
         auto& sst2_c = sstables::test(sst2).get_components();
 
@@ -250,7 +251,7 @@ SEASTAR_TEST_CASE(check_toc_func) {
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto& env, auto sstp) {
-        temporary_buffer<char> buf = sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).get();
+        temporary_buffer<char> buf = sstp->data_read(97, 6, env.make_reader_permit()).get();
         BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
     });
 }
@@ -258,7 +259,7 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 SEASTAR_TEST_CASE(compressed_random_access_read) {
     auto s = make_schema_for_compressed_sstable();
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto& env, auto sstp) {
-        temporary_buffer<char> buf = sstables::test(sstp).data_read(env.make_reader_permit(), 97, 6).get();
+        temporary_buffer<char> buf = sstp->data_read(97, 6, env.make_reader_permit()).get();
         BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
     });
 }
@@ -281,7 +282,7 @@ SEASTAR_TEST_CASE(find_key_map) {
         kk.push_back(make_map_value(map_type, map));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::binary_search(s->get_partitioner(), summary.entries, key) == 0);
     });
 }
 
@@ -302,7 +303,7 @@ SEASTAR_TEST_CASE(find_key_set) {
         kk.push_back(make_set_value(set_type, set));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::binary_search(s->get_partitioner(), summary.entries, key) == 0);
     });
 }
 
@@ -323,7 +324,7 @@ SEASTAR_TEST_CASE(find_key_list) {
         kk.push_back(make_list_value(list_type, list));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::binary_search(s->get_partitioner(), summary.entries, key) == 0);
     });
 }
 
@@ -341,7 +342,7 @@ SEASTAR_TEST_CASE(find_key_composite) {
         kk.push_back(data_value(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::binary_search(s->get_partitioner(), summary.entries, key) == 0);
     });
 }
 
@@ -352,7 +353,7 @@ SEASTAR_TEST_CASE(all_in_place) {
         int idx = 0;
         for (auto& e: summary.entries) {
             auto key = sstables::key::from_bytes(bytes(e.key));
-            BOOST_REQUIRE(sstables::test(sstp).binary_search(sstp->get_schema()->get_partitioner(), summary.entries, key) == idx++);
+            BOOST_REQUIRE(sstables::binary_search(sstp->get_schema()->get_partitioner(), summary.entries, key) == idx++);
         }
     });
 }
@@ -363,7 +364,7 @@ SEASTAR_TEST_CASE(full_index_search) {
         int idx = 0;
         for (auto& e : index_list) {
             auto key = key::from_partition_key(*sstp->get_schema(), e.key);
-            BOOST_REQUIRE(sstables::test(sstp).binary_search(sstp->get_schema()->get_partitioner(), index_list, key) == idx++);
+            BOOST_REQUIRE(sstables::binary_search(sstp->get_schema()->get_partitioner(), index_list, key) == idx++);
         }
     });
 }
@@ -382,7 +383,7 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(s->get_partitioner(), summary.entries, key) == -2);
+        BOOST_REQUIRE(sstables::binary_search(s->get_partitioner(), summary.entries, key) == -2);
     });
 }
 

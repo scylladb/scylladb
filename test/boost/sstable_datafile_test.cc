@@ -100,8 +100,8 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         auto sst2 = env.reusable_sst(sst).get();
 
         sstables::test(sst2).read_summary().get();
-        summary& sst1_s = sstables::test(sst).get_summary();
-        summary& sst2_s = sstables::test(sst2).get_summary();
+        const summary& sst1_s = sst->get_summary();
+        const summary& sst2_s = sst2->get_summary();
 
         BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
@@ -109,7 +109,7 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
         BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
 
-        sstables::test(sst2).read_toc().get();
+        sst2->read_toc().get();
         auto& sst1_c = sstables::test(sst).get_components();
         auto& sst2_c = sstables::test(sst2).get_components();
 
@@ -2115,7 +2115,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
 
         auto sst = make_sstable_containing(env.make_sstable(s), mutations);
 
-        summary& sum = sstables::test(sst).get_summary();
+        const summary& sum = sst->get_summary();
         BOOST_REQUIRE(sum.entries.size() == 1);
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
@@ -2314,12 +2314,13 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
 
         auto sst = make_sstable_containing(env.make_sstable(s), mutations);
 
-        summary s1 = sstables::test(sst).move_summary();
+        summary s1 = std::move(sstables::test(sst)._summary());
+        BOOST_REQUIRE(!(bool)sstables::test(sst)._summary()); // make sure std::move above took place
         BOOST_REQUIRE(s1.entries.size() > 1);
 
         sstables::test(sst).remove_component(component_type::Summary).get();
         sst = env.reusable_sst(sst).get();
-        summary& s2 = sstables::test(sst).get_summary();
+        const summary& s2 = sst->get_summary();
 
         BOOST_REQUIRE(::memcmp(&s1.header, &s2.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(s1.positions == s2.positions);
