@@ -104,13 +104,16 @@ def check_increases_metric(metrics, metric_names):
         assert saved_metrics[n] < get_metric(metrics, n, None, the_metrics), f'metric {n} did not increase'
 
 @contextmanager
-def check_increases_operation(metrics, operation_names):
+def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
     the_metrics = get_metrics(metrics)
-    saved_metrics = { x: get_metric(metrics, 'scylla_alternator_operation', {'op': x}, the_metrics) for x in operation_names }
+    saved_metrics = { x: get_metric(metrics, metric_name, {'op': x}, the_metrics) for x in operation_names }
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
-        assert saved_metrics[op] < get_metric(metrics, 'scylla_alternator_operation', {'op': op}, the_metrics)
+        if expected_value:
+            assert expected_value == get_metric(metrics, metric_name, {'op': op}, the_metrics) - saved_metrics[op]
+        else:
+            assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op}, the_metrics)
 
 ###### Test for metrics that count DynamoDB API operations:
 
@@ -124,6 +127,16 @@ def test_batch_get_item(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchGetItem']):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+def test_batch_write_item_count(test_table_s, metrics):
+    with check_increases_operation(metrics, ['BatchWriteItem'], metric_name='scylla_alternator_batch_item_count', expected_value=2):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+
+def test_batch_get_item_count(test_table_s, metrics):
+    with check_increases_operation(metrics, ['BatchGetItem'], metric_name='scylla_alternator_batch_item_count', expected_value=2):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
 
 # Test counters for CreateTable, DescribeTable, UpdateTable and DeleteTable
 def test_table_operations(dynamodb, metrics):
