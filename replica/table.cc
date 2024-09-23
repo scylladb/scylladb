@@ -3496,6 +3496,63 @@ future<row_locker::lock_holder> table::push_view_replica_updates(shared_ptr<db::
     return push_view_replica_updates(std::move(gen), s, std::move(m), timeout, std::move(tr_state), sem);
 }
 
+// Usually before a view update we must do a "read before write" (read the
+// base row before the modification), there are some cases when we know the
+// read-before-write is unnecessary because the base update contains all
+// the information we need to prepare the view updates (for *all* views).
+// Avoiding read-before-write when not needed is a significant performance
+// boost for the lucky use cases that don't need it (see #20679).
+// This function returns true if the read-before-write is not needed.
+// It returns false if for any reason, to correctly handle any of the views
+// is is necessary to do a read before write.
+// The list of views can be assumed to be non-empty (in the no-views case,
+// this function won't be called).
+static bool may_skip_read_before_write(
+        const std::vector<db::view::view_and_base>& views,
+        const mutation& m) {
+    // If *any* of the views has a key column which isn't a base-table key
+    // column, we need to know the previous value of that column to perform
+    // the view update (which may require deleting an old row), so a read-
+    // before-write *is* necessary - i.e., we need to return "false":
+    if (std::ranges::any_of(views, [] (const auto& v) {
+            return v.view->view_info()->has_base_non_pk_columns_in_view_pk(); })) {
+        return false;
+    }
+    // If we're still here, it means all the views have the same key columns
+    // as the base table (possibly in a different order).
+    // But if the base mutation affects more than a single row - i.e. deleting
+    // a whole partition or a clustering range - then because the key columns
+    // might be in different order in the view key, it might not be possible
+    // to convert the single base tombstone into a single view tombstone,
+    // and we *do* need to perform the read-before write to get the list of
+    // rows and produce tombstones for them individually.
+    // TODO: With more effort, the read-before-write can still be avoided if
+    // the key column reordering is not "too much". One example in the case of
+    // a partition tombstone if the view's partition key has the same columns
+    // as the base's (is_partition_key_permutation_of_base_partition_key).
+    // Another example when a clustering prefix being deleted in the base also
+    // happens to be a contiguous clustering prefix in the view.
+    if (m.partition().partition_tombstone() || !m.partition().row_tombstones().empty()) {
+        return false;
+    }
+    // We have a separate code path for secondary-index of a collection column
+    // which currently incorrectly relies on read-before-write in the deletion
+    // case: It wants to optimize the case of deletion of collection item that
+    // didn't previously exist and checks the "existing" (read-before-write
+    // result) to do that. So before this bug is fixed, we need to turn of the
+    // read-before-write avoidance if any of the views indexes a collection.
+    // FIXME: Fix the collection indexing bugs and remove this if().
+    if (std::ranges::any_of(views, [] (const auto& v) {
+            return std::ranges::any_of(v.view->partition_key_columns(), [] (const column_definition& cdef) {
+                return cdef.is_computed() && nullptr != dynamic_cast<const collection_column_computation*>(&cdef.get_computation());
+            });})) {
+        return false;
+    }
+    // Finally, if we reached here, there is no reason why a read-before-
+    // write is necessary, and we may skip it:
+    return true;
+}
+
 future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
         tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts) const {
     schema_ptr base = schema();
@@ -3517,6 +3574,12 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
+    if (may_skip_read_before_write(views, m)) {
+        co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-3", timeout, tr_state), std::move(views), std::move(m), std::nullopt, tr_state, now, timeout);
+        // No read-before-write, so no lock is needed.
+        co_return row_locker::lock_holder();
+    }
+
     auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(gen->get_db().as_data_dictionary(), *base, m.decorated_key(), m.partition(), views);
     const bool need_regular = !cr_ranges.empty();
     const bool need_static = db::view::needs_static_row(m.partition(), views);

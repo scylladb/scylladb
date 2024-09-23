@@ -1354,3 +1354,244 @@ def test_create_materialized_view_slash_name(cql, test_keyspace, table1):
     finally:
         # We shouldn't reach here, but if we did, let the test fail cleanly
         cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."/xyz/"')
+
+def trace_is_a_read(string):
+    # The following are strings in an INSERT's query trace which suggests
+    # the INSERT actually performed a *read*, i.e., a read-before-write.
+    # The specific strings are different in Cassandra and Scylla.
+    # Unfortunately these strings will need to be changed if we ever
+    # change these trace strings (which aren't documented anywhere, and
+    # may change at a developer's whim).
+    read_strings = [
+        # Scylla presents the read-before-write as:
+        #     Querying cache for range {{-3485513579396041028,
+        #           pk{000400000000}}} and slice [{ckp{000400000001}}]
+        "Querying cache for range",
+        # Cassandra presents the read-before-write as:
+        #     Executing single-partition query on cql_test_1726682057511
+        "Executing single-partition query"
+    ]
+    for i in read_strings:
+        if string.startswith(i):
+            return True
+    return False
+
+# Reproducer for issue #20679:
+# When a view has the same key columns as the base (possibly in a different
+# order), an update to a base table row can be sent as-is to the corresponding
+# view row, with no need to read the full existing row (no need for
+# "read-before-write"). The purpose of this test is to confirm that this
+# optimization is done - i.e., in this case no read-before-write happens.
+# This optimization doesn't change anything in the user-visible results, so
+# the test needs to use *query tracing* to verify that a read-before-write
+# was not done. Luckily, query tracing is supported in both Scylla and
+# Cassandra (although the specific strings are different).
+# This optimization does not exist in Cassandra, so it is marked cassandra_bug
+# (though it's a performance bug, not a correctness bug).
+def test_no_read_before_write_1(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p,c)') as table:
+        # A materialized view with the same key columns as the base, just
+        # a different order:
+        with new_materialized_view(cql, table, '*', 'c,p', 'p is not null and c is not null') as mv:
+            r = cql.execute(f'INSERT INTO {table} (p,c,x) VALUES (0,1,2)', trace=True)
+            trace = r.get_query_trace()
+            # Because the view has the same key columns as the base, we
+            # expect no read-before write was needed to perform the write:
+            for event in trace.events:
+                assert not trace_is_a_read(event.description)
+
+        # In the code above, we relied on the *lack* of some trace message
+        # as a sign that read-before-write was *not* done. But this lack of
+        # message can also happen if the trace messages changed! So it's
+        # important to confirm now that in a case where a read-before-write
+        # *is* needed (when the view key has a new column x), the expected
+        # trace message *does* appear.
+        with new_materialized_view(cql, table, '*', 'c,p,x', 'p is not null and c is not null and x is not null') as mv:
+            r = cql.execute(f'INSERT INTO {table} (p,c,x) VALUES (0,1,2)', trace=True)
+            trace = r.get_query_trace()
+            found_read = False
+            for event in trace.events:
+                if trace_is_a_read(event.description):
+                    found_read = True
+                    break
+            assert found_read
+
+# Reproducer for issue #20679:
+# Check another, more obscure, case where read-before-write isn't needed
+# so as an optimization, we shouldn't do it: A view that has a base-regular
+# column R in its key, and a mutation comes in which modifies neither R nor
+# any *selected* column in the view. In such a case, no matter which view-row
+# key a read-before-write might have found, this view row doesn't need to
+# be updated (because no selected column was changed). So a read-before-write
+# is pointless.
+# This optimization is currently missing in both Scylla and Cassandra,
+# so it's both xfail and cassandra_bug.
+@pytest.mark.xfail(reason="optimization not yet done")
+def test_no_read_before_write_2(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, r int, x int, primary key (p,c)') as table:
+        # A materialized view which adds the base-regular column r to the
+        # view's key. The base column x is deliberately NOT selected into
+        # the view.
+        with new_materialized_view(cql, table, 'c,p,r', 'c,p,r', 'p is not null and c is not null and r is not null') as mv:
+            # Perform an update in the base that changes *only* column x.
+            # Such an update doesn't need to do anything at all in the
+            # view (no matter which is the appropriate view row, it doesn't
+            # select x so it doesn't need changing) and in particular does
+            # not need a read-before-write.
+            r = cql.execute(f'UPDATE {table} SET x = 7 WHERE p=2 AND c=3', trace=True)
+            trace = r.get_query_trace()
+            for event in trace.events:
+                assert not trace_is_a_read(event.description)
+
+        # In the code above, we relied on the *lack* of some trace message
+        # as a sign that read-before-write was *not* done. But this lack of
+        # message can also happen if the trace messages changed! So it's
+        # important to confirm that in a case where a read-before-write
+        # *is* needed (when the view key has a new column x), the expected
+        # trace message *does* appear.
+        # But we already checked this in the test test_no_read_before_write_1
+        # so no need to check it again here.
+
+# A test that a delicate optimization in the view update process doesn't break
+# correctness: Deleting a base-table row that was already deleted shouldn't
+# need to modify the view at all. But what if the deletion was with a newer
+# timestamp? Is it fine that we don't update the deletion timestamp of the
+# view row? This test demonstrates that it's fine, as long as the code later
+# checks deletion according to the base (so if the base data gets deleted by
+# the newer deletion, the view row is deleted) and not the view. This test
+# passes, indicates that whatever the view update code does internally (which
+# this test can't directly test), the consequences are correct.
+def test_base_deletion_timestamp(cql, test_keyspace):
+    # Create a base table and a view with the same key columns as the
+    # base - the potentially-incorrect optimization that this test wants
+    # confirm doesn't happen is in the case there is a one-to-one
+    # correspondence between base and view rows.
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p,c)') as table:
+        with new_materialized_view(cql, table, '*', 'c,p', 'p is not null and c is not null') as mv:
+            # Create a base row at timestamp 1 and delete it at timestamp 2.
+            # The kicker: we do it in opposite order (first delete at
+            # timestamp 2, then create at timestamp 1). This should not
+            # matter, and the end result should be that the row shouldn't
+            # exist.
+            cql.execute(f'DELETE FROM {table} USING TIMESTAMP 2 WHERE p=0 AND c=1')
+            cql.execute(f'INSERT INTO {table} (p,c,x) VALUES (0,1,2) USING TIMESTAMP 1')
+            # Verify that the base row indeed does not exist
+            assert [] == list(cql.execute(f"SELECT c FROM {table} WHERE p=0 and c=1"))
+            # If the base row doesn't exist, neither should the view row.
+            # We assume that we don't need to do retries because we are
+            # testing on a single-node cluster where view updates are
+            # synchronous.
+            assert [] == list(cql.execute(f"SELECT c FROM {mv} WHERE p=0 and c=1"))
+
+# This test demonstrates a bug in an early fix of issue #20679 (avoiding
+# read-before-write when the view key has the same column as the base).
+# Check that a mutation that only deletes a base row is applied to the view
+# and not just ignored (mistakenly thinking that because "existing" is
+# empty because we didn't read it, it means the row doesn't exist and
+# it's not helpful to delete it.
+def test_delete_base_row(cql, test_keyspace):
+    # Create a base table and a view with the same key columns as the
+    # base - the incorrect optimization that this test exposes was in the
+    # code path that dealt specifically with that case.
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p,c)') as table:
+        with new_materialized_view(cql, table, '*', 'c,p', 'p is not null and c is not null') as mv:
+            # Create a base row and then delete it
+            cql.execute(f'INSERT INTO {table} (p,c,x) VALUES (0,1,2)')
+            cql.execute(f'DELETE FROM {table} WHERE p=0 AND c=1')
+            # Verify that the base row indeed does not exist
+            assert [] == list(cql.execute(f"SELECT c FROM {table} WHERE p=0 and c=1"))
+            # If the base row doesn't exist, neither should the view row.
+            assert [] == list(cql.execute(f"SELECT c FROM {mv} WHERE p=0 and c=1"))
+
+# Another test which demonstrates a bug in an early fix of issue #20679
+# (which avoids read-before-write when the view key has the same column as
+# the base).
+# In this test we have two clustering key columns in the base, and
+# delete "WHERE c1=?" which results in a *range* tombstone in the base.
+# Unlike modifications to single rows, such range tombstone cannot be
+# generally be copied as-is to the view (it might have the key columns
+# in different order!) so MV needs to split the deleted base range into
+# individual row deletions. To get the list of rows to delete, the MV code
+# must read the existing base row, and can't avoid read-before-write in
+# this case.
+def test_base_range_tombstone(cql, test_keyspace):
+    # We need two clustering key columns in this test, so that deleting
+    # each "WHERE c1=?" will cause a *range* tombstone - which is what
+    # we want to reproduce in this test.
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, primary key (p, c1, c2)') as table:
+        # In the view, c1 and c2 are reversed, so a range tombstone on c1
+        # in the base is can no longer be represented as contiguous range
+        # tombstone in the view and must be split into deletion of
+        # invidual rows.
+        with new_materialized_view(cql, table, '*', 'p, c2, c1', 'p is not null and c1 is not null and c2 is not null') as mv:
+            cql.execute(f'INSERT INTO {table} (p, c1, c2) VALUES (0,0,0)')
+            cql.execute(f'INSERT INTO {table} (p, c1, c2) VALUES (0,0,1)')
+            cql.execute(f'DELETE FROM {table} WHERE p=0 AND c1=0')
+            # Verify that the two base rows were indeed deleted
+            assert [] == list(cql.execute(f"SELECT c2 FROM {table} WHERE p=0"))
+            # If the base rows don't exist, neither should the view rows.
+            # Note that because cql-pytest runs on a single node, view updates
+            # are synchronous and we can read the view without retrying.
+            assert [] == list(cql.execute(f"SELECT c2 FROM {mv} WHERE p=0"))
+
+# This test is inspired by the C++ test test/boost/view_schema_test.cc::
+# test_view_update_generating_writetime. That test claimed that it's not
+# interesting to update the timestamp of a virtual column (unselected column)
+# when a base update only changed that timestamp and not the value, so the
+# code "optimized" this view update out, and the test verified that Scylla
+# really avoided the view update in this case. However, if we want to
+# implement #20679 (avoid read-before write in this case), we can't do this
+# optimization - when we optimize away the read-before-write we can't know
+# if the value is unchanged, so can't avoid the view update.
+# However, what this test tries to confirm is that with whatever optimization
+# we use - before or after #20679 - there are no user-visible changes.
+# The timestamp of the view row's virtual column is not user-visible - it
+# cannot be read in CQL - so optimizing it away is ok, but we need to verify
+# that even if it's optimized away, further updates to the same cell are
+# implemented correctly in the view.
+# Despite Cassandra not having virtual columns, this test passes in Cassandra
+# as well, because the *row marker* keeps the row alive. We have other
+# tests with more than one unselected column that show that this single
+# row marker is not enough.
+def test_virtual_column_timestamp_only_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        # View key with same columns as base key (different order, just for
+        # generality), and the base regular column v is *not* selected.
+        # So Scylla will a "virtual columns" for v in this view.
+        with new_materialized_view(cql, table, 'p, c', 'c, p', 'p is not null and c is not null') as mv:
+            cql.execute(f'UPDATE {table} USING TIMESTAMP 1 SET v = 1 WHERE p=2 AND c=3')
+            # The above command added a row to the base and to the view. On a
+            # single-node test, the update will be synchronous so no need for
+            # retry.
+            assert [(2,3,1)] == list(cql.execute(f"SELECT p, c, v FROM {table} WHERE p=2 AND c=3"))
+            assert [(2,3)] == list(cql.execute(f"SELECT p, c FROM {mv} WHERE p=2 AND c=3"))
+            # Write exactly the *same value* v=1 at a later timestamp 10.
+            # This shouldn't change the row values in either base or view,
+            # of course, but we don't know or care if the same-value update
+            # was avoided or not.
+            cql.execute(f'UPDATE {table} USING TIMESTAMP 10 SET v = 1 WHERE p=2 AND c=3')
+            assert [(2,3,1)] == list(cql.execute(f"SELECT p, c, v FROM {table} WHERE p=2 AND c=3"))
+            assert [(2,3)] == list(cql.execute(f"SELECT p, c FROM {mv} WHERE p=2 AND c=3"))
+            # We can verify with writetime(v) that in the base table, v's
+            # timestamp is updated to 10.
+            # We cannot do the same verification in the view - in the view,
+            # v is a virtual column and the CQL API is not allowed to access
+            # it. This is why the old pre-#20679 implementation could optimize
+            # away the view write in this case.
+            assert [(10,)] == list(cql.execute(f"SELECT writetime(v) FROM {table} WHERE p=2 AND c=3"))
+            # Delete value v with timestamp 2. 2 is older than the current
+            # timestamp of v (10) so we expect the row to remain - in both
+            # view and base. One can worry that if the uptime update in the
+            # view row was "optimized away", it would have remained with
+            # timestamp 1 and be deleted in this update. But fortunately,
+            # the "optimized away" version (pre-#20679) actually performed
+            # the base update first, noticed that no column was deleted
+            # in the base, so didn't apply the deletion to the view.
+            cql.execute(f'DELETE v FROM {table} USING TIMESTAMP 2 WHERE p=2 AND c=3')
+            assert [(2,3,1)] == list(cql.execute(f"SELECT p, c, v FROM {table} WHERE p=2 AND c=3"))
+            assert [(2,3)] == list(cql.execute(f"SELECT p, c FROM {mv} WHERE p=2 AND c=3"))
+            # Confirm that delete with timestamp 11 works as expected,
+            # deleting the row from both base and view
+            cql.execute(f'DELETE v FROM {table} USING TIMESTAMP 11 WHERE p=2 AND c=3')
+            assert [] == list(cql.execute(f"SELECT p, c, v FROM {table} WHERE p=2 AND c=3"))
+            assert [] == list(cql.execute(f"SELECT p, c FROM {mv} WHERE p=2 AND c=3"))
