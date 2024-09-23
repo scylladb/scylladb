@@ -118,6 +118,7 @@
 #include "idl/mapreduce_request.dist.impl.hh"
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
+#include "gms/feature_service.hh"
 
 namespace netw {
 
@@ -231,9 +232,9 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port)
+messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service)
     : messaging_service(config{std::move(id), ip, ip, port},
-                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
+                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr, feature_service)
 {}
 
 static
@@ -418,13 +419,14 @@ void messaging_service::do_start_listen() {
     }
 }
 
-messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials)
+messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(PER_SHARD_CONNECTION_COUNT + scfg.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
+    , _feature_service(feature_service)
 {
     _rpc->set_logger(&rpc_logger);
 
@@ -433,7 +435,8 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     // which in turn relies on _connection_index_for_tenant to be initialized.
     _connection_index_for_tenant.reserve(_scheduling_config.statement_tenants.size());
     for (unsigned i = 0; i <  _scheduling_config.statement_tenants.size(); ++i) {
-        _connection_index_for_tenant.push_back({_scheduling_config.statement_tenants[i].sched_group, i});
+        auto& tenant_cfg = _scheduling_config.statement_tenants[i];
+        _connection_index_for_tenant.push_back({tenant_cfg.sched_group, i, tenant_cfg.enabled});
     }
 
     register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id) {
@@ -456,6 +459,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     });
 
     init_local_preferred_ip_cache(_cfg.preferred_ips);
+    init_feature_listeners();
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
@@ -677,16 +681,22 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) const {
         return idx;
     }
 
-    // A statement or statement-ack verb
     const auto curr_sched_group = current_scheduling_group();
     for (unsigned i = 0; i < _connection_index_for_tenant.size(); ++i) {
         if (_connection_index_for_tenant[i].sched_group == curr_sched_group) {
-            // i == 0: the default tenant maps to the default client indexes belonging to the interval
-            // [PER_SHARD_CONNECTION_COUNT, PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT).
-            idx += i * PER_TENANT_CONNECTION_COUNT;
-            break;
+            if (_connection_index_for_tenant[i].enabled) {
+                // i == 0: the default tenant maps to the default client indexes belonging to the interval
+                // [PER_SHARD_CONNECTION_COUNT, PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT).
+                idx += i * PER_TENANT_CONNECTION_COUNT;
+                break;
+            } else {
+                // If the tenant is disable, immediately return current index to
+                // use $system tenant. 
+                return idx;
+            }
         }
     }
+
     return idx;
 }
 
@@ -789,6 +799,22 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
     // just read.
     //
     remove_rpc_client(msg_addr(ep));
+}
+
+void messaging_service::init_feature_listeners() {
+    _maintenance_tenant_enabled_listener = _feature_service.maintenance_tenant.when_enabled([this] {
+        enable_scheduling_tenant("$maintenance");
+    });
+}
+
+void messaging_service::enable_scheduling_tenant(std::string_view name) {
+    for (size_t i = 0; i < _scheduling_config.statement_tenants.size(); ++i) {
+        if (_scheduling_config.statement_tenants[i].name == name) {
+            _scheduling_config.statement_tenants[i].enabled = true;
+            _connection_index_for_tenant[i].enabled = true;
+            return;
+        }
+    }
 }
 
 gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_address& ip) const {

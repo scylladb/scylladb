@@ -12,7 +12,9 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/util/closeable.hh>
 
+#include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "gms/feature_service.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
@@ -56,6 +58,7 @@ int main(int ac, char ** av) {
 
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
+            sharded<gms::feature_service> feature_service;
             sharded<netw::messaging_service> messaging;
 
             abort_sources.start().get();
@@ -68,7 +71,10 @@ int main(int ac, char ** av) {
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
 
-            messaging.start(locator::host_id{}, listen, 7000).get();
+            auto cfg = gms::feature_config_from_db_config(db::config(), {});
+            feature_service.start(cfg).get();
+
+            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service)).get();
             auto stop_messaging = deferred_stop(messaging);
 
             gms::gossip_config gcfg;
