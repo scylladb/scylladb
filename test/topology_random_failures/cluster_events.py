@@ -420,7 +420,9 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
                                        random_tables: RandomTables,
                                        error_injection: str) -> AsyncIterator[None]:
     running_servers = await manager.running_servers()
-    data_dir = os.path.join(await manager.server_get_workdir(running_servers[1].server_id), "data")
+    data_dirs = [
+        directory for directory in os.listdir(await manager.server_get_workdir(running_servers[1].server_id)) if
+        directory != 'conf']
 
     LOGGER.info("Kill a node")
     await manager.server_stop(server_id=running_servers[1].server_id)
@@ -431,8 +433,9 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
 
     yield
 
-    LOGGER.info("Remove data dir of the dead node and start it")
-    rmtree(path=data_dir, ignore_errors=True)
+    LOGGER.info("Remove data directories of the dead node and start it except conf dir")
+    for directory in data_dirs:
+        rmtree(path=directory, ignore_errors=True)
     await manager.server_start(server_id=running_servers[1].server_id)
 
     yield
