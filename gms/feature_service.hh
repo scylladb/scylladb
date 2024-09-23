@@ -143,6 +143,7 @@ public:
     // whereas without it, it will fail the insert - i.e. for things like raft etc _all_ nodes should
     // have it or none, otherwise we can get partial failures on writes.
     gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
+    gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
