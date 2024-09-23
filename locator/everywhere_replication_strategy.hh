@@ -20,7 +20,7 @@ public:
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
-    virtual void validate_options(const gms::feature_service&) const override { /* noop */ }
+    virtual void validate_options(const gms::feature_service&) const override;
 
     std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override {
         // We explicitly allow all options
