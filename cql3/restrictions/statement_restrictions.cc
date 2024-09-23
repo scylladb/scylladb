@@ -1285,6 +1285,8 @@ statement_restrictions::statement_restrictions(private_tag,
             prepare_indexed_global(*view_schema);
         }
     }
+
+    _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
 }
 
 bool
@@ -1946,8 +1948,15 @@ dht::partition_range_vector partition_ranges_from_EQs(
 } // anonymous namespace
 
 dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
+    return _get_partition_key_ranges_fn(options);
+}
+
+get_partition_key_ranges_fn_t
+statement_restrictions::build_partition_key_ranges_fn() const {
     if (_partition_range_restrictions.empty()) {
+      return [] (const query_options& options) -> dht::partition_range_vector{
         return {dht::partition_range::make_open_ended_both_sides()};
+      };
     }
     if (has_partition_token(_partition_range_restrictions[0], *_schema)) {
         if (_partition_range_restrictions.size() != 1) {
@@ -1955,12 +1964,18 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
                     rlogger,
                     format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
         }
+      return [&] (const query_options& options) {
         return partition_ranges_from_token(_partition_range_restrictions[0], options, *_schema);
+      };
     } else if (_partition_range_is_simple) {
+      return [&] (const query_options& options) {
         // Special case to avoid extra allocations required for a Cartesian product.
         return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
+      };
     }
+  return [&] (const query_options& options) {
     return partition_ranges_from_singles(_partition_range_restrictions, options, *_schema);
+  };
 }
 
 namespace {

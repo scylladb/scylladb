@@ -28,6 +28,10 @@ namespace restrictions {
 ///have an index-manager, or even a table object.
 using check_indexes = bool_class<class check_indexes_tag>;
 
+// A function that returns the partition key ranges for a query. It is the solver of
+// WHERE clause fragments such as WHERE token(pk) > 1 or WHERE pk1 IN :list1 AND pk2 IN :list2.
+using get_partition_key_ranges_fn_t = std::function<dht::partition_range_vector (const query_options&)>;
+
 /**
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
@@ -124,6 +128,7 @@ private:
     schema_ptr _view_schema;
     std::optional<secondary_index::index> _idx_opt;
     expr::expression _idx_restrictions = expr::conjunction({});
+    get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -319,6 +324,7 @@ private:
 
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
     void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db);
+    get_partition_key_ranges_fn_t build_partition_key_ranges_fn() const;
 public:
     /**
      * Returns the specified range of the partition key.
