@@ -6871,7 +6871,7 @@ void storage_service::init_messaging_service() {
             std::vector<table_id> additional_tables;
 
             // We decide whether it's new mode or not.
-            const bool new_mode = feat.snapshot_rpc_receiver_side;
+            const bool new_mode = feat.snapshot_rpc_receiver_side && !utils::get_local_injector().enter("raft_pull_snapshot_handler_force_legacy");
 
             // Detect the second legacy RPC attempt via the tables list.
             const bool second_rpc_in_legacy_mode = params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id();

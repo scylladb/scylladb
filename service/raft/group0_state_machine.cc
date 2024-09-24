@@ -325,7 +325,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             return {std::move(topology_snp), std::move(raft_snp)};
         };
 
-        if (_snapshot_rpc_receiver_side_enabled) {
+        if (_snapshot_rpc_receiver_side_enabled && !utils::get_local_injector().enter("raft_pull_snapshot_sender_force_legacy")) {
             slogger.info("transfer snapshot: requesting everything at once using the new RPC semantics");
 
             // The other node will ignore the tables list and will send everything at once.
@@ -348,6 +348,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
                 &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{tables});
 
             slogger.trace("transfer snapshot: second round: requesting others (auth, SLs, view build status)");
+
+            while (utils::get_local_injector().enter("raft_pull_snapshot_sender_pause_between_rpcs")) {
+                co_await sleep_abortable(std::chrono::milliseconds(10), as);
+            }
 
             tables = std::vector<table_id>();
 
