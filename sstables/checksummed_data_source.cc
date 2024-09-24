@@ -66,6 +66,12 @@ public:
             on_internal_error(sstlog, format("Invalid chunk size: {}", chunk_size));
         }
         _chunk_size_trailing_zeros = count_trailing_zeros(chunk_size);
+        auto file_chunks = (_file_len + chunk_size - 1) >> _chunk_size_trailing_zeros;
+        if (checksum.checksums.size() != file_chunks) {
+            throw malformed_sstable_exception(seastar::format(
+                "Chunk count mismatch between CRC and Data.db: expected {} chunks but data file has {}",
+                checksum.checksums.size(), file_chunks));
+        }
         if (_pos > _file_len) {
             on_internal_error(sstlog, "attempt to read beyond end");
         }
