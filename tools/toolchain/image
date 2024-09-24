@@ -1,1 +1,1 @@
-docker.io/scylladb/scylla-toolchain:fedora-40-20240925
+ghcr.io/xtrey/scylla-toolchain:fedora-40-20241017
