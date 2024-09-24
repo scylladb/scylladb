@@ -314,6 +314,14 @@ For example, to disable developer mode:
 $ docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 ```
 
+#### `--default-log-level arg (=info)``
+
+Default log level for log messages. Valid values are trace, debug, info, warn, error.
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --default-log-level debug
+```
+
 #### `--experimental ENABLE`
 
 The `--experimental` command line option enables ScyllaDB's experimental mode
