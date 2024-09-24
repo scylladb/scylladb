@@ -6,7 +6,8 @@
 
 import allure
 import pytest
-
+from allure_commons.model2 import Status
+from allure_pytest.utils import get_pytest_report_status
 
 
 class ReportPlugin:
@@ -26,6 +27,16 @@ class ReportPlugin:
         report = outcome.get_result()
         if self.mode is not None or self.run_id is not None:
             report.nodeid = f"{report.nodeid}.{self.mode}.{self.run_id}"
+        status =  get_pytest_report_status(report)
+        # skip attaching logs for passed tests
+        # attach_capture is a destination for "--allure-no-capture" option from allure-plugin
+        if status != Status.PASSED and not self.config.option.attach_capture:
+            if report.caplog:
+                allure.attach(report.caplog, "log", allure.attachment_type.TEXT, None)
+            if report.capstdout:
+                allure.attach(report.capstdout, "stdout", allure.attachment_type.TEXT, None)
+            if report.capstderr:
+                allure.attach(report.capstderr, "stderr", allure.attachment_type.TEXT, None)
 
     @pytest.fixture(scope="function", autouse=True)
     def allure_set_mode(self, request):
