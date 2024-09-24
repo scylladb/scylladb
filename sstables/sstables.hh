@@ -59,8 +59,6 @@ class large_data_handler;
 
 namespace sstables {
 
-class random_access_reader;
-
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
@@ -71,11 +69,8 @@ class writer;
 namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
-class key;
 class sstable_writer;
-class sstable_writer_v2;
 class sstables_manager;
-class metadata_collector;
 
 struct foreign_sstable_open_info;
 
@@ -98,7 +93,6 @@ class data_consume_context;
 
 class index_reader;
 class partition_index_cache;
-class sstables_manager;
 
 extern size_t summary_byte_cost(double summary_ratio);
 
