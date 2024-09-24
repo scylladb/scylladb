@@ -690,6 +690,18 @@ SEASTAR_THREAD_TEST_CASE(test_multiple_data_dirs) {
     BOOST_REQUIRE(file_exists((data_dirs[0].path() / ks_name / tbl_dirname).native()).get());
     BOOST_REQUIRE(file_exists((data_dirs[1].path() / ks_name / tbl_dirname).native()).get());
 
+    // All sstables are now in dir-0, because tables flush their sstables
+    // into this dir only. Move all sstables from dir-0 to dir-1 to check
+    // how populator picks sstables from it, not only from "default" dir-0
+    std::vector<sstring> filenames;
+    lister::scan_dir(data_dirs[0].path() / ks_name / tbl_dirname, lister::dir_entry_types::of<directory_entry_type::regular>(), [&filenames] (fs::path dir, directory_entry de) {
+        filenames.push_back(de.name);
+        return make_ready_future<>();
+    }).get();
+    for (auto&& name : filenames) {
+        rename_file((data_dirs[0].path() / ks_name / tbl_dirname / name).native(), (data_dirs[1].path() / ks_name / tbl_dirname / name).native()).get();
+    }
+
     do_with_cql_env_thread([&] (cql_test_env& e) {
         auto res = e.execute_cql(format("select * from {}.{}", ks_name, tbl_name)).get();
         assert_that(res).is_rows().with_size(2).with_rows({
