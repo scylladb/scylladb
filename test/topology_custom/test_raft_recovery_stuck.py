@@ -79,6 +79,10 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     logging.info(f"Restarting {others}")
     await manager.rolling_restart(others)
 
+    # Prevent scylladb/scylladb#20791
+    logging.info(f"Wait until {srv1} sees {others} as alive")
+    await manager.server_sees_others(srv1.server_id, len(others))
+
     logging.info(f"{others} restarted, waiting until driver reconnects to them")
     hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
 
