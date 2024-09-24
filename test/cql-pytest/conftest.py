@@ -261,8 +261,8 @@ def temp_workdir():
         yield workdir
 
 @pytest.fixture(scope="session")
-def has_tablets(cql):
-    with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
+def has_tablets(cql, this_dc):
+    with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)
 
 @pytest.fixture(scope="function")
