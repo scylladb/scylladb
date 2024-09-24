@@ -542,6 +542,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         if (raft_snp->mutations.empty()) {
             slogger.info("transfer snapshot: second round: requesting others (auth, SLs, view build status)");
 
+            while (utils::get_local_injector().enter("raft_pull_snapshot_sender_pause_between_rpcs")) {
+                co_await sleep_abortable(std::chrono::milliseconds(10), as);
+            }
+
             // get the non-topology snapshot. it's possible we also get topology tables again (for example,
             // the second RPC may operate in the new mode), so split and combine them with the topology snapshot.
 

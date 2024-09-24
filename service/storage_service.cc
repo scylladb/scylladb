@@ -7933,7 +7933,7 @@ void storage_service::init_messaging_service() {
             // topology tables and one for auth tables, service levels, and additional tables.
             // When we detect it's the second RPC, we add additional tables based on our feature flags.
 
-            const bool new_mode = feat.snapshot_rpc_v2;
+            const bool new_mode = feat.snapshot_rpc_v2 && !utils::get_local_injector().enter("raft_pull_snapshot_handler_force_legacy");
             const bool legacy_mode_non_topology_tables = params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id();
 
             std::vector<table_id> tables;
