@@ -17,7 +17,17 @@ if [[ ( -z "$GITHUB_LOGIN" || -z "$GITHUB_TOKEN" ) && -f "$gh_hosts" ]]; then
 	GITHUB_TOKEN=$(awk '/oauth_token:/ { print $2 }' "$gh_hosts")
 fi
 
-if [[ $# != 1 ]]; then
+if [[ -z "$JENKINS_USERNAME" || -z "$JENKINS_API_TOKEN" ]]; then
+  echo "
+    JENKINS_USERNAME or JENKINS_API_TOKEN is missing from env.
+    To create a TOKEN, browse to https://jenkins.scylladb.com, then click on your username (upper right corner) and configure. Click on Add new token and set the JENKINS_USERNAME and JENKINS_API_TOKEN environment variables accordingly.
+    When running the script with any PR, it will first check if the last gating status is SUCCESS, if gating is not stable, the script will exit without completing the process
+    If you wish, this can be overridden by passing --force.  so the command will look like ./script/pull_github_pr.sh <pr number> --force
+  "
+  exit 1
+fi
+
+if [ -z "$1" ]; then
 	echo Please provide a github pull request number
 	exit 1
 fi
@@ -55,13 +65,11 @@ check_jenkins_job_status() {
   echo "Checking Jenkins job status for job: $jenkins_job"
 
   # Fetch Jenkins job last build status without passing credentials explicitly
-  lastCompletedBuild="${jenkins_url}/job/${jenkins_job}/lastCompletedBuild/api/json?tree=result"
-  lastCompleted=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedBuild | jq -r '.result')
-  # Handle the case where authentication fails
-  if [[ "$lastCompleted" == *"Authentication required"* ]]; then
-      echo "Failed to authenticate with Jenkins. Please check your session or credentials."
-      exit 1
+  lastCompletedBuild="${jenkins_url}/job/${jenkins_job}/lastCompletedBuild"
+  if [[ "$lastCompletedBuild" == *"Unauthorized"* ]]; then
+      echo "Failed to authenticate with Jenkins. please check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
   fi
+  lastCompleted=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedBuild/api/json?tree=result | jq -r '.result')
 
   # Check if build failed
   if [[ "$lastCompleted" == "SUCCESS" ]]; then
@@ -70,9 +78,14 @@ check_jenkins_job_status() {
     ORANGE='\033[0;33m'
     NC='\033[0m'
     echo -e "${ORANGE}\nWARNING:${NC} $jenkins_job is not stable"
-    exit 1
+    echo "exiting script since $lastCompletedBuild is unstable, you can force it by running ./script/pull_github_pr.sh <pr num> --force"
+    if [ -z "$FORCE" ]; then
+      exit 1
+    fi
   fi
 }
+
+FORCE=$2
 
 check_jenkins_job_status
 
