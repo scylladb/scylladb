@@ -50,7 +50,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 from cassandra.connection import UnixSocketEndPoint
 
 
-io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
 async def async_rmtree(directory, *args, **kwargs):
     loop = asyncio.get_event_loop()
