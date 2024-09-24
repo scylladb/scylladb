@@ -40,7 +40,7 @@ The table is used to store and distribute the service levels configuration.
 The table column names meanings are:
 *service_level* - the name of the service level.
 *timeout* - timeout for operations performed by users under this service level
-*workload_type* - type of workload declared for this service level (unspecified, interactive or batch)
+*workload_type* - type of workload declared for this service level (NULL, interactive or batch)
 
 ```
 select * from system_distributed.service_levels ;
@@ -110,7 +110,7 @@ role4: `timeout = 10ms`
 ### Workload types
 
 It's possible to declare a workload type for a service level, currently out of three available values:
- 1. unspecified - generic workload without any specific characteristics; default
+ 1. NULL - unspecified workload without any characteristics; default
  2. interactive - workload sensitive to latency, expected to have high/unbounded concurrency,
     with dynamic characteristics, OLTP;
     example: users clicking on a website and generating events with their clicks
@@ -133,7 +133,7 @@ If multiple workload types are applicable for a role, it makes sense if:
 
 Otherwise, e.g. if a role has multiple workload types declared,
 the conflicts are resolved as follows:
- - `X` vs `unspecified` -> `X`
+ - `X` vs `NULL` -> `X`
  - `batch` vs `interactive` -> `batch` - under the assumption that `batch` is safer, because it would not trigger load shedding as eagerly as `interactive`
 
 ### Effective service level
