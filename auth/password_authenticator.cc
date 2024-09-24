@@ -17,8 +17,10 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
+#include <variant>
 
 #include "auth/authenticated_user.hh"
+#include "auth/authentication_options.hh"
 #include "auth/common.hh"
 #include "auth/passwords.hh"
 #include "auth/roles-metadata.hh"
@@ -199,7 +201,7 @@ bool password_authenticator::require_authentication() const {
 }
 
 authentication_option_set password_authenticator::supported_options() const {
-    return authentication_option_set{authentication_option::password};
+    return authentication_option_set{authentication_option::password, authentication_option::salted_hash};
 }
 
 authentication_option_set password_authenticator::alterable_options() const {
@@ -218,28 +220,8 @@ future<authenticated_user> password_authenticator::authenticate(
     const sstring username = credentials.at(USERNAME_KEY);
     const sstring password = credentials.at(PASSWORD_KEY);
 
-    // Here was a thread local, explicit cache of prepared statement. In normal execution this is
-    // fine, but since we in testing set up and tear down system over and over, we'd start using
-    // obsolete prepared statements pretty quickly.
-    // Rely on query processing caching statements instead, and lets assume
-    // that a map lookup string->statement is not gonna kill us much.
-    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
-                SALTED_HASH,
-                get_auth_ks_name(_qp),
-                meta::roles_table::name,
-                meta::roles_table::role_col_name);
     try {
-        const auto res = co_await _qp.execute_internal(
-                query,
-                consistency_for_user(username),
-                internal_distributed_query_state(),
-                {username},
-                cql3::query_processor::cache_internal::yes);
-
-        auto salted_hash = std::optional<sstring>();
-        if (!res->empty()) {
-            salted_hash = res->one().get_opt<sstring>(SALTED_HASH);
-        }
+        const std::optional<sstring> salted_hash = co_await get_password_hash(username);
         if (!salted_hash || !passwords::check(password, *salted_hash)) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
@@ -258,27 +240,44 @@ future<authenticated_user> password_authenticator::authenticate(
 }
 
 future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
-    if (!options.password) {
+    // When creating a role with the usual `CREATE ROLE` statement, turns the underlying `PASSWORD`
+    // into the corresponding hash.
+    // When creating a role with `CREATE ROLE WITH SALTED HASH`, simply extracts the `SALTED HASH`.
+    auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
+        return std::visit(make_visitor(
+                [&] (const password_option& opt) {
+                    return passwords::hash(opt.password, rng_for_salt);
+                },
+                [] (const salted_hash_option& opt) {
+                    return opt.salted_hash;
+                }
+        ), creds);
+    });
+
+    // Neither `PASSWORD`, nor `SALTED HASH` has been specified.
+    if (!maybe_hash) {
         co_return;
     }
+
     const auto query = update_row_query();
     if (legacy_mode(_qp)) {
         co_await _qp.execute_internal(
                 query,
                 consistency_for_user(role_name),
                 internal_distributed_query_state(),
-                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
+                {std::move(*maybe_hash), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
-        co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)});
+        co_await collect_mutations(_qp, mc, query, {std::move(*maybe_hash), sstring(role_name)});
     }
 }
 
 future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
-    if (!options.password) {
+    if (!options.credentials) {
         co_return;
     }
+
+    const auto password = std::get<password_option>(*options.credentials).password;
 
     const sstring query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
             get_auth_ks_name(_qp),
@@ -290,11 +289,11 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 query,
                 consistency_for_user(role_name),
                 internal_distributed_query_state(),
-                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)},
+                {passwords::hash(password, rng_for_salt), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
         co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(*options.password, rng_for_salt), sstring(role_name)});
+                {passwords::hash(password, rng_for_salt), sstring(role_name)});
     }
 }
 
@@ -317,6 +316,36 @@ future<> password_authenticator::drop(std::string_view name, ::service::group0_b
 
 future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {
     return make_ready_future<custom_options>();
+}
+
+bool password_authenticator::uses_password_hashes() const {
+    return true;
+}
+
+future<std::optional<sstring>> password_authenticator::get_password_hash(std::string_view role_name) const {
+    // Here was a thread local, explicit cache of prepared statement. In normal execution this is
+    // fine, but since we in testing set up and tear down system over and over, we'd start using
+    // obsolete prepared statements pretty quickly.
+    // Rely on query processing caching statements instead, and lets assume
+    // that a map lookup string->statement is not gonna kill us much.
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
+                SALTED_HASH,
+                get_auth_ks_name(_qp),
+                meta::roles_table::name,
+                meta::roles_table::role_col_name);
+
+    const auto res = co_await _qp.execute_internal(
+            query,
+            consistency_for_user(role_name),
+            internal_distributed_query_state(),
+            {role_name},
+            cql3::query_processor::cache_internal::yes);
+
+    if (res->empty()) {
+        co_return std::nullopt;
+    }
+
+    co_return res->one().get_opt<sstring>(SALTED_HASH);
 }
 
 const resource_set& password_authenticator::protected_resources() const {

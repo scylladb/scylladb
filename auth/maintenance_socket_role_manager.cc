@@ -11,6 +11,7 @@
 #include <seastar/core/future.hh>
 #include <stdexcept>
 #include <string_view>
+#include "cql3/description.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
@@ -109,4 +110,8 @@ future<> maintenance_socket_role_manager::remove_attribute(std::string_view role
     return operation_not_supported_exception("REMOVE ATTRIBUTE");
 }
 
+future<std::vector<cql3::description>> maintenance_socket_role_manager::describe_role_grants() {
+    return operation_not_supported_exception<std::vector<cql3::description>>("DESCRIBE SCHEMA WITH INTERNALS");
 }
+
+} // namespace auth

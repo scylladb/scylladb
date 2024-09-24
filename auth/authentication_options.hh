@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
@@ -22,6 +23,7 @@ namespace auth {
 
 enum class authentication_option {
     password,
+    salted_hash,
     options
 };
 
@@ -35,6 +37,8 @@ struct fmt::formatter<auth::authentication_option> : fmt::formatter<string_view>
         switch (a) {
         case password:
             return formatter<string_view>::format("PASSWORD", ctx);
+        case salted_hash:
+            return formatter<string_view>::format("SALTED HASH", ctx);
         case options:
             return formatter<string_view>::format("OPTIONS", ctx);
         }
@@ -48,13 +52,22 @@ using authentication_option_set = std::unordered_set<authentication_option>;
 
 using custom_options = std::unordered_map<sstring, sstring>;
 
+struct password_option {
+    sstring password;
+};
+
+/// Used exclusively for restoring roles.
+struct salted_hash_option {
+    sstring salted_hash;
+};
+
 struct authentication_options final {
-    std::optional<sstring> password;
+    std::optional<std::variant<password_option, salted_hash_option>> credentials;
     std::optional<custom_options> options;
 };
 
 inline bool any_authentication_options(const authentication_options& aos) noexcept {
-    return aos.password || aos.options;
+    return aos.options || aos.credentials;
 }
 
 class unsupported_authentication_option : public std::invalid_argument {

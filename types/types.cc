@@ -9,6 +9,7 @@
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
 #include "cql3/cql3_type.hh"
+#include "cql3/description.hh"
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
@@ -1062,6 +1063,10 @@ const sstring& abstract_type::cql3_type_name() const {
         _cql3_type_name = name;
     }
     return _cql3_type_name;
+}
+
+sstring abstract_type::cql3_type_name_without_frozen() const {
+    return cql3_type_name_impl(*this);
 }
 
 void write_collection_value(bytes::iterator& out, data_type type, const data_value& value) {
@@ -3230,18 +3235,33 @@ sstring user_type_impl::get_name_as_cql_string() const {
     return cql3::util::maybe_quote(get_name_as_string());
 }
 
-std::ostream& user_type_impl::describe(std::ostream& os) const {
-    os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
-    for (size_t i = 0; i < _string_field_names.size(); i++) {
-        os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
-        if (i < _string_field_names.size() - 1) {
-            os << ",";
+cql3::description user_type_impl::describe(cql3::with_create_statement with_create_statement) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_create_statement) {
+            return std::nullopt;
         }
-        os << "\n";
-    }
-    os << ");";
 
-    return os;
+        std::ostringstream os;
+
+        os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
+        for (size_t i = 0; i < _string_field_names.size(); i++) {
+            os << "    " << cql3::util::maybe_quote(_string_field_names[i]) << " " << _types[i]->cql3_type_name();
+            if (i < _string_field_names.size() - 1) {
+                os << ",";
+            }
+            os << "\n";
+        }
+        os << ");";
+
+        return std::move(os).str();
+    });
+
+    return cql3::description {
+        .keyspace = _keyspace,
+        .type = "type",
+        .name = get_name_as_string(),
+        .create_statement = std::move(maybe_create_statement)
+    };
 }
 
 data_type

@@ -9,6 +9,7 @@
  */
 
 #include "bytes.hh"
+#include "cql3/description.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
@@ -355,34 +356,49 @@ user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared
 
 bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
-std::ostream& user_aggregate::describe(std::ostream& os) const {
-    auto ks = cql3::util::maybe_quote(name().keyspace);
-    auto na = cql3::util::maybe_quote(name().name);
-
-    os << "CREATE AGGREGATE " << ks << "." << na << "(";
-    auto a = arg_types();
-    for (size_t i = 0; i < a.size(); i++) {
-        if (i > 0) {
-            os << ", ";
+description user_aggregate::describe(with_create_statement with_stmt) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_stmt) {
+            return std::nullopt;
         }
-        os << a[i]->cql3_type_name();
-    }
-    os << ")\n";
 
-    os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
-       << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
-    if (is_reducible()) {
-        os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
-    }
-    if (has_finalfunc()) {
-        os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
-    }
-    if (_agg.initial_state) {
-        os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
-    }
-    os << ";";
+        auto ks = cql3::util::maybe_quote(name().keyspace);
+        auto na = cql3::util::maybe_quote(name().name);
 
-    return os;
+        std::ostringstream os;
+
+        os << "CREATE AGGREGATE " << ks << "." << na << "(";
+        auto a = arg_types();
+        for (size_t i = 0; i < a.size(); i++) {
+            if (i > 0) {
+                os << ", ";
+            }
+            os << a[i]->cql3_type_name();
+        }
+        os << ")\n";
+
+        os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
+           << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
+        if (is_reducible()) {
+            os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
+        }
+        if (has_finalfunc()) {
+            os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
+        }
+        if (_agg.initial_state) {
+            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
+        }
+        os << ";";
+
+        return std::move(os).str();
+    });
+
+    return description {
+        .keyspace = name().keyspace,
+        .type = "aggregate",
+        .name = name().name,
+        .create_statement = std::move(maybe_create_statement)
+    };
 }
 
 shared_ptr<aggregate_function>

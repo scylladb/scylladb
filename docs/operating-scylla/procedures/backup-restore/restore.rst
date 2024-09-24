@@ -30,6 +30,8 @@ Procedure
 
 ``cqlsh -e "SOURCE 'centos/db_schema.cql'"``
 
+| **Only** a superuser should perform it.
+
 Repeat the following steps for each node in the cluster:
 --------------------------------------------------------
 

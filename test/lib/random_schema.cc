@@ -11,6 +11,7 @@
 #include <boost/range/algorithm/unique.hpp>
 
 #include "cql3/cql3_type.hh"
+#include "cql3/description.hh"
 #include "mutation/mutation.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_test_env.hh"
@@ -844,9 +845,8 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
 }
 
 sstring udt_to_str(const user_type_impl& udt) {
-    std::stringstream ss;
-    udt.describe(ss);
-    return ss.str();
+    auto udt_desc = udt.describe(cql3::with_create_statement::yes);
+    return *udt_desc.create_statement;
 }
 
 struct udt_list {
@@ -1146,10 +1146,9 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
 
         auto& db = env.local_db();
 
-        std::stringstream ss;
-        _schema->describe(db, ss, false);
+        auto schema_desc = _schema->describe(db, cql3::describe_option::STMTS);
 
-        env.execute_cql(ss.str()).get();
+        env.execute_cql(*schema_desc.create_statement).get();
         auto& tbl = db.find_column_family(ks_name, tbl_name);
 
         _schema = tbl.schema();

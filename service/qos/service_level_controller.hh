@@ -17,6 +17,7 @@
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include "auth/service.hh"
+#include "cql3/description.hh"
 #include <map>
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -263,6 +264,8 @@ public:
         return _service_levels_db.contains(service_level_name);
     }
 
+    future<std::vector<cql3::description>> describe_service_levels();
+
     future<> commit_mutations(::service::group0_batch&& mc) {
         if (_sl_data_accessor->is_v2()) {
             return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
@@ -320,6 +323,10 @@ private:
     };
 
     future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc);
+
+    future<std::vector<cql3::description>> describe_created_service_levels() const;
+    future<std::vector<cql3::description>> describe_attached_service_levels();
+
 public:
 
     /**

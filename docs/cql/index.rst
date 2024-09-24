@@ -22,6 +22,7 @@ CQL Reference
    mv
    non-reserved-keywords
    reserved-keywords
+   describe-schema
    service-levels
    cql-extensions.md
 

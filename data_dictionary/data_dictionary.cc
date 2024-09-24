@@ -7,6 +7,7 @@
  */
 
 #include "data_dictionary.hh"
+#include "cql3/description.hh"
 #include "impl.hh"
 #include "user_types_metadata.hh"
 #include "keyspace_metadata.hh"
@@ -351,32 +352,47 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, const tab
 {
 }
 
-std::ostream& keyspace_metadata::describe(replica::database& db, std::ostream& os, bool with_internals) const {
-    os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
-       << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
-    for (const auto& opt: _strategy_options) {
-        os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
-    }
-    if (!_storage_options->is_local_type()) {
-        os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));
-        for (const auto& e : _storage_options->to_map()) {
-            os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
+cql3::description keyspace_metadata::describe(const replica::database& db, cql3::with_create_statement with_create_statement) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_create_statement) {
+            return std::nullopt;
         }
-    }
-    os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
-    if (db.features().tablets) {
-        if (!_initial_tablets.has_value()) {
-            os << " AND tablets = {'enabled': false}";
-        } else if (_initial_tablets.value() > 0) {
-            os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
-        }
-    }
-    os << ";";
 
-    return os;
+        std::ostringstream os;
+
+        os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
+           << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
+        for (const auto& opt: _strategy_options) {
+            os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
+        }
+        if (!_storage_options->is_local_type()) {
+            os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));
+            for (const auto& e : _storage_options->to_map()) {
+                os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
+            }
+        }
+        os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
+        if (db.features().tablets) {
+            if (!_initial_tablets.has_value()) {
+                os << " AND tablets = {'enabled': false}";
+            } else if (_initial_tablets.value() > 0) {
+                os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
+            }
+        }
+        os << ";";
+
+        return std::move(os).str();
+    });
+
+    return cql3::description {
+        .keyspace = name(),
+        .type = "keyspace",
+        .name = name(),
+        .create_statement = std::move(maybe_create_statement)
+    };
 }
 
-}
+} // namespace data_dictionary
 
 template <>
 struct fmt::formatter<data_dictionary::user_types_metadata> {

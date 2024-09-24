@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "cql3/util.hh"
 #include "utils/assert.hh"
 #include <boost/algorithm/string/join.hpp>
 #include <chrono>
@@ -687,6 +688,117 @@ future<> service_level_controller::unregister_subscriber(qos_configuration_chang
     return _subscribers.remove(subscriber);
 }
 
+static sstring describe_service_level(std::string_view sl_name, const service_level_options& sl_opts) {
+    using slo = service_level_options;
+
+    utils::small_vector<sstring, 2> opts{};
+
+    const sstring sl_name_formatted = cql3::util::maybe_quote(sl_name);
+
+    if (auto maybe_timeout = std::get_if<lowres_clock::duration>(&sl_opts.timeout)) {
+        // According to the documentation, `TIMEOUT` has to be expressed in milliseconds
+        // or seconds. It is therefore safe to use milliseconds here.
+        const auto timeout = std::chrono::duration_cast<std::chrono::milliseconds>(*maybe_timeout);
+        opts.push_back(seastar::format("TIMEOUT = {}", timeout));
+    }
+
+    switch (sl_opts.workload) {
+        case slo::workload_type::batch:
+            opts.push_back("WORKLOAD_TYPE = 'batch'");
+            break;
+        case slo::workload_type::interactive:
+            opts.push_back("WORKLOAD_TYPE = 'interactive'");
+            break;
+        case slo::workload_type::unspecified:
+            break;
+        case slo::workload_type::delete_marker:
+            // `slo::workload_typ::delete_marker` is only set temporarily. When a service level
+            // is actually created, it never has this workload type set anymore.
+            on_internal_error(sl_logger, "Unexpected workload type");
+    }
+
+    if (opts.size() == 0) {
+        return seastar::format("CREATE SERVICE LEVEL {};", sl_name_formatted);
+    }
+
+    return seastar::format("CREATE SERVICE LEVEL {} WITH {};", sl_name_formatted, fmt::join(opts, " AND "));
+}
+
+
+future<std::vector<cql3::description>> service_level_controller::describe_created_service_levels() const {
+
+    std::vector<cql3::description> result{};
+
+    // If we use Raft, we can rely on the cache and avoid a query.
+    // The cache gets updated when applying Raft log, so it's always up-to-date
+    // with the table.
+    //
+    // If Raft is not used, that means we're performing a rolling upgrade right now
+    // or the migration to topology on Raft hasn't started yet. It's highly unlikely
+    // anyone will try to make a backup in that situation, so we don't have a branch here.
+    //
+    // If Raft is not used yet, updating the cache will happen every 10 seconds. We deem it
+    // good enough if someone does attempt to make a backup in that state.
+    for (const auto& [sl_name, sl] : _service_levels_db) {
+        if (sl.is_static) {
+            continue;
+        }
+
+        result.push_back(cql3::description {
+            // Service levels do not belong to any keyspace.
+            .keyspace = std::nullopt,
+            .type = "service_level",
+            .name = sl_name,
+            .create_statement = describe_service_level(sl_name, sl.slo)
+        });
+
+        co_await coroutine::maybe_yield();
+    }
+
+    std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
+
+    co_return result;
+}
+
+future<std::vector<cql3::description>> service_level_controller::describe_attached_service_levels() {
+    const auto attached_service_levels = co_await _auth_service.local().underlying_role_manager().query_attribute_for_all("service_level");
+
+    std::vector<cql3::description> result{};
+    result.reserve(attached_service_levels.size());
+
+    for (const auto& [role, service_level] : attached_service_levels) {
+        const auto formatted_role = cql3::util::maybe_quote(role);
+        const auto formatted_sl = cql3::util::maybe_quote(service_level);
+
+        result.push_back(cql3::description {
+            // Attaching a service level doesn't belong to any keyspace.
+            .keyspace = std::nullopt,
+            .type = "service_level_attachment",
+            .name = service_level,
+            .create_statement = seastar::format("ATTACH SERVICE LEVEL {} TO {};", formatted_sl, formatted_role)
+        });
+
+        co_await coroutine::maybe_yield();
+    }
+
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+        return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
+    });
+
+
+    co_return result;
+}
+
+future<std::vector<cql3::description>> service_level_controller::describe_service_levels() {
+    std::vector<cql3::description> created_service_levels_descs = co_await describe_created_service_levels();
+    std::vector<cql3::description> attached_service_levels_descs = co_await describe_attached_service_levels();
+
+    created_service_levels_descs.insert(created_service_levels_descs.end(),
+            std::make_move_iterator(attached_service_levels_descs.begin()), std::make_move_iterator(attached_service_levels_descs.end()));
+
+    co_return created_service_levels_descs;
+}
+
 future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
 get_service_level_distributed_data_accessor_for_current_version(
     db::system_keyspace& sys_ks,
@@ -704,4 +816,4 @@ get_service_level_distributed_data_accessor_for_current_version(
     }
 }
 
-}
+} // namespace qos

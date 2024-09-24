@@ -10,14 +10,13 @@
 
 #include <unordered_map>
 #include <vector>
-#include <iosfwd>
 #include <seastar/core/sstring.hh>
 
+#include "cql3/description.hh"
 #include "schema/schema.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
-#include "data_dictionary/keyspace_element.hh"
 
 namespace gms {
 class feature_service;
@@ -25,7 +24,7 @@ class feature_service;
 
 namespace data_dictionary {
 
-class keyspace_metadata final : public keyspace_element {
+class keyspace_metadata final {
     sstring _name;
     sstring _strategy_name;
     locator::replication_strategy_config_options _strategy_options;
@@ -95,10 +94,7 @@ public:
     std::vector<schema_ptr> tables() const;
     std::vector<view_ptr> views() const;
 
-    virtual sstring keypace_name() const override { return name(); }
-    virtual sstring element_name() const override { return name(); }
-    virtual sstring element_type() const override { return "keyspace"; }
-    virtual std::ostream& describe(replica::database& db, std::ostream& os, bool with_internals) const override;
+    cql3::description describe(const replica::database& db, cql3::with_create_statement) const;
 };
 
 }

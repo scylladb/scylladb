@@ -19,6 +19,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 
+#include "cql3/CqlParser.hpp"
+#include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/cql_test_env.hh"
@@ -355,4 +357,56 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
         e.refresh_client_state().get();
         BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::interactive);
     }, auth_on(false));
+}
+
+SEASTAR_TEST_CASE(test_try_to_create_role_with_salted_hash_and_password) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        BOOST_REQUIRE_THROW(
+            env.execute_cql("CREATE ROLE jane WITH SALTED HASH = 'something' AND PASSWORD = 'something'").get(),
+            exceptions::syntax_exception);
+    }, auth_on(false));
+}
+
+SEASTAR_TEST_CASE(test_try_to_create_role_with_password_and_salted_hash) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        BOOST_REQUIRE_THROW(
+            env.execute_cql("CREATE ROLE jane WITH PASSWORD = 'something' AND SALTED HASH = 'something'").get(),
+            exceptions::syntax_exception);
+    }, auth_on(false));
+}
+
+SEASTAR_TEST_CASE(test_try_create_role_with_salted_hash_as_anonymous_user) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.local_client_state().set_login(auth::anonymous_user());
+        env.refresh_client_state().get();
+        BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));
+        BOOST_REQUIRE_THROW(env.execute_cql("CREATE ROLE my_new_role WITH SALTED HASH = 'myhash'").get(), exceptions::unauthorized_exception);
+    }, auth_on(true));
+}
+
+SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_salted_hash) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        // Note: crypt(5) specifies:
+        //
+        //    "Hashed passphrases are always entirely printable ASCII, and do not contain any whitespace
+        //     or the characters `:`, `;`, `*`, `!`, or `\`.   (These  characters  are
+        //     used as delimiters and special markers in the passwd(5) and shadow(5) files.)"
+
+        env.execute_cql("CREATE ROLE invalid_role WITH SALTED HASH = ';' AND LOGIN = true").get();
+        env.execute_cql("CREATE ROLE valid_role WITH SALTED HASH = 'salted_hash' AND LOGIN = true").get();
+        BOOST_REQUIRE_EXCEPTION(authenticate(env, "invalid_role", "pwd").get(), exceptions::authentication_exception,
+                exception_predicate::message_equals("Could not verify password"));
+        BOOST_REQUIRE_EXCEPTION(authenticate(env, "valid_role", "pwd").get(), exceptions::authentication_exception,
+                exception_predicate::message_equals("Username and/or password are incorrect"));
+    }, auth_on(true));
+}
+
+SEASTAR_TEST_CASE(test_try_describe_schema_with_internals_and_passwords_as_anonymous_user) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.local_client_state().set_login(auth::anonymous_user());
+        env.refresh_client_state().get();
+        BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));
+        BOOST_REQUIRE_EXCEPTION(env.execute_cql("DESC SCHEMA WITH INTERNALS AND PASSWORDS").get(), exceptions::unauthorized_exception,
+                exception_predicate::message_equals("DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
+    }, auth_on(true));
 }

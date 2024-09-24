@@ -8,6 +8,7 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <map>
+#include "cql3/description.hh"
 #include "db/view/view.hh"
 #include "timestamp.hh"
 #include "utils/assert.hh"
@@ -783,23 +784,12 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static bool is_global_index(replica::database& db, const table_id& id, const schema& s) {
+static bool is_global_index(const replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_global_index(s);
 }
 
-static bool is_index(replica::database& db, const table_id& id, const schema& s) {
+static bool is_index(const replica::database& db, const table_id& id, const schema& s) {
     return  db.find_column_family(id).get_index_manager().is_index(s);
-}
-
-sstring schema::element_type(replica::database& db) const {
-    if (is_view()) {
-        if (is_index(db, view_info()->base_id(), *this)) {
-            return "index";
-        } else {
-            return "view";
-        }
-    }
-    return "table";
 }
 
 static void describe_index_columns(std::ostream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
@@ -852,7 +842,9 @@ static void describe_index_columns(std::ostream& os, bool is_local, const schema
     os << ")";
 }
 
-std::ostream& schema::describe(replica::database& db, std::ostream& os, bool with_internals) const {
+sstring schema::get_create_statement(const replica::database& db, bool with_internals) const {
+    std::ostringstream os;
+
     os << "CREATE ";
     int n = 0;
 
@@ -865,7 +857,8 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
 
             describe_index_columns(os, is_local, *this, db.find_schema(view_info()->base_id()));  
             os << ";\n";
-            return os;
+
+            return std::move(os).str();
         } else {
             os << "MATERIALIZED VIEW " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " AS\n";
             os << "    SELECT ";
@@ -970,10 +963,30 @@ std::ostream& schema::describe(replica::database& db, std::ostream& os, bool wit
         }
     }
 
-    return os;
+    return std::move(os).str();
 }
 
-std::ostream& schema::schema_properties(replica::database& db, std::ostream& os) const {
+cql3::description schema::describe(const replica::database& db, cql3::describe_option desc_opt) const {
+    const sstring type = std::invoke([&] {
+        if (is_view()) {
+            return is_index(db, view_info()->base_id(), *this)
+                    ? "index"
+                    : "view";
+        }
+        return "table";
+    });
+
+    return cql3::description {
+        .keyspace = ks_name(),
+        .type = std::move(type),
+        .name = cf_name(),
+        .create_statement = desc_opt == cql3::describe_option::NO_STMTS
+                ? std::nullopt
+                : std::make_optional(get_create_statement(db, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
+    };
+}
+
+std::ostream& schema::schema_properties(const replica::database& db, std::ostream& os) const {
     os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
     os << "\n    AND caching = {";
     map_as_cql_param(os, caching_options().to_map());

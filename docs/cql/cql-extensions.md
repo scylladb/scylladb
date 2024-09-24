@@ -454,3 +454,11 @@ To facilitate insight into which values come from which service level, there is 
 ```
 
 For more details, check [Service Levels docs](https://github.com/scylladb/scylla/blob/master/docs/cql/service-levels.rst)
+
+## DESCRIBE SCHEMA WITH INTERNALS [AND PASSWORDS]
+
+We extended the semantics of `DESCRIBE SCHEMA WITH INTERNALS`: aside from describing the elements of the schema,
+it also describes authentication/authorization and service levels. Additionally, we introduced a new tier of the
+statement: `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`, which also includes the information about salted hashes of the roles.
+
+For more details, see [the article on DESCRIBE SCHEMA](./describe-schema.rst).

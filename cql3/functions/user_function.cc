@@ -7,6 +7,7 @@
  */
 
 #include "user_function.hh"
+#include "cql3/description.hh"
 #include "cql3/util.hh"
 #include "log.hh"
 #include "lang/wasm.hh"
@@ -66,32 +67,45 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
         });
 }
 
-std::ostream& user_function::describe(std::ostream& os) const {
-    auto ks = cql3::util::maybe_quote(name().keyspace);
-    auto na = cql3::util::maybe_quote(name().name);
-
-    os << "CREATE FUNCTION " << ks << "." << na << "(";
-    for (size_t i = 0; i < _arg_names.size(); i++) {
-        if (i > 0) {
-            os << ", ";
+description user_function::describe(with_create_statement with_stmt) const {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+        if (!with_stmt) {
+            return std::nullopt;
         }
-        os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
-    }
-    os << ")\n";
 
-    if (_called_on_null_input) {
-        os << "CALLED";
-    } else {
-        os << "RETURNS NULL";
-    }
-    os << " ON NULL INPUT\n"
-       << "RETURNS " << _return_type->cql3_type_name() << "\n"
-       << "LANGUAGE " << _language << "\n"
-       << "AS $$\n"
-       << _body << "\n"
-       << "$$;";
+        auto ks = cql3::util::maybe_quote(name().keyspace);
+        auto na = cql3::util::maybe_quote(name().name);
 
-    return os;
+        std::ostringstream os;
+
+        os << "CREATE FUNCTION " << ks << "." << na << "(";
+        for (size_t i = 0; i < _arg_names.size(); i++) {
+            if (i > 0) {
+                os << ", ";
+            }
+            os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
+        }
+        os << ")\n";
+
+        if (_called_on_null_input) {
+            os << "CALLED";
+        } else {
+            os << "RETURNS NULL";
+        }
+        os << " ON NULL INPUT\n"
+           << "RETURNS " << _return_type->cql3_type_name() << "\n"
+           << "LANGUAGE " << _language << "\n"
+           << "AS $$" << _body << "$$;";
+
+        return std::move(os).str();
+    });
+
+    return description {
+        .keyspace = name().keyspace,
+        .type = "function",
+        .name = name().name,
+        .create_statement = std::move(maybe_create_statement)
+    };
 }
 
 }

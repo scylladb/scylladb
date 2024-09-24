@@ -408,7 +408,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         return read_mutation_from_table_offline(
                 sst_man,
                 rcs_sem.make_tracking_only_permit(s, "schema_mutation", db::no_timeout, {}),
-                get_table_directory(scylla_data_path, s->keypace_name(), s->cf_name()).get(),
+                get_table_directory(scylla_data_path, s->ks_name(), s->cf_name()).get(),
                 keyspace,
                 schema_factory,
                 data_value(keyspace),
@@ -433,7 +433,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     auto types_mut = read_mutation_from_table_offline(
             sst_man,
             rcs_sem.make_tracking_only_permit(db::schema_tables::types(), "types_mutation", db::no_timeout, {}),
-            get_table_directory(scylla_data_path, types_schema->keypace_name(), types_schema->cf_name()).get(),
+            get_table_directory(scylla_data_path, types_schema->ks_name(), types_schema->cf_name()).get(),
             keyspace,
             db::schema_tables::types,
             data_value(keyspace),
