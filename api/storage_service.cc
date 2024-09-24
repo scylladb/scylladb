@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <functional>
 #include <iterator>
+#include <chrono>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -39,6 +40,7 @@
 #include <seastar/coroutine/exception.hh>
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
+#include "locator/tablets.hh"
 #include "column_family.hh"
 #include "log.hh"
 #include "release.hh"
@@ -1552,6 +1554,26 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::repair_tablet.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto tokens_param = split(req->get_query_param("tokens"), ",");
+        utils::chunked_vector<dht::token> tokens;
+        bool all_tokens = tokens_param.size() == 1 && tokens_param.front() == "all";
+        if (!all_tokens) {
+            tokens.reserve(tokens_param.size());
+            for (auto& t : tokens_param) {
+                auto token = dht::token::from_int64(validate_int(t));
+                tokens.push_back(token);
+            }
+        }
+        auto ks = req->get_query_param("ks");
+        auto table = req->get_query_param("table");
+        validate_table(ctx, ks, table);
+        auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+
+        auto res = co_await ss.local().add_repair_tablet_request(table_id, std::move(tokens), all_tokens);
+        co_return json::json_return_type(res);
+    });
+
     ss::tablet_balancing_enable.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto enabled = validate_bool(req->get_query_param("enabled"));
         co_await ss.local().set_tablet_balancing_enabled(enabled);
@@ -1658,6 +1680,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::move_tablet.unset(r);
     ss::add_tablet_replica.unset(r);
     ss::del_tablet_replica.unset(r);
+    ss::repair_tablet.unset(r);
     ss::tablet_balancing_enable.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
