@@ -798,6 +798,7 @@ class CQLApprovalTest(Test):
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         CQLApprovalTest._reset(self)
+        self._prepare_args(suite.options)
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
@@ -814,6 +815,9 @@ class CQLApprovalTest(Test):
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
             old_tmpfile.unlink()
+
+
+    def _prepare_args(self, options: argparse.Namespace):
         self.args = [
             "-s",  # don't capture print() inside pytest
             "test/pylib/cql_repl/cql_repl.py",
@@ -823,6 +827,8 @@ class CQLApprovalTest(Test):
             "--mode={}".format(self.mode),
         ]
         self.args.append(f"--alluredir={self.allure_dir}")
+        if not options.save_log_on_success:
+            self.args.append("--allure-no-capture")
 
     async def run(self, options: argparse.Namespace) -> Test:
         self.success = False
@@ -937,6 +943,8 @@ class RunTest(Test):
             "junit_suite_name={}".format(self.suite.name)
         ]
         self.args.append(f"--alluredir={self.allure_dir}")
+        if not suite.options.save_log_on_success:
+            self.args.append("--allure-no-capture")
         RunTest._reset(self)
 
     def _reset(self):
@@ -980,6 +988,8 @@ class PythonTest(Test):
             "--mode={}".format(self.mode)
         ]
         self.args.append(f"--alluredir={self.allure_dir}")
+        if not options.save_log_on_success:
+            self.args.append("--allure-no-capture")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
@@ -1109,6 +1119,8 @@ class ToolTest(Test):
             "--run_id={}".format(self.id)
         ]
         self.args.append(f"--alluredir={self.allure_dir}")
+        if not options.save_log_on_success:
+            self.args.append("--allure-no-capture")
         if options.markers:
             self.args.append(f"-m={options.markers}")
 
