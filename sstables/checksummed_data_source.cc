@@ -113,6 +113,9 @@ public:
             throw std::runtime_error(format("Checksummed reader not aligned to chunk boundary: pos={}, chunk_size={}", _pos, chunk_size));
         }
         return _input_stream->read_exactly(chunk_size).then([this, chunk_size](temporary_buffer<char> buf) {
+            if (buf.size() < chunk_size && _underlying_pos + buf.size() < _file_len) {
+                throw malformed_sstable_exception(seastar::format("Checksummed reader hit premature end-of-file at file offset {}, expected file length {}", _underlying_pos + buf.size(), _file_len));
+            }
             auto expected_checksum = _checksum.checksums[_pos >> _chunk_size_trailing_zeros];
             auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
             if (expected_checksum != actual_checksum) {
