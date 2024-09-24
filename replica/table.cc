@@ -596,7 +596,9 @@ future<> storage_group_manager::for_each_storage_group_gently(std::function<futu
 
 void storage_group_manager::for_each_storage_group(std::function<void(size_t, storage_group&)> f) const {
     for (auto& [id, sg]: _storage_groups) {
-        f(id, *sg);
+        if (auto holder = try_hold_gate(sg->async_gate())) {
+            f(id, *sg);
+        }
     }
 }
 
@@ -606,6 +608,12 @@ const storage_group_map& storage_group_manager::storage_groups() const {
 
 future<> storage_group_manager::stop_storage_groups() noexcept {
     return parallel_for_each(_storage_groups | boost::adaptors::map_values, std::mem_fn(&storage_group::stop));
+}
+
+void storage_group_manager::clear_storage_groups() {
+    for (auto& [id, sg]: _storage_groups) {
+        sg->clear_sstables();
+    }
 }
 
 void storage_group_manager::remove_storage_group(size_t id) {
@@ -1557,9 +1565,7 @@ table::stop() {
     co_await _sstable_deletion_gate.close();
     co_await std::move(gate_closed_fut);
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
-        for_each_compaction_group([] (compaction_group& cg) {
-            cg.clear_sstables();
-        });
+        _sg_manager->clear_storage_groups();
         _sstables = make_compound_sstable_set();
     }));
     _cache.refresh_snapshot();
@@ -2264,6 +2270,12 @@ bool compaction_group::empty() const noexcept {
 void compaction_group::clear_sstables() {
     _main_sstables = make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
     _maintenance_sstables = _t.make_maintenance_sstable_set();
+}
+
+void storage_group::clear_sstables() {
+    for (auto cg : compaction_groups()) {
+        cg->clear_sstables();
+    }
 }
 
 table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
@@ -3773,6 +3785,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await clear_inactive_reads_for_tablet(db, sg);
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
+    co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
     _sg_manager->remove_storage_group(tid.value());
 }
