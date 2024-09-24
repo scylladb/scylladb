@@ -71,7 +71,7 @@ static future<> create_legacy_metadata_table_if_missing_impl(
     assert(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
 
     auto db = qp.db();
-    auto parsed_statement = cql3::query_processor::parse_statement(cql);
+    auto parsed_statement = cql3::query_processor::parse_statement(cql, cql3::dialect{});
     auto& parsed_cf_statement = static_cast<cql3::statements::raw::cf_statement&>(*parsed_statement);
 
     parsed_cf_statement.prepare_keyspace(meta::legacy::AUTH_KS);

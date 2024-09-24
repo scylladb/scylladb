@@ -18,6 +18,7 @@ class migration_manager;
 
 namespace cql3 {
 class query_processor;
+class dialect;
 namespace statements {
 class modification_statement;
 }}
@@ -41,7 +42,6 @@ private:
      * Should be changed alongside every _insert_stmt reassignment
      * */
     bool _is_fallback_stmt = false;
-
 public:
     table_helper(std::string_view keyspace, std::string_view name, sstring create_cql, sstring insert_cql, std::optional<sstring> insert_cql_fallback = std::nullopt)
         : _keyspace(keyspace)

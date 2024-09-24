@@ -266,7 +266,8 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             // fall-though to below
         }
         auto raw_statement = cql3::query_processor::parse_statement(
-                fmt::format("CREATE KEYSPACE {} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}", name));
+                fmt::format("CREATE KEYSPACE {} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}", name),
+                cql3::dialect{});
         auto prepared_statement = raw_statement->prepare(db, cql_stats);
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
@@ -278,7 +279,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
 
     std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
     try {
-        raw_statements = cql3::query_processor::parse_statements(schema_str);
+        raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::dialect{});
     } catch (...) {
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {}", std::current_exception()));
     }

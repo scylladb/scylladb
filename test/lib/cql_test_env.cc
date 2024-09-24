@@ -183,6 +183,12 @@ private:
     };
     distributed<core_local_state> _core_local;
 private:
+    cql3::dialect test_dialect() {
+        return cql3::dialect{
+            .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
+        };
+    }
+
     auto make_query_state() {
         if (_db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
@@ -218,7 +224,7 @@ public:
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, *qo).then([qs, qo] (auto msg) {
+        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), *qo).then([qs, qo] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -230,7 +236,7 @@ public:
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, lqo).then([qs, qo = std::move(qo)] (auto msg) {
+        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), lqo).then([qs, qo = std::move(qo)] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }
@@ -238,9 +244,9 @@ public:
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
         return qp().invoke_on_all([query, this] (auto& local_qp) {
             auto qs = this->make_query_state();
-            return local_qp.prepare(query, *qs).finally([qs] {}).discard_result();
+            return local_qp.prepare(query, *qs, test_dialect()).finally([qs] {}).discard_result();
         }).then([query, this] {
-            return local_qp().compute_id(query, ks_name);
+            return local_qp().compute_id(query, ks_name, test_dialect());
         });
     }
 
@@ -283,7 +289,7 @@ public:
 
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {
         auto qs = make_query_state();
-        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state())->statement;
+        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect())->statement;
         auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
         if (!modif_stmt) {
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
@@ -1022,7 +1028,7 @@ public:
         using cql3::statements::modification_statement;
         std::vector<batch_statement::single_statement> modifications;
         boost::transform(queries, back_inserter(modifications), [this](const auto& query) {
-            auto stmt = local_qp().get_statement(query, _core_local.local().client_state);
+            auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
             if (!dynamic_cast<modification_statement*>(stmt->statement.get())) {
                 throw exceptions::invalid_request_exception(
                     "Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");

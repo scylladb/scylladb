@@ -399,6 +399,7 @@ public:
     named_value<bool> enable_optimized_reversed_reads;
     named_value<bool> enable_cql_config_updates;
     named_value<bool> enable_parallelized_aggregation;
+    named_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
 
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;

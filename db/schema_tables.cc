@@ -1943,7 +1943,9 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
 
     bytes_opt initcond = std::nullopt;
     if (initcond_str) {
-        auto expr = cql3::util::do_with_parser(*initcond_str, std::mem_fn(&cql3_parser::CqlParser::term));
+        // In general using the default dialect is wrong, but here the database is communicating with itself,
+        // not the user, so any dialect should work.
+        auto expr = cql3::util::do_with_parser(*initcond_str, cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::term));
         auto dummy_ident = ::make_shared<cql3::column_identifier>("", true);
         auto column_spec = make_lw_shared<cql3::column_specification>("", "", dummy_ident, state_type);
         auto raw = cql3::expr::evaluate(prepare_expression(expr, db.as_data_dictionary(), "", nullptr, {column_spec}), cql3::query_options::DEFAULT);

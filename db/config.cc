@@ -100,6 +100,21 @@ error_injection_list_to_json(const std::vector<db::config::error_injection_at_st
 }
 
 template <>
+bool
+config_from_string(std::string_view value) {
+    // boost::lexical_cast doesn't accept true/false, which are our output representations
+    // for bools. We want round-tripping, so we need to accept true/false. For backward
+    // compatibility, we also accept 1/0. #19791.
+    if (value == "true" || value == "1") {
+        return true;
+    } else if (value == "false" || value == "0") {
+        return false;
+    } else {
+        throw boost::bad_lexical_cast(typeid(std::string_view), typeid(bool));
+    }
+}
+
+template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
 
 template <>
@@ -177,7 +192,7 @@ struct convert<seastar::log_level> {
         if (!convert<std::string>::decode(node, tmp)) {
             return false;
         }
-        rhs = boost::lexical_cast<seastar::log_level>(tmp);
+        rhs = utils::config_from_string<seastar::log_level>(tmp);
         return true;
     }
 };
@@ -1057,6 +1072,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Make the system.config table UPDATEable.")
     , enable_parallelized_aggregation(this, "enable_parallelized_aggregation", liveness::LiveUpdate, value_status::Used, true,
             "Use on a new, parallel algorithm for performing aggregate queries.")
+    , cql_duplicate_bind_variable_names_refer_to_same_variable(this, "cql_duplicate_bind_variable_names_refer_to_same_variable", liveness::LiveUpdate, value_status::Used, true,
+            "A bind variable that appears twice in a CQL query refers to a single variable (if false, no name matching is performed).")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port.")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")

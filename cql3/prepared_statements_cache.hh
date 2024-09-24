@@ -14,6 +14,7 @@
 #include "utils/hash.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/dialect.hh"
 
 namespace cql3 {
 
@@ -37,14 +38,17 @@ class prepared_cache_key_type {
 public:
     // derive from cql_prepared_id_type so we can customize the formatter of
     // cache_key_type
-    struct cache_key_type : public cql_prepared_id_type {};
+    struct cache_key_type : public cql_prepared_id_type {
+        cache_key_type(cql_prepared_id_type&& id, cql3::dialect d) : cql_prepared_id_type(std::move(id)), dialect(d) {}
+        cql3::dialect dialect; // Not part of hash, but we don't expect collisions because of that
+        bool operator==(const cache_key_type& other) const = default;
+    };
 
 private:
     cache_key_type _key;
 
 public:
-    prepared_cache_key_type() = default;
-    explicit prepared_cache_key_type(cql_prepared_id_type cql_id) : _key(std::move(cql_id)) {}
+    explicit prepared_cache_key_type(cql_prepared_id_type cql_id, dialect d) : _key(std::move(cql_id), d) {}
 
     cache_key_type& key() { return _key; }
     const cache_key_type& key() const { return _key; }
@@ -176,7 +180,7 @@ struct hash<cql3::prepared_cache_key_type> final {
 template <> struct fmt::formatter<cql3::prepared_cache_key_type::cache_key_type> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const cql3::prepared_cache_key_type::cache_key_type& p, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{{cql_id: {}}}", static_cast<const cql3::cql_prepared_id_type&>(p));
+        return fmt::format_to(ctx.out(), "{{cql_id: {}, dialect: {}}}", static_cast<const cql3::cql_prepared_id_type&>(p), p.dialect);
     }
 };
 
