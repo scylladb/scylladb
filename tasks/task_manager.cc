@@ -22,6 +22,7 @@
 #include "utils/overloaded_functor.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
+#include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
@@ -434,7 +435,7 @@ task_manager& task_manager::virtual_task::impl::get_task_manager() const noexcep
     return _module->get_task_manager();
 }
 
-future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable() const {
+future<tasks::is_abortable> task_manager::virtual_task::impl::is_abortable(virtual_task_hint hint) const {
     return make_ready_future<tasks::is_abortable>(is_abortable::no);
 }
 
@@ -444,7 +445,7 @@ task_manager::virtual_task::virtual_task(virtual_task_impl_ptr&& impl) noexcept
     SCYLLA_ASSERT(this_shard_id() == 0);
 }
 
-future<bool> task_manager::virtual_task::contains(tasks::task_id task_id) const {
+future<std::optional<tasks::virtual_task_hint>> task_manager::virtual_task::contains(tasks::task_id task_id) const {
     return _impl->contains(task_id);
 }
 
@@ -456,20 +457,20 @@ task_manager::task_group task_manager::virtual_task::get_group() const noexcept 
     return _impl->get_group();
 }
 
-future<tasks::is_abortable> task_manager::virtual_task::is_abortable() const {
-    return _impl->is_abortable();
+future<tasks::is_abortable> task_manager::virtual_task::is_abortable(virtual_task_hint hint) const {
+    return _impl->is_abortable(std::move(hint));
 }
 
-future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id) {
-    return _impl->get_status(id);
+future<std::optional<task_status>> task_manager::virtual_task::get_status(task_id id, virtual_task_hint hint) {
+    return _impl->get_status(id, std::move(hint));
 }
 
-future<std::optional<task_status>> task_manager::virtual_task::wait(task_id id) {
-    return _impl->wait(id);
+future<std::optional<task_status>> task_manager::virtual_task::wait(task_id id, virtual_task_hint hint) {
+    return _impl->wait(id, std::move(hint));
 }
 
-future<> task_manager::virtual_task::abort(task_id id) noexcept {
-    return _impl->abort(id);
+future<> task_manager::virtual_task::abort(task_id id, virtual_task_hint hint) noexcept {
+    return _impl->abort(id, std::move(hint));
 }
 
 future<std::vector<task_stats>> task_manager::virtual_task::get_stats() {
@@ -712,7 +713,7 @@ future<> task_manager::stop() noexcept {
 }
 
 future<task_manager::foreign_task_ptr> task_manager::lookup_task_on_all_shards(sharded<task_manager>& tm, task_id tid) {
-    return task_manager::invoke_on_task(tm, tid, std::function([tid] (task_variant task_v) {
+    return task_manager::invoke_on_task(tm, tid, std::function([tid] (task_variant task_v, virtual_task_hint) {
         return std::visit(overloaded_functor{
             [] (tasks::task_manager::task_ptr task) {
                 return make_ready_future<task_manager::foreign_task_ptr>(make_foreign(task));
@@ -724,19 +725,19 @@ future<task_manager::foreign_task_ptr> task_manager::lookup_task_on_all_shards(s
     }));
 }
 
-future<task_manager::virtual_task_ptr> task_manager::lookup_virtual_task(task_manager& tm, task_id id) {
+future<std::pair<task_manager::virtual_task_ptr, tasks::virtual_task_hint>> task_manager::lookup_virtual_task(task_manager& tm, task_id id) {
     auto vts = tm.get_virtual_tasks();
     for (auto [_, vt]: tm.get_virtual_tasks()) {
-        if (co_await vt->contains(id)) {
-            co_return vt;
+        if (auto hint = co_await vt->contains(id); hint.has_value()) {
+            co_return std::make_pair(vt, std::move(hint.value()));
         }
     }
-    co_return nullptr;
+    co_return std::make_pair<task_manager::virtual_task_ptr, tasks::virtual_task_hint>(nullptr, {});
 }
 
-future<> task_manager::invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant)> func) {
-    co_await task_manager::invoke_on_task(tm, id, std::function([func = std::move(func)] (task_manager::task_variant task_v) -> future<bool> {
-        co_await func(task_v);
+future<> task_manager::invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant, virtual_task_hint)> func) {
+    co_await task_manager::invoke_on_task(tm, id, std::function([func = std::move(func)] (task_manager::task_variant task_v, virtual_task_hint vt_hint) -> future<bool> {
+        co_await func(task_v, std::move(vt_hint));
         co_return true;
     }));
 }

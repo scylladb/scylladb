@@ -16,6 +16,10 @@ class storage_service;
 enum class topology_request: uint16_t;
 }
 
+namespace tasks {
+struct virtual_task_hint;
+}
+
 namespace node_ops {
 
 class node_ops_virtual_task : public tasks::task_manager::virtual_task::impl {
@@ -28,15 +32,15 @@ public:
         , _ss(ss)
     {}
     virtual tasks::task_manager::task_group get_group() const noexcept override;
-    virtual future<bool> contains(tasks::task_id task_id) const override;
-    virtual future<tasks::is_abortable> is_abortable() const override;
+    virtual future<std::optional<tasks::virtual_task_hint>> contains(tasks::task_id task_id) const override;
+    virtual future<tasks::is_abortable> is_abortable(tasks::virtual_task_hint hint) const override;
 
-    virtual future<std::optional<tasks::task_status>> get_status(tasks::task_id id) override;
-    virtual future<std::optional<tasks::task_status>> wait(tasks::task_id id) override;
-    virtual future<> abort(tasks::task_id id) noexcept override;
+    virtual future<std::optional<tasks::task_status>> get_status(tasks::task_id id, tasks::virtual_task_hint hint) override;
+    virtual future<std::optional<tasks::task_status>> wait(tasks::task_id id, tasks::virtual_task_hint hint) override;
+    virtual future<> abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept override;
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
-    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id) const;
+    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint) const;
 };
 
 class streaming_task_impl : public tasks::task_manager::task::impl {

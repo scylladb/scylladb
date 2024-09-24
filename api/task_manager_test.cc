@@ -14,6 +14,7 @@
 #include "api/api.hh"
 #include "api/api-doc/task_manager_test.json.hh"
 #include "tasks/test_module.hh"
+#include "tasks/virtual_task_hint.hh"
 #include "utils/overloaded_functor.hh"
 
 namespace api {
@@ -86,7 +87,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     tmt::unregister_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->query_parameters["task_id"]}};
         try {
-            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_variant task_v) -> future<> {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_variant task_v, tasks::virtual_task_hint) -> future<> {
                 return std::visit(overloaded_functor{
                     [] (tasks::task_manager::task_ptr task) -> future<> {
                         tasks::test_task test_task{task};
@@ -110,7 +111,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
         std::string error = fail ? it->second : "";
 
         try {
-            co_await tasks::task_manager::invoke_on_task(tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_variant task_v) -> future<> {
+            co_await tasks::task_manager::invoke_on_task(tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_variant task_v, tasks::virtual_task_hint) -> future<> {
                 return std::visit(overloaded_functor{
                     [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) -> future<> {
                         tasks::test_task test_task{task};

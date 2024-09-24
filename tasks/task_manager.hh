@@ -21,6 +21,7 @@
 #include "db_clock.hh"
 #include "utils/log.hh"
 #include "gms/inet_address.hh"
+#include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/serialized_action.hh"
@@ -50,6 +51,7 @@ enum class task_kind {
 struct task_identity;
 struct task_status;
 struct task_stats;
+struct virtual_task_hint;
 
 class task_manager : public peering_sharded_service<task_manager> {
 public:
@@ -272,14 +274,17 @@ public:
             static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id);
         public:
             virtual task_group get_group() const noexcept = 0;
-            virtual future<bool> contains(tasks::task_id task_id) const = 0;
+            // Returns std::nullopt if an operation with task_id isn't tracked by this virtual_task.
+            // Returns empty virtual_task_hint if an operation with task_id is tracked by this virtual_task,
+            // but no additional information about the task is passed.
+            virtual future<std::optional<virtual_task_hint>> contains(tasks::task_id task_id) const = 0;
             module_ptr get_module() const noexcept;
             task_manager& get_task_manager() const noexcept;
-            virtual future<tasks::is_abortable> is_abortable() const;
+            virtual future<tasks::is_abortable> is_abortable(virtual_task_hint hint) const;
 
-            virtual future<std::optional<task_status>> get_status(task_id id) = 0;
-            virtual future<std::optional<task_status>> wait(task_id id) = 0;
-            virtual future<> abort(task_id id) noexcept = 0;
+            virtual future<std::optional<task_status>> get_status(task_id id, virtual_task_hint hint) = 0;
+            virtual future<std::optional<task_status>> wait(task_id id, virtual_task_hint hint) = 0;
+            virtual future<> abort(task_id id, virtual_task_hint hint) noexcept = 0;
             virtual future<std::vector<task_stats>> get_stats() = 0;
         };
         using virtual_task_impl_ptr = std::unique_ptr<impl>;
@@ -288,14 +293,14 @@ public:
     public:
         virtual_task(virtual_task_impl_ptr&& impl) noexcept;
 
-        future<bool> contains(tasks::task_id task_id) const;
+        future<std::optional<virtual_task_hint>> contains(tasks::task_id task_id) const;
         module_ptr get_module() const noexcept;
         task_group get_group() const noexcept;
-        future<tasks::is_abortable> is_abortable() const;
+        future<tasks::is_abortable> is_abortable(virtual_task_hint hint) const;
 
-        future<std::optional<task_status>> get_status(task_id id);
-        future<std::optional<task_status>> wait(task_id id);
-        future<> abort(task_id id) noexcept;
+        future<std::optional<task_status>> get_status(task_id id, virtual_task_hint hint);
+        future<std::optional<task_status>> wait(task_id id, virtual_task_hint hint);
+        future<> abort(task_id id, virtual_task_hint hint) noexcept;
         future<std::vector<task_stats>> get_stats();
     };
 
@@ -385,16 +390,16 @@ public:
 
     static future<task_manager::foreign_task_ptr> lookup_task_on_all_shards(sharded<task_manager>& tm, task_id tid);
     // Must be called from shard 0.
-    static future<task_manager::virtual_task_ptr> lookup_virtual_task(task_manager& tm, task_id id);
-    static future<> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant)> func);
+    static future<std::pair<task_manager::virtual_task_ptr, tasks::virtual_task_hint>> lookup_virtual_task(task_manager& tm, task_id id);
+    static future<> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<> (task_manager::task_variant, virtual_task_hint)> func);
     template<typename T>
-    static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_variant)> func) {
+    static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_variant, virtual_task_hint)> func) {
         std::optional<T> res;
         co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&tm, id, &res, &func] (unsigned shard) -> future<> {
             auto local_res = co_await tm.invoke_on(shard, [id, func] (const task_manager& local_tm) -> future<std::optional<T>> {
                 const auto& all_tasks = local_tm.get_local_tasks();
                 if (auto it = all_tasks.find(id); it != all_tasks.end()) {
-                    co_return co_await func(it->second);
+                    co_return co_await func(it->second, {});
                 }
                 co_return std::nullopt;
             });
@@ -406,9 +411,9 @@ public:
         });
         if (!res) {
             res = co_await tm.invoke_on(0, coroutine::lambda([id, &func] (auto& tm_local) -> future<std::optional<T>> {
-                auto task_ptr = co_await lookup_virtual_task(tm_local, id);
+                auto [task_ptr, hint] = co_await lookup_virtual_task(tm_local, id);
                 if (task_ptr) {
-                    co_return co_await func(task_ptr);
+                    co_return co_await func(task_ptr, std::move(hint));
                 }
                 co_return std::nullopt;
             }));
