@@ -405,16 +405,20 @@ async def init_tablet_transfer(manager: ManagerClient,
     assert old_host not in hosts_with_replica
 
 
+# @deselect_for(
+#     error_injections=[
+#         "stop_after_starting_auth_service",
+#         "stop_after_setting_mode_to_normal_raft_topology",
+#         "stop_before_becoming_raft_voter",
+#         "stop_after_updating_cdc_generation",
+#         "stop_before_streaming",
+#         "stop_after_streaming",
+#     ],
+#     reason="Can't add a node to a cluster with a banned node",
+# )
 @deselect_for(
-    error_injections=[
-        "stop_after_starting_auth_service",
-        "stop_after_setting_mode_to_normal_raft_topology",
-        "stop_before_becoming_raft_voter",
-        "stop_after_updating_cdc_generation",
-        "stop_before_streaming",
-        "stop_after_streaming",
-    ],
-    reason="Can't add a node to a cluster with a banned node",
+    # TODO: remove this skip when #20751 will be resolved.
+    reason="test_random_failures: remove_data_dir_of_dead_node cluster event is incorrect (causes test flakiness). See issue #20751",
 )
 async def remove_data_dir_of_dead_node(manager: ManagerClient,
                                        random_tables: RandomTables,
