@@ -106,6 +106,8 @@ private:
 
 namespace schema_tables {
 
+extern logging::logger slogger;
+
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
@@ -131,6 +133,7 @@ static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla s
 static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
 static constexpr auto SCYLLA_TABLE_SCHEMA_HISTORY = "scylla_table_schema_history"; // Scylla specific;
 
+schema_ptr keyspaces();
 schema_ptr columns();
 schema_ptr view_virtual_columns();
 schema_ptr dropped_columns();
@@ -139,10 +142,16 @@ schema_ptr tables();
 schema_ptr scylla_tables(schema_features features = schema_features::full());
 schema_ptr views();
 schema_ptr types();
+schema_ptr functions();
+schema_ptr aggregates();
 schema_ptr computed_columns();
 // Belongs to the "system" keyspace
 schema_ptr scylla_table_schema_history();
 
+// Returns table ids of all schema tables which contribute to schema_mutations,
+// i.e. those which are used to define schema of a table or a view.
+// All such tables have a clustering key whose first column is the table name.
+const std::unordered_set<table_id>& schema_tables_holding_schema_mutations();
 }
 
 namespace legacy {
@@ -162,6 +171,25 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
     sstring keyspace_name, sstring table_name, schema_ptr s);
 
 }
+
+struct qualified_name {
+    sstring keyspace_name;
+    sstring table_name;
+
+    qualified_name(sstring keyspace_name, sstring table_name)
+            : keyspace_name(std::move(keyspace_name))
+            , table_name(std::move(table_name))
+    { }
+
+    qualified_name(const schema_ptr& s)
+            : keyspace_name(s->ks_name())
+            , table_name(s->cf_name())
+    { }
+
+    auto operator<=>(const qualified_name&) const = default;
+};
+
+future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
 using namespace v3;
 
@@ -183,17 +211,13 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
 // Calculates schema digest for all non-system keyspaces
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 
-future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
-std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
-
-future<schema_result_value_type>
-read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name);
-future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, const sstring& keyspace_name);
-
 // Must be called on shard 0.
 future<semaphore_units<>> hold_merge_lock() noexcept;
+future<> with_merge_lock(noncopyable_function<future<> ()> func);
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
+future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features, std::optional<table_schema_version> version_from_group0);
+
+future<std::optional<table_schema_version>> get_group0_schema_version(db::system_keyspace& sys_ks);
 
 // Recalculates the local schema version.
 //
@@ -202,21 +226,35 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
 // of feature_service and schema tables.
 future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat);
 
-future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
+future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
+std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
+
+future<schema_result_value_type>
+read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name);
+future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, const sstring& keyspace_name);
 
 std::vector<mutation> make_create_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
 std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp);
 
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& partition, lw_shared_ptr<query::result_set> scylla_specific);
-
-future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition);
+future<lw_shared_ptr<keyspace_metadata>> create_keyspace_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition);
 
 std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp);
 
+// Given a set of rows that is sorted by keyspace, create types for each keyspace.
+// The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
+// types it reference have already been created.
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows);
+
 future<std::vector<user_type>> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
 
+std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace);
+
+future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row);
+
 seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_functions_from_schema_partition(replica::database& db, lw_shared_ptr<query::result_set> result);
+
+shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch);
 
 std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_schema_partition(replica::database& db, lw_shared_ptr<query::result_set> result, lw_shared_ptr<query::result_set> scylla_result, cql3::functions::change_batch& batch);
 

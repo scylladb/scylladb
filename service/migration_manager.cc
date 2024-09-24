@@ -28,6 +28,7 @@
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"

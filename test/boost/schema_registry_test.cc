@@ -16,6 +16,7 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
+#include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/list.hh"
 #include "utils/throttle.hh"
