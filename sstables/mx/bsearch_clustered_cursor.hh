@@ -175,6 +175,33 @@ private:
         });
     }
 
+    template <typename Consumer>
+    future<> read(cached_file::offset_type pos, tracing::trace_state_ptr trace_state, Consumer& c) {
+        struct retry_exception : std::exception {};
+        _stream = _cached_file.read(pos, _permit, trace_state);
+        c.reset();
+        return repeat([this, pos, trace_state, &c] {
+            return _stream.next_page_view().then([this, &c] (cached_file::page_view&& page) {
+                if (!page) {
+                    on_internal_error(sstlog, "End of stream while parsing");
+                }
+                bool retry = false;
+                return _as(_cached_file.region(), [&] {
+                    if (retry) {
+                        throw retry_exception();
+                    }
+                    retry = true;
+                    auto buf = page.get_buf();
+                    return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
+                });
+            }).handle_exception_type([this, pos, trace_state, &c] (const retry_exception& e) {
+                _stream = _cached_file.read(pos, _permit, trace_state);
+                c.reset();
+                return stop_iteration::no;
+            });
+        });
+    }
+
     // Returns offset of the entry in the offset map for the promoted index block of the index idx.
     // The offset is relative to the promoted index start in the index file.
     // idx must be in the range 0..(_blocks_count-1)
@@ -199,9 +226,7 @@ private:
     // Postconditions:
     //   - block.start is engaged and valid.
     future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
-        _clustering_parser.reset();
-        return consume_stream(_stream, _clustering_parser).then([this, &block] {
+        return read(_promoted_index_start + block.offset, trace_state, _clustering_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
             block.start.emplace(_clustering_parser.get_and_reset());
             _metrics.used_bytes += block.memory_usage() - mem_before;
@@ -211,9 +236,7 @@ private:
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
     future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
-        _block_parser.reset();
-        return consume_stream(_stream, _block_parser).then([this, &block] {
+        return read(_promoted_index_start + block.offset, trace_state, _block_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
             block.start.emplace(std::move(_block_parser.start()));
             block.end.emplace(std::move(_block_parser.end()));
