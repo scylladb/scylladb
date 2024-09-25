@@ -445,35 +445,34 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         auto uuid = s->id();
         sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
+        auto& cf = *gtable;
 
-            auto& cf = *gtable;
+        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
 
-            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
+        auto metadata = table_populator(gtable, db, ks_name, cfname);
+        std::exception_ptr ex;
 
-            auto metadata = table_populator(gtable, db, ks_name, cfname);
-            std::exception_ptr ex;
-
+        try {
+            co_await metadata.start();
+        } catch (...) {
+            std::exception_ptr eptr = std::current_exception();
+            std::string msg =
+                format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
+                        ks_name, cfname, cf.get_storage_options(), eptr);
+            dblog.error("{}", msg);
             try {
-                co_await metadata.start();
+                std::rethrow_exception(eptr);
+            } catch (sstables::compaction_stopped_exception& e) {
+                // swallow compaction stopped exception, to allow clean shutdown.
             } catch (...) {
-                std::exception_ptr eptr = std::current_exception();
-                std::string msg =
-                    format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
-                            ks_name, cfname, cf.get_storage_options(), eptr);
-                dblog.error("{}", msg);
-                try {
-                    std::rethrow_exception(eptr);
-                } catch (sstables::compaction_stopped_exception& e) {
-                    // swallow compaction stopped exception, to allow clean shutdown.
-                } catch (...) {
-                    ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
-                }
+                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
             }
+        }
 
-            co_await metadata.stop();
-            if (ex) {
-                co_await coroutine::return_exception_ptr(std::move(ex));
-            }
+        co_await metadata.stop();
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
 
         // system tables are made writable through sys_ks::mark_writable
         if (!is_system_keyspace(ks_name)) {
