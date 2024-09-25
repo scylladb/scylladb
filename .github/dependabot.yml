@@ -1,0 +1,11 @@
+version: 2
+updates:
+- package-ecosystem: "pip"
+  directory: "/docs"
+  schedule:
+    interval: "daily"
+  ignore:
+  - dependency-name: "*"
+  allow:
+  - dependency-name: "sphinx-scylladb-theme"
+  - dependency-name: "sphinx-multiversion-scylla"
