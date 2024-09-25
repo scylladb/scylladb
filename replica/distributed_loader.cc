@@ -281,7 +281,7 @@ class table_populator {
     sstring _ks;
     sstring _cf;
     global_table_ptr& _global_table;
-    std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
+    std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
 
@@ -319,7 +319,10 @@ future<> table_populator::start() {
     // pending_delete_dir, possibly referring to sstables in sub-directories.
     for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
         co_await collect_subdir(state);
-        co_await process_subdir(*_sstable_directories[state]);
+    }
+
+    for (auto dir : _sstable_directories) {
+        co_await process_subdir(*dir);
     }
 
     co_await smp::invoke_on_all([this] {
@@ -327,14 +330,15 @@ future<> table_populator::start() {
         return _global_table->disable_auto_compaction();
     });
 
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::staging]);
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::quarantine]);
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::normal]);
+    for (auto dir : _sstable_directories) {
+        co_await populate_subdir(*dir);
+    }
 }
 
 future<> table_populator::stop() {
-    for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
-        co_await it->second->stop();
+    while (!_sstable_directories.empty()) {
+        co_await _sstable_directories.back()->stop();
+        _sstable_directories.pop_back();
     }
 }
 
@@ -343,7 +347,7 @@ future<> table_populator::collect_subdir(sstables::sstable_state state) {
     co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
 
     // directory must be stopped using table_populator::stop below
-    _sstable_directories[state] = dptr;
+    _sstable_directories.push_back(std::move(dptr));
 }
 
 future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& directory) {
