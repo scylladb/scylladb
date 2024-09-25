@@ -14,6 +14,8 @@
 
 #include <seastar/core/thread.hh>
 
+#include <ranges>
+
 namespace cql3 {
 namespace functions {
 
@@ -73,31 +75,23 @@ description user_function::describe(with_create_statement with_stmt) const {
             return std::nullopt;
         }
 
-        auto ks = cql3::util::maybe_quote(name().keyspace);
-        auto na = cql3::util::maybe_quote(name().name);
+        auto arg_type_range = _arg_types | std::views::transform(std::mem_fn(&abstract_type::cql3_type_name));
+        auto arg_range = std::views::zip(_arg_names, arg_type_range)
+                | std::views::transform([] (std::tuple<std::string_view, std::string_view> arg) {
+                    const auto [name, type] = arg;
+                    return seastar::format("{} {}", name, type);
+                });
 
-        std::ostringstream os;
-
-        os << "CREATE FUNCTION " << ks << "." << na << "(";
-        for (size_t i = 0; i < _arg_names.size(); i++) {
-            if (i > 0) {
-                os << ", ";
-            }
-            os << _arg_names[i] << " " << _arg_types[i]->cql3_type_name();
-        }
-        os << ")\n";
-
-        if (_called_on_null_input) {
-            os << "CALLED";
-        } else {
-            os << "RETURNS NULL";
-        }
-        os << " ON NULL INPUT\n"
-           << "RETURNS " << _return_type->cql3_type_name() << "\n"
-           << "LANGUAGE " << _language << "\n"
-           << "AS $$" << _body << "$$;";
-
-        return std::move(os).str();
+        return seastar::format("CREATE FUNCTION {}.{}({})\n"
+                "{} ON NULL INPUT\n"
+                "RETURNS {}\n"
+                "LANGUAGE {}\n"
+                "AS $${}$$;",
+                cql3::util::maybe_quote(name().keyspace), cql3::util::maybe_quote(name().name), fmt::join(arg_range, ", "),
+                _called_on_null_input ? "CALLED" : "RETURNS NULL",
+                _return_type->cql3_type_name(),
+                _language,
+                _body);
     });
 
     return description {
