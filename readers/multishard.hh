@@ -103,6 +103,8 @@ public:
             tracing::trace_state_ptr trace_ptr) = 0;
 };
 
+using multishard_reader_buffer_hint = bool_class<struct multishard_reader_buffer_hint_tag>;
+
 /// Make a multishard_combining_reader.
 ///
 /// multishard_combining_reader takes care of reading a range from all shards
@@ -129,7 +131,8 @@ mutation_reader make_multishard_combining_reader_v2(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state = nullptr,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+        multishard_reader_buffer_hint buffer_hint = multishard_reader_buffer_hint::no);
 
 mutation_reader make_multishard_combining_reader_v2_for_tests(
         const dht::sharder& sharder,
@@ -139,5 +142,6 @@ mutation_reader make_multishard_combining_reader_v2_for_tests(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state = nullptr,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+        multishard_reader_buffer_hint buffer_hint = multishard_reader_buffer_hint::no);
 

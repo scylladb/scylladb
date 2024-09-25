@@ -1015,6 +1015,8 @@ class multishard_combining_reader_v2 : public mutation_reader::impl {
     bool _crossed_shards;
     unsigned _concurrency = 1;
 
+    multishard_reader_buffer_hint _buffer_hint = multishard_reader_buffer_hint::no;
+
     void on_partition_range_change(const dht::partition_range& pr);
     bool maybe_move_to_next_shard(const dht::token* const t = nullptr);
     future<> handle_empty_reader_buffer();
@@ -1029,7 +1031,8 @@ public:
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             tracing::trace_state_ptr trace_state,
-            mutation_reader::forwarding fwd_mr);
+            mutation_reader::forwarding fwd_mr,
+            multishard_reader_buffer_hint buffer_hint);
 
     // this is captured.
     multishard_combining_reader_v2(const multishard_combining_reader_v2&) = delete;
@@ -1115,7 +1118,12 @@ future<> multishard_combining_reader_v2::handle_empty_reader_buffer() {
                 _shard_readers[next_shard]->read_ahead();
             }
         }
-        return reader.fill_buffer();
+        std::optional<buffer_fill_hint> hint;
+        if (_buffer_hint) {
+            hint.emplace(max_buffer_size_in_bytes - buffer_size(),
+                    _shard_selection_min_heap.empty() ? dht::maximum_token() : _shard_selection_min_heap.front().token);
+        }
+        return reader.fill_buffer(std::move(hint));
     }
 }
 
@@ -1128,8 +1136,10 @@ multishard_combining_reader_v2::multishard_combining_reader_v2(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state,
-        mutation_reader::forwarding fwd_mr)
-    : impl(std::move(s), std::move(permit)), _keep_alive_sharder(std::move(keep_alive_sharder)), _sharder(sharder) {
+        mutation_reader::forwarding fwd_mr,
+        multishard_reader_buffer_hint buffer_hint)
+    : impl(std::move(s), std::move(permit)), _keep_alive_sharder(std::move(keep_alive_sharder)), _sharder(sharder),
+            _buffer_hint(buffer_hint) {
 
     // The permit of the multishard reader is destroyed after the permits of its child readers.
     // Therefore its semaphore resources won't be automatically released
@@ -1207,10 +1217,11 @@ mutation_reader make_multishard_combining_reader_v2(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state,
-        mutation_reader::forwarding fwd_mr) {
+        mutation_reader::forwarding fwd_mr,
+        multishard_reader_buffer_hint buffer_hint) {
     auto& sharder = erm->get_sharder(*schema);
     return make_mutation_reader<multishard_combining_reader_v2>(sharder, std::any(std::move(erm)), std::move(lifecycle_policy),
-            std::move(schema), std::move(permit), pr, ps, std::move(trace_state), fwd_mr);
+            std::move(schema), std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint);
 }
 
 mutation_reader make_multishard_combining_reader_v2_for_tests(
@@ -1221,7 +1232,8 @@ mutation_reader make_multishard_combining_reader_v2_for_tests(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state,
-        mutation_reader::forwarding fwd_mr) {
+        mutation_reader::forwarding fwd_mr,
+        multishard_reader_buffer_hint buffer_hint) {
     return make_mutation_reader<multishard_combining_reader_v2>(sharder, std::any(),
-            std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, std::move(trace_state), fwd_mr);
+            std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint);
 }
