@@ -41,6 +41,7 @@ target_link_libraries(service
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    cql3
     mutation
     node_ops
     raft
