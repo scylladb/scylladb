@@ -108,6 +108,7 @@ public:
     enum class task_group {
         // Each virtual task needs to have its group.
         topology_change_group,
+        tablets_group,
     };
 
     class task : public enable_lw_shared_from_this<task> {

@@ -8,10 +8,12 @@
 
 #pragma once
 
+#include "schema/schema_fwd.hh"
 namespace tasks {
 
 struct virtual_task_hint {
     // Contains hints for all virtual tasks types.
+    std::optional<table_id> table_id;
 };
 
 }

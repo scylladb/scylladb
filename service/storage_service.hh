@@ -111,6 +111,7 @@ class raft_group0;
 class group0_guard;
 class group0_info;
 class raft_group0_client;
+class tablet_virtual_task;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -990,6 +991,7 @@ private:
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
     friend class node_ops::task_manager_module;
+    friend class tablet_virtual_task;
 };
 
 }
