@@ -119,6 +119,19 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
                     BOOST_REQUIRE_LT(*prev_offset, block->data_file_offset);
                 }
 
+                cur->promoted_index().clear();
+
+                utils::get_local_injector().enable("cached_promoted_index_bad_alloc_parsing_across_page", true);
+                block = cur->promoted_index().get_block(i, trace).get();
+
+                testlog.debug("start : {}", *block->start);
+                testlog.debug("end   : {}", *block->end);
+                BOOST_REQUIRE(eq(*block->start, pos));
+                BOOST_REQUIRE(eq(*block->end, pos));
+                if (prev_offset) {
+                    BOOST_REQUIRE_LT(*prev_offset, block->data_file_offset);
+                }
+
                 prev_offset = block->data_file_offset;
             }
         }
