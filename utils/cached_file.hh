@@ -122,6 +122,12 @@ private:
             return temporary_buffer<char>(_lsa_buf.get(), _lsa_buf.size(), deleter());
         }
 
+        // Returns a pointer to the contents of the page.
+        // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
+        char* begin() {
+            return _lsa_buf.get();
+        }
+
         size_t size_in_allocator() {
             // lsa_buf occupies 4K in LSA even if the buf size is smaller.
             // _buf is transient and not accounted here.
@@ -208,16 +214,32 @@ public:
     class page_view {
         cached_page::ptr_type _page;
         size_t _offset;
-        size_t _size;
+        size_t _size = 0;
         std::optional<reader_permit::resource_units> _units;
     public:
         page_view() = default;
+
         page_view(size_t offset, size_t size, cached_page::ptr_type page, std::optional<reader_permit::resource_units> units)
                 : _page(std::move(page))
                 , _offset(offset)
                 , _size(size)
                 , _units(std::move(units))
         {}
+
+        page_view(page_view&& o) noexcept
+            : _page(std::move(o._page))
+            , _offset(std::exchange(o._offset, 0))
+            , _size(std::exchange(o._size, 0))
+            , _units(std::move(o._units))
+        {}
+
+        page_view& operator=(page_view&& o) noexcept {
+            _page = std::move(o._page);
+            _offset = std::exchange(o._offset, 0);
+            _size = std::exchange(o._size, 0);
+            _units = std::move(o._units);
+            return *this;
+        }
 
         // The returned buffer is valid only until the LSA region associated with cached_file invalidates references.
         temporary_buffer<char> get_buf() {
@@ -227,7 +249,31 @@ public:
             return buf;
         }
 
-        operator bool() const { return bool(_page); }
+        operator bool() const { return bool(_page) && _size; }
+    public: // ContiguousSharedBuffer concept
+        const char* begin() const { return _page ? _page->begin() + _offset : nullptr; }
+        const char* get() const { return begin(); }
+        const char* end() const { return begin() + _size; }
+        size_t size() const { return _size; }
+        bool empty() const { return !_size; }
+        char* get_write() { return const_cast<char*>(begin()); }
+
+        void trim(size_t pos) {
+            _size = pos;
+        }
+
+        void trim_front(size_t n) {
+            _offset += n;
+            _size -= n;
+        }
+
+        page_view share() {
+            return share(0, _size);
+        }
+
+        page_view share(size_t pos, size_t len) {
+            return page_view(_offset + pos, len, _page->share(), {});
+        }
     };
 
     // Generator of subsequent pages of data reflecting the contents of the file.
