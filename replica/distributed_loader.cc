@@ -428,7 +428,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
             auto& cf = *gtable;
 
-            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options().type_string(), datadir);
+            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
 
             auto metadata = table_populator(gtable, db, ks_name, cfname);
             std::exception_ptr ex;
@@ -438,8 +438,8 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             } catch (...) {
                 std::exception_ptr eptr = std::current_exception();
                 std::string msg =
-                    format("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
-                            ks_name, cfname, datadir, eptr);
+                    format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
+                            ks_name, cfname, cf.get_storage_options(), eptr);
                 dblog.error("{}", msg);
                 try {
                     std::rethrow_exception(eptr);
