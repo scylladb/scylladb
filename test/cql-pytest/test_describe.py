@@ -10,6 +10,7 @@
 import pytest
 import random
 import re
+import textwrap
 from contextlib import contextmanager, ExitStack
 from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix, new_user, new_session
 from cassandra.protocol import InvalidRequest, Unauthorized
@@ -2567,3 +2568,52 @@ def test_desc_restore(cql):
             assert restore_stmts == res
         finally:
             cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+### ===========================================================================
+
+# Verifies that describing a UDF with built-in types works correctly.
+# Scylla-only as the UDF uses Lua.
+def test_describe_udf_with_builtin_types(cql, test_keyspace, scylla_only):
+    fn_content = """\
+        (free_arg int, a list<boolean>, b set<time>, c map<varint, text>, d tuple<uuid, inet>)
+        RETURNS NULL ON NULL INPUT
+        RETURNS bigint
+        LANGUAGE lua
+        AS $$
+        return 3
+        $$;"""
+    # Get rid of indentation in the string.
+    fn_content = textwrap.dedent(fn_content)
+
+    with new_function(cql, test_keyspace, fn_content) as fn:
+        udf_row = cql.execute(f"DESC FUNCTION {test_keyspace}.{fn}").one()
+        udf_stmt = udf_row.create_statement
+
+        expected_stmt = f"CREATE FUNCTION {test_keyspace}.{fn}{fn_content}"
+        assert udf_stmt == expected_stmt
+
+# Verifies that describing a UDF with UDTs as its arguments works correctly.
+# Reproduces: scylladb/scylladb#20256.
+# Scylla-only as the UDf uses Lua.
+def test_describe_udf_with_udt(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, "(value int)") as udt:
+        _, udt_name = udt.split(".")
+
+        fn_content = f"""\
+            (free_arg {udt_name}, a list<frozen<{udt_name}>>, b set<frozen<{udt_name}>>, c map<frozen<{udt_name}>, frozen<{udt_name}>>, d tuple<frozen<{udt_name}>, int>)
+            RETURNS NULL ON NULL INPUT
+            RETURNS {udt_name}
+            LANGUAGE lua
+            AS $$
+            rhs.value = lhs + rhs.value
+            return rhs
+            $$;"""
+        # Get rid of indentation in the string.
+        fn_content = textwrap.dedent(fn_content)
+
+        with new_function(cql, test_keyspace, fn_content) as fn:
+            udf_row = cql.execute(f"DESC FUNCTION {test_keyspace}.{fn}").one()
+            udf_stmt = udf_row.create_statement
+
+            expected_stmt = f"CREATE FUNCTION {test_keyspace}.{fn}{fn_content}"
+            assert udf_stmt == expected_stmt
