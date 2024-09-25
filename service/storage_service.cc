@@ -3231,9 +3231,11 @@ future<> storage_service::stop() {
 }
 
 future<> storage_service::wait_for_group0_stop() {
-    _group0_as.request_abort();
-    _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
-    co_await when_all(std::move(_raft_state_monitor), std::move(_sstable_cleanup_fiber), std::move(_upgrade_to_topology_coordinator_fiber));
+    if (!_group0_as.abort_requested()) {
+        _group0_as.request_abort();
+        _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
+        co_await when_all(std::move(_raft_state_monitor), std::move(_sstable_cleanup_fiber), std::move(_upgrade_to_topology_coordinator_fiber));
+    }
 }
 
 future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
