@@ -201,6 +201,13 @@ private:
                         page.release_and_scramble();
                     });
 
+                    utils::get_local_injector().inject("cached_promoted_index_bad_alloc_parsing_across_page", [this] {
+                        // Prevent reserve explosion in testing.
+                        _as.set_lsa_reserve(1);
+                        _as.set_std_reserve(1);
+                        throw std::bad_alloc();
+                    });
+
                     return stop_iteration(status == data_consumer::read_status::ready);
                 });
             }).handle_exception_type([this, pos, trace_state, &c] (const retry_exception& e) {
@@ -357,6 +364,10 @@ public:
     // Invalidates information about blocks with smaller indexes than a given block.
     void invalidate_prior(promoted_index_block* block, tracing::trace_state_ptr trace_state) {
         erase_range(_blocks.begin(), _blocks.lower_bound(block->index));
+    }
+
+    void clear() {
+        erase_range(_blocks.begin(), _blocks.end());
     }
 
     cached_file& file() { return _cached_file; }
