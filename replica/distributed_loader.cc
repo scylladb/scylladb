@@ -340,9 +340,11 @@ future<> table_populator::stop() {
 }
 
 future<> table_populator::collect_subdirs(const data_dictionary::storage_options::local& so, sstables::sstable_state state) {
+    co_await coroutine::parallel_for_each(_global_table->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
         auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
         co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
         _sstable_directories.push_back(std::move(dptr));
+    });
 }
 
 future<> table_populator::collect_subdirs(const data_dictionary::storage_options::s3& so, sstables::sstable_state state) {
@@ -440,9 +442,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
 
-        // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-        // somehow someone placed sstables in more than one of them for a given ks. (import?)
-        co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
             auto& cf = *gtable;
 
             dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
@@ -471,7 +470,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             if (ex) {
                 co_await coroutine::return_exception_ptr(std::move(ex));
             }
-        });
 
         // system tables are made writable through sys_ks::mark_writable
         if (!is_system_keyspace(ks_name)) {
