@@ -114,13 +114,6 @@ private:
             return temporary_buffer<char>(_buf.get_write(), _buf.size(), make_deleter([self = std::move(self)] {}));
         }
 
-        // Returns a buffer which reflects contents of this page.
-        // The buffer will not prevent eviction.
-        // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
-        temporary_buffer<char> get_buf_weak() {
-            return temporary_buffer<char>(_lsa_buf.get(), _lsa_buf.size(), deleter());
-        }
-
         // Returns a pointer to the contents of the page.
         // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
         char* begin() {
@@ -239,14 +232,6 @@ public:
             _size = std::exchange(o._size, 0);
             _units = std::move(o._units);
             return *this;
-        }
-
-        // The returned buffer is valid only until the LSA region associated with cached_file invalidates references.
-        temporary_buffer<char> get_buf() {
-            auto buf = _page->get_buf_weak();
-            buf.trim_front(_offset);
-            buf.trim(_size);
-            return buf;
         }
 
         operator bool() const { return bool(_page) && _size; }
