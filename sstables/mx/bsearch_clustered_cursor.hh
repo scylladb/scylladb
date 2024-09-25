@@ -193,7 +193,14 @@ private:
                         throw retry_exception();
                     }
                     retry = true;
-                    return stop_iteration(c.consume(page) == data_consumer::read_status::ready);
+
+                    auto status = c.consume(page);
+
+                    utils::get_local_injector().inject("cached_promoted_index_parsing_invalidate_buf_across_page", [&page] {
+                        page.release_and_scramble();
+                    });
+
+                    return stop_iteration(status == data_consumer::read_status::ready);
                 });
             }).handle_exception_type([this, pos, trace_state, &c] (const retry_exception& e) {
                 _stream = _cached_file.read(pos, _permit, trace_state);
@@ -240,6 +247,7 @@ private:
         });
     }
 
+public:
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset and index fields valid.
     future<promoted_index_block*> get_block_only_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         auto i = _blocks.lower_bound(idx);
@@ -257,6 +265,7 @@ private:
         });
     }
 
+private:
     void erase_range(block_set_type::iterator begin, block_set_type::iterator end) {
         while (begin != end) {
             --_metrics.block_count;
@@ -475,6 +484,8 @@ public:
             blocks_count)
         , _trace_state(std::move(trace_state))
     { }
+
+    cached_promoted_index& promoted_index() { return _promoted_index; }
 
     future<std::optional<skip_info>> advance_to(position_in_partition_view pos) override {
         position_in_partition::less_compare less(_s);

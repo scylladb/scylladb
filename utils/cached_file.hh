@@ -78,6 +78,10 @@ private:
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
         }
+
+        bool only_ref() const {
+            return _use_count <= 1;
+        }
     public:
         explicit cached_page(cached_file* parent, page_idx_type idx, temporary_buffer<char> buf)
             : parent(parent)
@@ -232,6 +236,24 @@ public:
             _size = std::exchange(o._size, 0);
             _units = std::move(o._units);
             return *this;
+        }
+
+        // Fills the page with garbage, releases the pointer and evicts the page so that it's no longer in cache.
+        // For testing use-after-free on the buffer space.
+        // After the call, the object is the same state as after being moved-from.
+        void release_and_scramble() noexcept {
+            if (_page->only_ref()) {
+                std::memset(_page->_lsa_buf.get(), 0xfe, _page->_lsa_buf.size());
+                cached_page& cp = *_page;
+                _page = nullptr;
+                cp.parent->_lru.remove(cp);
+                cp.on_evicted();
+            } else {
+                _page = nullptr;
+            }
+            _size = 0;
+            _offset = 0;
+            _units = std::nullopt;
         }
 
         operator bool() const { return bool(_page) && _size; }
