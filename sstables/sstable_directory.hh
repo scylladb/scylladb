@@ -213,6 +213,7 @@ public:
             sstable_state state,
             io_error_handler_gen error_handler_gen);
     sstable_directory(replica::table& table,
+            sstable_state state,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
             io_error_handler_gen error_handler_gen);
     sstable_directory(replica::table& table,
