@@ -340,8 +340,7 @@ future<> table_populator::stop() {
 
 future<> table_populator::collect_subdir(sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
-    auto& directory = *dptr;
-    co_await directory.start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
+    co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
 
     // directory must be stopped using table_populator::stop below
     _sstable_directories[state] = dptr;
