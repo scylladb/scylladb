@@ -707,6 +707,7 @@ private:
     foreign_ptr<std::unique_ptr<evictable_reader_v2>> _reader;
 
 private:
+    future<remote_fill_buffer_result_v2> fill_reader_buffer(evictable_reader_v2& reader);
     future<> do_fill_buffer();
 
 public:
@@ -791,6 +792,14 @@ future<> shard_reader_v2::close() noexcept {
     }
 }
 
+future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictable_reader_v2& reader) {
+    reader_permit::need_cpu_guard ncpu_guard{reader.permit()};
+
+    co_await reader.fill_buffer();
+
+    co_return remote_fill_buffer_result_v2(reader.detach_buffer(), reader.is_end_of_stream());
+}
+
 future<> shard_reader_v2::do_fill_buffer() {
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader_v2>> reader;
@@ -842,9 +851,7 @@ future<> shard_reader_v2::do_fill_buffer() {
 
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                    reader_permit::need_cpu_guard ncpu_guard{rreader->permit()};
-                    co_await rreader->fill_buffer();
-                    auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
+                    auto res = co_await fill_reader_buffer(*rreader);
                     co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
                 } catch (...) {
                     ex = std::current_exception();
@@ -856,9 +863,7 @@ future<> shard_reader_v2::do_fill_buffer() {
             co_return std::move(res.result);
         } else {
             co_return co_await smp::submit_to(_shard, coroutine::lambda([this] () -> future<remote_fill_buffer_result_v2>  {
-                reader_permit::need_cpu_guard ncpu_guard{_reader->permit()};
-                co_await _reader->fill_buffer();
-                co_return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
+                return fill_reader_buffer(*_reader);
             }));
         }
     });
