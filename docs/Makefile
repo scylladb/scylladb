@@ -43,7 +43,6 @@ pristine: clean
 clean:
 	rm -rf $(BUILDDIR)/*
 	rm -rf _data/*
-	rm -f poetry.lock
 
 # Generate output commands
 .PHONY: dirhtml
