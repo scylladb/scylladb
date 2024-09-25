@@ -311,6 +311,7 @@ public:
     static future<pending_delete_result> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
+    sstable_state state() const noexcept { return _state; }
 };
 
 future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
