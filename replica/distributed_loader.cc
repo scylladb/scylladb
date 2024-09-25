@@ -342,7 +342,11 @@ future<> table_populator::stop() {
 future<> table_populator::collect_subdirs(const data_dictionary::storage_options::local& so, sstables::sstable_state state) {
     co_await coroutine::parallel_for_each(_global_table->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
         auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
-        co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
+        co_await dptr->start(_global_table.as_sharded_parameter(), state,
+                        sharded_parameter([datadir] {
+                            auto opts = data_dictionary::make_local_options(std::filesystem::path(datadir));
+                            return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
+                        }), default_io_error_handler_gen());
         _sstable_directories.push_back(std::move(dptr));
     });
 }
