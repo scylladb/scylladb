@@ -25,20 +25,22 @@ namespace mc {
 //   while (cp.consume(next_buf()) == read_status::waiting) {}
 //   position_in_partition pos = cp.get();
 //
+template <ContiguousSharedBuffer Buffer>
 class clustering_parser {
+    using FragmentedBuffer = basic_fragmented_buffer<Buffer>;
     const schema& _s;
     column_values_fixed_lengths _clustering_values_fixed_lengths;
     bool _parsing_start_key;
     boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
 
-    std::vector<fragmented_temporary_buffer> clustering_key_values;
+    std::vector<FragmentedBuffer> clustering_key_values;
     bound_kind_m kind{};
 
-    fragmented_temporary_buffer column_value;
+    FragmentedBuffer column_value;
     uint64_t ck_blocks_header = 0;
     uint32_t ck_blocks_header_offset = 0;
     std::optional<position_in_partition> _pos;
-    data_consumer::primitive_consumer _primitive;
+    data_consumer::primitive_consumer_impl<Buffer> _primitive;
 
     enum class state {
         CLUSTERING_START,
@@ -78,7 +80,7 @@ class clustering_parser {
 
     position_in_partition make_position() {
         auto key = clustering_key_prefix::from_range(clustering_key_values | boost::adaptors::transformed(
-            [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
+            [] (const FragmentedBuffer & b) { return typename FragmentedBuffer::view(b); }));
 
         if (kind == bound_kind_m::clustering) {
             return position_in_partition::for_key(std::move(key));
@@ -107,7 +109,7 @@ public:
 
     // Feeds the data into the state machine.
     // Returns read_status::ready when !active() after the call.
-    read_status consume(temporary_buffer<char>& data) {
+    read_status consume(Buffer& data) {
         if (_primitive.consume(data) == read_status::waiting) {
             return read_status::waiting;
         }
@@ -207,8 +209,9 @@ public:
     }
 };
 
+template <ContiguousSharedBuffer Buffer>
 class promoted_index_block_parser {
-    clustering_parser _clustering;
+    clustering_parser<Buffer> _clustering;
 
     std::optional<position_in_partition> _start_pos;
     std::optional<position_in_partition> _end_pos;
@@ -229,7 +232,7 @@ class promoted_index_block_parser {
         DONE,
     } _state = state::START;
 
-    data_consumer::primitive_consumer _primitive;
+    data_consumer::primitive_consumer_impl<Buffer> _primitive;
 public:
     using read_status = data_consumer::read_status;
 
@@ -247,7 +250,7 @@ public:
     // Feeds the data into the state machine.
     // Returns read_status::ready when whole block was parsed.
     // If returns read_status::waiting then data.empty() after the call.
-    read_status consume(temporary_buffer<char>& data) {
+    read_status consume(Buffer& data) {
         static constexpr size_t width_base = 65536;
         if (_primitive.consume(data) == read_status::waiting) {
             return read_status::waiting;

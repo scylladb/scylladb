@@ -145,14 +145,16 @@ private:
     using block_set_type = std::set<promoted_index_block, block_comparator>;
     block_set_type _blocks;
 private:
+    using Buffer = cached_file::page_view;
+
     struct u32_parser {
-        data_consumer::primitive_consumer& parser;
+        data_consumer::primitive_consumer_impl<Buffer>& parser;
 
         void reset() {
             parser.read_32();
         }
 
-        data_consumer::read_status consume(temporary_buffer<char>& buf) {
+        data_consumer::read_status consume(Buffer& buf) {
             return parser.consume_u32(buf);
         }
 
@@ -167,15 +169,14 @@ public:
     metrics& _metrics;
     const pi_index_type _blocks_count;
     cached_file& _cached_file;
-    data_consumer::primitive_consumer _primitive_parser;
+    data_consumer::primitive_consumer_impl<Buffer> _primitive_parser;
     u32_parser _u32_parser;
-    clustering_parser _clustering_parser;
-    promoted_index_block_parser _block_parser;
+    clustering_parser<Buffer> _clustering_parser;
+    promoted_index_block_parser<Buffer> _block_parser;
     reader_permit _permit;
     cached_file::stream _stream;
     logalloc::allocating_section _as;
 private:
-
     template <typename Consumer>
     future<> read(cached_file::offset_type pos, tracing::trace_state_ptr trace_state, Consumer& c) {
         struct retry_exception : std::exception {};
@@ -192,8 +193,7 @@ private:
                         throw retry_exception();
                     }
                     retry = true;
-                    auto buf = page.get_buf();
-                    return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
+                    return stop_iteration(c.consume(page) == data_consumer::read_status::ready);
                 });
             }).handle_exception_type([this, pos, trace_state, &c] (const retry_exception& e) {
                 _stream = _cached_file.read(pos, _permit, trace_state);
