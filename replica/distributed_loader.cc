@@ -307,7 +307,7 @@ private:
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
 
     future<> start_subdir(sstables::sstable_state state);
-    future<> populate_subdir(sharded<sstables::sstable_directory>&, allow_offstrategy_compaction);
+    future<> populate_subdir(sharded<sstables::sstable_directory>&);
 };
 
 future<> table_populator::start() {
@@ -325,9 +325,9 @@ future<> table_populator::start() {
         return _global_table->disable_auto_compaction();
     });
 
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::staging], allow_offstrategy_compaction::no);
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::quarantine], allow_offstrategy_compaction::no);
-    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::normal], allow_offstrategy_compaction::yes);
+    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::staging]);
+    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::quarantine]);
+    co_await populate_subdir(*_sstable_directories[sstables::sstable_state::normal]);
 }
 
 future<> table_populator::stop() {
@@ -371,9 +371,9 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
     return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
-future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& directory, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
+future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& directory) {
     auto state = directory.local().state();
-    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _global_table->get_storage_options(), state, do_allow_offstrategy_compaction);
+    dblog.debug("Populating {}/{}/{} state={}", _ks, _cf, _global_table->get_storage_options(), state);
 
     co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [this] () {
@@ -400,6 +400,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
         return make_sstable(*_global_table, state, gen, _highest_version);
     }, eligible_for_reshape_on_boot);
 
+    auto do_allow_offstrategy_compaction = allow_offstrategy_compaction(state == sstables::sstable_state::normal);
     co_await directory.invoke_on_all([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
         co_await dir.do_for_each_sstable([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
             auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
