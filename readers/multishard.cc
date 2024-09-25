@@ -1115,7 +1115,9 @@ future<> multishard_combining_reader_v2::handle_empty_reader_buffer() {
                 _shard_readers[next_shard]->read_ahead();
             }
         }
-        return reader.fill_buffer();
+        return reader.fill_buffer(buffer_fill_hint{
+                max_buffer_size_in_bytes - buffer_size(),
+                _shard_selection_min_heap.empty() ? dht::maximum_token() : _shard_selection_min_heap.front().token});
     }
 }
 
