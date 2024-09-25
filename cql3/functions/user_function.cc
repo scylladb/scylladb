@@ -72,6 +72,7 @@ std::ostream& user_function::describe(std::ostream& os) const {
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
 
+<<<<<<< HEAD
     os << "CREATE FUNCTION " << ks << "." << na << "(";
     for (size_t i = 0; i < _arg_names.size(); i++) {
         if (i > 0) {
@@ -97,6 +98,9 @@ std::ostream& user_function::describe(std::ostream& os) const {
     return os;
 =======
         auto arg_type_range = _arg_types | std::views::transform(std::mem_fn(&abstract_type::cql3_type_name));
+=======
+        auto arg_type_range = _arg_types | std::views::transform(std::mem_fn(&abstract_type::cql3_type_name_without_frozen));
+>>>>>>> 8582ed513b (cql3/functions/user_function: Print arguments and return type without frozen)
         auto arg_range = std::views::zip(_arg_names, arg_type_range)
                 | std::views::transform([] (std::tuple<std::string_view, std::string_view> arg) {
                     const auto [name, type] = arg;
@@ -110,7 +114,7 @@ std::ostream& user_function::describe(std::ostream& os) const {
                 "AS $${}$$;",
                 cql3::util::maybe_quote(name().keyspace), cql3::util::maybe_quote(name().name), fmt::join(arg_range, ", "),
                 _called_on_null_input ? "CALLED" : "RETURNS NULL",
-                _return_type->cql3_type_name(),
+                _return_type->cql3_type_name_without_frozen(),
                 _language,
                 _body);
     });
