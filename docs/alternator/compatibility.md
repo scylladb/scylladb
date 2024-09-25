@@ -16,9 +16,9 @@ provision that - Scylla requires you to provision your cluster. You need
 to reason about the number and size of your nodes - not the throughput.
 
 When creating a table, the BillingMode and ProvisionedThroughput options
-are ignored by Scylla. Tables default to a Billing mode of `PAY_PER_REQUEST`
-and `DescribeTable` API calls will return a value of 0 for the RCUs, WCUs
-and NumberOfDecreasesToday within the response.
+are ignored by Scylla. Tables default to a Billing mode of `PAY_PER_REQUEST`.
+`DescribeTable` API calls will return the provisioned value of the RCUs, WCUs
+but the NumberOfDecreasesToday will be zero within the response.
 
 ## Scan ordering
 
