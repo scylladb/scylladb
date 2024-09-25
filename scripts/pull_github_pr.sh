@@ -10,13 +10,25 @@
 set -e
 
 gh_hosts=~/.config/gh/hosts.yml
+jenkins_url="https://jenkins.scylladb.com"
+FORCE=$2
+ORANGE='\033[0;33m'
+NC='\033[0m'
 
 if [[ ( -z "$GITHUB_LOGIN" || -z "$GITHUB_TOKEN" ) && -f "$gh_hosts" ]]; then
 	GITHUB_LOGIN=$(awk '/user:/ { print $2 }' "$gh_hosts")
 	GITHUB_TOKEN=$(awk '/oauth_token:/ { print $2 }' "$gh_hosts")
 fi
 
-if [[ $# != 1 ]]; then
+if [[ -z "$JENKINS_USERNAME" || -z "$JENKINS_API_TOKEN" ]]; then
+  echo "
+    JENKINS_USERNAME or JENKINS_API_TOKEN is missing from env.
+    To create a TOKEN, browse to https://jenkins.scylladb.com, then click on your username (upper right corner) and configure. Click on Add new token and set the JENKINS_USERNAME and JENKINS_API_TOKEN environment variables accordingly.
+  "
+  exit 1
+fi
+
+if [ -z "$1" ]; then
 	echo Please provide a github pull request number
 	exit 1
 fi
@@ -35,6 +47,48 @@ curl() {
     fi
     command curl "${opts[@]}" "$@"
 }
+
+set_jenkins_job() {
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  version="${branch#next-}"
+  product=$(awk -F'=' '/^PRODUCT/ {print $2}' <SCYLLA-VERSION-GEN)
+  case "$product" in
+    scylla) folder_prefix="scylla";;
+    scylla-enterprise) folder_prefix="enterprise";;
+    *) echo "None supported product, valid options scylla|scylla-enterprise"
+      exit 1
+  esac
+
+  case "$branch" in
+    next) jenkins_job="scylla-master/job/next";;
+    next-enterprise) jenkins_job="scylla-enterprise/job/next";;
+    next*) jenkins_job="$folder_prefix-$version/job/next";;
+    *) echo "You are running the script from branch: $branch. Valid branches: next|next-enterprise|next-*"
+      exit 1
+  esac
+}
+
+check_jenkins_job_status() {
+  set_jenkins_job
+
+  lastCompletedJobName="$jenkins_url/job/$jenkins_job/lastCompletedBuild"
+  getBuildResult=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedJobName/api/json?tree=result)
+  if [[ "$getBuildResult" == "*Unauthorized*" ]]; then
+      echo -e "${ORANGE}WARNING:${NC} Failed to authenticate with Jenkins. please check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
+      exit 1
+  fi
+  lastCompleted=$(echo "$getBuildResult" | jq -r '.result')
+
+  if [[ "$lastCompleted" == "SUCCESS" ]]; then
+      echo "$lastCompletedJobName is stable"
+  else
+    echo -e "${ORANGE}WARNING:${NC} $lastCompletedJobName is not stable"
+  fi
+}
+
+if [[ "$FORCE" != "--force" ]]; then
+  check_jenkins_job_status
+fi
 
 NL=$'\n'
 
