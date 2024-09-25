@@ -440,8 +440,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
                 std::string msg =
                     format("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
                             ks_name, cfname, datadir, eptr);
-                dblog.error("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
-                            ks_name, cfname, datadir, eptr);
+                dblog.error("{}", msg);
                 try {
                     std::rethrow_exception(eptr);
                 } catch (sstables::compaction_stopped_exception& e) {
