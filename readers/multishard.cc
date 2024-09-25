@@ -209,6 +209,18 @@ class evictable_reader_v2 : public mutation_reader::impl {
 public:
     using auto_pause = bool_class<class auto_pause_tag>;
 
+    class auto_pause_disable_guard {
+        evictable_reader_v2& _reader;
+    public:
+        auto_pause_disable_guard(evictable_reader_v2& reader) : _reader(reader) {
+            _reader._auto_pause = auto_pause::no;
+        }
+        ~auto_pause_disable_guard() {
+            _reader._auto_pause = auto_pause::yes;
+            _reader.pause();
+        }
+    };
+
 private:
     auto_pause _auto_pause;
     mutation_source _ms;
@@ -801,11 +813,36 @@ future<> shard_reader_v2::close() noexcept {
 }
 
 future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictable_reader_v2& reader, std::optional<buffer_fill_hint> hint) {
+    evictable_reader_v2::auto_pause_disable_guard auto_pause_guard{reader};
     reader_permit::need_cpu_guard ncpu_guard{reader.permit()};
 
     co_await reader.fill_buffer();
 
-    co_return remote_fill_buffer_result_v2(reader.detach_buffer(), reader.is_end_of_stream());
+    if (!hint) {
+        co_return remote_fill_buffer_result_v2(reader.detach_buffer(), reader.is_end_of_stream());
+    }
+
+    mutation_reader::tracked_buffer buffer(reader.permit());
+    size_t buffer_size = 0;
+
+    auto drain_buffer_and_check_hint = [&] {
+        bool reached_stop_token = false;
+        while (!reader.is_buffer_empty()) {
+            auto mf = reader.pop_mutation_fragment();
+            reached_stop_token |= mf.is_partition_start() && mf.as_partition_start().key().token() >= hint->stop_token;
+            buffer.push_back(std::move(mf));
+            buffer_size += buffer.back().memory_usage();
+        }
+        // Finish reading if reader is EOS or we read enough.
+        // We read enough if we read at least max_buffer_size_in_bytes and we also fullfilled the hint.
+        return reader.is_end_of_stream() || ((reached_stop_token || buffer_size >= hint->size) && buffer_size >= max_buffer_size_in_bytes);
+    };
+
+    while (!drain_buffer_and_check_hint()) {
+        co_await reader.fill_buffer();
+    }
+
+    co_return remote_fill_buffer_result_v2(std::move(buffer), reader.is_end_of_stream());
 }
 
 future<> shard_reader_v2::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
