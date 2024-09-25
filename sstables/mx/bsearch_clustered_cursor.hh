@@ -144,6 +144,22 @@ private:
     //
     using block_set_type = std::set<promoted_index_block, block_comparator>;
     block_set_type _blocks;
+private:
+    struct u32_parser {
+        data_consumer::primitive_consumer& parser;
+
+        void reset() {
+            parser.read_32();
+        }
+
+        data_consumer::read_status consume(temporary_buffer<char>& buf) {
+            return parser.consume_u32(buf);
+        }
+
+        uint32_t value() const {
+            return parser._u32;
+        }
+    };
 public:
     const schema& _s;
     uint64_t _promoted_index_start;
@@ -152,28 +168,13 @@ public:
     const pi_index_type _blocks_count;
     cached_file& _cached_file;
     data_consumer::primitive_consumer _primitive_parser;
+    u32_parser _u32_parser;
     clustering_parser _clustering_parser;
     promoted_index_block_parser _block_parser;
     reader_permit _permit;
     cached_file::stream _stream;
     logalloc::allocating_section _as;
 private:
-    // Feeds the stream into the consumer until the consumer is satisfied.
-    // Does not give unconsumed data back to the stream.
-    template <typename Consumer>
-    future<> consume_stream(cached_file::stream& s, Consumer& c) {
-        return repeat([&] {
-            return s.next_page_view().then([&] (cached_file::page_view&& page) {
-                if (!page) {
-                    on_internal_error(sstlog, "End of stream while parsing");
-                }
-                return _as(_cached_file.region(), [&] {
-                    auto buf = page.get_buf();
-                    return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
-                });
-            });
-        });
-    }
 
     template <typename Consumer>
     future<> read(cached_file::offset_type pos, tracing::trace_state_ptr trace_state, Consumer& c) {
@@ -210,16 +211,8 @@ private:
     }
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _permit, trace_state);
-        return _stream.next_page_view().then([this] (cached_file::page_view page) {
-            temporary_buffer<char> buf = page.get_buf();
-            static_assert(noexcept(std::declval<data_consumer::primitive_consumer>().read_32(buf)));
-            if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
-                return make_ready_future<pi_offset_type>(_primitive_parser._u32);
-            }
-            return consume_stream(_stream, _primitive_parser).then([this] {
-                return _primitive_parser._u32;
-            });
+        return read(_promoted_index_start + get_offset_entry_pos(idx), trace_state, _u32_parser).then([this] {
+            return _u32_parser.value();
         });
     }
 
@@ -289,6 +282,7 @@ public:
         , _blocks_count(blocks_count)
         , _cached_file(f)
         , _primitive_parser(permit)
+        , _u32_parser(_primitive_parser)
         , _clustering_parser(s, permit, cvfl, true)
         , _block_parser(s, permit, std::move(cvfl))
         , _permit(std::move(permit))
