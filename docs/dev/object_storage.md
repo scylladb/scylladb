@@ -102,6 +102,7 @@ The API endpoint name is `/storage_service/backup` and its Swagger description c
 found [here](./api/api-doc/storage_service.json). Accepted parameters are
 
 * *keyspace*: the keyspace to copy sstables from
+* *table*: the table to copy sstables from
 * *snapshot*: the snapshot name to copy sstables from
 * *endpoint*: the key in the object storage configuration file
 * *bucket*: bucket name to put sstables' files in

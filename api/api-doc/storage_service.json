@@ -799,6 +799,14 @@
                           "paramType":"query"
                       },
                       {
+                          "name":"table",
+                          "description":"Name of a table to copy sstables from",
+                          "required":true,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
                           "name":"snapshot",
                           "description":"Name of a snapshot to copy sstables from",
                           "required":false,
