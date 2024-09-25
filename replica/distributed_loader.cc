@@ -306,7 +306,7 @@ public:
 private:
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
 
-    future<> collect_subdir(sstables::sstable_state state);
+    future<> collect_subdirs();
     future<> process_subdir(sharded<sstables::sstable_directory>&);
     future<> populate_subdir(sharded<sstables::sstable_directory>&);
 };
@@ -314,12 +314,7 @@ private:
 future<> table_populator::start() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
-    // The table base directory (with sstable_state::normal) must be
-    // loaded and processed first as it now may contain the shared
-    // pending_delete_dir, possibly referring to sstables in sub-directories.
-    for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
-        co_await collect_subdir(state);
-    }
+    co_await collect_subdirs();
 
     for (auto dir : _sstable_directories) {
         co_await process_subdir(*dir);
@@ -342,12 +337,17 @@ future<> table_populator::stop() {
     }
 }
 
-future<> table_populator::collect_subdir(sstables::sstable_state state) {
+future<> table_populator::collect_subdirs() {
+    // The table base directory (with sstable_state::normal) must be
+    // loaded and processed first as it now may contain the shared
+    // pending_delete_dir, possibly referring to sstables in sub-directories.
+  for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
 
     // directory must be stopped using table_populator::stop below
     _sstable_directories.push_back(std::move(dptr));
+  }
 }
 
 future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& directory) {
