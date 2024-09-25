@@ -1110,7 +1110,7 @@ public:
             _consumer.consume_row_end();
             return;
         }
-        if (_state != state::ROW_START || primitive_consumer::active()) {
+        if (_state != state::ROW_START || data_consumer::primitive_consumer::active()) {
             throw malformed_sstable_exception("end of input, but not end of row");
         }
     }
