@@ -222,8 +222,8 @@ public:
         // The returned buffer is valid only until the LSA region associated with cached_file invalidates references.
         temporary_buffer<char> get_buf() {
             auto buf = _page->get_buf_weak();
-            buf.trim(_size);
             buf.trim_front(_offset);
+            buf.trim(_size);
             return buf;
         }
 
@@ -306,7 +306,7 @@ public:
                         ? _cached_file->_last_page_size
                         : page_size;
                 units = get_page_units(page_size);
-                page_view buf(_offset_in_page, size, std::move(page), std::move(units));
+                page_view buf(_offset_in_page, size - _offset_in_page, std::move(page), std::move(units));
                 _offset_in_page = 0;
                 ++_page_idx;
                 return buf;
