@@ -115,6 +115,11 @@ private:
         _prestate = next_state;
         return read_status::waiting;
     }
+    inline read_status read_partial_int(prestate next_state) noexcept {
+        _pos = 0;
+        _prestate = next_state;
+        return read_status::waiting;
+    }
     template <typename VintType, prestate ReadingVint, prestate ReadingVintWithLen>
     inline read_status read_vint(temporary_buffer<char>& data, typename VintType::value_type& dest) {
         if (data.empty()) {
@@ -186,6 +191,9 @@ public:
         } else {
             return read_partial_int(data, prestate::READING_U32);
         }
+    }
+    inline read_status read_32() noexcept {
+        return read_partial_int(prestate::READING_U32);
     }
     inline read_status read_64(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint64_t)) {
@@ -316,6 +324,15 @@ private:
         return _pos == len;
     }
 public:
+    read_status consume_u32(temporary_buffer<char>& data) {
+        if (process_int(data, sizeof(uint32_t))) {
+            _u32 = net::ntoh(_read_int.uint32);
+            _prestate = prestate::NONE;
+            return read_status::ready;
+        }
+        return read_status::waiting;
+    }
+
     // Feeds data into the state machine.
     // After the call, when data is not empty then active() can be assumed to be false.
     read_status consume(temporary_buffer<char>& data) {
@@ -435,12 +452,7 @@ public:
             }
             break;
         case prestate::READING_U32:
-            if (process_int(data, sizeof(uint32_t))) {
-                _u32 = net::ntoh(_read_int.uint32);
-                _prestate = prestate::NONE;
-                return read_status::ready;
-            }
-            break;
+            return consume_u32(data);
         case prestate::READING_U64:
             if (process_int(data, sizeof(uint64_t))) {
                 _u64 = net::ntoh(_read_int.uint64);
