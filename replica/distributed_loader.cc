@@ -300,31 +300,8 @@ public:
         SCYLLA_ASSERT(_sstable_directories.empty());
     }
 
-    future<> start() {
-        SCYLLA_ASSERT(this_shard_id() == 0);
-
-        // The table base directory (with sstable_state::normal) must be
-        // loaded and processed first as it now may contain the shared
-        // pending_delete_dir, possibly referring to sstables in sub-directories.
-        for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
-            co_await start_subdir(state);
-        }
-
-        co_await smp::invoke_on_all([this] {
-            _global_table->update_sstables_known_generation(_highest_generation);
-            return _global_table->disable_auto_compaction();
-        });
-
-        co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
-    }
-
-    future<> stop() {
-        for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
-            co_await it->second->stop();
-        }
-    }
+    future<> start();
+    future<> stop();
 
 private:
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
@@ -332,6 +309,32 @@ private:
 
     future<> start_subdir(sstables::sstable_state state);
 };
+
+future<> table_populator::start() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    // The table base directory (with sstable_state::normal) must be
+    // loaded and processed first as it now may contain the shared
+    // pending_delete_dir, possibly referring to sstables in sub-directories.
+    for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
+        co_await start_subdir(state);
+    }
+
+    co_await smp::invoke_on_all([this] {
+        _global_table->update_sstables_known_generation(_highest_generation);
+        return _global_table->disable_auto_compaction();
+    });
+
+    co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
+    co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
+    co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
+}
+
+future<> table_populator::stop() {
+    for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
+        co_await it->second->stop();
+    }
+}
 
 future<> table_populator::start_subdir(sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
