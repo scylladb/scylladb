@@ -307,7 +307,7 @@ private:
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
 
     future<> collect_subdir(sstables::sstable_state state);
-    future<> start_subdir(sstables::sstable_state state);
+    future<> process_subdir(sharded<sstables::sstable_directory>&);
     future<> populate_subdir(sharded<sstables::sstable_directory>&);
 };
 
@@ -319,7 +319,7 @@ future<> table_populator::start() {
     // pending_delete_dir, possibly referring to sstables in sub-directories.
     for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
         co_await collect_subdir(state);
-        co_await start_subdir(state);
+        co_await process_subdir(*_sstable_directories[state]);
     }
 
     co_await smp::invoke_on_all([this] {
@@ -346,8 +346,7 @@ future<> table_populator::collect_subdir(sstables::sstable_state state) {
     _sstable_directories[state] = dptr;
 }
 
-future<> table_populator::start_subdir(sstables::sstable_state state) {
-    auto& directory = *_sstable_directories[state];
+future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& directory) {
     co_await distributed_loader::lock_table(_global_table, directory);
 
     sstables::sstable_directory::process_flags flags {
