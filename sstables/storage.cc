@@ -645,7 +645,8 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
 }
 
 future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
-    co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
+    on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
+    co_return;
 }
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstable_state state) {

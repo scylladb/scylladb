@@ -394,7 +394,6 @@ class table : public enable_lw_shared_from_this<table>
 public:
     struct config {
         std::vector<sstring> all_datadirs;
-        sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;
@@ -686,10 +685,6 @@ private:
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
 public:
-    sstring dir() const {
-        return _config.datadir;
-    }
-
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
     future<> init_storage();

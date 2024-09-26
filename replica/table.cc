@@ -2601,7 +2601,15 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
-    auto jsondir = table_shards->_config.datadir + "/snapshots/" + name;
+    auto* so = std::get_if<storage_options::local>(&table_shards->get_storage_options().value);
+    if (so == nullptr) {
+        throw std::runtime_error("Snapshotting non-local tables is not implemented");
+    }
+    if (so->dir.empty()) { // virtual tables don't have initialized local storage
+        co_return;
+    }
+
+    auto jsondir = (so->dir / sstables::snapshots_dir / name).native();
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
@@ -2661,7 +2669,12 @@ future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<sna
 }
 
 future<bool> table::snapshot_exists(sstring tag) {
-    sstring jsondir = _config.datadir + "/snapshots/" + tag;
+    auto* so = std::get_if<storage_options::local>(&_storage_opts->value);
+    if (so == nullptr || so->dir.empty()) {
+        co_return false; // Technically it doesn't as snapshots only work for local storage
+    }
+
+    sstring jsondir = (so->dir / sstables::snapshots_dir / tag).native();
     bool exists = false;
     try {
         auto sd = co_await io_check(file_stat, jsondir, follow_symlink::no);

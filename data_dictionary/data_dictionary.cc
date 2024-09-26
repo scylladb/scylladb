@@ -415,3 +415,14 @@ auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dicti
     }
     return fmt::format_to(ctx.out(), ", userTypes={}}}", m.user_types());
 }
+
+auto fmt::formatter<data_dictionary::storage_options>::format(const data_dictionary::storage_options& so, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return std::visit(overloaded_functor {
+        [&ctx] (const data_dictionary::storage_options::local& so) -> decltype(ctx.out()) {
+            return fmt::format_to(ctx.out(), "{}", so.dir);
+        },
+        [&ctx] (const data_dictionary::storage_options::s3& so) -> decltype(ctx.out()) {
+            return fmt::format_to(ctx.out(), "s3://{}/{}", so.bucket, so.prefix);
+        }
+    }, so.value);
+}

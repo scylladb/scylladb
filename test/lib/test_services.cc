@@ -137,12 +137,6 @@ schema_ptr table_for_tests::make_default_schema() {
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
-    // FIXME -- the storage options here are from sstables::test_env that should have
-    // initialized it properly
-    std::visit(overloaded_functor {
-        [&cfg] (data_dictionary::storage_options::local& o) { o.dir = cfg.datadir; },
-        [&cfg] (data_dictionary::storage_options::s3& o) { o.prefix = cfg.datadir; },
-    }, storage.value);
     cfg.cf_stats = &_data->cf_stats;
     _data->s = s ? s : make_default_schema();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
@@ -485,18 +479,18 @@ table_for_tests
 test_env::make_table_for_tests(schema_ptr s, sstring dir) {
     maybe_start_compaction_manager();
     auto cfg = make_table_config();
-    cfg.datadir = dir;
     cfg.enable_commitlog = false;
-    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+    auto storage = _impl->storage;
+    std::visit(overloaded_functor {
+        [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
+        [&dir] (data_dictionary::storage_options::s3& o) { o.prefix = dir; },
+    }, storage.value);
+    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), std::move(storage));
 }
 
 table_for_tests
 test_env::make_table_for_tests(schema_ptr s) {
-    maybe_start_compaction_manager();
-    auto cfg = make_table_config();
-    cfg.datadir = _impl->dir.path().native();
-    cfg.enable_commitlog = false;
-    return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+    return make_table_for_tests(std::move(s), _impl->dir.path().native());
 }
 
 void test_env::request_abort() {
