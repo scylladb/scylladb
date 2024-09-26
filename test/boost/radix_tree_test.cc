@@ -12,6 +12,8 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <fmt/core.h>
 
+#include "radix_tree_printer.hh"
+#include "collection_stress.hh"
 #include "utils/compact-radix-tree.hh"
 
 using namespace compact_radix_tree;
@@ -155,6 +157,119 @@ BOOST_AUTO_TEST_CASE(test_clone) {
     do_test_clone(333333);
 }
 
+class stress_test_data {
+    unsigned long *_data;
+    unsigned long _val;
+public:
+    stress_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
+    stress_test_data(const stress_test_data&) = delete;
+    stress_test_data(stress_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
+    ~stress_test_data() {
+        if (_data != nullptr) {
+            delete _data;
+        }
+    }
+
+    unsigned long value() const {
+        return _data == nullptr ? _val + 0x80000000 : *_data;
+    }
+};
+
+template <> struct fmt::formatter<stress_test_data> : fmt::formatter<string_view> {
+    auto format(const stress_test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
+
+BOOST_AUTO_TEST_CASE(stress_test) {
+    using test_tree = tree<stress_test_data>;
+
+    auto t = std::make_unique<test_tree>();
+    std::map<unsigned, stress_test_data> oracle;
+
+    unsigned col_size = 0;
+    enum class validate {
+        oracle, iterator, walk, lower_bound,
+    };
+    validate vld = validate::oracle;
+
+    stress_config cfg;
+    cfg.count = 35642;
+    cfg.iters = 1;
+    cfg.keys = "rand";
+    cfg.verb = false;
+
+    for (int i = 0; i < 5; i++) {
+        stress_collection(cfg,
+            /* insert */ [&] (int key) {
+                t->emplace(key, key);
+                oracle.emplace(std::make_pair(key, key));
+                col_size++;
+            },
+            /* erase */ [&] (int key) {
+                t->erase(key);
+                oracle.erase(key);
+                col_size--;
+            },
+            /* validate */ [&] {
+                if (cfg.verb) {
+                    compact_radix_tree::printer<stress_test_data, unsigned>::show(*t);
+                }
+                if (vld == validate::oracle) {
+                    for (auto&& d : oracle) {
+                        stress_test_data* td = t->get(d.first);
+                        SCYLLA_ASSERT(td != nullptr);
+                        SCYLLA_ASSERT(td->value() == d.second.value());
+                    }
+                    vld = validate::iterator;
+                } else if (vld == validate::iterator) {
+                    unsigned nr = 0;
+                    auto ti = t->begin();
+                    while (ti != t->end()) {
+                        SCYLLA_ASSERT(ti->value() == ti.key());
+                        nr++;
+                        ti++;
+                        SCYLLA_ASSERT(nr <= col_size);
+                    }
+                    SCYLLA_ASSERT(nr == col_size);
+                    vld = validate::walk;
+                } else if (vld == validate::walk) {
+                    unsigned nr = 0;
+                    t->walk([&nr, col_size] (unsigned idx, stress_test_data& td) {
+                        SCYLLA_ASSERT(idx == td.value());
+                        nr++;
+                        SCYLLA_ASSERT(nr <= col_size);
+                        return true;
+                    });
+                    SCYLLA_ASSERT(nr == col_size);
+                    vld = validate::lower_bound;
+                } else if (vld == validate::lower_bound) {
+                    unsigned nr = 0;
+                    unsigned idx = 0;
+                    while (true) {
+                        stress_test_data* td = t->lower_bound(idx);
+                        if (td == nullptr) {
+                            break;
+                        }
+                        SCYLLA_ASSERT(td->value() >= idx);
+                        nr++;
+                        idx = td->value() + 1;
+                        SCYLLA_ASSERT(nr <= col_size);
+                    }
+                    SCYLLA_ASSERT(nr == col_size);
+                    vld = validate::oracle;
+                }
+            },
+            /* step */ [] (stress_step step) { }
+        );
+
+        cfg.count /= 3;
+    }
+
+    t->clear();
+    oracle.clear();
+}
+
 SEASTAR_TEST_CASE(test_exception_safety_of_clone) {
     return seastar::async([] {
         test_tree t;
@@ -176,4 +291,75 @@ SEASTAR_TEST_CASE(test_exception_safety_of_clone) {
                     return a.value() == b.value();
                 }));
     });
+}
+
+class compaction_test_data {
+    unsigned long *_data;
+    unsigned long _val;
+public:
+    compaction_test_data(unsigned long val) : _data(new unsigned long(val)), _val(val) {}
+    compaction_test_data(const compaction_test_data&) = delete;
+    compaction_test_data(compaction_test_data&& o) noexcept : _data(std::exchange(o._data, nullptr)), _val(o._val) {}
+    ~compaction_test_data() {
+        if (_data != nullptr) {
+            delete _data;
+        }
+    }
+
+    unsigned long value() const {
+        return _data == nullptr ? _val + 0x80000000 : *_data;
+    }
+};
+
+template <> struct fmt::formatter<compaction_test_data> : fmt::formatter<string_view> {
+    auto format(const compaction_test_data& d, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", d.value());
+    }
+};
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
+    using test_tree = tree<compaction_test_data>;
+
+    tree_pointer<test_tree> t;
+
+    stress_config cfg;
+    cfg.count = 132564;
+    cfg.iters = 1;
+    cfg.keys = "rand";
+    cfg.verb = false;
+
+    unsigned col_size = 0;
+
+    for (int i = 0; i < 32; i++) {
+        stress_compact_collection(cfg,
+            /* insert */ [&] (int key) {
+                t->emplace(key, key);
+                col_size++;
+            },
+            /* erase */ [&] (int key) {
+                t->erase(key);
+                col_size--;
+            },
+            /* validate */ [&] {
+                if (cfg.verb) {
+                    compact_radix_tree::printer<compaction_test_data, unsigned>::show(*t);
+                }
+
+                unsigned nr = 0;
+                auto ti = t->begin();
+                while (ti != t->end()) {
+                    SCYLLA_ASSERT(ti->value() == ti.key());
+                    nr++;
+                    ti++;
+                }
+                SCYLLA_ASSERT(nr == col_size);
+            },
+            /* clear */ [&] {
+                t->clear();
+                col_size = 0;
+            }
+        );
+
+        cfg.count /= 2;
+    }
 }

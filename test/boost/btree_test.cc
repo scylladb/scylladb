@@ -12,7 +12,9 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "test/unit/tree_test_key.hh"
+#include "collection_stress.hh"
+#include "btree_validation.hh"
+#include "tree_test_key.hh"
 #include "utils/intrusive_btree.hh"
 
 using namespace intrusive_b;
@@ -526,6 +528,101 @@ BOOST_DATA_TEST_CASE(test_unlink_leftmost_n,
     }
 }
 
+BOOST_DATA_TEST_CASE(stress_test, boost::unit_test::data::make({std::tuple(4132, 9), std::tuple(27, 312)}), count, iter) {
+    constexpr int TEST_NODE_SIZE = 8;
+    constexpr int TEST_LINEAR_THRESH = 21;
+
+    class test_key : public tree_test_key_base {
+    public:
+        member_hook _hook;
+        test_key(int nr) noexcept : tree_test_key_base(nr) {}
+        test_key(const test_key&) = delete;
+        test_key(test_key&&) = delete;
+    };
+
+    using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH, key_search::both, with_debug::yes>;
+    using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
+    using test_iterator_checker = iterator_checker<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
+
+    test_key_tri_compare cmp;
+    auto t = std::make_unique<test_tree>();
+    std::map<int, unsigned long> oracle;
+    test_validator tv;
+    auto* itc = new test_iterator_checker(tv, *t);
+
+    stress_config cfg;
+    cfg.count = count;
+    cfg.iters = iter;
+    cfg.keys = "rand";
+    cfg.verb = false;
+    auto itv = 0;
+
+    stress_collection(cfg,
+        /* insert */ [&] (int key) {
+            auto ir = t->insert(std::make_unique<test_key>(key), cmp);
+            SCYLLA_ASSERT(ir.second);
+            oracle[key] = key;
+
+            if (itv++ % 7 == 0) {
+                if (!itc->step()) {
+                    delete itc;
+                    itc = new test_iterator_checker(tv, *t);
+                }
+            }
+        },
+        /* erase */ [&] (int key) {
+            test_key k(key);
+            auto deleter = [] (test_key* k) noexcept { delete k; };
+
+            if (itc->here(k)) {
+                delete itc;
+                itc = nullptr;
+            }
+
+            t->erase_and_dispose(key, cmp, deleter);
+            oracle.erase(key);
+
+            if (itc == nullptr) {
+                itc = new test_iterator_checker(tv, *t);
+            }
+
+            if (itv++ % 5 == 0) {
+                if (!itc->step()) {
+                    delete itc;
+                    itc = new test_iterator_checker(tv, *t);
+                }
+            }
+        },
+        /* validate */ [&] {
+            if (cfg.verb) {
+                fmt::print("Validating\n");
+                tv.print_tree(*t, '|');
+            }
+            tv.validate(*t);
+        },
+        /* step */ [&] (stress_step step) {
+            if (step == stress_step::before_erase) {
+                auto sz = t->calculate_size();
+                if (sz != (size_t)cfg.count) {
+                    fmt::print("Size {} != count {}\n", sz, cfg.count);
+                    throw "size";
+                }
+
+                auto ti = t->begin();
+                for (auto oe : oracle) {
+                    if ((unsigned long)*ti != oe.second) {
+                        fmt::print("Data mismatch {} vs {}\n", oe.second, *ti);
+                        throw "oracle";
+                    }
+                    ti++;
+                }
+            }
+        }
+    );
+
+    delete itc;
+}
+
 static future<> test_exception_safety_of_clone(unsigned nr_keys) {
     return seastar::async([nr_keys] {
         test_tree t;
@@ -566,4 +663,58 @@ SEASTAR_TEST_CASE(test_exception_safety_of_clone_linear) {
 
 SEASTAR_TEST_CASE(test_exception_safety_of_clone_large) {
     return test_exception_safety_of_clone(2534);
+}
+
+void stress_compaction_test(int count, int iter) {
+    constexpr int TEST_NODE_SIZE = 7;
+    constexpr int TEST_LINEAR_THRESHOLD = 19;
+
+    class test_key : public tree_test_key_base {
+    public:
+        member_hook _hook;
+        test_key(int nr) noexcept : tree_test_key_base(nr) {}
+        test_key(const test_key&) = delete;
+        test_key(test_key&& o) noexcept : tree_test_key_base(std::move(o)), _hook(std::move(o._hook)) {}
+    };
+
+    using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD, key_search::both, with_debug::yes>;
+    using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD>;
+
+    stress_config cfg;
+    cfg.count = count;
+    cfg.iters = iter;
+    cfg.verb = false;
+
+    tree_pointer<test_tree> t;
+    test_validator tv;
+
+    stress_compact_collection(cfg,
+        /* insert */ [&] (int key) {
+            auto k = alloc_strategy_unique_ptr<test_key>(current_allocator().construct<test_key>(key));
+            auto ti = t->insert(std::move(k), test_key_tri_compare{});
+            SCYLLA_ASSERT(ti.second);
+        },
+        /* erase */ [&] (int key) {
+            auto deleter = current_deleter<test_key>();
+            t->erase_and_dispose(test_key(key), test_key_tri_compare{}, deleter);
+        },
+        /* validate */ [&] {
+            if (cfg.verb) {
+                fmt::print("Validating:\n");
+                tv.print_tree(*t, '|');
+            }
+            tv.validate(*t);
+        },
+        /* clear */ [&] {
+            t->clear_and_dispose(current_deleter<test_key>());
+        }
+    );
+}
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test_large) {
+    stress_compaction_test(10000, 13);
+}
+
+SEASTAR_THREAD_TEST_CASE(stress_compaction_test_small) {
+    stress_compaction_test(17, 3);
 }

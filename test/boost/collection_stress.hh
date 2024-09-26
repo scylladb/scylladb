@@ -67,8 +67,6 @@ void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase
             if (i % (i/1000 + 1) == 0) {
                 validate();
             }
-
-            seastar::thread::maybe_yield();
         }
 
         if (shuffle) {
@@ -85,8 +83,6 @@ void stress_collection(const stress_config& conf, Insert&& insert, Erase&& erase
             if ((conf.count-i) % ((conf.count-i)/1000 + 1) == 0) {
                 validate();
             }
-
-            seastar::thread::maybe_yield();
         }
 
         step(stress_step::iteration_finished);
