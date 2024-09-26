@@ -19,9 +19,9 @@ leveled_compaction_strategy_state& leveled_compaction_strategy::get_state(table_
     return table_s.get_compaction_strategy_state().get<leveled_compaction_strategy_state>();
 }
 
-compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::optional<std::vector<shared_sstable>> candidates_opt) {
     auto& state = get_state(table_s);
-    auto candidates = control.candidates(table_s);
+    auto candidates = candidates_opt ? std::move(*candidates_opt) : control.candidates(table_s);
     // NOTE: leveled_manifest creation may be slightly expensive, so later on,
     // we may want to store it in the strategy itself. However, the sstable
     // lists managed by the manifest may become outdated. For example, one

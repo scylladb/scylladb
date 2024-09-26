@@ -306,7 +306,8 @@ public:
     future<> get_compaction_history(compaction_history_consumer&& f);
 
     // Submit a table to be compacted.
-    void submit(compaction::table_state& t);
+    // Caller can pass candidates for compaction if known in advance
+    void submit(compaction::table_state& t, std::optional<std::vector<sstables::shared_sstable>> candidates_opt = std::nullopt);
 
     // Can regular compaction be performed in the given table
     bool can_perform_regular_compaction(compaction::table_state& t);
