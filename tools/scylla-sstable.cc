@@ -1620,11 +1620,11 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         writer.Bool(res.has_digest);
         switch (res.status) {
         case validate_checksums_status::valid:
-            writer.Key("valid_checksums");
+            writer.Key("valid");
             writer.Bool(true);
             break;
         case validate_checksums_status::invalid:
-            writer.Key("valid_checksums");
+            writer.Key("valid");
             writer.Bool(false);
             break;
         case validate_checksums_status::no_checksum:

@@ -599,7 +599,7 @@ The content is dumped in JSON, using the following schema:
     $RESULT := {
         "has_checksums": Bool,
         "has_digest": Bool,
-        "valid_checksums": Bool, // optional
+        "valid": Bool, // optional
     }
 
 decompress
