@@ -10,6 +10,9 @@ on:
       - 'docs/**'
       - '.github/**'
   workflow_dispatch:
+  issue_comment:
+    types:
+      - created
 
 env:
   BUILD_TYPE: RelWithDebInfo
@@ -25,6 +28,7 @@ concurrency:
 
 jobs:
   read-toolchain:
+    if: github.event_name == 'pull_request' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/clang-tidy'))
     uses: ./.github/workflows/read-toolchain.yaml
   clang-tidy:
     name: Run clang-tidy
