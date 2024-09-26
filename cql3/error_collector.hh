@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "bytes.hh"
 #include "cql3/error_listener.hh"
 #include "exceptions/exceptions.hh"
 

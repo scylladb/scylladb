@@ -9,6 +9,8 @@
  */
 
 #include "exceptions.hh"
+
+#include "bytes.hh"
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>
 

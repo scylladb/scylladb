@@ -18,7 +18,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "auth/authenticated_user.hh"
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "seastarx.hh"
 
 namespace auth {

@@ -15,7 +15,7 @@
 #include "db/operation_type.hh"
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace exceptions {
 
