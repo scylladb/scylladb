@@ -11,7 +11,7 @@
 
 #include <seastar/core/sstring.hh>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "cdc/cdc_options.hh"
 #include "schema/schema.hh"
 #include "serializer_impl.hh"
