@@ -6684,6 +6684,10 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
         co_return join_node_response_result{};
     }
 
+    if (utils::get_local_injector().enter("join_node_response_drop_expiring")) {
+        _group0->modifiable_address_map().force_drop_expiring_entries();
+    }
+
     try {
         co_return co_await std::visit(overloaded_functor {
             [&] (const join_node_response_params::accepted& acc) -> future<join_node_response_result> {
