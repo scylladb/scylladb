@@ -112,6 +112,7 @@ class group0_guard;
 class group0_info;
 class raft_group0_client;
 class tablet_virtual_task;
+class task_manager_module;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -186,6 +187,7 @@ private:
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
     shared_ptr<node_ops::task_manager_module> _node_ops_module;
+    shared_ptr<service::task_manager_module> _tablets_module;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);

@@ -101,6 +101,7 @@
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "node_ops/task_manager_module.hh"
+#include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
@@ -183,6 +184,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
+        , _tablets_module(make_shared<service::task_manager_module>(tm))
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
@@ -200,8 +202,10 @@ storage_service::storage_service(abort_source& abort_source,
         , _topology_state_machine(topology_state_machine)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
+    tm.register_module(_tablets_module->get_name(), _tablets_module);
     if (this_shard_id() == 0) {
         _node_ops_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
+        _tablets_module->make_virtual_task<service::tablet_virtual_task>(*this);
     }
     register_metrics();
 
@@ -3235,6 +3239,7 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
+    co_await _tablets_module->stop();
     co_await _node_ops_module->stop();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
