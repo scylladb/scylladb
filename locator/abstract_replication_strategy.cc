@@ -227,7 +227,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
     }
 }
 
-dht::token_range_vector
+future<dht::token_range_vector>
 vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
     dht::token_range_vector ret;
     const auto& tm = *_tmptr;
@@ -245,11 +245,12 @@ vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iterati
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
         prev_tok = tok;
+        co_await coroutine::maybe_yield();
     }
-    return ret;
+    co_return ret;
 }
 
-dht::token_range_vector
+future<dht::token_range_vector>
 vnode_effective_replication_map::get_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
@@ -299,7 +300,7 @@ abstract_replication_strategy::get_ranges(locator::host_id ep, const token_metad
     co_return ret;
 }
 
-dht::token_range_vector
+future<dht::token_range_vector>
 vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
@@ -312,7 +313,7 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     });
 }
 
-dht::token_range_vector
+future<dht::token_range_vector>
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
