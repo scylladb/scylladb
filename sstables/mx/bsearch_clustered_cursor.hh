@@ -225,35 +225,15 @@ private:
         return _promoted_index_size - (_blocks_count - idx) * sizeof(pi_offset_type);
     }
 
-    future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        return read(_promoted_index_start + get_offset_entry_pos(idx), trace_state, _u32_parser).then([this] {
-            return _u32_parser.value();
-        });
-    }
+    future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state);
 
     // Postconditions:
     //   - block.start is engaged and valid.
-    future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        return read(_promoted_index_start + block.offset, trace_state, _clustering_parser).then([this, &block] {
-            auto mem_before = block.memory_usage();
-            block.start.emplace(_clustering_parser.get_and_reset());
-            _metrics.used_bytes += block.memory_usage() - mem_before;
-        });
-    }
+    future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state);
 
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
-    future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        return read(_promoted_index_start + block.offset, trace_state, _block_parser).then([this, &block] {
-            auto mem_before = block.memory_usage();
-            block.start.emplace(std::move(_block_parser.start()));
-            block.end.emplace(std::move(_block_parser.end()));
-            block.end_open_marker = _block_parser.end_open_marker();
-            block.data_file_offset = _block_parser.offset();
-            block.width = _block_parser.width();
-            _metrics.used_bytes += block.memory_usage() - mem_before;
-        });
-    }
+    future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state);
 
 public:
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset and index fields valid.
@@ -387,6 +367,37 @@ struct fmt::formatter<sstables::mc::cached_promoted_index::promoted_index_block>
 };
 
 namespace sstables::mc {
+
+inline
+future<cached_promoted_index::pi_offset_type>
+cached_promoted_index::read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + get_offset_entry_pos(idx), trace_state, _u32_parser).then([idx, this] {
+        return _u32_parser.value();
+    });
+}
+
+inline
+future<> cached_promoted_index::read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + block.offset, trace_state, _clustering_parser).then([this, &block] {
+        auto mem_before = block.memory_usage();
+        block.start.emplace(_clustering_parser.get_and_reset());
+        _metrics.used_bytes += block.memory_usage() - mem_before;
+    });
+}
+
+inline
+future<> cached_promoted_index::read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + block.offset, trace_state, _block_parser).then([this, &block] {
+        auto mem_before = block.memory_usage();
+        block.start.emplace(std::move(_block_parser.start()));
+        block.end.emplace(std::move(_block_parser.end()));
+        block.end_open_marker = _block_parser.end_open_marker();
+        block.data_file_offset = _block_parser.offset();
+        block.width = _block_parser.width();
+        _metrics.used_bytes += block.memory_usage() - mem_before;
+    });
+}
+
 /// Cursor implementation which does binary search over index entries.
 ///
 /// Memory consumption: O(log(N))
