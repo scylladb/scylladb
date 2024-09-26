@@ -2819,7 +2819,16 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
-                testlog.info("Validating corrupted {}", sst->get_filename());
+                testlog.info("Validating digest-corrupted {}", sst->get_filename());
+                auto valid_digest = sst->read_digest().get();
+                BOOST_REQUIRE(valid_digest.has_value());
+                sstables::test(sst).set_digest(valid_digest.value() + 1);
+
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                sstables::test(sst).set_digest(valid_digest); // restore it for next test cases
+
+                testlog.info("Validating checksum-corrupted {}", sst->get_filename());
 
                 { // corrupt the sstable
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));

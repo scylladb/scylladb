@@ -206,6 +206,10 @@ public:
     const utils::filter_ptr& get_filter() const {
         return _sst->_components->filter;
     }
+
+    void set_digest(std::optional<uint32_t> digest) {
+        _sst->_components->digest = digest;
+    }
 };
 
 inline auto replacer_fn_no_op() {
