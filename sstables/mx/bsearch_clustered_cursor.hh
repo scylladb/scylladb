@@ -371,6 +371,7 @@ inline
 future<cached_promoted_index::pi_offset_type>
 cached_promoted_index::read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
     return read(_promoted_index_start + get_offset_entry_pos(idx), trace_state, _u32_parser).then([idx, this] {
+        sstlog.trace("cached_promoted_index {}: read_block_offset: idx: {}, offset: {}", fmt::ptr(this), idx, _u32_parser.value());
         return _u32_parser.value();
     });
 }
@@ -380,6 +381,7 @@ future<> cached_promoted_index::read_block_start(promoted_index_block& block, tr
     return read(_promoted_index_start + block.offset, trace_state, _clustering_parser).then([this, &block] {
         auto mem_before = block.memory_usage();
         block.start.emplace(_clustering_parser.get_and_reset());
+        sstlog.trace("cached_promoted_index {}: read_block_start: {}", fmt::ptr(this), block);
         _metrics.used_bytes += block.memory_usage() - mem_before;
     });
 }
@@ -394,6 +396,7 @@ future<> cached_promoted_index::read_block(promoted_index_block& block, tracing:
         block.data_file_offset = _block_parser.offset();
         block.width = _block_parser.width();
         _metrics.used_bytes += block.memory_usage() - mem_before;
+        sstlog.trace("cached_promoted_index {}: read_block: {}", fmt::ptr(this), block);
     });
 }
 
