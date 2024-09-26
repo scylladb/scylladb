@@ -202,7 +202,9 @@ public:
     }
 
     void reset() {
+        _parsing_start_key = true;
         _state = state::CLUSTERING_START;
+        _primitive.reset();
     }
 };
 
@@ -318,7 +320,7 @@ public:
 
     void reset() {
         _end_open_marker.reset();
-        _clustering.set_parsing_start_key(true);
+        _clustering.reset();
         _state = state::START;
     }
 };
