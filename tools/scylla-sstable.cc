@@ -16,7 +16,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/core/units.hh>
+#include <stdexcept>
 
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
@@ -39,6 +42,8 @@
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
 #include "locator/host_id.hh"
+#include "utils/s3/client.hh"
+#include "utils/s3/object_storage_endpoint_param.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -2598,6 +2603,128 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
     consumer->consume_stream_end().get();
 }
 
+// the location of an object in object storage
+struct object_location {
+    // defaults to "s3", this field is not used so far.
+    std::string backend = "s3";
+    std::string endpoint;
+    std::filesystem::path key;
+
+    // two representations are accepted:
+    // - <endpoint>:<key>
+    // - s3://<endpoint>/<key>
+    static std::optional<object_location> as_uri(std::string_view s) {
+        const std::string_view uri_sep = "://";
+        auto sep_pos = s.find(uri_sep);
+        if (sep_pos == s.npos) {
+            return {};
+        }
+        object_location loc;
+        loc.backend = sstring(s.substr(0, sep_pos));
+        sep_pos += std::size(uri_sep);
+        auto path_pos = s.find('/', sep_pos);
+        loc.endpoint = s.substr(sep_pos, path_pos);
+        if (path_pos == s.npos) {
+            throw std::invalid_argument(fmt::format("malformatted URI: {}", s));
+        }
+        path_pos += 1;
+        loc.key = s.substr(path_pos);
+        return loc;
+    }
+
+    static std::optional<object_location> as_scp_path(std::string_view s) {
+        const char sep = ':';
+        auto sep_pos = s.find(sep);
+        if (sep_pos == s.npos) {
+            return {};
+        }
+        object_location loc;
+        loc.endpoint = s.substr(0, sep_pos);
+        sep_pos += 1;
+        loc.key = s.substr(sep_pos);
+        return loc;
+    }
+
+    static object_location parse(std::string_view s) {
+        if (auto loc = as_uri(s)) {
+            return *std::move(loc);
+        }
+        if (auto loc = as_scp_path(s)) {
+            return *std::move(loc);
+        }
+        return {
+            .backend ="s3",
+            .endpoint = "",
+            .key = s,
+        };
+    }
+};
+
+static
+void upload_operation(schema_ptr schema, reader_permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager&, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+    for (auto required_param : {"object-storage-config", "to"}) {
+        if (!vm.contains(required_param)) {
+            throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
+        }
+    }
+    object_location dest = object_location::parse(vm["to"].as<std::string>());
+    if (dest.endpoint.empty()) {
+        if (!vm.contains("endpoint")) {
+            throw std::invalid_argument("endpoint is not specified");
+        }
+        dest.endpoint = vm["endpoint"].as<std::string>();
+    }
+
+    auto endpoints = read_endpoints_config(vm["object-storage-config"].as<std::string>()).get();
+    auto cfg = make_lw_shared<s3::endpoint_config>(endpoints.at(dest.endpoint));
+    semaphore mem(vm["memory"].as<unsigned>() * 1_MiB);
+    auto cln = s3::client::make(dest.endpoint, std::move(cfg), mem);
+    auto close_cln = deferred_close(*cln);
+
+    std::vector<sstring> filenames;
+    using enum sstables::component_type;
+    const sstables::component_type all_components[] = {
+        Index,
+        CompressionInfo,
+        Data,
+        TOC,
+        Summary,
+        Digest,
+        CRC,
+        Filter,
+        Statistics,
+        Scylla,
+    };
+    for (auto& sst : sstables) {
+        auto& storage = sst->get_storage();
+        for (auto component : all_components) {
+            if (sst->has_component(component)) {
+                auto fn = sstable::filename(storage.prefix(),
+                                            schema->ks_name(),
+                                            schema->cf_name(),
+                                            sst->get_version(),
+                                            sst->generation(),
+                                            sstable_format_types::big,
+                                            component);
+                sst_log.debug("adding {}", fn);
+                filenames.push_back(std::move(fn));
+            }
+        }
+    }
+    const unsigned concurrency = vm["concurrency"].as<unsigned>();
+    max_concurrent_for_each(filenames, concurrency,
+                            [cln, &dest] (sstring& filename) -> future<> {
+        std::filesystem::path path(filename);
+        auto object_name = dest.key / path.filename();
+        sst_log.debug("uploading {} to {}", path, object_name);
+        return cln->upload_file(path, object_name.native());
+    }).get();
+}
+
 template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
@@ -2978,6 +3105,24 @@ for more information on this operation, including the API documentation.
                 typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
             }},
             script_operation},
+/* upload */
+    {{"upload",
+            "Upload specified SSTables to specified location in object storage",
+R"(
+Upload specified SSTables to specified location of given endpoint, which is in turn
+configured with specified configuration.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#upload
+for more information on this operation, including the API documentation.
+)",
+            {
+                typed_option<std::string>("endpoint", "ID of the configured object storage endpoint to copy SSTable to"),
+                typed_option<std::string>("object-storage-config", "The path to object_storage.yaml"),
+                typed_option<std::string>("to", "The destination location"),
+                typed_option<unsigned>("concurrency", 16, "Number of simultaneous transfer jobs"),
+                typed_option<unsigned>("memory", 1024, "Total memory allocated for file transmission (in MiB)"),
+            }},
+            upload_operation},
 /* shard-of */
     {{"shard-of",
             "Print out the shard which 'owns' the sstable",
