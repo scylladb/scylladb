@@ -259,7 +259,7 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
     auto altered = std::move(diff.entries_differing);
 
     affected_keyspaces affected;
-    affected.dropped = std::move(diff.entries_only_on_left);
+    affected.names.dropped = std::move(diff.entries_only_on_left);
 
     auto& sk_created = sk_diff.entries_only_on_right;
     auto& sk_altered = sk_diff.entries_differing;
@@ -270,7 +270,7 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
     altered.insert(sk_altered.begin(), sk_altered.end());
     // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
     for (auto&& ks : boost::range::join(sk_created, sk_dropped)) {
-        if (!created.contains(ks) && !affected.dropped.contains(ks)) {
+        if (!created.contains(ks) && !affected.names.dropped.contains(ks)) {
             altered.emplace(ks);
         }
     }
@@ -281,18 +281,22 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
-        co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
-        affected.created.insert(name);
+        affected.created.push_back(
+                co_await replica::database::prepare_create_keyspace_on_all_shards(
+                        sharded_db, proxy, *ksm));
+        affected.names.created.insert(name);
     }
     for (auto& name : altered) {
         slogger.info("Altering keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto tmp_ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
-        co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
-        affected.altered.insert(name);
+        affected.altered.push_back(
+                co_await replica::database::prepare_update_keyspace_on_all_shards(
+                        sharded_db, *tmp_ksm));
+        affected.names.altered.insert(name);
     }
-    for (auto& key : affected.dropped) {
+    for (auto& key : affected.names.dropped) {
         slogger.info("Dropping keyspace {}", key);
     }
     co_return affected;
@@ -537,9 +541,9 @@ constexpr size_t max_concurrent = 8;
 
 in_progress_types_storage_per_shard::in_progress_types_storage_per_shard(replica::database& db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types) : _stored_user_types(db.as_user_types_storage()) {
     // initialize metadata for new keyspaces
-    for (auto& ks_name : affected_keyspaces.created) {
-        auto& ks = db.find_keyspace(ks_name);
-        auto metadata = ks.metadata();
+    for (auto& ks_per_shard : affected_keyspaces.created) {
+        auto metadata = ks_per_shard[this_shard_id()]->metadata();
+        auto& ks_name = metadata->name();
         if (!_in_progress_types.contains(ks_name)) {
             // copy metadata
             _in_progress_types[ks_name] = metadata->user_types();
@@ -563,7 +567,7 @@ in_progress_types_storage_per_shard::in_progress_types_storage_per_shard(replica
         auto& ks_name = type->_keyspace;
         _in_progress_types[ks_name].remove_type(type);
     }
-    for (const auto &ks_name : affected_keyspaces.dropped) {
+    for (const auto &ks_name : affected_keyspaces.names.dropped) {
         // can't reference a type when it's keyspace is being dropped
         _in_progress_types[ks_name] = data_dictionary::user_types_metadata();
     }
@@ -942,13 +946,23 @@ void schema_applier::commit_tables_and_views() {
 }
 
 void schema_applier::commit_on_shard(replica::database& db) {
+    // commit keyspace operations
+    for (auto& ks_per_shard : _affected_keyspaces.created) {
+        auto ks = ks_per_shard[this_shard_id()].release();
+        db.insert_keyspace(std::move(ks));
+    }
+    for (auto& ks_change_per_shard : _affected_keyspaces.altered) {
+        auto ks_change = ks_change_per_shard[this_shard_id()].release();
+        db.update_keyspace(std::move(ks_change));
+    }
+
     commit_tables_and_views();
 
     // commit user functions and aggregates
     _functions_batch.local().commit();
 
     // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-    for (const auto& ks_name : _affected_keyspaces.dropped) {
+    for (const auto& ks_name : _affected_keyspaces.names.dropped) {
         db.drop_keyspace(ks_name);
     }
 }
@@ -1035,13 +1049,13 @@ future<> schema_applier::notify() {
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
         auto& notifier = db.get_notifier();
         // notify about keyspaces
-        for (auto& name : _affected_keyspaces.created) {
+        for (const auto& name : _affected_keyspaces.names.created) {
             co_await notifier.create_keyspace(name);
         }
-        for (auto& name : _affected_keyspaces.altered) {
+        for (const auto& name : _affected_keyspaces.names.altered) {
             co_await notifier.update_keyspace(name);
         }
-        for (auto& name : _affected_keyspaces.dropped) {
+        for (const auto& name : _affected_keyspaces.names.dropped) {
             co_await notifier.drop_keyspace(name);
         }
         // notify about user types
