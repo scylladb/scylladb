@@ -162,13 +162,15 @@ public:
     // Makes updates visible. Before calling this function in memory state as observed by other
     // components should not yet change. The function atomically switches current state with
     // new state (the one built in update function).
-    void commit();
+    future<> commit();
     // Notify is called after commit and allows to trigger code which can't provide
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> notify();
     // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
     future<> destroy();
+private:
+    void commit_on_shard(replica::database& db);
 };
 
 }
