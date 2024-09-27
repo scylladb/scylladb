@@ -251,24 +251,29 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
      */
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
+    auto created = std::move(diff.entries_only_on_right);
+    auto altered = std::move(diff.entries_differing);
+
     affected_keyspaces affected{
-        .created = std::move(diff.entries_only_on_right),
-        .altered = std::move(diff.entries_differing),
         .dropped = std::move(diff.entries_only_on_left),
     };
 
     auto& sharded_db = proxy.local().get_db();
-    for (auto& name : affected.created) {
+    for (auto& name : created) {
         slogger.info("Creating keyspace {}", name);
         auto ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)});
-        co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
+        affected.created.push_back(
+                co_await replica::database::prepare_create_keyspace_on_all_shards(
+                        sharded_db, proxy, *ksm));
     }
-    for (auto& name : affected.altered) {
+    for (auto& name : altered) {
         slogger.info("Altering keyspace {}", name);
         auto tmp_ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)});
-        co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
+        affected.altered.push_back(
+                co_await replica::database::prepare_update_keyspace_on_all_shards(
+                        sharded_db, *tmp_ksm));
     }
     for (auto& key : affected.dropped) {
         slogger.info("Dropping keyspace {}", key);
@@ -789,16 +794,38 @@ future<> schema_applier::update(const std::vector<mutation>& muts) {
             _before.scylla_aggregates, _after.scylla_aggregates);
 
     co_await drop_types(_proxy, _affected_user_types);
-
-    auto& sharded_db = _proxy.local().get_db();
-    // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-    for (auto& name : _affected_keyspaces.dropped) {
-        co_await replica::database::drop_keyspace_on_all_shards(sharded_db, name);
-    }
 }
 
-void schema_applier::commit() {
-    // TODO: add copy on write to schema changes
+void schema_applier::commit_on_shard(replica::database& db) {
+    // commit keyspace operations
+    for (auto& ks_per_shard : _affected_keyspaces.created) {
+        auto& ks = ks_per_shard[this_shard_id()];
+        db.insert_keyspace(std::move(ks));
+    }
+    for (auto& ks_change_per_shard : _affected_keyspaces.altered) {
+        auto& ks_change = ks_change_per_shard[this_shard_id()];
+        db.update_keyspace(std::move(ks_change));
+    }
+    for (auto& ks_name : _affected_keyspaces.dropped) {
+        db.drop_keyspace(ks_name);
+    }
+    // TODO: move code for all schema modifications
+}
+
+// TODO: move per shard logic directly to raft so that all subsystems can be updated together
+future<> schema_applier::commit() {
+    auto& sharded_db = _proxy.local().get_db();
+    // Run func first on shard 0
+    // to allow "seeding" of the effective_replication_map
+    // with a new e_r_m instance.
+    co_await sharded_db.invoke_on(0, [this] (replica::database& db) { return commit_on_shard(db); });
+    co_await sharded_db.invoke_on_all([this] (replica::database& db) {
+        if (this_shard_id() == 0) {
+            return make_ready_future<>();
+        }
+        commit_on_shard(db);
+        return make_ready_future<>();
+    });
 }
 
 future<> schema_applier::notify() {
@@ -806,10 +833,12 @@ future<> schema_applier::notify() {
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
         auto& notifier = db.get_notifier();
         // notify about keyspaces
-        for (auto& name : _affected_keyspaces.created) {
+        for (auto& ks : _affected_keyspaces.created) {
+            auto& name = ks[this_shard_id()]->metadata()->name();
             co_await notifier.create_keyspace(name);
         }
-        for (auto& name : _affected_keyspaces.altered) {
+        for (auto& change : _affected_keyspaces.altered) {
+            auto& name = change[this_shard_id()].keyspace_name();
             co_await notifier.update_keyspace(name);
         }
         for (auto& name : _affected_keyspaces.dropped) {
@@ -851,7 +880,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     co_await ap.adjust(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update(mutations);
-    ap.commit();
+    co_await ap.commit();
     co_await ap.notify();
 }
 

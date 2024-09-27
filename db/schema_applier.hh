@@ -47,8 +47,8 @@ struct schema_complete_view {
 
 // groups keyspaces based on what is happening to them during schema change
 struct affected_keyspaces {
-    std::set<sstring> created;
-    std::set<sstring> altered;
+    std::vector<replica::database::created_keyspace_per_shard> created;
+    std::vector<replica::database::keyspace_change_per_shard> altered;
     std::set<sstring> dropped;
 };
 
@@ -133,11 +133,14 @@ public:
     // Makes updates visible. Before calling this function in memory state as observed by other
     // components should not yet change. The function atomically switches current state with
     // new state (the one built in update function).
-    void commit();
+    future<> commit();
     // Notify is called after commit and allows to trigger code which can't provide
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> notify();
+
+private:
+    void commit_on_shard(replica::database& db);
 };
 
 }
