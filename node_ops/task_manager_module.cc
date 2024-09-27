@@ -199,6 +199,8 @@ std::set<gms::inet_address> task_manager_module::get_nodes() const noexcept {
             _ss._topology_state_machine._topology.transition_nodes
         ) | boost::adaptors::transformed([&ss = _ss] (auto& node) {
             return ss.host2ip(locator::host_id{node.first.uuid()});
+        }) | boost::adaptors::filtered([&ss = _ss] (auto& ip) {
+            return ss._gossiper.is_alive(ip);
         })
     );
 }
