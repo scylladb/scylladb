@@ -25,7 +25,7 @@ add_scylla_test(big_decimal_test
 add_scylla_test(bloom_filter_test
   KIND SEASTAR)
 add_scylla_test(bptree_test
-  KIND BOOST
+  KIND SEASTAR
   LIBRARIES utils)
 add_scylla_test(broken_sstable_test
   KIND SEASTAR)
