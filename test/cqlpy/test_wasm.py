@@ -9,7 +9,7 @@
 
 from cassandra.protocol import InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from util import new_test_table, unique_name, new_function, new_aggregate
+from .util import new_test_table, unique_name, new_function, new_aggregate
 
 import pytest
 import requests

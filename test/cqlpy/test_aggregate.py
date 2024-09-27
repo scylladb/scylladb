@@ -9,10 +9,10 @@
 import pytest
 import math
 from decimal import Decimal
-from util import new_test_table, unique_key_int, project, new_type
+from .util import new_test_table, unique_key_int, project, new_type
 from cassandra.util import Date
 from cassandra.protocol import SyntaxException
-from cassandra_tests.porting import assert_invalid_message
+from .cassandra_tests.porting import assert_invalid_message
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

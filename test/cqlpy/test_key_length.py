@@ -19,8 +19,8 @@
 #############################################################################
 
 import pytest
-from util import new_test_table, random_string, unique_key_string, unique_key_int
-import nodetool
+from .util import new_test_table, random_string, unique_key_string, unique_key_int
+from . import nodetool
 from cassandra.protocol import InvalidRequest
 from cassandra.util import SortedSet
 

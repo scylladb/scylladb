@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from util import new_test_table
+from .util import new_test_table
 from cassandra.protocol import InvalidRequest
 
 # table1 has some pre-set data which the tests below SELECT on (the tests

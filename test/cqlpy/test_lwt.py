@@ -12,7 +12,7 @@ import re
 import pytest
 from cassandra.protocol import InvalidRequest
 
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 
 @pytest.fixture(scope="module")
 # FIXME: LWT is not supported with tablets yet. See #18066

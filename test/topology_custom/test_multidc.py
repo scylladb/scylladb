@@ -9,9 +9,7 @@ import sys
 import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
-
-sys.path.insert(0, sys.path[0] + "/test/cqlpy")
-import nodetool
+from test.cqlpy import nodetool
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from test.pylib.manager_client import ManagerClient

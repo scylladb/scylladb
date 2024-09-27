@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from ...porting import *
 
 # Test limit queries on a sparse table,
 # migrated from cql_tests.py:TestCQL.limit_sparse_test()

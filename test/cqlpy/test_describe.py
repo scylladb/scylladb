@@ -12,7 +12,8 @@ import random
 import re
 import textwrap
 from contextlib import contextmanager, ExitStack
-from util import is_scylla, new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix, new_user, new_session
+from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
+    new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user
 from cassandra.protocol import InvalidRequest, Unauthorized
 from collections.abc import Iterable
 from typing import Any

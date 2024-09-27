@@ -6,7 +6,7 @@
 # Tests the calculation of partition range and slice.
 
 import pytest
-from util import new_test_table
+from .util import new_test_table
 
 def test_delete_where_empty_IN(cql, test_keyspace):
     """Tests that DELETE FROM t WHERE p IN () is allowed.  See #9311."""

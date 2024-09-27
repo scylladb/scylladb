@@ -8,12 +8,12 @@ import time
 import re
 import pytest
 
-from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
+from .util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-import nodetool
+from . import nodetool
 
 def get_id_of_cf(cql, cf_name):
     ks, cf = cf_name.split(".")

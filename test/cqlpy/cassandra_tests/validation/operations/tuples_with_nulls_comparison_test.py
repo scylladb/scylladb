@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra_tests.porting import *
+from ...porting import *
 
 def testAddUDTField(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(foo text)") as typename:

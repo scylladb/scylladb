@@ -7,7 +7,7 @@
 #############################################################################
 
 import pytest
-from util import new_test_table
+from .util import new_test_table
 from cassandra.protocol import ConfigurationException
 
 @pytest.fixture(scope="module")

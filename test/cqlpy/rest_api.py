@@ -7,7 +7,7 @@
 # Some metrics cannot be obtained by nodetool, but they are available by API.
 
 import requests
-import nodetool
+from . import nodetool
 import pytest
 from contextlib import contextmanager
 

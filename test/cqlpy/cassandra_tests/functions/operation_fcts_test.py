@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from ...cassandra_tests.porting import *
 
 from decimal import Decimal
 from ctypes import c_float

@@ -32,7 +32,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest
-from util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int
 import uuid
 
 @pytest.fixture(scope="module")

@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pytest
-import util
-import nodetool
+from . import nodetool
+from . import util
 import json
 
 from collections import defaultdict
