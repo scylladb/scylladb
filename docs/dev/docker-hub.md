@@ -50,6 +50,13 @@ Which yields, for `/proc/sys/fs/aio-max-nr`:
 $ docker run --name some-scylla --hostname some-scylla -d scylladb/scylla
 ```
 
+If you're on macOS and plan to start a multi-node cluster (3 nodes or more), start ScyllaDB with
+`–reactor-backend=epoll` to override the default `linux-aio` reactor backend:
+
+```console
+$ docker run --name some-scylla --hostname some-scylla -d scylladb/scylla --reactor-backend=epoll
+```
+
 ### Run `nodetool` utility
 
 ```console
@@ -76,6 +83,11 @@ cqlsh>
 
 ```console
 $ docker run --name some-scylla2  --hostname some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
+```
+If you're on macOS, ensure to add the `–reactor-backend=epoll` option when adding new nodes:
+
+```console
+$ docker run --name some-scylla2  --hostname some-scylla2 -d scylladb/scylla --reactor-backend=epoll --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
 ```
 
 #### Make a cluster with Docker Compose
