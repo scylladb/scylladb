@@ -140,3 +140,114 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
 #endif
     });
 }
+
+SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_index) {
+    return test_env::do_with_async([](test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = ss.make_pkey();
+
+        // enough to have same index block whose clustering key is split across pages
+        clustering_key::less_compare less(*s);
+        std::set<clustering_key, clustering_key::less_compare> keys(less); // present in data file
+        std::set<clustering_key, clustering_key::less_compare> missing_keys(less);
+        const auto n_keys = 13;
+        auto key_size = 32; // whatever
+
+        while (keys.size() < n_keys) {
+            auto key = ss.make_ckey(make_random_string(key_size));
+            keys.emplace(key);
+        }
+
+        while (missing_keys.size() < n_keys) {
+            auto key = ss.make_ckey(make_random_string(key_size));
+            if (!keys.contains(key)) {
+                missing_keys.emplace(key);
+            }
+        }
+
+        // Make sure there are missing keys before and after all present keys
+        // to stress edge cases.
+        {
+            auto first_key = *keys.begin();
+            auto last_key = *std::prev(keys.end());
+            missing_keys.emplace(first_key);
+            missing_keys.emplace(last_key);
+            keys.erase(first_key);
+            keys.erase(last_key);
+        }
+
+        auto last_key = *std::prev(keys.end());
+
+        auto mut = mutation(s, pk);
+        for (auto key : keys) {
+            ss.add_row(mut, key, "vvvv");
+        }
+
+        env.manager().set_promoted_index_block_size(1); // force entry for each row
+        auto mut_reader = make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut));
+        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto permit = semaphore.make_permit();
+        tracing::trace_state_ptr trace = nullptr;
+
+        auto index = std::make_unique<index_reader>(sst, permit, trace, use_caching::yes, true);
+        auto close_index = deferred_close(*index);
+
+        index->advance_to(dht::ring_position_view(pk)).get();
+        index->read_partition_data().get();
+
+        auto index2 = std::make_unique<index_reader>(sst, permit, trace, use_caching::yes, true);
+        auto close_index2 = deferred_close(*index2);
+        index2->advance_to(dht::ring_position_view(pk)).get();
+        index2->advance_to_next_partition().get();
+        auto next_partition_offset = index2->data_file_positions().start;
+
+        for (auto key : missing_keys) {
+            auto cur = dynamic_cast<mc::bsearch_clustered_cursor*>(index->current_clustered_cursor());
+            BOOST_REQUIRE(cur);
+
+            testlog.info("Testing missing key {}", key);
+            auto skip_lb = cur->advance_to(position_in_partition::before_key(key)).get();
+            auto skip_ub = cur->probe_upper_bound(position_in_partition::after_key(*s, key)).get();
+            uint64_t lb_offset = index->get_data_file_position();
+            uint64_t ub_offset = next_partition_offset;
+            if (skip_lb) {
+                lb_offset = skip_lb->offset;
+            }
+            if (skip_ub) {
+                ub_offset = *skip_ub;
+            }
+            BOOST_REQUIRE_EQUAL(lb_offset, ub_offset);
+            index->reset_clustered_cursor().get();
+        }
+
+        position_in_partition::equal_compare eq(*s);
+
+        // Check that for each present key, single-row reads will read a single block
+        for (auto key : keys) {
+            auto cur = dynamic_cast<mc::bsearch_clustered_cursor*>(index->current_clustered_cursor());
+            BOOST_REQUIRE(cur);
+
+            testlog.info("Testing present key {}", key);
+            auto skip_lb = cur->advance_to(position_in_partition::before_key(key)).get();
+            auto skip_ub = cur->probe_upper_bound(position_in_partition::after_key(*s, key)).get();
+            uint64_t lb_offset = index->get_data_file_position();
+            uint64_t ub_offset = next_partition_offset;
+            if (skip_lb) {
+                lb_offset = skip_lb->offset;
+            }
+            if (skip_ub) {
+                ub_offset = *skip_ub;
+            }
+
+            // All blocks have the same width, take any of them.
+            auto expected_width = cur->promoted_index().get_block(0, trace).get()->width;
+            BOOST_REQUIRE_EQUAL(ub_offset - lb_offset, expected_width);
+
+            index->reset_clustered_cursor().get();
+        }
+    });
+}

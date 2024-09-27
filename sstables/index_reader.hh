@@ -366,7 +366,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, cached_file_ptr, _num_blocks, trace_state);
+            *ck_values_fixed_lengths, cached_file_ptr, _num_blocks, trace_state, sst->features());
     }
 
     auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
@@ -867,6 +867,10 @@ public:
 
     clustered_index_cursor* current_clustered_cursor() {
         return current_clustered_cursor(_lower_bound);
+    }
+
+    future<> reset_clustered_cursor() {
+        return reset_clustered_cursor(_lower_bound);
     }
 
     // Returns tombstone for the current partition if it was recorded in the sstable.
