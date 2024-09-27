@@ -690,7 +690,6 @@ static future<functions_change_batch_all_shards> merge_functions(distributed<ser
             drop_cached_func(db, *val);
             batch.replace_function(co_await create_func(db, *val));
         }
-        batch.commit();
     }));
     co_return batches;
 }
@@ -711,7 +710,6 @@ static future<functions_change_batch_all_shards> merge_aggregates(distributed<se
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
             batch.remove_function(name, arg_types);
         }
-        batch.commit();
         co_return;
     });
     co_return batches;
@@ -806,6 +804,12 @@ void schema_applier::commit_on_shard(replica::database& db) {
     for (auto& ks_name : _affected_keyspaces.dropped) {
         db.drop_keyspace(ks_name);
     }
+    // commit user functions and aggregates
+    auto& funcs_change_batch = _functions_batch[this_shard_id()];
+    funcs_change_batch.commit();
+    auto& aggrs_change_batch = _aggregates_batch[this_shard_id()];
+    aggrs_change_batch.commit();
+
     // TODO: move code for all schema modifications
 }
 
