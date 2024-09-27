@@ -1468,7 +1468,7 @@ def parse_cmd_line() -> argparse.Namespace:
     try:
         out = ninja('unit_test_list')
         # [1/1] List configured unit tests
-        args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n"))
+        args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, count=1, flags=re.DOTALL).split("\n"))
     except Exception:
         print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
         raise
