@@ -40,6 +40,15 @@ void everywhere_replication_strategy::validate_options(const gms::feature_servic
     }
 }
 
+sstring everywhere_replication_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const {
+    const auto replication_factor = erm.get_replication_factor();
+    if (read_replicas.size() > replication_factor) {
+        return seastar::format("everywhere_replication_strategy: the number of replicas for everywhere_replication_strategy is {}, cannot be higher than replication factor {}", read_replicas.size(), replication_factor);
+    }
+    return {};
+}
+
+
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, replication_strategy_params>;
 static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
 static registry registrator_short_name("EverywhereStrategy");
