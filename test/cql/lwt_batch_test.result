@@ -1,3 +1,10 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
 > create table lwt (a int, b int, primary key (a,b));
 OK
 > -- basic batch: ok
@@ -527,3 +534,9 @@ OK
 | True        |      0 |     9 | null          |
 | True        |      0 |     0 | null          |
 +-------------+--------+-------+---------------+
+> DROP TABLE gh7113;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

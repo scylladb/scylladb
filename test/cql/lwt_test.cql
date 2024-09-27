@@ -1,3 +1,7 @@
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+USE ks;
 --
 -- basic: ensure the grammar works
 --
@@ -826,4 +830,7 @@ insert into t (p, c) values (1,2) if not exists;
 select count(*) from t;
 -- stop this travesty
 drop table t;
+
+-- cleanup
+DROP KEYSPACE ks;
 

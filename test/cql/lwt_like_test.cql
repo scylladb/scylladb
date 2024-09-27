@@ -1,3 +1,8 @@
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+USE ks;
+
 create table t (pk int primary key, c text);
 insert into  t (pk, c) values (1, 'abc');
 insert into  t (pk, c) values (2, 'bcd');
@@ -30,3 +35,6 @@ update tm set m = { 2: 'error' } where pk = 1 if m like 'a%';
 create table tb (pk int primary key, b blob);
 insert into  tb (pk, b) values (1, bigintAsBlob(1));
 update tb set b = bigintAsBlob(2) where pk = 1 if b like 'a%';
+
+-- cleanup
+DROP KEYSPACE ks;

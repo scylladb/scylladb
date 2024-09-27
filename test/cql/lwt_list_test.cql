@@ -1,3 +1,8 @@
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+USE ks;
+
 CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
 UPDATE t SET l = [-1] + l WHERE pk = 0;
 SELECT l FROM t WHERE pk = 0;
@@ -89,3 +94,6 @@ APPLY BATCH;
 SELECT l FROM t WHERE pk = 0;
 
 DROP TABLE t;
+
+-- cleanup
+DROP KEYSPACE ks;
