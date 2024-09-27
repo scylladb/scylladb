@@ -67,6 +67,7 @@ class vnode_effective_replication_map;
 class effective_replication_map_factory;
 class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
+class effective_replication_map;
 
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
@@ -97,6 +98,9 @@ protected:
 
 public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
+
+    // Check that the read replica set does not exceed what's allowed by the schema.
+    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const = 0;
 
     abstract_replication_strategy(
         replication_strategy_params params,
