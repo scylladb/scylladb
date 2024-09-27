@@ -1,3 +1,9 @@
+-- CDC and tablets are not working together yet, turn them off.
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+USE ks;
+
 create table tb2 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'keys'};
 -- Should add 3 rows (preimage + postimage + delta). Delta has only key columns and "pk" + "ck"
 insert into tb2 (pk, ck, i1) VALUES (2, 22, 222) USING TTL 2222;
@@ -8,3 +14,6 @@ alter table tb2 with cdc = {'enabled': true, 'preimage': true, 'postimage': true
 insert into tb2 (pk, ck, i1) VALUES (3, 33, 333) USING TTL 3333;
 select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, i1 from tb2_scylla_cdc_log where pk = 3 and ck = 33 allow filtering;
 drop table tb2;
+
+-- cleanup
+DROP KEYSPACE ks;

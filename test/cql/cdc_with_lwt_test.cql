@@ -1,5 +1,9 @@
 -- Error messages contain a keyspace name. Make the output stable.
-CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+-- CDC and tablets are not working together yet, turn them off.
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+
 CREATE TABLE ks.tbl_cdc_lwt (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':true, 'preimage':true};
 
 -- (0) successful insert
@@ -19,4 +23,6 @@ SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scyl
 
 -- there should be 5 rows in total: (0) + preimg(0) + (2) + preimg(2) + (4)
 SELECT count(*) FROM ks.tbl_cdc_lwt_scylla_cdc_log;
+
+-- cleanup
 DROP KEYSPACE ks;
