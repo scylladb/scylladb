@@ -789,7 +789,9 @@ static void assert_partition_start(mutation_reader& rd) {
 
 // A dataset with one large partition with many clustered fragments.
 // Partition key: pk int [0]
-// Clusterint key: ck int [0 .. n_rows() - 1]
+// Clustering key: ck int [0 .. n_rows() * 2 - 1]
+// Present keys are odd: 1, 3, ...
+// Missing keys are even: 0, 2, ...
 class clustered_ds {
 public:
     virtual int n_rows(const table_config&) = 0;
@@ -799,7 +801,11 @@ public:
     }
 
     virtual clustering_key make_ck(const schema& s, int ck) {
-        return clustering_key::from_single_value(s, serialized(ck));
+        return clustering_key::from_single_value(s, serialized(ck * 2 + 1));
+    }
+
+    virtual clustering_key make_missing_ck(const schema& s, int ck) {
+        return clustering_key::from_single_value(s, serialized(ck * 2));
     }
 };
 
@@ -923,6 +929,22 @@ static test_result select_spread_rows(replica::column_family& cf, clustered_ds& 
 
     auto slice = sb.build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
+    auto rd = cf.make_reader_v2(cf.schema(),
+        semaphore.make_permit(),
+        pr,
+        slice);
+    auto close_rd = deferred_close(rd);
+
+    return test_reading_all(rd);
+}
+
+static test_result select_missing_row(replica::column_family& cf, clustered_ds& ds, int key) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto sb = partition_slice_builder(*cf.schema());
+    sb.with_range(query::clustering_range::make_singular(ds.make_missing_ck(*cf.schema(), key)));
+
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*cf.schema(), ds.make_pk(*cf.schema())));
+    auto slice = sb.build();
     auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
         pr,
@@ -1627,6 +1649,35 @@ void test_large_partition_select_few_rows(app_template &app, replica::column_fam
     test(0, 2, n_rows / 2);
 }
 
+void test_large_partition_select_missing_rows(app_template &app, replica::column_family& cf, clustered_ds& ds) {
+    auto n_rows = ds.n_rows(cfg);
+
+    output_mgr->set_test_param_names({{"offset", "{:<7}"}}, test_result::stats_names());
+    auto test = [&](int offset) {
+      run_test_case(app, [&] {
+        auto r = select_missing_row(cf, ds, offset);
+        r.set_params(to_sstrings(offset));
+        check_fragment_count(r, 0);
+        return r;
+      });
+    };
+
+    test(0);
+    test(1);
+
+    test(n_rows / 3);
+
+    test(n_rows / 2 - 1);
+    test(n_rows / 2);
+    test(n_rows / 2 + 1);
+
+    test(n_rows * 2 / 3);
+
+    test(n_rows - 1);
+    test(n_rows);
+    test(n_rows * 2);
+}
+
 void test_large_partition_forwarding(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     output_mgr->set_test_param_names({{"pk-scan", "{:<7}"}}, test_result::stats_names());
 
@@ -1860,6 +1911,13 @@ static std::initializer_list<test_group> test_groups = {
         test_group::requires_cache::no,
         test_group::type::large_partition,
         make_test_fn(test_large_partition_select_few_rows),
+    },
+    {
+        "large-partition-select-missing-rows",
+        "Testing single-row reads of a missing key from a large partition",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        make_test_fn(test_large_partition_select_missing_rows),
     },
     {
         "large-partition-forwarding",
