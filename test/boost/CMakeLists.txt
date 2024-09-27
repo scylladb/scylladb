@@ -15,7 +15,8 @@ add_scylla_test(auth_passwords_test
 add_scylla_test(auth_resource_test
   KIND BOOST)
 add_scylla_test(auth_test
-  KIND SEASTAR)
+  KIND SEASTAR
+  LIBRARIES cql3)
 add_scylla_test(batchlog_manager_test
   KIND SEASTAR)
 add_scylla_test(big_decimal_test
