@@ -260,7 +260,7 @@ filter_for_query(consistency_level cl,
     size_t bf = block_for(erm, cl);
 
     if (read_repair == read_repair_decision::DC_LOCAL) {
-        bf = std::max(block_for(erm, cl), local_count);
+        bf = std::max(bf, local_count);
     }
 
     if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
