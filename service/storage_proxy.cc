@@ -97,6 +97,7 @@
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 #include "locator/util.hh"
+#include "tools/build_info.hh"
 
 namespace bi = boost::intrusive;
 
@@ -108,6 +109,25 @@ namespace service {
 static logging::logger slogger("storage_proxy");
 static logging::logger qlogger("query_result");
 static logging::logger mlogger("mutation_data");
+
+namespace {
+
+// Check the effective replication map consistency:
+// we have an inconsistent effective replication map in case we the number of
+// read replicas is higher than the replication factor.
+void validate_read_replicas(const locator::effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) {
+    // Skip for non-debug builds.
+    if constexpr (!tools::build_info::is_debug_build()) {
+        return;
+    }
+
+    const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, read_replicas);
+    if (!error.empty()) {
+        on_internal_error(slogger, error);
+    }
+}
+
+} // namespace
 
 namespace storage_proxy_stats {
 static const sstring COORDINATOR_STATS_CATEGORY("storage_proxy_coordinator");
@@ -5405,6 +5425,12 @@ class always_speculating_read_executor : public abstract_read_executor {
 public:
     using abstract_read_executor::abstract_read_executor;
     virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) {
+        if (_targets.size() < 2) {
+            on_internal_error(slogger,
+                              seastar::format("always_speculating_read_executor: received {} replica(s)"
+                                              ", required at least 2 replicas",
+                                              _targets.size()));
+        }
         resolver->add_wait_targets(_targets.size());
         // FIXME: consider disabling for CL=*ONE
         bool want_digest = true;
@@ -5419,6 +5445,12 @@ class speculating_read_executor : public abstract_read_executor {
 public:
     using abstract_read_executor::abstract_read_executor;
     virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
+        if (_targets.size() < 2) {
+            on_internal_error(slogger,
+                              seastar::format("speculating_read_executor: received {} replica(s)"
+                                              ", required at least 2 replicas",
+                                              _targets.size()));
+        }
         _speculate_timer.set_callback([this, resolver, timeout] {
             if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
                 resolver->add_wait_targets(1); // we send one more request so wait for it too
@@ -6416,6 +6448,7 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
     auto endpoints = erm.get_endpoints_for_reading(token);
+    validate_read_replicas(erm, endpoints);
     auto it = boost::range::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm.get_topology(), endpoints);
