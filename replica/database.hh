@@ -1341,6 +1341,10 @@ struct keyspace_change {
     lw_shared_ptr<keyspace_metadata> metadata;
     locator::replication_strategy_ptr strategy;
     locator::vnode_effective_replication_map_ptr erm;
+
+    const sstring& keyspace_name() const {
+        return metadata->name();
+    }
 };
 
 class keyspace {
@@ -1772,20 +1776,22 @@ public:
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
     table_id find_uuid(const schema_ptr&) const;
 
+    using created_keyspace_per_shard = std::vector<seastar::foreign_ptr<std::unique_ptr<keyspace>>>;
+    using keyspace_change_per_shard = std::vector<seastar::foreign_ptr<std::unique_ptr<keyspace_change>>>;
+
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
      *
      * @return ready future when the operation is complete
      */
-    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<created_keyspace_per_shard> prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
-    static future<> update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
-    static future<> drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name);
+    static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
