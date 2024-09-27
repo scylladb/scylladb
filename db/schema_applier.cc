@@ -874,11 +874,6 @@ future<> schema_applier::update() {
     co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates, _types_storage);
 
-    // TODO: move into schema_applier::commit
-    co_await _functions_batch.invoke_on_all([&] (cql3::functions::change_batch& batch) {
-        batch.commit();
-    });
-
     co_await post_commit();
 
     co_await drop_types(_proxy, _affected_user_types);
@@ -890,8 +885,26 @@ future<> schema_applier::update() {
     }
 }
 
-void schema_applier::commit() {
-    // TODO: add copy on write to schema changes
+void schema_applier::commit_on_shard(replica::database& db) {
+    // commit user functions and aggregates
+    _functions_batch.local().commit();
+}
+
+// TODO: move per shard logic directly to raft so that all subsystems can be updated together
+// (requires switching all affected subsystems to 'applier' interface first)
+future<> schema_applier::commit() {
+    auto& sharded_db = _proxy.local().get_db();
+    // Run func first on shard 0
+    // to allow "seeding" of the effective_replication_map
+    // with a new e_r_m instance.
+    co_await sharded_db.invoke_on(0, [this] (replica::database& db) { return commit_on_shard(db); });
+    co_await sharded_db.invoke_on_all([this] (replica::database& db) {
+        if (this_shard_id() == 0) {
+            return make_ready_future<>();
+        }
+        commit_on_shard(db);
+        return make_ready_future<>();
+    });
 }
 
 future<> schema_applier::post_commit() {
@@ -947,7 +960,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update();
-    ap.commit();
+    co_await ap.commit();
     co_await ap.destroy();
 }
 
