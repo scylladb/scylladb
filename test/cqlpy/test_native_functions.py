@@ -10,7 +10,7 @@
 ###############################################################################
 
 import pytest
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 from datetime import datetime
 from cassandra.protocol import InvalidRequest
 

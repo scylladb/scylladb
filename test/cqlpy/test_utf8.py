@@ -12,7 +12,7 @@
 import pytest
 import unicodedata
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name, unique_key_string
+from .util import unique_name, unique_key_string
 
 
 @pytest.fixture(scope="module")

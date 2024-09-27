@@ -11,7 +11,7 @@
 # https://github.com/apache/cassandra/blob/1959502d8b16212479eecb076c89945c3f0f180c/doc/native_protocol_v4.spec#L675
 
 import pytest
-from util import new_test_table, unique_key_int, config_value_context
+from .util import new_test_table, unique_key_int, config_value_context
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")

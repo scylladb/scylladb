@@ -6,7 +6,7 @@
 # Test involving the "date" column type.
 #############################################################################
 
-from util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int
 from cassandra.util import Date
 from cassandra.protocol import InvalidRequest
 

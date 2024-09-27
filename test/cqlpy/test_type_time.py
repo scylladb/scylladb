@@ -6,7 +6,7 @@
 # Test involving the "time" column type.
 #############################################################################
 
-from util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int
 
 import pytest
 

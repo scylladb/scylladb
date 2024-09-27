@@ -10,7 +10,7 @@
 #############################################################################
 
 import pytest
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 from cassandra.query import UNSET_VALUE
 from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest

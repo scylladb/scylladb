@@ -13,7 +13,7 @@
 #############################################################################
 
 import pytest
-from util import new_test_keyspace, new_test_table, unique_name, index_table_name
+from .util import new_test_keyspace, new_test_table, unique_name, index_table_name
 from cassandra.protocol import ConfigurationException, InvalidRequest
 
 # A fixture similar to "test_keyspace", just creates a keyspace that enables

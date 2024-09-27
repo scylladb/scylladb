@@ -8,9 +8,9 @@
 ###############################################################################
 
 import pytest
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
-from rest_api import scylla_inject_error
+from .rest_api import scylla_inject_error
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

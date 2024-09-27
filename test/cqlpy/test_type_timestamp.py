@@ -10,7 +10,7 @@
 # That latter concept is tested in test_timestamp.py, not here.
 #############################################################################
 
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 from datetime import datetime
 from cassandra.protocol import SyntaxException, InvalidRequest
 import pytest

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pytest
-import rest_api
-import nodetool
-from util import new_test_table, config_value_context
+from . import nodetool
+from . import rest_api
+from .util import new_test_table, config_value_context
 from cassandra.protocol import ConfigurationException
 
 # Disable component memory reclamation by setting the threshold to max value

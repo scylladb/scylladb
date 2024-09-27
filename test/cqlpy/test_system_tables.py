@@ -8,9 +8,9 @@
 # or may assume, that Scylla provides similar content.
 #############################################################################
 
-from util import new_test_table
+from .util import new_test_table
 import pytest
-import nodetool
+from . import nodetool
 
 #############################################################################
 # system.size_estimates.partitions_count

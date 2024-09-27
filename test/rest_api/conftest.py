@@ -19,9 +19,7 @@ from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_
 from cassandra.policies import RoundRobinPolicy
 
 
-# Use the util.py library from ../cqlpy:
-sys.path.insert(1, sys.path[0] + '/test/cqlpy')
-from util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
+from ..cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
 
 # By default, tests run against a Scylla server listening
 # on localhost:9042 for CQL and localhost:10000 for the REST API.

@@ -7,10 +7,10 @@
 
 import datetime
 import uuid
-from cassandra_tests.porting import *
+from ...porting import *
 
 from cassandra.util import Date
-from util import new_function, unique_name, new_secondary_index
+from ....util import new_function, unique_name, new_secondary_index
 import os
 
 def is_scylla(cql, test_keyspace):

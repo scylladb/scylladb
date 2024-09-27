@@ -13,7 +13,7 @@ import pytest
 import re
 import random
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name, unique_key_int, new_test_table
+from .util import unique_name, unique_key_int, new_test_table
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

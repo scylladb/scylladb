@@ -30,7 +30,7 @@ import time
 
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
 
-from util import unique_name, new_test_table
+from .util import unique_name, new_test_table
 
 # check_af_optional() and check_af_mandatory() are utility functions for
 # checking that ALLOW FILTERING is optional or mandatory on a SELECT on a
