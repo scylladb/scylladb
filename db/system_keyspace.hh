@@ -27,6 +27,7 @@
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
 #include "types/types.hh"
+#include "auth_version.hh"
 
 namespace sstables {
     struct entry_descriptor;
@@ -608,10 +609,7 @@ public:
     // returns the corresponding mutation. Otherwise returns nullopt.
     future<std::optional<mutation>> get_group0_schema_version();
 
-    enum class auth_version_t: int64_t {
-        v1 = 1,
-        v2 = 2,
-    };
+    using auth_version_t = db::auth_version_t;
 
     // If the `auth_version` key in `system.scylla_local` is present (either live or tombstone),
     // returns the corresponding mutation. Otherwise returns nullopt.
