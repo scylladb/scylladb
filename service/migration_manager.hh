@@ -23,6 +23,7 @@
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "db/timeout_clock.hh"
 
 #include <vector>
 

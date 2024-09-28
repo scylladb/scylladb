@@ -11,6 +11,7 @@
 #include "types/set.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "mutation/mutation.hh"
 
 namespace cql3 {
 void

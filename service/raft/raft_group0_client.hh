@@ -25,9 +25,10 @@
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
-#include "mutation/mutation.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/maintenance_mode.hh"
+
+class mutation;
 
 namespace db {
 
@@ -221,11 +222,13 @@ private:
 
     future<> materialize_mutations();
 public:
-    explicit group0_batch(::service::group0_guard&& g) : _guard(std::move(g)) {}
+    explicit group0_batch(::service::group0_guard&& g);
     // Constructor with optional guard used to handle both legacy and current code.
     // There is no guard for legacy code but the whole class may be passed
     // through to simplify the flow.
-    explicit group0_batch(std::optional<::service::group0_guard> g) : _guard(std::move(g)) {}
+    explicit group0_batch(std::optional<::service::group0_guard> g);
+
+    ~group0_batch();
 
     // Annotation helper for cases where we need collector (e.g. some interface)
     // but the code is fully legacy and the collector won't be used.

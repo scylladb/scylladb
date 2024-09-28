@@ -498,6 +498,16 @@ template group0_command raft_group0_client::prepare_command(broadcast_table_quer
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
+group0_batch::group0_batch(::service::group0_guard&& g)
+        : _guard(std::move(g)) {
+}
+
+group0_batch::group0_batch(std::optional<::service::group0_guard> g)
+        : _guard(std::move(g)) {
+}
+
+group0_batch::~group0_batch() = default;
+
 api::timestamp_type group0_batch::write_timestamp() const {
     if (!_guard) {
         on_internal_error(logger, "group0_batch: write_timestamp without guard taken");
