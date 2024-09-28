@@ -12,6 +12,7 @@
 #include "test/lib/cql_test_env.hh"
 
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_state_machine.hh"

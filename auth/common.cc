@@ -25,6 +25,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "timeout_config.hh"
 #include "utils/error_injection.hh"
+#include "db/system_keyspace.hh"
 
 namespace auth {
 
@@ -40,7 +41,7 @@ constinit const std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.")
 static logging::logger auth_log("auth");
 
 bool legacy_mode(cql3::query_processor& qp) {
-    return qp.auth_version < db::system_keyspace::auth_version_t::v2;
+    return qp.auth_version < db::auth_version_t::v2;
 }
 
 std::string_view get_auth_ks_name(cql3::query_processor& qp) {

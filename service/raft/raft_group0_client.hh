@@ -16,6 +16,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/coroutine/generator.hh>
 #include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
@@ -24,9 +25,15 @@
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
+#include "mutation/mutation.hh"
 #include "service/raft/group0_state_machine.hh"
-#include "db/system_keyspace.hh"
 #include "service/maintenance_mode.hh"
+
+namespace db {
+
+class system_keyspace;
+
+}
 
 namespace service {
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.

@@ -24,6 +24,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
+#include "db/system_keyspace.hh"
 
 
 namespace service {

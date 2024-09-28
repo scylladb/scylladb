@@ -16,6 +16,7 @@
 #include "gms/feature_service.hh"
 #include <fmt/core.h>
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 #include <ios>
 #include <ostream>
 #include <boost/range/adaptor/map.hpp>

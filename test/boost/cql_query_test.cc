@@ -15,6 +15,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include <seastar/net/inet_address.hh>
 

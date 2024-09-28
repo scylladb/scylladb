@@ -32,6 +32,7 @@
 #include "utils/observable.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
+#include "db/auth_version.hh"
 
 
 namespace lang { class manager; }
@@ -175,7 +176,7 @@ public:
 
     lang::manager& lang() { return _lang_manager; }
 
-    db::system_keyspace::auth_version_t auth_version;
+    db::auth_version_t auth_version;
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {

@@ -36,6 +36,12 @@ namespace service {
     class storage_service;
 }
 
+namespace locator {
+
+class shared_token_metadata;
+
+}
+
 namespace qos {
 /**
  *  a structure to hold a service level
