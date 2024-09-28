@@ -20,8 +20,8 @@
 #include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
-#include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_fwd.hh"
+#include "service/raft/raft_timeout.hh"
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
@@ -37,6 +37,9 @@ class system_keyspace;
 }
 
 namespace service {
+
+class raft_group_registry;
+
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.
 
 // It is also required in order to perform group 0 changes

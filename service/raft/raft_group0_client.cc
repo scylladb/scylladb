@@ -11,6 +11,7 @@
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
+#include "raft_group_registry.hh"
 #include <boost/algorithm/string/join.hpp>
 
 #include "frozen_schema.hh"
