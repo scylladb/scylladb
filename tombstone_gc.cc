@@ -8,7 +8,6 @@
 
 #include <chrono>
 #include <boost/icl/interval.hpp>
-#include <boost/icl/interval_map.hpp>
 #include "schema/schema.hh"
 #include "gc_clock.hh"
 #include "tombstone_gc.hh"
@@ -16,41 +15,58 @@
 #include "exceptions/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
-#include "compaction/compaction_manager.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 
 extern logging::logger dblog;
 
-seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_repair_history_map_for_table(const table_id& id) {
-    if (!_repair_history_maps) {
+seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_repair_history_for_table(const table_id& id) {
+    if (!_reconcile_history_maps) {
         return {};
     }
-    auto& repair_history_maps = *_repair_history_maps;
-    auto it = repair_history_maps.find(id);
-    if (it != repair_history_maps.end()) {
+    auto& reconcile_history_maps = _reconcile_history_maps->_repair_maps;
+    auto it = reconcile_history_maps.find(id);
+    if (it != reconcile_history_maps.end()) {
         return it->second;
-    } else {
-        repair_history_maps[id] = seastar::make_lw_shared<repair_history_map>();
-        return repair_history_maps[id];
     }
+    reconcile_history_maps[id] = seastar::make_lw_shared<repair_history_map>();
+    return reconcile_history_maps[id];
 }
 
-seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_repair_history_map_for_table(const table_id& id) const {
-    if (!_repair_history_maps) {
+seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
+    if (!_reconcile_history_maps) {
         return {};
     }
-    auto& repair_history_maps = *_repair_history_maps;
-    auto it = repair_history_maps.find(id);
-    if (it != repair_history_maps.end()) {
+    auto& reconcile_history_maps = _reconcile_history_maps->_repair_maps;
+    auto it = reconcile_history_maps.find(id);
+    if (it != reconcile_history_maps.end()) {
         return it->second;
-    } else {
-        return {};
     }
+    return {};
 }
 
-void tombstone_gc_state::drop_repair_history_map_for_table(const table_id& id) {
-    _repair_history_maps->erase(id);
+seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_or_create_group0_gc_time() {
+    if (!_reconcile_history_maps) {
+        return {};
+    }
+    if (!_reconcile_history_maps->_group0_gc_time) {
+        _reconcile_history_maps->_group0_gc_time = seastar::make_lw_shared<gc_clock::time_point>();
+    }
+    return _reconcile_history_maps->_group0_gc_time;
+}
+
+seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_time() const {
+    if (!_reconcile_history_maps) {
+        return {};
+    }
+    if (!_reconcile_history_maps->_group0_gc_time) {
+        return {};
+    }
+    return _reconcile_history_maps->_group0_gc_time;
+}
+
+void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
+    _reconcile_history_maps->_repair_maps.erase(id);
 }
 
 // This is useful for a sstable to query a gc_before for a range. The range is
@@ -87,13 +103,13 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         auto max_repair_timestamp = gc_clock::time_point::min();
         int hits = 0;
         knows_entire_range = false;
-        auto m = get_repair_history_map_for_table(s->id());
+        auto m = get_repair_history_for_table(s->id());
         if (m) {
             auto interval = locator::token_metadata::range_to_interval(range);
             auto min = gc_clock::time_point::max();
             auto max = gc_clock::time_point::min();
             bool contains_all = false;
-            for (auto& x : boost::make_iterator_range(m->map.equal_range(interval))) {
+            for (auto& x : boost::make_iterator_range(m->equal_range(interval))) {
                 auto r = locator::token_metadata::interval_to_range(x.first);
                 min = std::min(x.second, min);
                 max = std::max(x.second, max);
@@ -151,10 +167,10 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
         auto repair_timestamp = gc_clock::time_point::min();
-        auto m = get_repair_history_map_for_table(s->id());
+        auto m = get_repair_history_for_table(s->id());
         if (m) {
-            const auto it = m->map.find(dk.token());
-            if (it == m->map.end()) {
+            const auto it = m->find(dk.token());
+            if (it == m->end()) {
                 gc_before = gc_clock::time_point::min();
             } else {
                 repair_timestamp = it->second;
@@ -170,8 +186,19 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
 }
 
 void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
-    auto m = get_or_create_repair_history_map_for_table(id);
-    m->map += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
+    auto m = get_or_create_repair_history_for_table(id);
+    if (!m) {
+        on_fatal_internal_error(dblog, "repair_history_map not found/created");
+    }
+    *m += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
+}
+
+void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
+    auto m = get_or_create_group0_gc_time();
+    if (!m) {
+        on_fatal_internal_error(dblog, "group0_gc_time not found/created");
+    }
+    *m = refresh_time;
 }
 
 static bool needs_repair_before_gc(const replica::database& db, sstring ks_name) {
