@@ -398,6 +398,11 @@ async def trigger_snapshot(manager, server: ServerInfo) -> None:
     host = cql.cluster.metadata.get_host(server.ip_addr)
     await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
 
+async def trigger_stepdown(manager, server: ServerInfo) -> None:
+    cql = manager.get_cql()
+    host = cql.cluster.metadata.get_host(server.ip_addr)
+    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr)
+
 
 
 async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
