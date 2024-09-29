@@ -291,6 +291,11 @@ public:
         return _raft_gr.group0_with_timeouts();
     }
 
+    // Hold shutdown gate to be waited during shutdown
+    gate::holder hold_group0_gate() {
+        return _shutdown_gate.hold();
+    }
+
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
