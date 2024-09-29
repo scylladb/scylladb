@@ -214,6 +214,27 @@ def test_filter_with_unused_static_column(cql, test_keyspace, scylla_only):
                         expected = [(42,43,44)] if '4' in where else [(42,43,44),(1,2,3)]
                         assert list(cql.execute(f"SELECT * FROM {mv}")) == expected
 
+# It is currently not supported (in neither Scylla nor Cassandra) to use
+# a static column in a materialized view's filter (WHERE clause).
+# The reason why this is not allowed is explained in issue #4250: Unlike the
+# partition's key, its a static column can be changed. If filtering on it
+# were allowed, One small change in the base - changing the value of the
+# static column of a partition - could require adding or deleting millions
+# of separate view rows, which will be extremely inefficient.
+# We could (but currently don't, and this test does NOT explore) allow a
+# filter on a static column in the special case that the view's partition key
+# is the same (up to column reordering) as the base's partition key. It's the
+# same special case that we have for deleting a long partition when the view's
+# partition key is the same (up to reordering) as the base's partition key.
+# (issue #8199)
+def test_filter_with_static_column(cql, test_keyspace):
+    schema = 'p int, c int, v int, s int static, primary key (p,c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        where = f's = 6 AND p IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL'
+        with pytest.raises(InvalidRequest, match='Non-primary'):
+            with new_materialized_view(cql, table, select='p,c,v', pk='p,c,v', where=where) as mv:
+                pass
+
 # Ensure that we don't allow materialized views which contain static rows.
 # Neither Cassandra nor Scylla support this at the moment.
 def test_static_columns_are_disallowed(cql, test_keyspace):
@@ -224,6 +245,13 @@ def test_static_columns_are_disallowed(cql, test_keyspace):
         try:
             with pytest.raises(InvalidRequest, match="[Ss]tatic column"):
                 cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT p, s FROM {table} PRIMARY KEY (p)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
+        # Case 1a: 's' not in primary key, and listed as "*" and not explicitly
+        mv = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="[Ss]tatic column"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} PRIMARY KEY (p)")
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
@@ -1189,3 +1217,25 @@ def test_base_partition_deletion_with_low_timestamp(cql, test_keyspace):
             # Verify we get only the row with the newer timestamp
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=0")]
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {mv} WHERE p=0")]
+
+# A few basic tests for the "WITH" option in CREATE MATERIALIZED VIEW.
+def test_create_mv_with(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, c int') as table:
+        # Check that "WITH COMMENT=..." is accepted, and just adds the
+        # "WITH COMMENT=..." to the output of DESC but changes nothing else.
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with comment = 'hello123'") as mv:
+            assert 'hello123' in cql.execute(f'DESC MATERIALIZED VIEW {mv}').one().create_statement
+        # Check that unrecognized WITH options are rejected with an error.
+        # Recognized options are those listed in cf_prop_defs::validate() or
+        # in one of the registered schema extensions or appearing with a
+        # special syntax in cfamProperty in cql3/Cql.g. "garbagename" isn't
+        # on of the recognized options.
+        with pytest.raises(SyntaxException, match="Unknown property"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with garbagename = 'dog234'") as mv:
+                pass
+        # Check that COMPACT STORAGE is *not* allowed for materialized views
+        # (Scylla and Cassandra 3 allow it just for regular tables, but this
+        # isn't tested here).
+        with pytest.raises(InvalidRequest, match="COMPACT STORAGE"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with compact storage") as mv:
+                pass
