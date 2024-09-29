@@ -8,19 +8,24 @@ import util
 import nodetool
 import json
 
-def verify_snapshots(cql, tables:set[str], test_tag:str):
+from collections import defaultdict
+
+def verify_snapshots(cql, expected_snapshots: dict[str, set[str]]):
     results = list(cql.execute(f"SELECT keyspace_name, table_name, snapshot_name, live, total FROM system.snapshots"))
     for res in results:
-        if res.snapshot_name == test_tag:
-            tables.remove(f"{res.keyspace_name}.{res.table_name}")
-    assert not tables
+        if res.snapshot_name in expected_snapshots:
+            t = f"{res.keyspace_name}.{res.table_name}"
+            assert t in expected_snapshots[res.snapshot_name], f"Unexpected snapshot {t}: snapshot_name={res.snapshot_name}: expected_snapshots={expected_snapshots}"
+            expected_snapshots[res.snapshot_name].remove(t)
+    for _, expected_tables in expected_snapshots.items():
+        assert not expected_tables, f"Not all expected snapshots were listed: expected_snapshots={expected_snapshots}"
 
 def test_snapshots_table(scylla_only, cql, test_keyspace):
     test_tag = util.unique_name()
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-        verify_snapshots(cql, {table}, test_tag)
+        verify_snapshots(cql, {test_tag: [table]})
     nodetool.del_snapshot(cql, test_tag)
 
 def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
@@ -28,8 +33,33 @@ def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-    verify_snapshots(cql, {table}, test_tag)
+    verify_snapshots(cql, {test_tag: [table]})
     nodetool.del_snapshot(cql, test_tag)
+
+def test_snapshots_multiple_keyspaces(scylla_only, cql):
+    expected_snapshots = defaultdict(set)
+    ks_opts = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    test_tags = [util.unique_name(), util.unique_name(), util.unique_name()]
+    with util.new_test_keyspace(cql, ks_opts) as test_keyspace1:
+        with util.new_test_table(cql, test_keyspace1, 'pk int PRIMARY KEY, v int') as table1:
+            cql.execute(f"INSERT INTO {table1} (pk, v) VALUES (0, 0)")
+            nodetool.take_snapshot(cql, table1, test_tags[0], False)
+            expected_snapshots[test_tags[0]].add(table1)
+            cql.execute(f"INSERT INTO {table1} (pk, v) VALUES (1, 1)")
+            nodetool.take_snapshot(cql, table1, test_tags[1], False)
+            expected_snapshots[test_tags[1]].add(table1)
+            with util.new_test_keyspace(cql, ks_opts) as test_keyspace2:
+                with util.new_test_table(cql, test_keyspace2, 'pk int PRIMARY KEY, v int') as table2:
+                    cql.execute(f"INSERT INTO {table2} (pk, v) VALUES (0, 0)")
+                    nodetool.take_snapshot(cql, table2, test_tags[0], False)
+                    expected_snapshots[test_tags[0]].add(table2)
+                    cql.execute(f"INSERT INTO {table2} (pk, v) VALUES (2, 2)")
+                    nodetool.take_snapshot(cql, table2, test_tags[2], False)
+                    expected_snapshots[test_tags[2]].add(table2)
+
+                    verify_snapshots(cql, expected_snapshots)
+    for t in test_tags:
+        nodetool.del_snapshot(cql, t)
 
 def test_clients(scylla_only, cql):
     columns = ', '.join([
