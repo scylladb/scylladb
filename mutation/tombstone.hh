@@ -78,7 +78,7 @@ struct fmt::formatter<tombstone> : fmt::formatter<string_view> {
      }
 };
 
-static inline std::ostream& operator<<(std::ostream& out, const tombstone& t) {
+inline std::ostream& operator<<(std::ostream& out, const tombstone& t) {
     fmt::print(out, "{}", t);
     return out;
 }

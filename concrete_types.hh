@@ -174,7 +174,7 @@ template <typename Func> concept CanHandleAllTypes = requires(Func f) {
 
 template<typename Func>
 requires CanHandleAllTypes<Func>
-static inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
+inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
     switch (t.get_kind()) {
     case abstract_type::kind::ascii:
         return f(*static_cast<const ascii_type_impl*>(&t));

@@ -24,7 +24,7 @@
 #include <variant>
 
 template<typename T, ContiguousSharedBuffer Buffer>
-static inline T consume_be(Buffer& p) {
+inline T consume_be(Buffer& p) {
     T i = read_be<T>(p.get());
     p.trim_front(sizeof(T));
     return i;

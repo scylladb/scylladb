@@ -39,7 +39,7 @@ public:
     }
 };
 
-static inline
+inline
 gc_clock::time_point to_gc_clock(db_clock::time_point tp) noexcept {
     // Converting time points through `std::time_t` means that we don't have to make any assumptions about the epochs
     // of `gc_clock` and `db_clock`, though we require that that the period of `gc_clock` is also 1 s like

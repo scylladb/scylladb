@@ -108,12 +108,12 @@ public:
     }
 };
 
-static inline
+inline
 mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition& mp) {
     return {std::move(s), mp};
 }
 
-static inline
+inline
 mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition_v2& mp) {
     return {s, mp.as_mutation_partition(*s)};
 }
@@ -184,7 +184,7 @@ public:
     }
 };
 
-static inline
+inline
 mutation_assertion assert_that(mutation m) {
     return { std::move(m) };
 }
@@ -208,7 +208,7 @@ public:
     }
 };
 
-static inline
+inline
 mutation_opt_assertions assert_that(mutation_opt mo) {
     return { std::move(mo) };
 }

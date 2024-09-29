@@ -216,18 +216,18 @@ public:
     future<> close() noexcept override;
 };
 
-static inline fs::path operator/(const fs::path& lhs, const char* rhs) {
+inline fs::path operator/(const fs::path& lhs, const char* rhs) {
     return lhs / fs::path(rhs);
 }
 
-static inline fs::path operator/(const fs::path& lhs, const sstring& rhs) {
+inline fs::path operator/(const fs::path& lhs, const sstring& rhs) {
     return lhs / fs::path(rhs);
 }
 
-static inline fs::path operator/(const fs::path& lhs, std::string_view rhs) {
+inline fs::path operator/(const fs::path& lhs, std::string_view rhs) {
     return lhs / fs::path(rhs);
 }
 
-static inline fs::path operator/(const fs::path& lhs, const std::string& rhs) {
+inline fs::path operator/(const fs::path& lhs, const std::string& rhs) {
     return lhs / fs::path(rhs);
 }

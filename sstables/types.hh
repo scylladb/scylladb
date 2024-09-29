@@ -31,7 +31,7 @@
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
-static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
+inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
     using byte = bytes_view::value_type;
     return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
 }

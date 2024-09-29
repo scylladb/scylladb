@@ -388,7 +388,7 @@ T read_simple_exactly(View v) {
 }
 
 template<typename T, FragmentedMutableView Out>
-static inline
+inline
 void write(Out& out, std::type_identity_t<T> val) {
     auto v = net::ntoh(val);
     auto p = reinterpret_cast<const bytes_view::value_type*>(&v);
@@ -401,7 +401,7 @@ void write(Out& out, std::type_identity_t<T> val) {
 }
 
 template<typename T, FragmentedMutableView Out>
-static inline
+inline
 void write_native(Out& out, std::type_identity_t<T> v) {
     auto p = reinterpret_cast<const bytes_view::value_type*>(&v);
     if (out.current_fragment().size() >= sizeof(v)) [[likely]] {

@@ -49,7 +49,7 @@ template <> struct fmt::formatter<canonical_mutation> : fmt::formatter<string_vi
     auto format(const canonical_mutation&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-static inline std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
+inline std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
     fmt::print(os, "{}", cm);
     return os;
 }

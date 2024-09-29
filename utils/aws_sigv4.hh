@@ -37,9 +37,9 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
         const std::vector<temporary_buffer<char>>* body_content, std::string_view region, std::string_view service, std::string_view query_string);
 
 // Convenience alias not to pass obscure nullptr argument to get_signature()
-static inline constexpr std::vector<temporary_buffer<char>>* unsigned_content = nullptr;
+inline constexpr std::vector<temporary_buffer<char>>* unsigned_content = nullptr;
 // Same for datestamp checking
-static inline auto omit_datestamp_expiration_check = std::nullopt;
+inline auto omit_datestamp_expiration_check = std::nullopt;
 
 std::string format_time_point(db_clock::time_point tp);
 

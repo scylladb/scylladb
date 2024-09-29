@@ -138,7 +138,7 @@ size_t serialize_string_size(const sstring& s) {;
 }
 
 template<typename T, typename CharOutputIterator>
-static inline
+inline
 void write(CharOutputIterator& out, const T& val) {
     auto v = net::ntoh(val);
     out = std::copy_n(reinterpret_cast<char*>(&v), sizeof(v), out);
