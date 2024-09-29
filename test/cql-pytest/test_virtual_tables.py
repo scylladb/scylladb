@@ -8,16 +8,28 @@ import util
 import nodetool
 import json
 
+def verify_snapshots(cql, tables:set[str], test_tag:str):
+    results = list(cql.execute(f"SELECT keyspace_name, table_name, snapshot_name, live, total FROM system.snapshots"))
+    for res in results:
+        if res.snapshot_name == test_tag:
+            tables.remove(f"{res.keyspace_name}.{res.table_name}")
+    assert not tables
+
 def test_snapshots_table(scylla_only, cql, test_keyspace):
+    test_tag = util.unique_name()
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
-        nodetool.take_snapshot(cql, table, 'my_tag', False)
-        res = list(cql.execute(f"SELECT keyspace_name, table_name, snapshot_name, live, total FROM system.snapshots"))
-        assert len(res) == 1
-        ks, tbl = table.split('.')
-        assert res[0][0] == ks
-        assert res[0][1] == tbl
-        assert res[0][2] == 'my_tag'
+        nodetool.take_snapshot(cql, table, test_tag, False)
+        verify_snapshots(cql, {table}, test_tag)
+    nodetool.del_snapshot(cql, test_tag)
+
+def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
+    test_tag = util.unique_name()
+    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+        nodetool.take_snapshot(cql, table, test_tag, False)
+    verify_snapshots(cql, {table}, test_tag)
+    nodetool.del_snapshot(cql, test_tag)
 
 def test_clients(scylla_only, cql):
     columns = ', '.join([
