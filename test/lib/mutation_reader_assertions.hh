@@ -28,7 +28,7 @@ inline bool trim_range_tombstone(const schema& s, range_tombstone& rt, const que
     return relevant;
 }
 
-static inline void match_compacted_mutation(const mutation_opt& mo, const mutation& m, gc_clock::time_point query_time,
+inline void match_compacted_mutation(const mutation_opt& mo, const mutation& m, gc_clock::time_point query_time,
                                             const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
     // If the passed in mutation is empty, allow for the reader to produce an empty or no partition.
     if (m.partition().empty() && !mo) {

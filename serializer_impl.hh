@@ -75,7 +75,7 @@ struct serialize_array_helper<false, T> {
 };
 
 template<typename T, typename Container, typename Output>
-static inline void serialize_array(Output& out, const Container& v) {
+inline void serialize_array(Output& out, const Container& v) {
     serialize_array_helper<can_serialize_fast<T>(), T>::doit(out, v);
 }
 
@@ -208,12 +208,12 @@ struct deserialize_array_helper<false, T> {
 };
 
 template<typename T, typename Input, typename Container>
-static inline void deserialize_array(Input& in, Container& v, size_t sz) {
+inline void deserialize_array(Input& in, Container& v, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
 }
 
 template<typename T, typename Input>
-static inline void skip_array(Input& in, size_t sz) {
+inline void skip_array(Input& in, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::skip(in, sz);
 }
 

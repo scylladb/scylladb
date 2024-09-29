@@ -76,7 +76,7 @@ public:
 };
 
 template<typename T>
-static inline
+inline
 size_t cartesian_product_size(const std::vector<std::vector<T>>& vec_of_vecs) {
     size_t r = 1;
     for (auto&& vec : vec_of_vecs) {
@@ -86,7 +86,7 @@ size_t cartesian_product_size(const std::vector<std::vector<T>>& vec_of_vecs) {
 }
 
 template<typename T>
-static inline
+inline
 bool cartesian_product_is_empty(const std::vector<std::vector<T>>& vec_of_vecs) {
     for (auto&& vec : vec_of_vecs) {
         if (vec.empty()) {
@@ -97,7 +97,7 @@ bool cartesian_product_is_empty(const std::vector<std::vector<T>>& vec_of_vecs) 
 }
 
 template<typename T>
-static inline
+inline
 cartesian_product<T> make_cartesian_product(const std::vector<std::vector<T>>& vec_of_vecs) {
     return cartesian_product<T>(vec_of_vecs);
 }

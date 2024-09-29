@@ -18,7 +18,7 @@
 
 extern logging::logger mclog;
 
-static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
+inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction
     return ranges.empty() || std::any_of(ranges.begin(), ranges.end(), [](auto& r) {
         return !r.is_full();

@@ -570,7 +570,7 @@ bool operator==(const data_value& x, const data_value& y);
 using bytes_view_opt = std::optional<bytes_view>;
 using managed_bytes_view_opt = std::optional<managed_bytes_view>;
 
-static inline
+inline
 std::strong_ordering tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
@@ -585,7 +585,7 @@ tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v
     }
 }
 
-static inline
+inline
 bool equal(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->equal(e1, e2);
 }
@@ -876,7 +876,7 @@ less_unsigned(bytes_view v1, bytes_view v2) {
 }
 
 template<typename Type>
-static inline
+inline
 typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }

@@ -185,7 +185,7 @@ public:
 // Converts compound_type<> representation to legacy representation
 // @packed is assumed to be serialized using supplied @type.
 template <typename CompoundType>
-static inline
+inline
 bytes to_legacy(CompoundType& type, managed_bytes_view packed) {
     legacy_compound_view<CompoundType> lv(type, packed);
     bytes legacy_form(bytes::initialized_later(), lv.size());

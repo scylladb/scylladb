@@ -16,13 +16,13 @@
 extern std::atomic<int64_t> clocks_offset;
 
 template<typename Duration>
-static inline void forward_jump_clocks(Duration delta)
+inline void forward_jump_clocks(Duration delta)
 {
     auto d = std::chrono::duration_cast<std::chrono::seconds>(delta).count();
     clocks_offset.fetch_add(d, std::memory_order_relaxed);
 }
 
-static inline std::chrono::seconds get_clocks_offset()
+inline std::chrono::seconds get_clocks_offset()
 {
     auto off = clocks_offset.load(std::memory_order_relaxed);
     return std::chrono::seconds(off);

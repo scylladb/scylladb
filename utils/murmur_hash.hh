@@ -45,7 +45,7 @@ uint64_t read_block(InputIterator& in) {
            (((uint64_t) tmp[6] & 0xff) << 48) + (((uint64_t) tmp[7] & 0xff) << 56);
 }
 
-static inline
+inline
 uint64_t fmix(uint64_t k) {
     k ^= (uint64_t)k >> 33;
     k *= 0xff51afd7ed558ccdL;

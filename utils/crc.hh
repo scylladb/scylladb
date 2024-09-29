@@ -22,19 +22,19 @@
 #elif defined(__aarch64__)
 #include <arm_acle.h>
 /* Implement x86-64 intrinsics with according aarch64 ones */
-static inline uint32_t _mm_crc32_u8(uint32_t crc, uint8_t in)
+inline uint32_t _mm_crc32_u8(uint32_t crc, uint8_t in)
 {
     return __crc32cb(crc, in);
 }
-static inline uint32_t _mm_crc32_u16(uint32_t crc, uint16_t in)
+inline uint32_t _mm_crc32_u16(uint32_t crc, uint16_t in)
 {
     return __crc32ch(crc, in);
 }
-static inline uint32_t _mm_crc32_u32(uint32_t crc, uint32_t in)
+inline uint32_t _mm_crc32_u32(uint32_t crc, uint32_t in)
 {
     return __crc32cw(crc, in);
 }
-static inline uint32_t _mm_crc32_u64(uint32_t crc, uint64_t in)
+inline uint32_t _mm_crc32_u64(uint32_t crc, uint64_t in)
 {
     return __crc32cd(crc, in);
 }

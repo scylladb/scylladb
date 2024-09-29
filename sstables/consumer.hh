@@ -24,7 +24,7 @@
 #include <variant>
 
 template<typename T>
-static inline T consume_be(temporary_buffer<char>& p) {
+inline T consume_be(temporary_buffer<char>& p) {
     T i = read_be<T>(p.get());
     p.trim_front(sizeof(T));
     return i;

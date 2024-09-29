@@ -39,7 +39,7 @@ public:
     }
 };
 
-static inline
+inline
 timestamp_type new_timestamp() {
     return timestamp_clock::now().time_since_epoch().count();
 }

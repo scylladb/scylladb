@@ -66,7 +66,7 @@ static constexpr double pow_2_32 = 4294967296.0; ///< 2^32
 static constexpr double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
 
 
-static inline size_t size_unsigned_var_int(unsigned int value) {
+inline size_t size_unsigned_var_int(unsigned int value) {
     size_t size = 0;
     while ((value & 0xFFFFFF80) != 0L) {
         size++;
@@ -76,7 +76,7 @@ static inline size_t size_unsigned_var_int(unsigned int value) {
     return size;
 }
 
-static inline size_t write_unsigned_var_int(unsigned int value, uint8_t* to) {
+inline size_t write_unsigned_var_int(unsigned int value, uint8_t* to) {
     size_t size = 0;
     while ((value & 0xFFFFFF80) != 0L) {
         *to = (value & 0x7F) | 0x80;
