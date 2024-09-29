@@ -39,7 +39,7 @@ ScyllaDB requires modern Intel/AMD CPUs that support the SSE4.2 instruction set 
 
 ScyllaDB supports the following CPUs:
 
-* Intel core: Westmere and later (2010)
+* Intel core: Broadwell and later (2014)
 * Intel atom: Goldmont and later (2016)
 * AMD low power: Jaguar and later (2013)
 * AMD standard: Bulldozer and later (2011)
