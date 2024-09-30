@@ -291,7 +291,7 @@
          "id":"task_status",
          "description":"A task status object",
          "properties":{
-            "id":{
+            "task_id":{
                "type":"string",
                "description":"The uuid of the task"
             },

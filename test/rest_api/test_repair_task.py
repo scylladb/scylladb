@@ -43,7 +43,7 @@ def test_repair_task_progress_finished_task(cql, this_dc, rest_api):
                     assert status["progress_completed"] == status["progress_total"], "Incorrect task progress"
 
                     assert "children_ids" in status, "Shard tasks weren't created"
-                    children = [s for s in status_tree if s["parent_id"] == status["id"]]
+                    children = [s for s in status_tree if s["parent_id"] == status["task_id"]]
                     assert all([child["progress_completed"] == child["progress_total"] for child in children]), "Some shard tasks have incorrect progress"
 
                     assert sum([child["progress_total"] for child in children]) == status["progress_total"], "Total progress of parent is not equal to children total progress sum"
@@ -114,8 +114,8 @@ def test_repair_task_progress(cql, this_dc, rest_api):
                         resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")
                         resp.raise_for_status()
 
-                        child_status = wait_for_task(rest_api, status["id"])
-                        status_tree = get_task_status_recursively(rest_api, status["id"])
-                        for child_status in get_children(status_tree, status["id"]):
+                        child_status = wait_for_task(rest_api, status["task_id"])
+                        status_tree = get_task_status_recursively(rest_api, status["task_id"])
+                        for child_status in get_children(status_tree, status["task_id"]):
                             assert child_status["progress_completed"] == child_status["progress_total"], "Incorrect task progress"
     drain_module_tasks(rest_api, module_name)

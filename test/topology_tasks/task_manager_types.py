@@ -40,7 +40,7 @@ class TaskStats(NamedTuple):
 
 class TaskStatus(NamedTuple):
     """Full status of Task Manager's tasks"""
-    id: TaskID
+    task_id: TaskID
     state: State
     type: str
     kind: str

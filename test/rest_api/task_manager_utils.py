@@ -41,7 +41,7 @@ def check_field_correctness(field_name, status, expected_status):
         assert status[field_name] == expected_status[field_name], f"Incorrect task {field_name}"
 
 def check_status_correctness(status, expected_status):
-    check_field_correctness("id", status, expected_status)
+    check_field_correctness("task_id", status, expected_status)
     check_field_correctness("state", status, expected_status)
     check_field_correctness("sequence_number", status, expected_status)
     check_field_correctness("keyspace", status, expected_status)
@@ -61,11 +61,11 @@ def get_children(status_tree, parent_id):
 def check_child_parent_relationship(rest_api, status_tree, parent, allow_no_children):
     assert allow_no_children or parent.get("children_ids", []), f"Child tasks were not created for {parent}"
 
-    for child in get_children(status_tree, parent["id"]):
-        child_id = child["id"]
+    for child in get_children(status_tree, parent["task_id"]):
+        child_id = child["task_id"]
         assert child["kind"] == "node", "Child task isn't marked as local"
         assert parent["sequence_number"] == child["sequence_number"], f"Child task with id {child_id} did not inherit parent's sequence number"
-        assert child["parent_id"] == parent["id"], f"Parent id of task with id {child_id} is not set"
+        assert child["parent_id"] == parent["task_id"], f"Parent id of task with id {child_id} is not set"
         check_child_parent_relationship(rest_api, status_tree, child, True)
 
 def drain_module_tasks(rest_api, module_name):
