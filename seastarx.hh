@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <boost/asio/ip/address_v4.hpp>  // avoid conflict between ::socket and seastar::socket
-
 namespace seastar {
 
 template <typename T>
