@@ -47,7 +47,6 @@ class options;
 }
 
 namespace replica {
-class database;
 class table;
 }
 
@@ -538,6 +537,14 @@ struct schema_static_props {
     }
 };
 
+class schema_describe_helper {
+public:
+    virtual bool is_global_index(const table_id& base_id, const schema& view_s) const = 0;
+    virtual bool is_index(const table_id& base_id, const schema& view_s) const = 0;
+    virtual schema_ptr find_schema(const table_id& id) const = 0;
+    virtual ~schema_describe_helper() = default;
+};
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -916,11 +923,11 @@ public:
      * table's id and dropped columns. The dropped columns are present in column definitions and also the `ALTER DROP`
      * statement (and `ALTER ADD` if the column has been re-added) to the description.
      */
-    cql3::description describe(const replica::database& db, cql3::describe_option) const;
+    cql3::description describe(const schema_describe_helper& helper, cql3::describe_option) const;
 
     // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.
     // The method cannot be used on index, as indexes don't support alter statement.
-    std::ostream& describe_alter_with_properties(replica::database& db, std::ostream& os) const;
+    std::ostream& describe_alter_with_properties(const schema_describe_helper& helper, std::ostream& os) const;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
@@ -937,9 +944,9 @@ public:
     }
 private:
     // Print all schema properties in CQL syntax
-    std::ostream& schema_properties(const replica::database& db, std::ostream& os) const;
+    std::ostream& schema_properties(const schema_describe_helper& helper, std::ostream& os) const;
 
-    sstring get_create_statement(const replica::database& db, bool with_internals) const;
+    sstring get_create_statement(const schema_describe_helper& helper, bool with_internals) const;
 public:
     const v3_columns& v3() const {
         return _v3_columns;

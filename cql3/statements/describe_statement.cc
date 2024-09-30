@@ -50,6 +50,7 @@
 #include "utils/sorting.hh"
 #include "replica/database.hh"
 #include "cql3/description.hh"
+#include "replica/schema_describe_helper.hh"
 
 static logging::logger dlogger("describe");
 
@@ -207,7 +208,8 @@ description view(const data_dictionary::database& db, const sstring& ks, const s
         throw exceptions::invalid_request_exception(format("Materialized view '{}' not found in keyspace '{}'", name, ks));
     }
 
-    return view->schema()->describe(db.real_database(), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    return view->schema()->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
 }
 
 description index(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
@@ -225,7 +227,8 @@ description index(const data_dictionary::database& db, const sstring& ks, const 
         }
     }
 
-    return (**idx).describe(db.real_database(), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    return (**idx).describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
 }
 
 // `base_name` should be a table with enabled cdc
@@ -238,9 +241,10 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
 
     std::ostringstream os;
     auto schema = table->schema();
-    schema->describe_alter_with_properties(db.real_database(), os);
+    replica::schema_describe_helper describe_helper{db};
+    schema->describe_alter_with_properties(describe_helper, os);
 
-    auto schema_desc = schema->describe(db.real_database(), describe_option::NO_STMTS);
+    auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
     schema_desc.create_statement = std::move(os).str();
     return schema_desc;
 }
@@ -261,7 +265,8 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     std::vector<description> result;
 
     // table
-    result.push_back(schema->describe(db.real_database(), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS));
+    replica::schema_describe_helper describe_helper{db};
+    result.push_back(schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS));
 
     // indexes
     std::ranges::sort(idxs, std::ranges::less(), [] (const auto& a) {
@@ -309,8 +314,9 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
         co_return result;
     }
 
-    co_return boost::copy_range<std::vector<description>>(tables | boost::adaptors::transformed([&replica_db] (auto&& t) {
-        return t->describe(replica_db, describe_option::NO_STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    co_return boost::copy_range<std::vector<description>>(tables | boost::adaptors::transformed([&describe_helper] (auto&& t) {
+        return t->describe(describe_helper, describe_option::NO_STMTS);
     }));
 }
 
