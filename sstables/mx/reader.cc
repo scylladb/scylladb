@@ -1557,6 +1557,8 @@ private:
         auto [begin, end] = _index_reader->data_file_positions();
         SCYLLA_ASSERT(end);
 
+        sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
+
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
             if (reversed()) {
