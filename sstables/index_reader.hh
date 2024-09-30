@@ -670,7 +670,7 @@ private:
 
         auto& summary = _sstable->get_summary();
         bound.previous_summary_idx = std::distance(std::begin(summary.entries),
-            std::lower_bound(summary.entries.begin() + bound.previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
+            std::upper_bound(summary.entries.begin() + bound.previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
 
         if (bound.previous_summary_idx == 0) {
             sstlog.trace("index {}: first entry", fmt::ptr(this));
