@@ -17,11 +17,13 @@
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
+#include "contiguous_shared_buffer.hh"
 #include "fragment_range.hh"
 
-/// Fragmented buffer consisting of multiple temporary_buffer<char>
-class fragmented_temporary_buffer {
-    using vector_type = std::vector<seastar::temporary_buffer<char>>;
+/// Fragmented buffer consisting of multiple Buffer objects.
+template <ContiguousSharedBuffer Buffer>
+class basic_fragmented_buffer {
+    using vector_type = std::vector<Buffer>;
     vector_type _fragments;
     size_t _size_bytes = 0;
 public:
@@ -30,15 +32,15 @@ public:
     class view;
     class istream;
     class reader;
-    using ostream = seastar::memory_output_stream<vector_type::iterator>;
+    using ostream = seastar::memory_output_stream<typename vector_type::iterator>;
 
-    fragmented_temporary_buffer() = default;
+    basic_fragmented_buffer() = default;
 
-    fragmented_temporary_buffer(std::vector<seastar::temporary_buffer<char>> fragments, size_t size_bytes) noexcept
+    basic_fragmented_buffer(std::vector<Buffer> fragments, size_t size_bytes) noexcept
         : _fragments(std::move(fragments)), _size_bytes(size_bytes)
     { }
 
-    fragmented_temporary_buffer(const char* str, size_t size)
+    basic_fragmented_buffer(const char* str, size_t size)
     {
         *this = allocate_to_fit(size);
         size_t pos = 0;
@@ -54,10 +56,10 @@ public:
 
     ostream get_ostream() noexcept {
         if (_fragments.size() != 1) {
-            return ostream::fragmented(_fragments.begin(), _size_bytes);
+            return typename ostream::fragmented(_fragments.begin(), _size_bytes);
         }
         auto& current = *_fragments.begin();
-        return ostream::simple(reinterpret_cast<char*>(current.get_write()), current.size());
+        return typename ostream::simple(reinterpret_cast<char*>(current.get_write()), current.size());
     }
 
     using const_fragment_iterator = typename vector_type::const_iterator;
@@ -100,23 +102,23 @@ public:
         _fragments.erase(it.base(), _fragments.end());
     }
 
-    // Creates a fragmented temporary buffer of a specified size, supplied as a parameter.
+    // Creates a fragmented buffer of a specified size, supplied as a parameter.
     // Max chunk size is limited to 128kb (the same limit as `bytes_stream` has).
-    static fragmented_temporary_buffer allocate_to_fit(size_t data_size) {
+    static basic_fragmented_buffer allocate_to_fit(size_t data_size) {
         constexpr size_t max_fragment_size = default_fragment_size; // 128KB
 
         const size_t full_fragment_count = data_size / max_fragment_size; // number of max-sized fragments
         const size_t last_fragment_size = data_size % max_fragment_size;
 
-        std::vector<seastar::temporary_buffer<char>> fragments;
+        std::vector<Buffer> fragments;
         fragments.reserve(full_fragment_count + !!last_fragment_size);
         for (size_t i = 0; i < full_fragment_count; ++i) {
-            fragments.emplace_back(seastar::temporary_buffer<char>(max_fragment_size));
+            fragments.emplace_back(Buffer(max_fragment_size));
         }
         if (last_fragment_size) {
-            fragments.emplace_back(seastar::temporary_buffer<char>(last_fragment_size));
+            fragments.emplace_back(Buffer(last_fragment_size));
         }
-        return fragmented_temporary_buffer(std::move(fragments), data_size);
+        return basic_fragmented_buffer(std::move(fragments), data_size);
     }
 
     vector_type release() && noexcept {
@@ -124,7 +126,8 @@ public:
     }
 };
 
-class fragmented_temporary_buffer::view {
+template <ContiguousSharedBuffer Buffer>
+class basic_fragmented_buffer<Buffer>::view {
     vector_type::const_iterator _current;
     const char* _current_position = nullptr;
     size_t _current_size = 0;
@@ -252,7 +255,7 @@ public:
         _current_size = std::min(_current_size, _total_size);
     }
 
-    bool operator==(const fragmented_temporary_buffer::view& other) const noexcept {
+    bool operator==(const basic_fragmented_buffer::view& other) const noexcept {
         auto this_it = begin();
         auto other_it = other.begin();
 
@@ -285,10 +288,14 @@ public:
         return this_it == end() && other_it == other.end();
     }
 };
+
+using fragmented_temporary_buffer = basic_fragmented_buffer<temporary_buffer<char>>;
+
 static_assert(FragmentRange<fragmented_temporary_buffer::view>);
 static_assert(FragmentedView<fragmented_temporary_buffer::view>);
 
-inline fragmented_temporary_buffer::operator view() const noexcept
+template <ContiguousSharedBuffer Buffer>
+inline basic_fragmented_buffer<Buffer>::operator view() const noexcept
 {
     if (!_size_bytes) {
         return view();
@@ -305,7 +312,8 @@ concept ExceptionThrower = requires(T obj, size_t n) {
 
 }
 
-class fragmented_temporary_buffer::istream {
+template <ContiguousSharedBuffer Buffer>
+class basic_fragmented_buffer<Buffer>::istream {
     vector_type::const_iterator _current;
     const char* _current_position;
     const char* _current_end;
@@ -465,29 +473,32 @@ public:
     }
 };
 
-inline fragmented_temporary_buffer::istream fragmented_temporary_buffer::get_istream() const noexcept // allow empty (ut for that)
+template <ContiguousSharedBuffer Buffer>
+inline basic_fragmented_buffer<Buffer>::istream basic_fragmented_buffer<Buffer>::get_istream() const noexcept // allow empty (ut for that)
 {
     return istream(_fragments, _size_bytes);
 }
 
-class fragmented_temporary_buffer::reader {
-    std::vector<temporary_buffer<char>> _fragments;
+template <ContiguousSharedBuffer Buffer>
+class basic_fragmented_buffer<Buffer>::reader {
+    using FragBuffer = basic_fragmented_buffer<Buffer>;
+    FragBuffer::vector_type _fragments;
     size_t _left = 0;
 public:
-    future<fragmented_temporary_buffer> read_exactly(input_stream<char>& in, size_t length) {
-        _fragments = std::vector<temporary_buffer<char>>();
+    future<FragBuffer> read_exactly(input_stream<char>& in, size_t length) {
+        _fragments = FragBuffer::vector_type();
         _left = length;
         return repeat_until_value([this, length, &in] {
             if (!_left) {
-                return make_ready_future<std::optional<fragmented_temporary_buffer>>(fragmented_temporary_buffer(std::move(_fragments), length));
+                return make_ready_future<std::optional<FragBuffer>>(FragBuffer(std::move(_fragments), length));
             }
             return in.read_up_to(_left).then([this] (temporary_buffer<char> buf) {
                 if (buf.empty()) {
-                    return std::make_optional(fragmented_temporary_buffer());
+                    return std::make_optional(FragBuffer());
                 }
                 _left -= buf.size();
-                _fragments.emplace_back(std::move(buf));
-                return std::optional<fragmented_temporary_buffer>();
+                _fragments.emplace_back(Buffer(std::move(buf)));
+                return std::optional<FragBuffer>();
             });
         });
     }
@@ -495,7 +506,8 @@ public:
 
 // The operator below is used only for logging
 
-inline std::ostream& operator<<(std::ostream& out, const fragmented_temporary_buffer::view& v) {
+template <ContiguousSharedBuffer Buffer>
+inline std::ostream& operator<<(std::ostream& out, const typename basic_fragmented_buffer<Buffer>::view& v) {
     for (bytes_view frag : fragment_range(v)) {
         out << to_hex(frag);
     }
