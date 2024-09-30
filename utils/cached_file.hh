@@ -78,6 +78,10 @@ private:
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
         }
+
+        bool only_ref() const {
+            return _use_count <= 1;
+        }
     public:
         explicit cached_page(cached_file* parent, page_idx_type idx, temporary_buffer<char> buf)
             : parent(parent)
@@ -114,11 +118,10 @@ private:
             return temporary_buffer<char>(_buf.get_write(), _buf.size(), make_deleter([self = std::move(self)] {}));
         }
 
-        // Returns a buffer which reflects contents of this page.
-        // The buffer will not prevent eviction.
+        // Returns a pointer to the contents of the page.
         // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
-        temporary_buffer<char> get_buf_weak() {
-            return temporary_buffer<char>(_lsa_buf.get(), _lsa_buf.size(), deleter());
+        char* begin() {
+            return _lsa_buf.get();
         }
 
         size_t size_in_allocator() {
@@ -208,10 +211,11 @@ public:
     class page_view {
         cached_page::ptr_type _page;
         size_t _offset;
-        size_t _size;
+        size_t _size = 0;
         std::optional<reader_permit::resource_units> _units;
     public:
         page_view() = default;
+
         page_view(size_t offset, size_t size, cached_page::ptr_type page, std::optional<reader_permit::resource_units> units)
                 : _page(std::move(page))
                 , _offset(offset)
@@ -219,15 +223,64 @@ public:
                 , _units(std::move(units))
         {}
 
-        // The returned buffer is valid only until the LSA region associated with cached_file invalidates references.
-        temporary_buffer<char> get_buf() {
-            auto buf = _page->get_buf_weak();
-            buf.trim(_size);
-            buf.trim_front(_offset);
-            return buf;
+        page_view(page_view&& o) noexcept
+            : _page(std::move(o._page))
+            , _offset(std::exchange(o._offset, 0))
+            , _size(std::exchange(o._size, 0))
+            , _units(std::move(o._units))
+        {}
+
+        page_view& operator=(page_view&& o) noexcept {
+            _page = std::move(o._page);
+            _offset = std::exchange(o._offset, 0);
+            _size = std::exchange(o._size, 0);
+            _units = std::move(o._units);
+            return *this;
         }
 
-        operator bool() const { return bool(_page); }
+        // Fills the page with garbage, releases the pointer and evicts the page so that it's no longer in cache.
+        // For testing use-after-free on the buffer space.
+        // After the call, the object is the same state as after being moved-from.
+        void release_and_scramble() noexcept {
+            if (_page->only_ref()) {
+                std::memset(_page->_lsa_buf.get(), 0xfe, _page->_lsa_buf.size());
+                cached_page& cp = *_page;
+                _page = nullptr;
+                cp.parent->_lru.remove(cp);
+                cp.on_evicted();
+            } else {
+                _page = nullptr;
+            }
+            _size = 0;
+            _offset = 0;
+            _units = std::nullopt;
+        }
+
+        operator bool() const { return bool(_page) && _size; }
+    public: // ContiguousSharedBuffer concept
+        const char* begin() const { return _page ? _page->begin() + _offset : nullptr; }
+        const char* get() const { return begin(); }
+        const char* end() const { return begin() + _size; }
+        size_t size() const { return _size; }
+        bool empty() const { return !_size; }
+        char* get_write() { return const_cast<char*>(begin()); }
+
+        void trim(size_t pos) {
+            _size = pos;
+        }
+
+        void trim_front(size_t n) {
+            _offset += n;
+            _size -= n;
+        }
+
+        page_view share() {
+            return share(0, _size);
+        }
+
+        page_view share(size_t pos, size_t len) {
+            return page_view(_offset + pos, len, _page->share(), {});
+        }
     };
 
     // Generator of subsequent pages of data reflecting the contents of the file.
@@ -306,7 +359,7 @@ public:
                         ? _cached_file->_last_page_size
                         : page_size;
                 units = get_page_units(page_size);
-                page_view buf(_offset_in_page, size, std::move(page), std::move(units));
+                page_view buf(_offset_in_page, size - _offset_in_page, std::move(page), std::move(units));
                 _offset_in_page = 0;
                 ++_page_idx;
                 return buf;

@@ -70,7 +70,7 @@ private:
     };
 
     struct m_parser_context {
-        mc::promoted_index_block_parser block_parser;
+        mc::promoted_index_block_parser<temporary_buffer<char>> block_parser;
 
         m_parser_context(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
             : block_parser(s, std::move(permit), std::move(cvfl))

@@ -453,3 +453,52 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     BOOST_REQUIRE_EQUAL(2, metrics.page_populations);
     BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_page_view_as_contiguous_shared_buffer) {
+    auto page_size = cached_file::page_size;
+    test_file tf = make_test_file(page_size);
+
+    cached_file_stats metrics;
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, cf_lru, region, page_size);
+
+    auto s = cf.read(1, std::nullopt);
+    cached_file::page_view p = s.next_page_view().get();
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(1, page_size - 1), sstring(p.begin(), p.end()));
+    BOOST_REQUIRE_EQUAL(p.size(), page_size - 1);
+    BOOST_REQUIRE(!p.empty());
+
+    p.trim(10);
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(1, 10), sstring(p.begin(), p.end()));
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(1, 10), sstring(p.get_write(), p.end()));
+
+    p.trim_front(1);
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(2, 9), sstring(p.begin(), p.end()));
+
+    // Check movability
+    {
+        auto p_cpy = p.share();
+        auto p1 = std::move(p_cpy);
+        BOOST_REQUIRE_EQUAL(tf.contents.substr(2, 9), sstring(p1.begin(), p1.end()));
+        BOOST_REQUIRE(p_cpy.empty());
+        BOOST_REQUIRE(p_cpy.size() == 0);
+        BOOST_REQUIRE(!p_cpy);
+    }
+
+    auto p2 = p.share(2, 3);
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(4, 3), sstring(p2.begin(), p2.end()));
+    p2.trim_front(1); // should not affect p
+
+    p.trim_front(9);
+    BOOST_REQUIRE_EQUAL(p.size(), 0);
+    BOOST_REQUIRE(p.begin() == p.end());
+
+    p = {};
+    BOOST_REQUIRE_EQUAL(p.size(), 0);
+    BOOST_REQUIRE(p.begin() == p.end());
+    BOOST_REQUIRE(!p);
+    BOOST_REQUIRE_EQUAL(sstring(p.begin(), p.end()), sstring());
+
+    // p should not affect p2
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(5, 2), sstring(p2.begin(), p2.end()));
+}
