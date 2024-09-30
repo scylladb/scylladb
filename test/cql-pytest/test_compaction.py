@@ -4,6 +4,8 @@
 
 from util import new_materialized_view, new_test_table
 import nodetool
+import pytest
+import requests
 import time
 
 # sleep to let a ttl (of `seconds`) expire and
@@ -145,3 +147,38 @@ def test_tombstone_gc_with_materialized_view_update_in_memtable(scylla_only, cql
                 assert len(sstables) == 1, f"Expected single sstable but saw {len(sstables)}: res={list(res)}"
                 assert keys == {1}, f"Expected keys=={1} but got {keys}: res={list(res)}"
                 assert rows == {2}, f"Expected rows=={2} but got {keys}: res={list(res)}"
+
+def get_compaction_stats(cql, table):
+    ks, cf = table.split('.')
+    res = requests.get(f'{nodetool.rest_api_url(cql)}/compaction_manager/metrics/pending_tasks_by_table')
+    res.raise_for_status()
+    stats = res.json()
+    tasks = 0
+    for s in stats:
+        if s['ks'] == ks and s['cf'] == cf:
+            tasks += int(s['task'])
+    return tasks, stats
+
+@pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace, compaction_strategy):
+    """
+    Test that compactionstats show no pending compaction after major compaction
+    """
+    num_sstables = 16
+    extra_strategy_options = ""
+    if compaction_strategy == "LeveledCompactionStrategy":
+        extra_strategy_options = ", 'sstable_size_in_mb':1"
+        num_sstables *= 4   # Need enough data to trigger level 0 compaction
+    value = 'x' * 128*1024
+    with new_test_table(cql, test_keyspace,
+                        schema="p int PRIMARY KEY, v text",
+                        extra=f"WITH compression={{}} AND compaction={{'class':'{compaction_strategy}'{extra_strategy_options}}}") as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            for i in range(num_sstables):
+                cql.execute(f"INSERT INTO {table} (p, v) VALUES ({i}, '{value}')")
+                nodetool.flush(cql, table)
+            tasks, stats = get_compaction_stats(cql, table)
+            assert tasks > 0, f"Found no pending compaction tasks as expected: stats={stats}"
+            nodetool.compact(cql, table)
+            tasks, stats = get_compaction_stats(cql, table)
+            assert tasks == 0, f"Found {tasks} pending compaction tasks unexpectedly: stats={stats}"
