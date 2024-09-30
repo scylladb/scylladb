@@ -1387,6 +1387,9 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
     } else if (do_advance_existings) {
         co_await advance_existings();
     }
+    if (utils::get_local_injector().enter("keep_mv_read_semaphore_units_10ms_longer") && _existing && _existing->is_clustering_row()) {
+        co_await seastar::sleep(std::chrono::milliseconds(10));
+    }
 
     // If the partition tombstone update is applied to all the views and there are no other updates, we can skip going over
     // all the rows trying to generate row updates, because the partition tombstones already cover everything.
