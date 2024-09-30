@@ -99,6 +99,7 @@ future<> directories::create_and_verify(directories::set dir_set, recursive recu
 }
 
 template <typename... Args>
+[[noreturn]]
 static inline
 void verification_error(const fs::path& path, const char* fstr, Args&&... args) {
     auto emsg = fmt::format(fmt::runtime(fstr), std::forward<Args>(args)...);
