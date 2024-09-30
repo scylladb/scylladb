@@ -708,7 +708,6 @@ future<> client::multipart_upload::finalize_upload() {
 
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
-        co_await abort_upload();
         co_await coroutine::return_exception(std::runtime_error("couldn't upload parts"));
     }
 
@@ -778,7 +777,16 @@ public:
             co_await upload_part(std::move(_bufs));
         }
         if (upload_started()) {
-            co_await finalize_upload();
+            std::exception_ptr ex;
+            try {
+                co_await finalize_upload();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            if (ex) {
+                co_await abort_upload();
+                std::rethrow_exception(ex);
+            }
         }
     }
 };
@@ -869,7 +877,16 @@ public:
             co_await upload_part(std::exchange(_current, nullptr));
         }
         if (upload_started()) {
-            co_await finalize_upload();
+            std::exception_ptr ex;
+            try {
+                co_await finalize_upload();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            if (ex) {
+                co_await abort_upload();
+                std::rethrow_exception(ex);
+            }
         }
     }
 
