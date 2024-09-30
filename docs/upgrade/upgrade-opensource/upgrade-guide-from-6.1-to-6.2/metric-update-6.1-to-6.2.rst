@@ -21,8 +21,8 @@ The following metrics are new in ScyllaDB |NEW_VERSION|:
 
    * - Metric
      - Description
-   * -
-     - 
+   * - scylla_alternator_batch_item_count 
+     - The total number of items processed across all batches
 
   
 
