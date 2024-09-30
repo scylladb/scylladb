@@ -1132,7 +1132,12 @@ public:
             write(out, uint64_t(0));
         }
 
-        buf.remove_suffix(buf.size_bytes() - size);
+        auto to_remove = buf.size_bytes() - size;
+        // #20862 - we decrement usage counter based on buf.size() below.
+        // Since we are shrinking buffer here, we need to also decrement
+        // counter already
+        buf.remove_suffix(to_remove);
+        _segment_manager->totals.buffer_list_bytes -= to_remove;
 
         // Build sector checksums.
         auto id = net::hton(_desc.id);
@@ -3824,6 +3829,10 @@ uint64_t db::commitlog::get_total_size() const {
         + _segment_manager->totals.wasted_size_on_disk
         + _segment_manager->totals.buffer_list_bytes
         ;
+}
+
+uint64_t db::commitlog::get_buffer_size() const {
+    return _segment_manager->totals.buffer_list_bytes;
 }
 
 uint64_t db::commitlog::get_completed_tasks() const {
