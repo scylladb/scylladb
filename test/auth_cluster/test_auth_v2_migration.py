@@ -9,7 +9,6 @@ import logging
 import pytest
 import time
 
-from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name

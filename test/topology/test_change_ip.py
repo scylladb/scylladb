@@ -116,7 +116,7 @@ async def test_change_two(manager, random_tables, mode):
         # and the mentioned above code is not exercised by this test.
         await manager.api.enable_injection(servers[0].ip_addr, 'ip-change-raft-sync-delay', one_shot=False)
     await manager.server_start(servers[1].server_id)
-    servers[1] = ServerInfo(servers[1].server_id, s1_new_ip, s1_new_ip)
+    servers[1] = ServerInfo(servers[1].server_id, s1_new_ip, s1_new_ip, servers[1].datacenter, servers[1].rack)
     if mode != 'release':
         s0_logs = await manager.server_open_log(servers[0].server_id)
         await s0_logs.wait_for('crash-before-prev-ip-removed hit, killing the node')
@@ -127,7 +127,7 @@ async def test_change_two(manager, random_tables, mode):
     await wait_proper_ips([servers[0], servers[1]])
 
     await manager.server_start(servers[2].server_id)
-    servers[2] = ServerInfo(servers[2].server_id, s2_new_ip, s2_new_ip)
+    servers[2] = ServerInfo(servers[2].server_id, s2_new_ip, s2_new_ip, servers[2].datacenter, servers[2].rack)
     await reconnect_driver(manager)
     await wait_proper_ips([servers[0], servers[1], servers[2]])
 
