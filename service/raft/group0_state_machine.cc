@@ -290,7 +290,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto holder = _gate.hold();
 
-    slogger.trace("transfer snapshot from {} index {} snp id {}", from_ip, snp.idx, snp.id);
+    slogger.info("transfer snapshot from {} index {} snp id {}", from_ip, snp.idx, snp.id);
     netw::messaging_service::msg_addr addr{*from_ip, 0};
     auto& as = _abort_source;
 
