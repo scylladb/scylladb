@@ -1059,10 +1059,14 @@ public:
 // Returns `no_checksum` if the sstable is uncompressed and does not have
 // a CRC component (CRC.db is missing from TOC.txt).
 // Validation errors are logged individually.
-enum class validate_checksums_result {
+enum class validate_checksums_status {
     invalid = 0,
     valid = 1,
     no_checksum = 2
+};
+struct validate_checksums_result {
+    validate_checksums_status status;
+    bool has_digest;
 };
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit);
 

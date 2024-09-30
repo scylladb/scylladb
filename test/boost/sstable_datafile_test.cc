@@ -2814,7 +2814,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 testlog.info("Validating intact {}", sst->get_filename());
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::valid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+                BOOST_REQUIRE(res.has_digest);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
@@ -2825,7 +2826,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 sstables::test(sst).set_digest(valid_digest.value() + 1);
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
                 sstables::test(sst).set_digest(valid_digest); // restore it for next test cases
 
                 testlog.info("Validating checksum-corrupted {}", sst->get_filename());
@@ -2838,7 +2840,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
 
                 testlog.info("Validating post-load minor truncation (last byte removed) on {}", sst->get_filename());
 
@@ -2847,7 +2850,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
 
                 testlog.info("Validating post-load major truncation (half of data removed) on {}", sst->get_filename());
 
@@ -2856,13 +2860,15 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
 
                 if (compression_params == no_compression_params) {
                     testlog.info("Validating with no checksums {}", sst->get_filename());
                     sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
                     auto res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::no_checksum);
+                    BOOST_REQUIRE(res.has_digest);
                 }
 
                 { // truncate the sstable
@@ -2877,7 +2883,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst->load(sst->get_schema()->get_sharder()).get();
 
                     res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
                 }
 
                 { // truncate the sstable
@@ -2892,7 +2899,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst->load(sst->get_schema()->get_sharder()).get();
 
                     res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
                 }
 
                 { // append data to the sstable
@@ -2912,7 +2920,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst->load(sst->get_schema()->get_sharder()).get();
 
                     res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
                 }
             }
         }

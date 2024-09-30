@@ -2510,7 +2510,7 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, read
 }
 
 template <typename ChecksumType>
-static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, uint32_t expected_digest) {
+static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, std::optional<uint32_t> expected_digest) {
     bool valid = true;
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
@@ -2542,18 +2542,20 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
             valid = false;
         }
 
-        actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.get(), compressed_len);
-        if (checksum_all) {
-            uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-            actual_full_checksum = ChecksumType::checksum(actual_full_checksum,
-                    reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+        if (expected_digest) {
+            actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.get(), compressed_len);
+            if (checksum_all) {
+                uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+                actual_full_checksum = ChecksumType::checksum(actual_full_checksum,
+                        reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+            }
         }
 
         offset += chunk_len;
     }
 
-    if (actual_full_checksum != expected_digest) {
-        sstlog.error("Full checksum mismatch: expected={}, actual={}", expected_digest, actual_full_checksum);
+    if (expected_digest && actual_full_checksum != *expected_digest) {
+        sstlog.error("Full checksum mismatch: expected={}, actual={}", *expected_digest, actual_full_checksum);
         valid = false;
     }
 
@@ -2649,16 +2651,18 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
 
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
     const auto digest = co_await sst->read_digest();
-    if (!digest) {
-        throw std::runtime_error(seastar::format("No digest available for SSTable: {}", sst->get_filename()));
-    }
+    validate_checksums_result ret = {
+        validate_checksums_status::valid,
+        digest.has_value()
+    };
+
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {
         sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
-        co_return validate_checksums_result::no_checksum;
+        ret.status = validate_checksums_status::no_checksum;
+        co_return ret;
     }
 
-    auto ret = validate_checksums_result::valid;
     input_stream<char> data_stream;
     if (sst->get_compression()) {
         data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit,
@@ -2668,7 +2672,7 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                 nullptr, nullptr, sstable::raw_stream::no,
                 integrity_check::yes, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
-                    ret = validate_checksums_result::invalid;
+                    ret.status = validate_checksums_status::invalid;
                 });
     }
 
@@ -2678,9 +2682,9 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     try {
         if (sst->get_compression()) {
             if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, *digest);
+                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
             } else {
-                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, *digest);
+                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
             }
         } else {
             valid = co_await do_validate_uncompressed(data_stream, checksum->checksums.size(), checksum->chunk_size);
@@ -2696,7 +2700,7 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     maybe_rethrow_exception(std::move(ex));
 
     if (!valid) {
-        ret = validate_checksums_result::invalid;
+        ret.status = validate_checksums_status::invalid;
     }
     co_return ret;
 }

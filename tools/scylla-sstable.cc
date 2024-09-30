@@ -1608,20 +1608,26 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         writer.Key(sst->get_filename());
         writer.StartObject();
         writer.Key("has_checksums");
-        switch (res) {
-        case validate_checksums_result::valid:
+        switch (res.status) {
+        case validate_checksums_status::valid:
+        case validate_checksums_status::invalid:
             writer.Bool(true);
+            break;
+        case validate_checksums_status::no_checksum:
+            writer.Bool(false);
+        }
+        writer.Key("has_digest");
+        writer.Bool(res.has_digest);
+        switch (res.status) {
+        case validate_checksums_status::valid:
             writer.Key("valid_checksums");
             writer.Bool(true);
             break;
-        case validate_checksums_result::invalid:
-            writer.Bool(true);
+        case validate_checksums_status::invalid:
             writer.Key("valid_checksums");
             writer.Bool(false);
             break;
-        case validate_checksums_result::no_checksum:
-            writer.Bool(false);
-            break;
+        case validate_checksums_status::no_checksum:
         }
         writer.EndObject();
     }

@@ -2950,7 +2950,8 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         f.close().get();
 
         auto res = sstables::validate_checksums(sst, permit).get();
-        BOOST_REQUIRE(res == validate_checksums_result::invalid);
+        BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+        BOOST_REQUIRE(res.has_digest);
 
 
         const auto errors = sst->validate(permit, abort, error_handler{count}).get();
