@@ -125,6 +125,8 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
         'reader_concurrency_semaphore_serialize_limit_multiplier': 0,
         'reader_concurrency_semaphore_kill_limit_multiplier': 0,
+        'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 0,
+        'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 0,
 
         'maintenance_socket': socket_path,
 
