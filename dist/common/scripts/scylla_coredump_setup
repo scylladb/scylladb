@@ -40,10 +40,10 @@ if __name__ == '__main__':
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
-    # Seems like specific version of systemd pacakge on RHEL9 has a bug on
+    # Seems like a specific version of systemd package on RHEL9 has a bug on
     # SELinux configuration, it introduced "systemd-container-coredump" module
     # to provide rule for systemd-coredump but not enabled by default.
-    # We have to manually load it, otherwise it causes permission errror.
+    # We have to manually load it, otherwise it causes permission error.
     # (#19325)
     if is_redhat_variant() and distro.major_version() == '9':
         if not shutil.which('getenforce'):
