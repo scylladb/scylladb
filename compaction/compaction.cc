@@ -1364,6 +1364,12 @@ public:
 
 class split_compaction final : public regular_compaction {
     compaction_type_options::split _options;
+
+    uint64_t partitions_per_sstable() const override {
+        // one sstable will be split into two, so use half the
+        // total estimated partitions for the output tables.
+        return _estimated_partitions / 2;
+    }
 public:
     split_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::split options,
                          compaction_progress_monitor& progress_monitor)
