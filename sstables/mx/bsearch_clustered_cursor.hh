@@ -536,7 +536,10 @@ public:
         return advance_to_upper_bound(pos).then([this] {
             if (_current_idx == 0) {
                 sstlog.trace("mc_bsearch_clustered_cursor {}: same block", fmt::ptr(this));
-                return make_ready_future<std::optional<skip_info>>(std::nullopt);
+                return _promoted_index.get_block(_current_idx, _trace_state).then([this] (promoted_index_block* block) {
+                    _skip_info = skip_info{block->data_file_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
+                    return std::make_optional(_skip_info);
+                });
             }
             return _promoted_index.get_block(_current_idx - 1, _trace_state).then([this] (promoted_index_block* block) {
                 sstlog.trace("mc_bsearch_clustered_cursor {}: [{}] = {}", fmt::ptr(this), _current_idx - 1, *block);
