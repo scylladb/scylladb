@@ -2564,50 +2564,18 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
     co_return valid;
 }
 
-template <typename ChecksumType>
-static future<bool> do_validate_uncompressed(input_stream<char>& stream, const checksum& checksum, uint32_t expected_digest) {
-    bool valid = true;
-    uint64_t offset = 0;
-    uint32_t actual_full_checksum = ChecksumType::init_checksum();
-
-    for (size_t i = 0; i < checksum.checksums.size(); ++i) {
-        const auto expected_checksum = checksum.checksums[i];
-        auto buf = co_await stream.read_exactly(checksum.chunk_size);
-
-        if (buf.empty()) {
-            sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has less", offset, checksum.checksums.size());
-            valid = false;
-            break;
-        }
-
-        auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
-
-        if (actual_checksum != expected_checksum) {
-            sstlog.error("Chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, checksum.chunk_size, expected_checksum, actual_checksum);
-            valid = false;
-        }
-
-        actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.begin(), buf.size());
-
-        offset += buf.size();
-    }
-
-    {
-        // We should be at EOF here, but the flag might not be set yet. To ensure
-        // it is set, try to read some more. This should return an empty buffer.
+static future<bool> do_validate_uncompressed(input_stream<char>& stream, uint64_t expected_data_len) {
+    uint64_t actual_data_len = 0;
+    do {
         auto buf = co_await stream.read();
-        if (!buf.empty()) {
-            sstlog.error("Chunk count mismatch between CRC.db and Data.db at offset {}: expected {} chunks but data file has more", offset, checksum.checksums.size());
-            valid = false;
-        }
-    }
+        actual_data_len += buf.size();
+    } while (!stream.eof());
 
-    if (actual_full_checksum != expected_digest) {
-        sstlog.error("Full checksum mismatch: expected={}, actual={}", expected_digest, actual_full_checksum);
-        valid = false;
+    if (actual_data_len != expected_data_len) {
+        sstlog.error("Data length mismatch between CRC and Data.db: expected {}, actual {}", expected_data_len, actual_data_len);
+        co_return false;
     }
-
-    co_return valid;
+    co_return true;
 }
 
 future<std::optional<uint32_t>> sstable::read_digest() {
@@ -2687,11 +2655,27 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     if (!digest) {
         throw std::runtime_error(seastar::format("No digest available for SSTable: {}", sst->get_filename()));
     }
+    auto checksum = co_await sst->read_checksum();
+    if (!checksum && !sst->get_compression()) {
+        sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
+        co_return validate_checksums_result::no_checksum;
+    }
 
-    auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr, sstable::raw_stream::yes);
+    auto ret = validate_checksums_result::valid;
+    input_stream<char> data_stream;
+    if (sst->get_compression()) {
+        data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit,
+                nullptr, nullptr, sstable::raw_stream::yes);
+    } else {
+        data_stream = sst->data_stream(0, sst->data_size(), permit,
+                nullptr, nullptr, sstable::raw_stream::no,
+                sstable::integrity_check::yes, [&ret](sstring msg) {
+                    sstlog.error("{}", msg);
+                    ret = validate_checksums_result::invalid;
+                });
+    }
 
     auto valid = true;
-    auto ret = validate_checksums_result::valid;
     std::exception_ptr ex;
 
     try {
@@ -2702,16 +2686,11 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                 valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, *digest);
             }
         } else {
-            auto checksum = co_await sst->read_checksum();
-            if (!checksum) {
-                sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
-                ret = validate_checksums_result::no_checksum;
-            } else if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, *digest);
-            } else {
-                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, *digest);
-            }
+            valid = co_await do_validate_uncompressed(data_stream, sst->data_size());
         }
+    } catch (malformed_sstable_exception& e) {
+        valid = false;
+        sstlog.error("{}", e.what());
     } catch (...) {
         ex = std::current_exception();
     }
