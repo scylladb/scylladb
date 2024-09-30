@@ -784,14 +784,6 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static bool is_global_index(const replica::database& db, const table_id& id, const schema& s) {
-    return  db.find_column_family(id).get_index_manager().is_global_index(s);
-}
-
-static bool is_index(const replica::database& db, const table_id& id, const schema& s) {
-    return  db.find_column_family(id).get_index_manager().is_index(s);
-}
-
 static void describe_index_columns(std::ostream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
     auto index_name = secondary_index::index_name_from_table_name(index_schema.cf_name());
     if (!base_schema->all_indices().contains(index_name)) {
@@ -842,20 +834,20 @@ static void describe_index_columns(std::ostream& os, bool is_local, const schema
     os << ")";
 }
 
-sstring schema::get_create_statement(const replica::database& db, bool with_internals) const {
+sstring schema::get_create_statement(const schema_describe_helper& helper, bool with_internals) const {
     std::ostringstream os;
 
     os << "CREATE ";
     int n = 0;
 
     if (is_view()) {
-        if (is_index(db, view_info()->base_id(), *this)) {
-            auto is_local = !is_global_index(db, view_info()->base_id(), *this);
+        if (helper.is_index(view_info()->base_id(), *this)) {
+            auto is_local = !helper.is_global_index(view_info()->base_id(), *this);
 
             os << "INDEX " << cql3::util::maybe_quote(secondary_index::index_name_from_table_name(cf_name())) << " ON "
                     << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name());
 
-            describe_index_columns(os, is_local, *this, db.find_schema(view_info()->base_id()));  
+            describe_index_columns(os, is_local, *this, helper.find_schema(view_info()->base_id()));
             os << ";\n";
 
             return std::move(os).str();
@@ -945,7 +937,7 @@ sstring schema::get_create_statement(const replica::database& db, bool with_inte
     if (is_compact_table()) {
         os << "COMPACT STORAGE\n    AND ";
     }
-    schema_properties(db, os);
+    schema_properties(helper, os);
     os << ";\n";
 
     if (with_internals) {
@@ -966,10 +958,10 @@ sstring schema::get_create_statement(const replica::database& db, bool with_inte
     return std::move(os).str();
 }
 
-cql3::description schema::describe(const replica::database& db, cql3::describe_option desc_opt) const {
+cql3::description schema::describe(const schema_describe_helper& helper, cql3::describe_option desc_opt) const {
     const sstring type = std::invoke([&] {
         if (is_view()) {
-            return is_index(db, view_info()->base_id(), *this)
+            return helper.is_index(view_info()->base_id(), *this)
                     ? "index"
                     : "view";
         }
@@ -982,11 +974,11 @@ cql3::description schema::describe(const replica::database& db, cql3::describe_o
         .name = cf_name(),
         .create_statement = desc_opt == cql3::describe_option::NO_STMTS
                 ? std::nullopt
-                : std::make_optional(get_create_statement(db, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
+                : std::make_optional(get_create_statement(helper, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))
     };
 }
 
-std::ostream& schema::schema_properties(const replica::database& db, std::ostream& os) const {
+std::ostream& schema::schema_properties(const schema_describe_helper& helper, std::ostream& os) const {
     os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
     os << "\n    AND caching = {";
     map_as_cql_param(os, caching_options().to_map());
@@ -1009,7 +1001,7 @@ std::ostream& schema::schema_properties(const replica::database& db, std::ostrea
     for (auto& [type, ext] : extensions()) {
         os << "\n    AND " << type << " = " << ext->options_to_string();
     }
-    if (is_view() && !is_index(db, view_info()->base_id(), *this)) {
+    if (is_view() && !helper.is_index(view_info()->base_id(), *this)) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
         if (is_sync_update.has_value()) {
             os << "\n    AND synchronous_updates = " << *is_sync_update;
@@ -1018,10 +1010,10 @@ std::ostream& schema::schema_properties(const replica::database& db, std::ostrea
     return os;
 }
 
-std::ostream& schema::describe_alter_with_properties(replica::database& db, std::ostream& os) const {
+std::ostream& schema::describe_alter_with_properties(const schema_describe_helper& helper, std::ostream& os) const {
     os << "ALTER "; 
     if (is_view()) {
-        if (is_index(db, view_info()->base_id(), *this)) {
+        if (helper.is_index(view_info()->base_id(), *this)) {
             on_internal_error(dblog, "ALTER statement is not supported for index");
         }
         
@@ -1030,7 +1022,7 @@ std::ostream& schema::describe_alter_with_properties(replica::database& db, std:
         os << "TABLE ";
     }
     os << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " WITH ";
-    schema_properties(db, os);
+    schema_properties(helper, os);
     os << ";\n";
 
     return os;
