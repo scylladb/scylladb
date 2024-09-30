@@ -711,8 +711,13 @@ private:
             // i is valid until next allocation point
             auto& entries = bound.current_list->_entries;
             if (i == std::end(entries)) {
-                sstlog.trace("index {}: not found", fmt::ptr(this));
-                return advance_to_page(bound, summary_idx + 1);
+                if (_single_page_read) {
+                    sstlog.trace("index {}: not found in index page {}, returning eof because this is a single-partition read", summary_idx, fmt::ptr(this));
+                    return advance_to_end(bound);
+                } else {
+                    sstlog.trace("index {}: not found in index page {}, trying next index page", summary_idx, fmt::ptr(this));
+                    return advance_to_page(bound, summary_idx + 1);
+                }
             }
             bound.current_index_idx = std::distance(std::begin(entries), i);
             bound.current_pi_idx = 0;
