@@ -1033,6 +1033,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Start killing reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , reader_concurrency_semaphore_cpu_concurrency(this, "reader_concurrency_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 1,
             "Admit new reads while there are less than this number of requests that need CPU.")
+    , view_update_reader_concurrency_semaphore_serialize_limit_multiplier(this, "view_update_reader_concurrency_semaphore_serialize_limit_multiplier", liveness::LiveUpdate, value_status::Used, 2,
+            "Start serializing view update reads after their collective memory consumption goes above $normal_limit * $multiplier.")
+    , view_update_reader_concurrency_semaphore_kill_limit_multiplier(this, "view_update_reader_concurrency_semaphore_kill_limit_multiplier", liveness::LiveUpdate, value_status::Used, 4,
+            "Start killing view update reads after their collective memory consumption goes above $normal_limit * $multiplier.")
+    , view_update_reader_concurrency_semaphore_cpu_concurrency(this, "view_update_reader_concurrency_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 1,
+            "Admit new view update reads while there are less than this number of requests that need CPU.")
     , maintenance_reader_concurrency_semaphore_count_limit(this, "maintenance_reader_concurrency_semaphore_count_limit", liveness::LiveUpdate, value_status::Used, 10,
             "Allow up to this many maintenance (e.g. streaming and repair) reads per shard to progress at the same time.")
     , twcs_max_window_count(this, "twcs_max_window_count", liveness::LiveUpdate, value_status::Used, 50,

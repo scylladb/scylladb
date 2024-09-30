@@ -9,6 +9,7 @@
  */
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <optional>
