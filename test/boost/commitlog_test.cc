@@ -1705,3 +1705,35 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
     co_await log.shutdown();
     co_await log.clear();
 }
+
+// tests #20862 - buffer usage counter not being updated correctly
+SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
+    commitlog::config cfg;
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    // uncomment for verbosity
+    // logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = make_table_id();
+    auto size = 1024;
+
+    auto size_before_alloc = log.get_buffer_size();
+
+    rp_handle h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+        dst.fill('1', size);
+    });
+    h.release();
+
+    auto size_after_alloc = log.get_buffer_size();
+    co_await log.sync_all_segments();
+    auto size_after_sync = log.get_buffer_size();
+
+    BOOST_CHECK_LE(size_before_alloc, size_after_alloc);
+    BOOST_CHECK_LE(size_after_sync, size_before_alloc);
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
