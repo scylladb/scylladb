@@ -1036,7 +1036,7 @@ async def get_tablet_tokens_from_host_on_shard(manager: ManagerClient, server: S
                 tokens.append(tablet_replica.last_token)
     return tokens
 
-async def get_tablet_count_per_shard_for_host(shards_count: int, manager: ManagerClient, server: ServerInfo, full_tables: dict[str: list[str]]) -> list[int]:
+async def get_tablet_count_per_shard_for_host(manager: ManagerClient, server: ServerInfo, full_tables: dict[str, list[str]], shards_count: int = 2) -> list[int]:
     host = await manager.get_host_id(server.server_id)
     result = [0] * shards_count
 
@@ -1073,10 +1073,10 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
 
     # Then tablet count metric for each shard depicts the actual state
     tables = { "testing": ["mytable1", "mytable2"] }
-    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
-    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(manager, servers[1], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
 
     # When third table is created
@@ -1084,10 +1084,10 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
 
     # Then tablet count metric for each shard depicts the actual state
     tables = { "testing": ["mytable1", "mytable2", "mytable3"] }
-    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
-    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(manager, servers[1], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
 
     # When one of tables is dropped
@@ -1095,10 +1095,10 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
 
     # Then tablet count metric for each shard depicts the actual state
     tables = { "testing": ["mytable1", "mytable3"] }
-    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[0], tables)
+    expected_count_per_shard_for_host_0 = await get_tablet_count_per_shard_for_host(manager, servers[0], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[0], expected_count_per_shard_for_host_0)
 
-    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(shards_count, manager, servers[1], tables)
+    expected_count_per_shard_for_host_1 = await get_tablet_count_per_shard_for_host(manager, servers[1], tables, shards_count)
     await assert_tablet_count_metric_value_for_shards(manager, servers[1], expected_count_per_shard_for_host_1)
 
     # And when moving tablets from one shard of src_host to (dest_host, shard_3)
