@@ -12,6 +12,8 @@
 #include "service/paxos/cas_request.hh"
 #include "utils/rjson.hh"
 #include "executor.hh"
+#include "tracing/trace_state.hh"
+#include "keys.hh"
 
 namespace alternator {
 

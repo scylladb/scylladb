@@ -14,6 +14,7 @@
 #include "message/messaging_service_fwd.hh"
 #include "raft/raft.hh"
 #include "raft/server.hh"
+#include "raft_timeout.hh"
 #include "utils/recent_entries_map.hh"
 #include "direct_failure_detector/failure_detector.hh"
 #include "service/raft/group0_fwd.hh"
@@ -52,11 +53,6 @@ struct raft_server_for_group {
     raft_sys_table_storage& persistence;
     std::optional<seastar::future<>> aborted;
     std::optional<lowres_clock::duration> default_op_timeout;
-};
-
-struct raft_timeout {
-    seastar::compat::source_location loc = seastar::compat::source_location::current();
-    std::optional<lowres_clock::time_point> value;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {

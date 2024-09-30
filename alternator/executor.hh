@@ -23,6 +23,8 @@
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
 
+#include "tracing/trace_state.hh"
+
 namespace db {
     class system_distributed_keyspace;
 }
@@ -49,6 +51,8 @@ namespace gms {
 class gossiper;
 
 }
+
+class schema_builder;
 
 namespace alternator {
 

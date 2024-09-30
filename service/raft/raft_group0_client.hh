@@ -16,19 +16,30 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/coroutine/generator.hh>
 #include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
-#include "service/raft/raft_group_registry.hh"
 #include "service/raft/group0_fwd.hh"
+#include "service/raft/raft_timeout.hh"
 #include "utils/UUID.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "service/raft/group0_state_machine.hh"
-#include "db/system_keyspace.hh"
 #include "service/maintenance_mode.hh"
 
+class mutation;
+
+namespace db {
+
+class system_keyspace;
+
+}
+
 namespace service {
+
+class raft_group_registry;
+
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.
 
 // It is also required in order to perform group 0 changes
@@ -214,11 +225,13 @@ private:
 
     future<> materialize_mutations();
 public:
-    explicit group0_batch(::service::group0_guard&& g) : _guard(std::move(g)) {}
+    explicit group0_batch(::service::group0_guard&& g);
     // Constructor with optional guard used to handle both legacy and current code.
     // There is no guard for legacy code but the whole class may be passed
     // through to simplify the flow.
-    explicit group0_batch(std::optional<::service::group0_guard> g) : _guard(std::move(g)) {}
+    explicit group0_batch(std::optional<::service::group0_guard> g);
+
+    ~group0_batch();
 
     // Annotation helper for cases where we need collector (e.g. some interface)
     // but the code is fully legacy and the collector won't be used.

@@ -9,6 +9,7 @@
 #include "test/lib/scylla_test_case.hh"
 
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include "transport/request.hh"
 #include "transport/response.hh"

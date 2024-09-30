@@ -32,6 +32,7 @@
 #include "types/user.hh"
 #include "concrete_types.hh"
 #include "validation.hh"
+#include "dht/i_partitioner.hh"
 #include <optional>
 
 namespace cql3 {
