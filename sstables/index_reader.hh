@@ -480,6 +480,7 @@ class index_reader {
     }
 
     future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {
+        assert(!bound.context || !_single_page_read);
         if (!bound.context) {
             bound.consumer = std::make_unique<index_consumer>(_region, _sstable->get_schema());
             bound.context = make_context(begin, end, *bound.consumer);
@@ -554,12 +555,6 @@ private:
                     }
                     if (ex) {
                         return make_exception_future<index_list>(std::move(ex));
-                    }
-                    if (_single_page_read) {
-                        // if the associated reader is forwarding despite having singular range, we prepare for that
-                        _single_page_read = false;
-                        auto& ctx = *bound.context;
-                        return ctx.close().then([bc = std::move(bound.context), &bound] { return std::move(bound.consumer->indexes); });
                     }
                     return make_ready_future<index_list>(std::move(bound.consumer->indexes));
                 });
