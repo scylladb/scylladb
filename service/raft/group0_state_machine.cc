@@ -481,7 +481,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto holder = _gate.hold();
 
-    slogger.trace("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
+    slogger.info("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
