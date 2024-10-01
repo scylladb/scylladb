@@ -71,7 +71,7 @@ This will send ScyllaDB only logs to :code:`/var/log/scylla/scylla.log`
 
 Logging on Docker
 -----------------
-Starting from ScyllaDB 1.3, `ScyllaDB Docker <https://hub.docker.com/r/scylladb/scylla/>`_, you should use :code:`docker logs` command to access ScyllaDB server and JMX proxy logs
+Starting from ScyllaDB 1.3, `ScyllaDB Docker <https://hub.docker.com/r/scylladb/scylla/>`_, you should use :code:`docker logs` command to access ScyllaDB server logs.
 
 
 .. include:: /rst_include/advance-index.rst

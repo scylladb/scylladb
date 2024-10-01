@@ -1,11 +1,12 @@
 ### a dictionary of redirections
 #old path: new path
 
-
-
-# Move up the Features section
 # THESE REDIRECTIOSN SHOULD BE UNCOMMENTED WHEN 6.2 IS RELEASED
 # Before 6.2 documentation is available, these redirections result in 404
+
+#/stable/troubleshooting/nodetool-memory-read-timeout.html: /stable/troubleshooting/index.html
+
+# Move up the Features section
 
 #/stable/using-scylla/features.html: /stable/features/index.html
 #/stable/using-scylla/lwt.html: /stable/features/lwt.html

@@ -77,7 +77,7 @@ Launching ScyllaDB on Azure
         
         ssh -i ~/.ssh/ssh-key.pem scyllaadm@public-ip
  
-   To check that the ScyllaDB server and the JMX component are running, run:
+   To check that the ScyllaDB server is running, run:
 
    .. code-block:: console
       
