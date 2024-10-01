@@ -555,7 +555,7 @@ public:
                 sstlog.trace("mc_bsearch_clustered_cursor {}: same block", fmt::ptr(this));
                 return _promoted_index.get_block(_current_idx, _trace_state).then([this] (promoted_index_block* block) {
                     _skip_info = skip_info{block->data_file_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
-                    return std::make_optional(_skip_info);
+                    sstlog.trace("mc_bsearch_clustered_cursor {}: {}", fmt::ptr(this), _skip_info);
                 });
             }
             return _promoted_index.get_block(_current_idx - 1, _trace_state).then([this, pos] (promoted_index_block* block) {
@@ -567,9 +567,8 @@ public:
                         _current_pos = position_in_partition::after_all_clustered_rows();
                         _skip_info = skip_info{block->data_file_offset + block->width, tombstone(),
                                                position_in_partition::before_all_clustered_rows()};
-                        sstlog.trace("mc_bsearch_clustered_cursor {}: data_file_offset={}, tombstone={}, pos={}",
-                                     fmt::ptr(this), _skip_info.offset, _skip_info.active_tombstone, _skip_info.active_tombstone_pos);
-                        return make_ready_future<std::optional<skip_info>>(_skip_info);
+                        sstlog.trace("mc_bsearch_clustered_cursor {}: {}", fmt::ptr(this), _skip_info);
+                        return make_ready_future<>();
                     }
                     tombstone tomb;
                     auto tomb_pos = position_in_partition::before_all_clustered_rows();
@@ -581,16 +580,14 @@ public:
                     ++_current_idx;
                     return _promoted_index.get_block(_current_idx - 1, _trace_state).then([this, tomb, tomb_pos = std::move(tomb_pos)] (promoted_index_block* block) mutable {
                         sstlog.trace("mc_bsearch_clustered_cursor {}: [{}] = {}", fmt::ptr(this), block->index, *block);
-                        sstlog.trace("mc_bsearch_clustered_cursor {}: data_file_offset={}, tombstone={}, pos={}",
-                                     fmt::ptr(this), block->data_file_offset, tomb, tomb_pos);
                         _skip_info = skip_info{block->data_file_offset, tomb, std::move(tomb_pos)};
+                        sstlog.trace("mc_bsearch_clustered_cursor {}: {}", fmt::ptr(this), _skip_info);
                         if (_current_idx == _blocks_count) {
                             _current_pos = position_in_partition::after_all_clustered_rows();
-                            return make_ready_future<std::optional<skip_info>>(_skip_info);
+                            return make_ready_future<>();
                         }
                         return _promoted_index.get_block_with_start(_current_idx, _trace_state).then([this] (promoted_index_block* block) {
                             _current_pos = *block->start;
-                            return std::make_optional(_skip_info);
                         });
                     });
                 }
@@ -598,7 +595,7 @@ public:
                 sstlog.trace("mc_bsearch_clustered_cursor {}: datafile_offset={}", fmt::ptr(this), datafile_offset);
                 if (_current_idx < 2) {
                     _skip_info = skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
-                    return make_ready_future<std::optional<skip_info>>(_skip_info);
+                    return make_ready_future<>();
                 }
                 // _current_idx points to the block whose start is > than the cursor (upper bound).
                 // The cursor is in _current_idx - 1. We will tell the data file reader to skip to
@@ -606,21 +603,24 @@ public:
                 // active at the end of the block, not at the beginning of the block, so we need
                 // to read the active tombstone from the preceding block, _current_idx - 2.
                 return _promoted_index.get_block(_current_idx - 2, _trace_state)
-                        .then([this, datafile_offset] (promoted_index_block* block) -> std::optional<skip_info> {
+                        .then([this, datafile_offset] (promoted_index_block* block) {
                     sstlog.trace("mc_bsearch_clustered_cursor {}: [{}] = {}", fmt::ptr(this), _current_idx - 2, *block);
                     // XXX: Until we have automatic eviction, we need to invalidate cached index blocks
                     // as we walk so that memory footprint is not O(N) but O(log(N)).
                     _promoted_index.invalidate_prior(block, _trace_state);
-                    if (!block->end_open_marker) {
-                        _skip_info = skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
-                        return _skip_info;
+                    tombstone tomb;
+                    position_in_partition tomb_pos = position_in_partition::before_all_clustered_rows();
+                    if (block->end_open_marker) {
+                        tomb = tombstone(*block->end_open_marker);
+                        tomb_pos = *block->end;
                     }
-                    auto tomb = tombstone(*block->end_open_marker);
-                    sstlog.trace("mc_bsearch_clustered_cursor {}: tombstone={}, pos={}", fmt::ptr(this), tomb, *block->end);
-                    _skip_info = skip_info{datafile_offset, tomb, *block->end};
-                    return _skip_info;
+                    _skip_info = skip_info{datafile_offset, tomb, std::move(tomb_pos)};
                 });
             });
+        }).then([this] {
+            sstlog.trace("mc_bsearch_clustered_cursor {}: {}", fmt::ptr(this), _skip_info);
+            tracing::trace(_trace_state, "mc_bsearch_clustered_cursor {}: {}", fmt::ptr(this), _skip_info);
+            return std::make_optional(_skip_info);
         });
     }
 

@@ -325,3 +325,11 @@ inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_inde
     std::visit([&out] (const auto& pos) mutable { fmt::print(out, "{}", pos); }, pos);
     return out;
 }
+
+template<>
+struct fmt::formatter<sstables::clustered_index_cursor::skip_info> : fmt::formatter<std::string_view> {
+    auto format(const sstables::clustered_index_cursor::skip_info& info, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "skip_info{{offset: {}, tombstone: ({}, {})}}",
+                              info.offset, info.active_tombstone_pos, info.active_tombstone);
+    }
+};
