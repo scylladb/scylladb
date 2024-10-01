@@ -145,6 +145,24 @@ private:
     //
     using block_set_type = std::set<promoted_index_block, block_comparator>;
     block_set_type _blocks;
+private:
+    using Buffer = cached_file::page_view;
+
+    struct u32_parser {
+        data_consumer::primitive_consumer_impl<Buffer>& parser;
+
+        void reset() {
+            parser.read_32();
+        }
+
+        data_consumer::read_status consume(Buffer& buf) {
+            return parser.consume_u32(buf);
+        }
+
+        uint32_t value() const {
+            return parser._u32;
+        }
+    };
 public:
     const schema& _s;
     uint64_t _promoted_index_start;
@@ -152,26 +170,50 @@ public:
     metrics& _metrics;
     const pi_index_type _blocks_count;
     cached_file& _cached_file;
-    data_consumer::primitive_consumer _primitive_parser;
-    clustering_parser _clustering_parser;
-    promoted_index_block_parser _block_parser;
+    data_consumer::primitive_consumer_impl<Buffer> _primitive_parser;
+    u32_parser _u32_parser;
+    clustering_parser<Buffer> _clustering_parser;
+    promoted_index_block_parser<Buffer> _block_parser;
     reader_permit _permit;
     cached_file::stream _stream;
     logalloc::allocating_section _as;
 private:
-    // Feeds the stream into the consumer until the consumer is satisfied.
-    // Does not give unconsumed data back to the stream.
     template <typename Consumer>
-    future<> consume_stream(cached_file::stream& s, Consumer& c) {
-        return repeat([&] {
-            return s.next_page_view().then([&] (cached_file::page_view&& page) {
+    future<> read(cached_file::offset_type pos, tracing::trace_state_ptr trace_state, Consumer& c) {
+        struct retry_exception : std::exception {};
+        _stream = _cached_file.read(pos, _permit, trace_state);
+        c.reset();
+        return repeat([this, pos, trace_state, &c] {
+            return _stream.next_page_view().then([this, &c] (cached_file::page_view&& page) {
                 if (!page) {
                     on_internal_error(sstlog, "End of stream while parsing");
                 }
+                bool retry = false;
                 return _as(_cached_file.region(), [&] {
-                    auto buf = page.get_buf();
-                    return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
+                    if (retry) {
+                        throw retry_exception();
+                    }
+                    retry = true;
+
+                    auto status = c.consume(page);
+
+                    utils::get_local_injector().inject("cached_promoted_index_parsing_invalidate_buf_across_page", [&page] {
+                        page.release_and_scramble();
+                    });
+
+                    utils::get_local_injector().inject("cached_promoted_index_bad_alloc_parsing_across_page", [this] {
+                        // Prevent reserve explosion in testing.
+                        _as.set_lsa_reserve(1);
+                        _as.set_std_reserve(1);
+                        throw std::bad_alloc();
+                    });
+
+                    return stop_iteration(status == data_consumer::read_status::ready);
                 });
+            }).handle_exception_type([this, pos, trace_state, &c] (const retry_exception& e) {
+                _stream = _cached_file.read(pos, _permit, trace_state);
+                c.reset();
+                return stop_iteration::no;
             });
         });
     }
@@ -183,48 +225,17 @@ private:
         return _promoted_index_size - (_blocks_count - idx) * sizeof(pi_offset_type);
     }
 
-    future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _permit, trace_state);
-        return _stream.next_page_view().then([this] (cached_file::page_view page) {
-            temporary_buffer<char> buf = page.get_buf();
-            static_assert(noexcept(std::declval<data_consumer::primitive_consumer>().read_32(buf)));
-            if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
-                return make_ready_future<pi_offset_type>(_primitive_parser._u32);
-            }
-            return consume_stream(_stream, _primitive_parser).then([this] {
-                return _primitive_parser._u32;
-            });
-        });
-    }
+    future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state);
 
     // Postconditions:
     //   - block.start is engaged and valid.
-    future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
-        _clustering_parser.reset();
-        return consume_stream(_stream, _clustering_parser).then([this, &block] {
-            auto mem_before = block.memory_usage();
-            block.start.emplace(_clustering_parser.get_and_reset());
-            _metrics.used_bytes += block.memory_usage() - mem_before;
-        });
-    }
+    future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state);
 
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
-    future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
-        _block_parser.reset();
-        return consume_stream(_stream, _block_parser).then([this, &block] {
-            auto mem_before = block.memory_usage();
-            block.start.emplace(std::move(_block_parser.start()));
-            block.end.emplace(std::move(_block_parser.end()));
-            block.end_open_marker = _block_parser.end_open_marker();
-            block.data_file_offset = _block_parser.offset();
-            block.width = _block_parser.width();
-            _metrics.used_bytes += block.memory_usage() - mem_before;
-        });
-    }
+    future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state);
 
+public:
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset and index fields valid.
     future<promoted_index_block*> get_block_only_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         auto i = _blocks.lower_bound(idx);
@@ -242,6 +253,7 @@ private:
         });
     }
 
+private:
     void erase_range(block_set_type::iterator begin, block_set_type::iterator end) {
         while (begin != end) {
             --_metrics.block_count;
@@ -267,6 +279,7 @@ public:
         , _blocks_count(blocks_count)
         , _cached_file(f)
         , _primitive_parser(permit)
+        , _u32_parser(_primitive_parser)
         , _clustering_parser(s, permit, cvfl, true)
         , _block_parser(s, permit, std::move(cvfl))
         , _permit(std::move(permit))
@@ -333,6 +346,10 @@ public:
         erase_range(_blocks.begin(), _blocks.lower_bound(block->index));
     }
 
+    void clear() {
+        erase_range(_blocks.begin(), _blocks.end());
+    }
+
     cached_file& file() { return _cached_file; }
 };
 } // namespace sstables::mc
@@ -350,6 +367,40 @@ struct fmt::formatter<sstables::mc::cached_promoted_index::promoted_index_block>
 };
 
 namespace sstables::mc {
+
+inline
+future<cached_promoted_index::pi_offset_type>
+cached_promoted_index::read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + get_offset_entry_pos(idx), trace_state, _u32_parser).then([idx, this] {
+        sstlog.trace("cached_promoted_index {}: read_block_offset: idx: {}, offset: {}", fmt::ptr(this), idx, _u32_parser.value());
+        return _u32_parser.value();
+    });
+}
+
+inline
+future<> cached_promoted_index::read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + block.offset, trace_state, _clustering_parser).then([this, &block] {
+        auto mem_before = block.memory_usage();
+        block.start.emplace(_clustering_parser.get_and_reset());
+        sstlog.trace("cached_promoted_index {}: read_block_start: {}", fmt::ptr(this), block);
+        _metrics.used_bytes += block.memory_usage() - mem_before;
+    });
+}
+
+inline
+future<> cached_promoted_index::read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+    return read(_promoted_index_start + block.offset, trace_state, _block_parser).then([this, &block] {
+        auto mem_before = block.memory_usage();
+        block.start.emplace(std::move(_block_parser.start()));
+        block.end.emplace(std::move(_block_parser.end()));
+        block.end_open_marker = _block_parser.end_open_marker();
+        block.data_file_offset = _block_parser.offset();
+        block.width = _block_parser.width();
+        _metrics.used_bytes += block.memory_usage() - mem_before;
+        sstlog.trace("cached_promoted_index {}: read_block: {}", fmt::ptr(this), block);
+    });
+}
+
 /// Cursor implementation which does binary search over index entries.
 ///
 /// Memory consumption: O(log(N))
@@ -459,6 +510,8 @@ public:
             blocks_count)
         , _trace_state(std::move(trace_state))
     { }
+
+    cached_promoted_index& promoted_index() { return _promoted_index; }
 
     future<std::optional<skip_info>> advance_to(position_in_partition_view pos) override {
         position_in_partition::less_compare less(_s);
