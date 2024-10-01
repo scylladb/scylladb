@@ -40,7 +40,7 @@ def check_compaction_task(cql, rest_api, keyspace, run_compaction, compaction_ty
             failed = [task["task_id"] for task in statuses if task["state"] != "done"]
             assert not failed, f"tasks with ids {failed} failed"
 
-            for root_id in [s["id"] for s in statuses]:
+            for root_id in [s["task_id"] for s in statuses]:
                 status_tree = get_task_status_recursively(rest_api, root_id)
                 check_child_parent_relationship(rest_api, status_tree, status_tree[0], allow_no_children)
     drain_module_tasks(rest_api, module_name)
@@ -160,9 +160,9 @@ def test_compaction_task_abort(cql, this_dc, rest_api):
                     assert status["state"] == "failed", "Task finished successfully despite abort"
                     assert "abort" in status["error"], "Task wasn't aborted by user"
 
-                    status_tree = get_task_status_recursively(rest_api, status["id"])
+                    status_tree = get_task_status_recursively(rest_api, status["task_id"])
                     if "children_ids" in status:
-                        children = get_children(status_tree, status["id"])
+                        children = get_children(status_tree, status["task_id"])
                         assert all(child["state"] == "failed" for child in children), "Some child tasks finished successfully despite abort"
                         assert all("abort requested" in child["error"] for child in children), "Some child tasks weren't aborted by user"
                         assert all("children" not in child for child in children), "Some child tasks spawned new tasks even though they were aborted"

@@ -42,7 +42,7 @@ def test_task_manager_status_running(rest_api):
             print(f"created test task {task0}")
 
             status = get_task_status(rest_api, task0)
-            check_status_correctness(status, { "id": task0, "state": "running", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
+            check_status_correctness(status, { "task_id": task0, "state": "running", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
 
             tasks = list_tasks(rest_api, "test")
             assert tasks, "task_status unregistered task that did not finish"
@@ -58,7 +58,7 @@ def test_task_manager_status_done(rest_api):
                 resp.raise_for_status()
 
                 status = get_task_status(rest_api, task0)
-                check_status_correctness(status, { "id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
+                check_status_correctness(status, { "task_id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
                 assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_status_failed(rest_api):
@@ -72,7 +72,7 @@ def test_task_manager_status_failed(rest_api):
                 resp.raise_for_status()
 
                 status = get_task_status(rest_api, task0)
-                check_status_correctness(status, { "id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
+                check_status_correctness(status, { "task_id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
                 assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_not_abortable(rest_api):
@@ -86,7 +86,7 @@ def test_task_manager_not_abortable(rest_api):
 
 def wait_and_check_status(rest_api, id, sequence_number, keyspace, table):
     status = wait_for_task(rest_api, id)
-    check_status_correctness(status, { "id": id, "state": "done", "sequence_number": sequence_number, "keyspace": keyspace, "table": table })
+    check_status_correctness(status, { "task_id": id, "state": "done", "sequence_number": sequence_number, "keyspace": keyspace, "table": table })
 
 def test_task_manager_wait(rest_api):
     with new_test_module(rest_api):
@@ -163,10 +163,10 @@ def test_task_manager_recursive_status(rest_api):
                         print(f"created test task {task3}")
 
                     tasks = get_task_status_recursively(rest_api, task0)
-                    check_field_correctness("id", tasks[0], { "id" : f"{task0}" })
-                    check_field_correctness("id", tasks[1], { "id" : f"{task1}" })
-                    check_field_correctness("id", tasks[2], { "id" : f"{task3}" })
-                    check_field_correctness("id", tasks[3], { "id" : f"{task2}" })
+                    check_field_correctness("task_id", tasks[0], { "task_id" : f"{task0}" })
+                    check_field_correctness("task_id", tasks[1], { "task_id" : f"{task1}" })
+                    check_field_correctness("task_id", tasks[2], { "task_id" : f"{task3}" })
+                    check_field_correctness("task_id", tasks[3], { "task_id" : f"{task2}" })
 
 def test_module_not_exists(rest_api):
     module_name = "module_that_does_not_exist"
@@ -225,7 +225,7 @@ class TaskBinaryTree():
         assert len(status_tree) == len([s for s in expected_states if s != State.NONE]), "Incorrect tree nodes number"
         for i in range(len(self.tree)):
             if expected_states[i] != State.NONE:
-                statuses = [s for s in status_tree if s["id"] == self.tree[i]]
+                statuses = [s for s in status_tree if s["task_id"] == self.tree[i]]
                 assert len(statuses) == 1
                 status = statuses[0]
                 assert expected_states[i].value == status["state"]
