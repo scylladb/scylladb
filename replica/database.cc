@@ -12,6 +12,7 @@
 #include <fmt/std.h>
 #include "log.hh"
 #include "replica/database_fwd.hh"
+#include "seastar/coroutine/exception.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
@@ -1035,11 +1036,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, shard
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
     constexpr db_clock::time_point truncated_at(std::chrono::seconds(253402214400));
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
-    co_await smp::invoke_on_all([&] {
-        return table_shards->stop();
-    });
-    f.get(); // re-throw exception from truncate() if any
+    co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt), true);
     co_await table_shards->destroy_storage();
 }
 
@@ -2381,7 +2378,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
+    co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt), false);
 }
 
 struct database::table_truncate_state {
@@ -2390,10 +2387,11 @@ struct database::table_truncate_state {
     db::replay_position low_mark;
     std::vector<compaction_manager::compaction_reenabler> cres;
     bool did_flush;
+    future<> stop_future = make_ready_future();
 };
 
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt, bool do_stop) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -2412,11 +2410,13 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         with_snapshot = false;
     }
 
-    dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
+    dblog.info("Truncating {}.{} {}snapshot: do_stop={}", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ", do_stop);
 
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(smp::count);
 
+    std::exception_ptr ex;
+  try {
     co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
         table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
             auto& cf = *table_shards;
@@ -2435,14 +2435,25 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             st->cres.reserve(1 + cf.views().size());
             auto& db = sharded_db.local();
             auto& cm = db.get_compaction_manager();
+
+          if (do_stop) {
+                st->stop_future = cf.stop();
+          } else {
             co_await cf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
                 st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
             });
+          }
             co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
                 auto& vcf = db.find_column_family(v);
+              if (do_stop) {
+                    st->stop_future = st->stop_future.then([&vcf] {
+                        return vcf.stop();
+                    });
+              } else {
                 co_await vcf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
                     st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
                 });
+              }
             });
 
             co_return make_foreign(std::move(st));
@@ -2490,6 +2501,25 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         return db.truncate(sys_ks.local(), cf, st, truncated_at);
     });
     dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
+  } catch (...) {
+    ex = std::current_exception();
+  }
+
+    if (do_stop) {
+        co_await sharded_db.invoke_on_all([&] (database& db) {
+            auto shard = this_shard_id();
+            if (auto st = table_states[shard].get()) {
+                st->holder.release();
+                return std::exchange(st->stop_future, make_ready_future());
+            } else {
+                return make_ready_future();
+            }
+        });
+    }
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {

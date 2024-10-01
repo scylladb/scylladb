@@ -246,6 +246,9 @@ public:
     bool no_compacted_sstable_undeleted() const;
 
     future<> stop(sstring reason = "table removal") noexcept;
+    bool is_stopped() const noexcept {
+        return _async_gate.is_closed();
+    }
 
     // Clear sstable sets
     void clear_sstables();
