@@ -210,19 +210,13 @@ class std_optional:
         self.ref = ref
 
     def get(self):
-        try:
-            return self.ref['_M_payload']['_M_payload']['_M_value']
-        except gdb.error:
-            return self.ref['_M_payload'] # Scylla 3.0 compatibility
+        return self.ref['_M_payload']['_M_payload']['_M_value']
 
     def __bool__(self):
         return self.__nonzero__()
 
     def __nonzero__(self):
-        try:
-            return bool(self.ref['_M_payload']['_M_engaged'])
-        except gdb.error:
-            return bool(self.ref['_M_engaged']) # Scylla 3.0 compatibility
+        return bool(self.ref['_M_payload']['_M_engaged'])
 
 
 class std_tuple:
@@ -751,13 +745,7 @@ class static_vector:
     def __iter__(self):
         t = self.ref.type.strip_typedefs()
         value_type = t.template_argument(0)
-        try:
-            data = self.ref['m_holder']['storage']['data'].cast(value_type.pointer())
-        except:
-            try:
-                data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer()) # Scylla 3.1 compatibility
-            except gdb.error:
-                data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer()) # Scylla 3.0 compatibility
+        data = self.ref['m_holder']['storage']['data'].cast(value_type.pointer())
         for i in range(self.__len__()):
             yield data[i]
 
@@ -1256,10 +1244,7 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
 
 class interval_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
-        try:
-            self.val = val['_interval']
-        except gdb.error: # 4.1 compatibility
-            self.val = val['_range']
+        self.val = val['_interval']
 
     def inspect_bound(self, bound_opt):
         bound = std_optional(bound_opt)
@@ -2097,16 +2082,10 @@ class dirty_mem_mgr():
         self.ref = ref
 
     def real_dirty(self):
-        try:
-            return int(self.ref['_region_group']['_real_total_memory'])
-        except gdb.error: # backward compatibility with <= 5.1
-            return int(self.ref['_real_region_group']['_total_memory'])
+        return int(self.ref['_region_group']['_real_total_memory'])
 
     def unspooled(self):
-        try:
-            return int(self.ref['_region_group']['_unspooled_total_memory'])
-        except gdb.error: # backward compatibility with <= 5.1
-            return int(self.ref['_virtual_region_group']['_total_memory'])
+        return int(self.ref['_region_group']['_unspooled_total_memory'])
 
 
 def find_instances(type_name):
@@ -2281,10 +2260,7 @@ class scylla_memory(gdb.Command):
         per_sg_stats = {}
         reactor = gdb.parse_and_eval('seastar::local_engine')
         for tq in get_local_task_queues():
-            try:
-                sched_group_specific = std_array(reactor['_scheduling_group_specific_data']['per_scheduling_group_data'])[int(tq['_id'])]['specific_vals']
-            except gdb.error: # 4.0 backwards compatibility
-                sched_group_specific = tq['_scheduling_group_specific_vals']
+            sched_group_specific = std_array(reactor['_scheduling_group_specific_data']['per_scheduling_group_data'])[int(tq['_id'])]['specific_vals']
             stats = std_vector(sched_group_specific)[key_id].reinterpret_cast(stats_ptr_type).dereference()
             if int(stats['writes']) == 0 and int(stats['background_writes']) == 0 and int(stats['foreground_reads']) == 0 and int(stats['reads']) == 0:
                 continue
@@ -2302,11 +2278,7 @@ class scylla_memory(gdb.Command):
             return
         global_sp_stats, per_sg_sp_stats = scylla_memory.summarize_storage_proxy_coordinator_stats(sp)
 
-        try:
-            # 4.4 compatibility
-            hm = std_optional(sp['_hints_manager']).get()
-        except gdb.error:
-            hm = sp['_hints_manager']
+        hm = sp['_hints_manager']
         view_hm = sp['_hints_for_views_manager']
 
         gdb.write('Coordinator:\n'
@@ -2347,10 +2319,7 @@ class scylla_memory(gdb.Command):
         initial_memory = int(semaphore["_initial_resources"]["memory"])
         used_count = initial_count - int(semaphore["_resources"]["count"])
         used_memory = initial_memory - int(semaphore["_resources"]["memory"])
-        try:
-            waiters = int(semaphore["_stats"]["waiters"])
-        except gdb.error: # 5.1 compatibility
-            waiters = int(semaphore["_wait_list"]["_size"])
+        waiters = int(semaphore["_stats"]["waiters"])
         return f'{semaphore_name:<16} {used_count:>3}/{initial_count:>3}, {used_memory:>13}/{initial_memory:>13}, queued: {waiters}'
 
     @staticmethod
@@ -4486,18 +4455,13 @@ def find_sstables_attached_to_tables():
 
 def find_sstables():
     """A generator which yields pointers to all live sstable objects on current shard."""
-    try:
-        db = find_db(current_shard())
-        user_sstables_manager = std_unique_ptr(db["_user_sstables_manager"]).get()
-        system_sstables_manager = std_unique_ptr(db["_system_sstables_manager"]).get()
-        for manager in (user_sstables_manager, system_sstables_manager):
-            for sst_list_name in ("_active", "_undergoing_close"):
-                for sst in intrusive_list(manager[sst_list_name], link="_manager_list_link"):
-                    yield sst.address
-    except gdb.error:
-        # Scylla Enterprise 2020.1 compatibility
-        for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables'), link='_tracker_link'):
-            yield sst.address
+    db = find_db(current_shard())
+    user_sstables_manager = std_unique_ptr(db["_user_sstables_manager"]).get()
+    system_sstables_manager = std_unique_ptr(db["_system_sstables_manager"]).get()
+    for manager in (user_sstables_manager, system_sstables_manager):
+        for sst_list_name in ("_active", "_undergoing_close"):
+            for sst in intrusive_list(manager[sst_list_name], link="_manager_list_link"):
+                yield sst.address
 
 
 class scylla_sstables(gdb.Command):
@@ -4674,10 +4638,7 @@ class scylla_memtables(gdb.Command):
             except gdb.error:
                 pass
 
-            try:
-                scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
-            except gdb.error:
-                scylla_memtables.dump_memtable_list(seastar_lw_shared_ptr(table['_memtables']).get()) # Scylla 5.1 compatibility
+            scylla_memtables.dump_compaction_group_memtables(std_unique_ptr(table["_compaction_group"]).get())
 
 def escape_html(s):
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
@@ -5369,23 +5330,9 @@ class scylla_compaction_tasks(gdb.Command):
 
         task_list = list(std_list(cm['_tasks']))
         for task in task_list:
-            try:
-                task = seastar_shared_ptr(task).get().dereference()
-            except:
-                task = seastar_lw_shared_ptr(task).get().dereference() # Scylla 5.0 compatibility
-
-            try:
-                schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
-            except:
-                try:
-                    schema = schema_ptr(task['compacting_table'].dereference()['_schema']) # Scylla 5.0 compatibility
-                except:
-                    schema = schema_ptr(task['compacting_cf'].dereference()['_schema']) # Scylla 4.6 compatibility
-
-            try:
-                key = 'type={}, state={:5}, {}'.format(task['_type'], str(task['_state']), schema.table_name())
-            except:
-                key = 'type={}, running={:5}, {}'.format(task['type'], str(task['compaction_running']), schema.table_name()) # Scylla 5.0 compatibility
+            task = seastar_shared_ptr(task).get().dereference()
+            schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
+            key = 'type={}, state={:5}, {}'.format(task['_type'], str(task['_state']), schema.table_name())
             task_hist.add(key)
 
         task_hist.print_to_console()
@@ -5830,10 +5777,6 @@ class scylla_read_stats(gdb.Command):
             gdb.write("Scylla version doesn't seem to have the permits linked yet, cannot list reads.")
             raise
 
-        if not permit_list.type.strip_typedefs().name.startswith('boost::intrusive::list'):
-            # 4.5 compatibility
-            permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
-
         state_prefix_len = len('reader_permit::state::')
 
         # (table, description, state) -> stats
@@ -5866,17 +5809,8 @@ class scylla_read_stats(gdb.Command):
         semaphore_name = str(semaphore['_name'])[1:-1]
         initial_count = int(semaphore['_initial_resources']['count'])
         initial_memory = int(semaphore['_initial_resources']['memory'])
-        if semaphore['_inactive_reads'].type.name.startswith('std::map'):
-            # 4.4 compatibility
-            inactive_read_count = len(std_map(semaphore['_inactive_reads']))
-        else:
-            inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
-
-
-        try:
-            waiters = int(semaphore["_stats"]["waiters"])
-        except gdb.error: # 5.1 compatibility
-            waiters = int(semaphore["_wait_list"]["_size"])
+        inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
+        waiters = int(semaphore["_stats"]["waiters"])
 
         gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
                 semaphore_name,
@@ -5900,11 +5834,7 @@ class scylla_read_stats(gdb.Command):
         else:
             db = find_db()
             semaphores = [db["_read_concurrency_sem"], db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
-            try:
-                semaphores.append(db["_compaction_concurrency_sem"])
-            except gdb.error:
-                # 2020.1 compatibility
-                pass
+            semaphores.append(db["_compaction_concurrency_sem"])
 
         for semaphore in semaphores:
             scylla_read_stats.dump_reads_from_semaphore(semaphore)
