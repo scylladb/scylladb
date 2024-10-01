@@ -454,6 +454,8 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _bucket;
     sstring _ks;
     sstring _cf;
+    sstring _prefix;
+    std::vector<sstring> _sstables;
     sstring _snapshot_name;
 
 protected:
@@ -462,14 +464,15 @@ protected:
 public:
     download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
             sstring endpoint, sstring bucket,
-            sstring ks, sstring cf, sstring snapshot) noexcept
+            sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _endpoint(std::move(endpoint))
         , _bucket(std::move(bucket))
         , _ks(std::move(ks))
         , _cf(std::move(cf))
-        , _snapshot_name(std::move(snapshot))
+        , _prefix(std::move(prefix))
+        , _sstables(std::move(sstables))
     {}
 
     virtual std::string type() const override {
@@ -487,10 +490,9 @@ future<> sstables_loader::download_task_impl::run() {
     sstables::sstable_open_config cfg {
         .load_bloom_filter = false,
     };
-    auto prefix = format("{}/{}", _cf, _snapshot_name);
-    llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, prefix);
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _endpoint, _bucket, prefix, cfg);
-    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, prefix);
+    llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg);
+    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
     co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
         co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false);
     });
@@ -517,11 +519,12 @@ future<> sstables_loader::stop() {
 }
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring endpoint, sstring bucket, sstring snapshot) {
+            sstring prefix, std::vector<sstring> sstables,
+            sstring endpoint, sstring bucket) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
-    llog.info("Restore sstables from {}({}) to {}", endpoint, snapshot, ks_name);
-    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(snapshot));
+    llog.info("Restore sstables from {}({}) to {}", endpoint, prefix, ks_name);
+    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstables));
     co_return task->id();
 }

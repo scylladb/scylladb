@@ -333,6 +333,41 @@ bool storage_options::can_update_to(const storage_options& new_options) {
     return value == new_options.value;
 }
 
+storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
+    // when restoring from object storage, the API of /storage_service/restore
+    // provides:
+    // 1. a shared prefix
+    // 2. a list of sstables, each of which has its own partial path
+    //
+    // for example, assuming we have following API call:
+    // - shared prefix: /bucket/ks/cf
+    // - sstables
+    //   - 3123/me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt
+    //   - 3123/me-3gdq_0bki_2edkg2vx4xtksugjj5-big-TOC.txt
+    //   - 3245/me-3gdq_0bki_2cvk02wubgncy8qd41-big-TOC.txt
+    //
+    // note, this example shows three sstables from two different snapshot backups.
+    //
+    // we assume all sstables' locations share the same base prefix (storage_options::s3::prefix).
+    // however, sstable in different backups have different prefixes. to handle this, we compose
+    // a per-sstable prefix by concatenating the shared prefix and the "parent directory" of the
+    // sstable's location. the resulting structure looks like:
+    //
+    // sstables:
+    //   - prefix: /bucket/ks/cf/3123
+    //     desc: me-3gdq_0bki_2cvk01yl83nj0tp5gh-big
+    //   - prefix: /bucket/ks/cf/3123
+    //     desc: me-3gdq_0bki_2edkg2vx4xtksugjj5-big
+    //   - prefix: /bucket/ks/cf/3145
+    //     desc: me-3gdq_0bki_2cvk02wubgncy8qd41-big
+    SCYLLA_ASSERT(!is_local_type());
+    storage_options ret = *this;
+    s3 s3_options = std::get<s3>(value);
+    s3_options.prefix += s;
+    ret.value = std::move(s3_options);
+    return ret;
+}
+
 no_such_keyspace::no_such_keyspace(std::string_view ks_name)
     : runtime_error{fmt::format("Can't find a keyspace {}", ks_name)}
 {

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <vector>
 #include <seastar/core/sharded.hh>
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
@@ -88,7 +89,8 @@ public:
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring endpoint, sstring bucket, sstring snapshot);
+            sstring prefix, std::vector<sstring> sstables,
+            sstring endpoint, sstring bucket);
 
     class download_task_impl;
 };

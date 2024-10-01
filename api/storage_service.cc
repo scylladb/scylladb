@@ -54,6 +54,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
+#include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
 
 using namespace seastar::httpd;
@@ -496,13 +497,19 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto keyspace = req->get_query_param("keyspace");
         auto table = req->get_query_param("table");
         auto bucket = req->get_query_param("bucket");
-        auto snapshot_name = req->get_query_param("snapshot");
-        if (table.empty()) {
-            // TODO: If missing, should restore all tables
-            throw httpd::bad_param_exception("The table name must be specified");
-        }
+        auto prefix = req->get_query_param("prefix");
 
-        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, endpoint, bucket, snapshot_name);
+        // TODO: the http_server backing the API does not use content streaming
+        // should use it for better performance
+        rjson::value parsed = rjson::parse(req->content);
+        if (!parsed.IsArray()) {
+            throw httpd::bad_param_exception("mulformatted sstables in body");
+        }
+        std::vector<sstring> sstables;
+        for (const rjson::value& element : parsed.GetArray()) {
+            sstables.emplace_back(rjson::to_string_view(element));
+        }
+        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 

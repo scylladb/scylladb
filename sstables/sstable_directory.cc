@@ -61,6 +61,12 @@ sstable_directory::sstables_registry_components_lister::sstables_registry_compon
 {
 }
 
+sstable_directory::restore_components_lister::restore_components_lister(const data_dictionary::storage_options::value_type& options,
+                                                                        std::vector<sstring> toc_filenames)
+        : _toc_filenames(std::move(toc_filenames))
+{
+}
+
 std::unique_ptr<sstable_directory::components_lister>
 sstable_directory::make_components_lister() {
     return std::visit(overloaded_functor {
@@ -108,6 +114,23 @@ sstable_directory::sstable_directory(replica::table& table,
         sstable_state::upload,
         std::move(error_handler_gen)
     )
+{}
+
+sstable_directory::sstable_directory(replica::table& table,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+        std::vector<sstring> sstables,
+        io_error_handler_gen error_handler_gen)
+    : _manager(table.get_sstables_manager())
+    , _schema(table.schema())
+    , _storage_opts(std::move(storage_opts))
+    , _state(sstable_state::upload)
+    , _error_handler_gen(error_handler_gen)
+    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _lister(std::make_unique<sstable_directory::restore_components_lister>(_storage_opts->value,
+                                                                             std::move(sstables)))
+    , _sharder_ptr(std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()))
+    , _sharder(*_sharder_ptr)
+    , _unshared_remote_sstables(smp::count)
 {}
 
 sstable_directory::sstable_directory(sstables_manager& manager,
@@ -293,6 +316,10 @@ future<> sstable_directory::sstables_registry_components_lister::prepare(sstable
     }
 }
 
+future<> sstable_directory::restore_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
+    return make_ready_future();
+}
+
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
     return _lister->process(*this, flags);
 }
@@ -406,6 +433,19 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
     });
 }
 
+future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
+    co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
+        std::filesystem::path sst_path{toc_filename};
+        entry_descriptor desc = sstables::parse_path(sst_path, "", "");
+        if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
+            co_return;
+        }
+        dirlog.debug("Processing {} entry from {}", desc.generation, toc_filename);
+        co_await directory.process_descriptor(
+            std::move(desc), flags,
+            [&directory, prefix=sst_path.parent_path().native()] {
+                return directory._storage_opts->append_to_s3_prefix(prefix);;
+            });
     });
 }
 
@@ -422,6 +462,10 @@ future<> sstable_directory::filesystem_components_lister::commit() {
 }
 
 future<> sstable_directory::sstables_registry_components_lister::commit() {
+    return make_ready_future<>();
+}
+
+future<> sstable_directory::restore_components_lister::commit() {
     return make_ready_future<>();
 }
 

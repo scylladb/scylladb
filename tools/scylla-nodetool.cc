@@ -1507,16 +1507,24 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
 
 void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
-    for (auto required_param : {"endpoint", "bucket", "snapshot", "keyspace"}) {
+    for (auto required_param : {"endpoint", "bucket", "prefix", "keyspace", "table"}) {
         if (!vm.count(required_param)) {
             throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
         }
         params[required_param] = vm[required_param].as<sstring>();
     }
-    if (vm.count("table")) {
-        params["table"] = vm["table"].as<sstring>();
-    }
-    const auto restore_res = client.post("/storage_service/restore", std::move(params));
+    sstring sstables_body = std::invoke([&vm] {
+        std::stringstream output;
+        rjson::streaming_writer writer(output);
+        writer.StartArray();
+        for (auto& toc_fn : vm["sstables"].as<std::vector<sstring>>()) {
+            writer.String(toc_fn);
+        }
+        writer.EndArray();
+        return make_sstring(output.view());
+    });
+    const auto restore_res = client.post("/storage_service/restore", std::move(params),
+                                         request_body{"application/json", std::move(sstables_body)});
     const auto task_id = rjson::to_string_view(restore_res);
     if (vm.count("nowait")) {
         fmt::print(R"(The task id of this operation is {}
@@ -3889,12 +3897,14 @@ For more information, see: {}"
                 {
                     typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables from"),
                     typed_option<sstring>("bucket", "Name of the bucket to copy SSTables from"),
-                    typed_option<sstring>("snapshot", "Name of a snapshot to copy sstables from"),
+                    typed_option<sstring>("prefix", "The shared prefix of the object keys for the backuped SSTables"),
                     typed_option<sstring>("keyspace", "Name of a keyspace to copy SSTables to"),
                     typed_option<sstring>("table", "Name of a table to copy SSTables to"),
                     typed_option<>("nowait", "Don't wait on the restore process"),
                 },
-
+                {
+                    typed_option<std::vector<sstring>>("sstables", "The object keys of the TOC component of the SSTables to be restored", -1),
+                },
             },
             restore_operation
         },

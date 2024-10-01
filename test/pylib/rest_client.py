@@ -317,14 +317,14 @@ class ScyllaRESTAPIClient():
                   "snapshot": tag}
         return await self.client.post_json(f"/storage_service/backup", host=node_ip, params=params)
 
-    async def restore(self, node_ip: str, ks: str, cf: str, tag: str, dest: str, bucket: str) -> str:
+    async def restore(self, node_ip: str, ks: str, cf: str, dest: str, bucket: str, prefix: str, sstables: list[str]) -> str:
         """Restore keyspace:table from backup"""
         params = {"keyspace": ks,
                   "table": cf,
                   "endpoint": dest,
                   "bucket": bucket,
-                  "snapshot": tag}
-        return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params)
+                  "prefix": prefix}
+        return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
     async def take_snapshot(self, node_ip: str, ks: str, tag: str) -> None:
         """Take keyspace snapshot"""

@@ -143,6 +143,15 @@ public:
         virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
     };
 
+    class restore_components_lister final : public components_lister {
+        std::vector<sstring> _toc_filenames;
+    public:
+        restore_components_lister(const data_dictionary::storage_options::value_type& options, std::vector<sstring> toc_filenames);
+        virtual future<> process(sstable_directory& directory, process_flags flags) override;
+        virtual future<> commit() override;
+        virtual future<> prepare(sstable_directory&, process_flags, storage&) override;
+    };
+
 private:
 
     // prevents an object that respects a phaser (usually a table) from disappearing in the middle of the operation.
@@ -205,6 +214,10 @@ public:
             io_error_handler_gen error_handler_gen);
     sstable_directory(replica::table& table,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+            io_error_handler_gen error_handler_gen);
+    sstable_directory(replica::table& table,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+            std::vector<sstring> sstables,
             io_error_handler_gen error_handler_gen);
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
