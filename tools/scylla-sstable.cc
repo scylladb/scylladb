@@ -1499,6 +1499,7 @@ public:
                 {sstables::sstable_feature::CorrectStaticCompact, "CorrectStaticCompact"},
                 {sstables::sstable_feature::CorrectEmptyCounters, "CorrectEmptyCounters"},
                 {sstables::sstable_feature::CorrectUDTsInCollections, "CorrectUDTsInCollections"},
+                {sstables::sstable_feature::CorrectLastPiBlockWidth, "CorrectLastPiBlockWidth"},
         };
         _writer.StartObject();
         _writer.Key("mask");
