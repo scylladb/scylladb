@@ -146,9 +146,7 @@ The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, 
 
 .. include:: /operating-scylla/_common/networking-ports.rst
 
-All ports above need to be open to external clients (CQL), external admin systems (JMX), and other nodes (RPC). REST API port can be kept closed for incoming external connections.
-
-The JMX service, :code:`scylla-jmx`, runs on port 7199. It is required in order to manage ScyllaDB using :code:`nodetool` and other Apache Cassandra-compatible utilities. The :code:`scylla-jmx` process must be able to connect to port 10000 on localhost. The JMX service listens for incoming JMX connections on all network interfaces on the system.
+All ports above need to be open to external clients (CQL) and other nodes (RPC). REST API port can be kept closed for incoming external connections.
 
 Advanced networking
 -------------------
@@ -222,10 +220,6 @@ Monitoring Stack
 ----------------
 
 |mon_root|
-
-JMX
----
-ScyllaDB JMX is compatible with Apache Cassandra, exposing the relevant subset of MBeans.
 
 .. REST
 

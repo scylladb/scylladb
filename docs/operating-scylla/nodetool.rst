@@ -67,20 +67,8 @@ The ``nodetool`` utility provides a simple command-line interface to the followi
 
 Nodetool generic options
 ========================
-All options are supported:
 
-
-
-* ``-p <port>`` or ``--port <port>`` - Remote JMX agent port number.
-
-* ``-pp`` or ``--print-port`` - Operate in 4.0 mode with hosts disambiguated by port number.
-
-* ``-pw <password>`` or ``--password <password>`` - Remote JMX agent password.
-
-* ``-pwf <passwordFilePath>`` or ``--password-file <passwordFilePath>`` - Path to the JMX password file.
-
-* ``-u <username>`` or ``--username <username>`` - Remote JMX agent username.
-
+* ``-p <port>`` or ``--port <port>`` - The port of the REST API of the ScyllaDB node.
 * ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
 
 Supported Nodetool operations

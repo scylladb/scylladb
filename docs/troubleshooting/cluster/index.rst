@@ -10,7 +10,6 @@ Cluster and Node
    Failed Decommission Problem </troubleshooting/failed-decommission/>
    Cluster Timeouts </troubleshooting/timeouts>
    Node Joined With No Data </troubleshooting/node-joined-without-any-data>
-   SocketTimeoutException </troubleshooting/nodetool-memory-read-timeout/> 
    NullPointerException </troubleshooting/nodetool-nullpointerexception/> 
    Failed Schema Sync </troubleshooting/failed-schema-sync/> 
 
@@ -28,7 +27,6 @@ Cluster and Node
 * :doc:`Failed Decommission Problem </troubleshooting/failed-decommission/>`
 * :doc:`Cluster Timeouts </troubleshooting/timeouts>`
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
-* :doc:`Nodetool fails with SocketTimeoutException 'Read timed out' </troubleshooting/nodetool-memory-read-timeout>`
 * :doc:`Nodetool Throws NullPointerException </troubleshooting/nodetool-nullpointerexception>`
 * :doc:`Failed Schema Sync </troubleshooting/failed-schema-sync>`
 
