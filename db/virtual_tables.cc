@@ -261,67 +261,31 @@ public:
 
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
         struct decorated_keyspace_name {
-            sstring name;
+            schema_ptr s;
             dht::decorated_key key;
-        };
-        std::vector<decorated_keyspace_name> keyspace_names;
 
-        for (const auto& [name, _] : _db.local().get_keyspaces()) {
-            auto dk = make_partition_key(name);
-            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk)) {
-                continue;
+            auto operator<=>(const decorated_keyspace_name& o) const {
+                return key.tri_compare(*o.s, o.key);
             }
-            keyspace_names.push_back({std::move(name), std::move(dk)});
-        }
-
-        boost::sort(keyspace_names, [less = dht::ring_position_less_comparator(*_s)]
-                (const decorated_keyspace_name& l, const decorated_keyspace_name& r) {
-            return less(l.key, r.key);
-        });
+        };
 
         using snapshots_by_tables_map = std::map<sstring, std::map<sstring, replica::table::snapshot_details>>;
+        using snapshots_by_keyspace_map = std::map<decorated_keyspace_name, snapshots_by_tables_map>;
 
-        class snapshot_reducer {
-        private:
-            snapshots_by_tables_map _result;
-        public:
-            future<> operator()(const snapshots_by_tables_map& value) {
-                for (auto& [table_name, snapshots] : value) {
-                    if (auto [_, added] = _result.try_emplace(table_name, std::move(snapshots)); added) {
-                        continue;
-                    }
-                    auto& rp = _result.at(table_name);
-                    for (auto&& [snapshot_name, snapshot_detail]: snapshots) {
-                        if (auto [_, added] = rp.try_emplace(snapshot_name, std::move(snapshot_detail)); added) {
-                            continue;
-                        }
-                        auto& detail = rp.at(snapshot_name);
-                        detail.live += snapshot_detail.live;
-                        detail.total += snapshot_detail.total;
-                    }
+        snapshots_by_keyspace_map keyspace_snapshots;
+        auto snapshot_details = co_await _db.local().get_snapshot_details();
+
+        for (const auto& [snapshot_name, details] : snapshot_details) {
+            for (const auto& d : details) {
+                auto dk = make_partition_key(d.ks);
+                if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk)) {
+                    continue;
                 }
-                return make_ready_future<>();
+                keyspace_snapshots[decorated_keyspace_name(_s, dk)][d.cf][snapshot_name] = d.details;
             }
-            snapshots_by_tables_map get() && {
-                return std::move(_result);
-            }
-        };
-
-        for (auto& ks_data : keyspace_names) {
+        }
+        for (const auto& [ks_data, snapshots_by_tables] : keyspace_snapshots) {
             co_await result.emit_partition_start(ks_data.key);
-
-            const auto snapshots_by_tables = co_await _db.map_reduce(snapshot_reducer(), [ks_name_ = ks_data.name] (replica::database& db) mutable -> future<snapshots_by_tables_map> {
-                auto ks_name = std::move(ks_name_);
-                snapshots_by_tables_map snapshots_by_tables;
-                co_await db.get_tables_metadata().for_each_table_gently(coroutine::lambda([&] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
-                    if (table->schema()->ks_name() != ks_name) {
-                        co_return;
-                    }
-                    const auto unordered_snapshots = co_await table->get_snapshot_details();
-                    snapshots_by_tables.emplace(table->schema()->cf_name(), std::map<sstring, replica::table::snapshot_details>(unordered_snapshots.begin(), unordered_snapshots.end()));
-                }));
-                co_return snapshots_by_tables;
-            });
 
             for (const auto& [table_name, snapshots] : snapshots_by_tables) {
                 for (auto& [snapshot_name, details] : snapshots) {

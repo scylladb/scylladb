@@ -124,6 +124,18 @@ def take_snapshot(cql, table, tag, skip_flush):
         args.append(ks)
         run_nodetool(cql, "snapshot", *args)
 
+def del_snapshot(cql, tag:str, keyspaces:list[str] = []):
+    if has_rest_api(cql):
+        params = {'tag': tag}
+        if keyspaces:
+            params["kn"] = ','.join(keyspaces)
+        requests.delete(f'{rest_api_url(cql)}/storage_service/snapshots/', params=params)
+    else:
+        args = ['--tag', tag]
+        if keyspaces:
+            args.extend(keyspaces)
+        run_nodetool(cql, "clearsnapshot", *args)
+
 def refreshsizeestimates(cql):
     if has_rest_api(cql):
         # The "nodetool refreshsizeestimates" is not available, or needed, in Scylla
