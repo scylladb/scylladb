@@ -1934,6 +1934,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtbuilder.done();
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
+                    co_await utils::get_local_injector().inject("delay_node_bootstrap", [](auto& handler) {
+                        rtlogger.info("delay_node_bootstrap: waiting for message");
+                        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+                    });
                     std::vector<canonical_mutation> muts;
                     // Since after bootstrapping a new node some nodes lost some ranges they need to cleanup
                     muts = mark_nodes_as_cleanup_needed(node, false);
@@ -1947,8 +1951,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                    "bootstrap: read fence completed");
                     }
                     break;
-                case node_state::removing:
+                case node_state::removing: {
+                    co_await utils::get_local_injector().inject("delay_node_removal", [](auto& handler) {
+                        rtlogger.info("delay_node_removal: waiting for message");
+                        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+                    });
                     node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
+                }
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
