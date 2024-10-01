@@ -183,9 +183,13 @@ private:
 private:
     std::unique_ptr<sstable_directory::components_lister> make_components_lister();
 
-    future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
+    future<> process_descriptor(sstables::entry_descriptor desc,
+            process_flags flags,
+            noncopyable_function<data_dictionary::storage_options()>&& get_storage_options);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
-    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc,
+            noncopyable_function<data_dictionary::storage_options()>&& get_storage_options,
+            sstables::sstable_open_config cfg = {}) const;
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
