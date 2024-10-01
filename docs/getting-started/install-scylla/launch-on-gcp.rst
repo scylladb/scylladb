@@ -63,7 +63,7 @@ Launching ScyllaDB on GCP
         
         gcloud compute ssh scylla-node1
    
-   To check that the ScyllaDB server and the JMX component are running, run:
+   To check that the ScyllaDB server is running, run:
 
      .. code-block:: console
       

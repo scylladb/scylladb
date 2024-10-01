@@ -11,7 +11,7 @@ For example:
 ScyllaDB uses available memory to cache your data. ScyllaDB knows how to dynamically manage memory for optimal performance, for example, if many clients connect to ScyllaDB, it will evict some data from the cache to make room for these connections, when the connection count drops again, this memory is returned to the cache.
 
 To limit the memory usage you can start scylla with ``--memory`` parameter.
-Alternatively, you can specify the amount of memory ScyllaDB should leave to the OS with ``--reserve-memory`` parameter. Keep in mind that the amount of memory left to the operating system needs to suffice external scylla modules, such as ``scylla-jmx``, which runs on top of JVM.
+Alternatively, you can specify the amount of memory ScyllaDB should leave to the OS with ``--reserve-memory`` parameter. Keep in mind that the amount of memory left to the operating system needs to suffice external scylla modules.
 
 On Ubuntu, edit the ``/etc/default/scylla-server``.
 

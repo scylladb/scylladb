@@ -78,7 +78,7 @@ Launching Instances from ScyllaDB AMI
    * The ``scylla.yaml`` file: ``/etc/scylla/scylla.yaml``
    * Data: ``/var/lib/scylla/``
 
-   To check that the ScyllaDB server and the JMX component are running, run:
+   To check that the ScyllaDB server is running, run:
 
    .. code-block:: console
     
