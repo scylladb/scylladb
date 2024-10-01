@@ -236,7 +236,14 @@ public:
     // Returns true when all compacted sstables were already deleted.
     bool no_compacted_sstable_undeleted() const;
 
+<<<<<<< HEAD
     future<> stop() noexcept;
+=======
+    future<> stop(sstring reason = "table removal") noexcept;
+
+    // Clear sstable sets
+    void clear_sstables();
+>>>>>>> b8d6f864bc (replica: Fix schema change during migration cleanup)
 };
 
 using storage_group_ptr = lw_shared_ptr<storage_group>;
@@ -296,6 +303,7 @@ public:
     const storage_group_map& storage_groups() const;
 
     future<> stop_storage_groups() noexcept;
+    void clear_storage_groups();
     void remove_storage_group(size_t id);
     // FIXME: Cannot return nullptr, signature can be changed to return storage_group&.
     storage_group* storage_group_for_id(const schema_ptr&, size_t i) const;
