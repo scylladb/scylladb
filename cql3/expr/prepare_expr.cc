@@ -24,7 +24,7 @@
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "utils/like_matcher.hh"
 
-#include <boost/range/algorithm/count.hpp>
+#include <ranges>
 
 namespace cql3::expr {
 
@@ -146,7 +146,7 @@ usertype_constructor_prepare_expression(const usertype_constructor& u, data_dict
         // We had some field that are not part of the type
         for (auto&& id_val : u.elements) {
             auto&& id = id_val.first;
-            if (!boost::range::count(ut->field_names(), id.bytes_)) {
+            if (!std::ranges::contains(ut->field_names(), id.bytes_)) {
                 throw exceptions::invalid_request_exception(format("Unknown field '{}' in value of user defined type {}", id, ut->get_name_as_string()));
             }
         }
@@ -561,9 +561,10 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
     if (receiver) {
         type = receiver->type;
     } else {
-        type = tuple_type_impl::get_instance(boost::copy_range<std::vector<data_type>>(
+        type = tuple_type_impl::get_instance(
                 values
-                | boost::adaptors::transformed(type_of)));
+                | std::views::transform(type_of)
+                | std::ranges::to<std::vector>());
     }
     tuple_constructor value {
         .elements  = std::move(values),

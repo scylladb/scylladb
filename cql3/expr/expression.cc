@@ -13,12 +13,6 @@
 
 #include <seastar/core/on_internal_error.hh>
 
-#include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm/set_algorithm.hpp>
-#include <boost/range/algorithm/unique.hpp>
-#include <boost/range/numeric.hpp>
 #include <fmt/ostream.h>
 #include <unordered_map>
 #include <algorithm>
@@ -41,9 +35,6 @@ namespace cql3 {
 namespace expr {
 
 logging::logger expr_logger("cql_expression");
-
-using boost::adaptors::filtered;
-using boost::adaptors::transformed;
 
 bool operator==(const expression& e1, const expression& e2) {
     if (e1._v->v.index() != e2._v->v.index()) {
@@ -295,7 +286,7 @@ bool limits(managed_bytes_view lhs, oper_t op, managed_bytes_view rhs, const abs
 }
 
 bool list_contains_null(managed_bytes_view list) {
-    return boost::algorithm::any_of_equal(partially_deserialize_listlike(list), std::nullopt);
+    return std::ranges::contains(partially_deserialize_listlike(list), managed_bytes_opt());
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
@@ -376,7 +367,7 @@ bool_or_null contains(const expression& lhs, const expression& rhs, const evalua
     } else if (collection_type->is_map()) {
         auto data_map = value_cast<map_type_impl::native_type>(lhs_collection);
         using entry = std::pair<data_value, data_value>;
-        return exists_in(data_map | transformed([](const entry& e) { return e.second; }));
+        return exists_in(data_map | std::views::transform([](const entry& e) { return e.second; }));
     } else {
         on_internal_error(expr_logger, "unsupported collection type in a CONTAINS expression");
     }
@@ -540,7 +531,7 @@ const column_value& get_subscripted_column(const expression& e) {
 
 expression make_conjunction(expression a, expression b) {
     auto children = explode_conjunction(std::move(a));
-    boost::copy(explode_conjunction(std::move(b)), back_inserter(children));
+    std::ranges::copy(explode_conjunction(std::move(b)), back_inserter(children));
     return conjunction{std::move(children)};
 }
 
@@ -609,7 +600,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                 }
             },
             [&] (const cql3::expr::conjunction& conj) {
-                out = fmt::format_to(out, "({})", fmt::join(conj.children | transformed(to_printer), ") AND ("));
+                out = fmt::format_to(out, "({})", fmt::join(conj.children | std::views::transform(to_printer), ") AND ("));
             },
             [&] (const binary_operator& opr) {
                 if (pr.debug_mode) {
@@ -666,29 +657,30 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             [&] (const function_call& fc)  {
                 if (is_token_function(fc)) {
                     if (!pr.for_metadata) {
-                        out = fmt::format_to(out, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        out = fmt::format_to(out, "token({})", fmt::join(fc.args | std::views::transform(to_printer), ", "));
                     } else {
-                        out = fmt::format_to(out, "system.token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        out = fmt::format_to(out, "system.token({})", fmt::join(fc.args | std::views::transform(to_printer), ", "));
                     }
                 } else {
                     std::visit(overloaded_functor{
                         [&] (const cql3::functions::function_name& named) {
-                            out = fmt::format_to(out, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
+                            out = fmt::format_to(out, "{}({})", named, fmt::join(fc.args | std::views::transform(to_printer), ", "));
                         },
                         [&] (const shared_ptr<cql3::functions::function>& fn) {
                             if (!pr.debug_mode && fn->name() == cql3::functions::aggregate_fcts::first_function_name()) {
                                 // The "first" function is artificial, don't emit it
                                 out = fmt::format_to(out, "{}", to_printer(fc.args[0]));
                             } else if (!pr.for_metadata) {
-                                out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
+                                out = fmt::format_to(out, "{}({})", fn->name(), fmt::join(fc.args | std::views::transform(to_printer), ", "));
                             } else {
                                 const std::string_view fn_name = fn->name().name;
                                 if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
                                     auto cast_type = fn_name.substr(6);
-                                    out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | transformed(to_printer), ", "),
+                                    out = fmt::format_to(out, "cast({} as {})", fmt::join(fc.args | std::views::transform(to_printer), ", "),
                                          cast_type);
                                 } else {
-                                    auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
+                                    auto args = fc.args | std::views::transform(to_printer) | std::views::transform(fmt::to_string<expression::printer>)
+                                            | std::ranges::to<std::vector<sstring>>();
                                     out = fmt::format_to(out, "{}", fn->column_name(args));
                                 }
                             }
@@ -734,16 +726,16 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                 }
             },
             [&] (const tuple_constructor& tc) {
-                out = fmt::format_to(out, "({})", fmt::join(tc.elements | transformed(to_printer), ", "));
+                out = fmt::format_to(out, "({})", fmt::join(tc.elements | std::views::transform(to_printer), ", "));
             },
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
                 case collection_constructor::style_type::list: {
-                    out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | transformed(to_printer), ", "));
+                    out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
                     return;
                 }
                 case collection_constructor::style_type::set: {
-                    out = fmt::format_to(out, "{{{}}}", fmt::join(cc.elements | transformed(to_printer), ", "));
+                    out = fmt::format_to(out, "{{{}}}", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
                     return;
                 }
                 case collection_constructor::style_type::map: {
@@ -932,9 +924,9 @@ expression search_and_replace(const expression& e,
             overloaded_functor{
                 [&] (const conjunction& conj) -> expression {
                     return conjunction{
-                        boost::copy_range<std::vector<expression>>(
-                            conj.children | boost::adaptors::transformed(recurse)
-                        )
+                            conj.children
+                            | std::views::transform(recurse)
+                            | std::ranges::to<std::vector>()
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
@@ -945,18 +937,18 @@ expression search_and_replace(const expression& e,
                 },
                 [&] (const tuple_constructor& tc) -> expression {
                     return tuple_constructor{
-                        boost::copy_range<std::vector<expression>>(
-                            tc.elements | boost::adaptors::transformed(recurse)
-                        ),
+                        tc.elements
+                            | std::views::transform(recurse)
+                            | std::ranges::to<std::vector>(),
                         tc.type
                     };
                 },
                 [&] (const collection_constructor& c) -> expression {
                     return collection_constructor{
                         c.style,
-                        boost::copy_range<std::vector<expression>>(
-                            c.elements | boost::adaptors::transformed(recurse)
-                        ),
+                        c.elements
+                            | std::views::transform(recurse)
+                            | std::ranges::to<std::vector>(),
                         c.type
                     };
                 },
@@ -970,9 +962,9 @@ expression search_and_replace(const expression& e,
                 [&] (const function_call& fc) -> expression {
                     return function_call{
                         fc.func,
-                        boost::copy_range<std::vector<expression>>(
-                            fc.args | boost::adaptors::transformed(recurse)
-                        )
+                        fc.args
+                            | std::views::transform(recurse)
+                            | std::ranges::to<std::vector>()
                     };
                 },
                 [&] (const cast& c) -> expression {
@@ -2084,9 +2076,8 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
 
 unsigned
 aggregation_depth(const cql3::expr::expression& e) {
-    static constexpr auto max = static_cast<const unsigned& (*)(const unsigned&, const unsigned&)>(std::max<unsigned>);
     static constexpr auto max_over_range = [] (std::ranges::range auto&& rng) -> unsigned {
-        return boost::accumulate(rng | boost::adaptors::transformed(aggregation_depth), 0u, max);
+        return std::ranges::fold_left(rng | std::views::transform(aggregation_depth), 0u, std::ranges::max);
     };
     return visit(overloaded_functor{
         [] (const conjunction& c) {
@@ -2129,7 +2120,7 @@ aggregation_depth(const cql3::expr::expression& e) {
             return max_over_range(cc.elements);
         },
         [] (const usertype_constructor& uc) {
-            return max_over_range(uc.elements | boost::adaptors::map_values);
+            return max_over_range(uc.elements | std::views::values);
         }
     }, e);
 }
@@ -2217,7 +2208,7 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
             return cc;
         },
         [&] (usertype_constructor uc) -> expression {
-            recurse_over_range(uc.elements | boost::adaptors::map_values);
+            recurse_over_range(uc.elements | std::views::values);
             return uc;
         }
     }, e);

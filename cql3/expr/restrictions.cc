@@ -14,6 +14,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include "types/list.hh"
 #include <iterator>
+#include <ranges>
 
 namespace cql3 {
 namespace expr {
@@ -111,9 +112,7 @@ void validate_token_relation(const std::vector<const column_definition*> column_
         }
         throw exceptions::invalid_request_exception(
                 seastar::format("The token function arguments must be in the partition key order: {}",
-                       fmt::join(boost::adaptors::transform(pk, [](const column_definition& cd) {
-                           return cd.name_as_text();
-                       }), ", ")));
+                       fmt::join(pk | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
 }
 
