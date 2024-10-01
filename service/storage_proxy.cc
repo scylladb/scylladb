@@ -43,6 +43,7 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
+#include <boost/range/algorithm/remove.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/numeric.hpp>
 #include <boost/range/empty.hpp>
