@@ -31,13 +31,6 @@ By default, ScyllaDB runs as user ``scylla`` in group ``scylla``. The following 
    User=test
    Group=test
 
-5. Edit /usr/lib/systemd/system/scylla-jmx.service
-
-.. code-block:: sh
-   
-   User=test
-   Group=test
-
 6. Reload the daemon settings and start ScyllaDB and node_exporter
 
 .. code-block:: sh
@@ -51,5 +44,4 @@ At this point, all  services should be started as test:test user:
 .. code-block:: sh
    
    test      8760     1 11 14:42 ?        00:00:01 /usr/bin/scylla --log-to-syslog 1 --log-to-std ...
-   test      8765     1 12 14:42 ?        00:00:01 /opt/scylladb/jmx/symlinks/scylla-jmx -Xmx256m ...
    test     13638     1  0 14:30 ?        00:00:00 /usr/bin/node_exporter --collector.interrupts
