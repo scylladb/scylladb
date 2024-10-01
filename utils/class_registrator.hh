@@ -9,9 +9,9 @@
 #pragma once
 
 #include <memory>
+#include <ranges>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
-#include <boost/range/algorithm/find_if.hpp>
 
 #include "seastarx.hh"
 
@@ -112,7 +112,7 @@ sstring nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(std
     } else {
         const auto& classes{nonstatic_class_registry<BaseType, Args...>::classes()};
 
-        const auto it = boost::find_if(classes, [class_name](const auto& registered_class) {
+        const auto it = std::ranges::find_if(classes, [class_name](const auto& registered_class) {
             // the fully qualified name contains the short name
             auto i = registered_class.first.find_last_of('.');
             return i != sstring::npos && registered_class.first.compare(i + 1, sstring::npos, class_name) == 0;
