@@ -23,7 +23,7 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         // There should be enough rows to use multiple pages
         auto prepared_id = e.prepare("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (?, ?, 1, ?, ?)").get();
         auto big_string_v = cql3::raw_value::make_value(serialized(big_string));
-        max_concurrent_for_each(boost::irange(0, 64 * 1024), 2, [&] (auto i) {
+        max_concurrent_for_each(std::views::iota(0, 64 * 1024), 2, [&] (auto i) {
             return e.execute_prepared(prepared_id, {
                 cql3::raw_value::make_value(serialized(i % 3)),                     // pk
                 cql3::raw_value::make_value(serialized(format("hello{}", i))),      // ck

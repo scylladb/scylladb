@@ -2417,7 +2417,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(smp::count);
 
-    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
         table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
             auto& cf = *table_shards;
             auto st = std::make_unique<table_truncate_state>();

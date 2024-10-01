@@ -514,7 +514,7 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
 static
 void
 do_test_split_range_to_single_shard(const schema& s, const dht::static_sharder& sharder_, const dht::partition_range& pr) {
-    for (auto shard : boost::irange(0u, sharder_.shard_count())) {
+    for (auto shard : std::views::iota(0u, sharder_.shard_count())) {
         auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get();
         auto sharder = dht::ring_position_range_sharder(sharder_, pr);
         auto x = sharder.next(s);
@@ -585,7 +585,7 @@ static
 void
 do_test_selective_token_range_sharder(const dht::sharder& input_sharder, const schema& s, const dht::token_range& range) {
     bool debug = false;
-    for (auto shard : boost::irange(0u, input_sharder.shard_count())) {
+    for (auto shard : std::views::iota(0u, input_sharder.shard_count())) {
         auto sharder = dht::selective_token_range_sharder(input_sharder, range, shard);
         auto range_shard = sharder.next();
         while (range_shard) {

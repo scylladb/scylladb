@@ -552,7 +552,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_
     for (auto&& key : keys) {
         mutation m(s, key);
         sstring val = make_random_string(1024);
-        for (auto i : boost::irange(0u, ckeys_per_part)) {
+        for (auto i : std::views::iota(0u, ckeys_per_part)) {
             table.add_row(m, table.make_ckey(next_ckey + i), val);
         }
         next_ckey += ckeys_per_part;

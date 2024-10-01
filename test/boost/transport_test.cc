@@ -60,15 +60,15 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     res.write_value(bytes_opt(value));
 
     // Name and value list
-    auto names_and_values = boost::copy_range<std::vector<std::pair<sstring, bytes_opt>>>(
-        boost::irange<int16_t>(0, tests::random::get_int<int16_t>(16) + 16)
-        | boost::adaptors::transformed([] (int) {
+    auto names_and_values =
+        std::views::iota(0, tests::random::get_int<int>(16) + 16)
+        | std::views::transform([] (int) {
             return std::pair(
                 tests::random::get_sstring(),
                 !tests::random::get_int(4) ? bytes_opt() : bytes_opt(tests::random::get_bytes(tests::random::get_int<int16_t>(1024)))
             );
         })
-    );
+        | std::ranges::to<std::vector<std::pair<sstring, bytes_opt>>>();
     res.write_short(names_and_values.size());
     for (auto& [ name, value ] : names_and_values) {
         res.write_string(name);
@@ -76,21 +76,21 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     }
 
     // String list
-    auto string_list = boost::copy_range<std::vector<sstring>>(
-        boost::irange<int16_t>(0, tests::random::get_int<int16_t>(16) + 16)
-        | boost::adaptors::transformed([] (int) {
+    auto string_list =
+        std::views::iota(0, tests::random::get_int<int>(16) + 16)
+        | std::views::transform([] (int) {
             return tests::random::get_sstring();
         })
-    );
+        | std::ranges::to<std::vector<sstring>>();
     res.write_string_list(string_list);
 
     // String map
-    auto string_map = boost::copy_range<std::map<sstring, sstring>>(
-        boost::irange<int16_t>(0, tests::random::get_int<int16_t>(16) + 16)
-        | boost::adaptors::transformed([] (int) {
+    auto string_map =
+        std::views::iota(0, tests::random::get_int<int>(16) + 16)
+        | std::views::transform([] (int) {
             return std::pair(tests::random::get_sstring(), tests::random::get_sstring());
         })
-    );
+        | std::ranges::to<std::map>();
     res.write_string_map(string_map);
     auto string_unordered_map = std::unordered_map<sstring, sstring>(string_map.begin(), string_map.end());
 

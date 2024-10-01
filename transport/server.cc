@@ -1182,7 +1182,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
         tracing::begin(trace_state, "Execute batch of CQL3 queries", client_state.get_client_address());
     }
 
-    for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
+    for ([[gnu::unused]] auto i : std::views::iota(0u, n)) {
         const auto kind = in.read_byte();
 
         std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
@@ -1908,7 +1908,7 @@ public:
             r.write_string(udt->_keyspace);
             r.write_bytes_as_string(udt->_name);
             r.write_short(udt->size());
-            for (auto&& i : boost::irange<size_t>(0, udt->size())) {
+            for (auto&& i : std::views::iota(0u, udt->size())) {
                 r.write_bytes_as_string(udt->field_name(i));
                 encode(r, udt->field_type(i));
             }

@@ -11,6 +11,7 @@
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/scollectd_api.hh>
 #include <boost/range/irange.hpp>
+#include <ranges>
 #include <regex>
 #include "api/api_init.hh"
 
@@ -61,7 +62,7 @@ void set_collectd(http_context& ctx, routes& r) {
 
         return do_with(std::vector<cd::collectd_value>(), [id] (auto& vec) {
             vec.resize(smp::count);
-            return parallel_for_each(boost::irange(0u, smp::count), [&vec, id] (auto cpu) {
+            return parallel_for_each(std::views::iota(0u, smp::count), [&vec, id] (auto cpu) {
                 return smp::submit_to(cpu, [id = *id] {
                     return scollectd::get_collectd_value(id);
                 }).then([&vec, cpu] (auto res) {

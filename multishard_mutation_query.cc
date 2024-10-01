@@ -620,7 +620,7 @@ future<> read_context::save_readers(mutation_reader::tracked_buffer unconsumed_b
         tracing::trace(_trace_state, "No compaction state to dismantle, partition exhausted", cs_stats);
     }
 
-    co_await parallel_for_each(boost::irange(0u, smp::count), [this, &last_pos] (shard_id shard) {
+    co_await parallel_for_each(std::views::iota(0u, smp::count), [this, &last_pos] (shard_id shard) {
         auto& rm = _readers[shard];
         if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
             return save_reader(shard, last_pos);

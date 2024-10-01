@@ -164,7 +164,7 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
 }
 
 future<stop_iteration> multishard_writer::handle_end_of_stream() {
-    return parallel_for_each(boost::irange(0u, _sharder.shard_count()), [this] (unsigned shard) {
+    return parallel_for_each(std::views::iota(0u, _sharder.shard_count()), [this] (unsigned shard) {
         if (_queue_reader_handles[shard]) {
             _queue_reader_handles[shard]->push_end_of_stream();
         }
@@ -232,7 +232,7 @@ future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
 
 future<> multishard_writer::close() noexcept {
     return _producer.close().then([this] {
-        return parallel_for_each(boost::irange(size_t(0), _shard_writers.size()), [this] (auto shard) {
+        return parallel_for_each(std::views::iota(0u, _shard_writers.size()), [this] (auto shard) {
             if (auto w = std::move(_shard_writers[shard])) {
                 return smp::submit_to(shard, [w = std::move(w)] () mutable {
                     return w->close();

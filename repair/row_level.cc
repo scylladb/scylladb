@@ -157,7 +157,7 @@ public:
         co_return value_type(_sinks[node_idx].value(), _sources[node_idx].value());
     }
     future<> close() {
-        co_await coroutine::parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) -> future<> {
+        co_await coroutine::parallel_for_each(std::views::iota(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) -> future<> {
             std::optional<rpc::sink<SinkType>>& sink_opt = _sinks[node_idx];
             auto f = sink_opt ? sink_opt->close() : make_ready_future<>();
             f = co_await coroutine::as_future(std::move(f));
@@ -225,7 +225,7 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
 
 static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const inet_address_vector_replica_set& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
-    parallel_for_each(boost::irange(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
+    parallel_for_each(std::views::iota(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
         std::vector<row_level_diff_detect_algorithm> algorithms = co_await ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx]));
         std::sort(algorithms.begin(), algorithms.end());
         nodes_algorithms[idx] = std::move(algorithms);
@@ -2705,7 +2705,7 @@ private:
         // moved from the `_row_buf` to `_working_row_buf`.
         std::vector<repair_hash> combined_hashes;
         combined_hashes.resize(master.all_nodes().size());
-        parallel_for_each(boost::irange(size_t(0), master.all_nodes().size()), coroutine::lambda([&] (size_t idx) -> future<> {
+        parallel_for_each(std::views::iota(size_t(0), master.all_nodes().size()), coroutine::lambda([&] (size_t idx) -> future<> {
             // Request combined hashes from all nodes between (_last_sync_boundary, _current_sync_boundary]
             // Each node will
             // - Set `_current_sync_boundary` to `_common_sync_boundary`
@@ -2845,10 +2845,10 @@ private:
         repair_hash_set local_row_hash_sets = master.working_row_hashes().get();
         auto sz = _all_live_peer_nodes.size();
         std::vector<repair_hash_set> set_diffs(sz);
-        for (size_t idx : boost::irange(size_t(0), sz)) {
+        for (size_t idx : std::views::iota(size_t(0), sz)) {
             set_diffs[idx] = get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
         }
-        parallel_for_each(boost::irange(size_t(0), sz), coroutine::lambda([&] (size_t idx) -> future<> {
+        parallel_for_each(std::views::iota(size_t(0), sz), coroutine::lambda([&] (size_t idx) -> future<> {
             auto& ns = master.all_nodes()[idx + 1];
             auto dst_cpu_id = ns.shard;
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());

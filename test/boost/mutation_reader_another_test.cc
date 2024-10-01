@@ -311,7 +311,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_move_buffer_content_to) {
     auto pkey = s.make_pkey(1);
     auto mut_orig = mutation(s.schema(), pkey);
 
-    auto mf_range = boost::irange(0, 50) | boost::adaptors::transformed([&] (auto n) {
+    auto mf_range = std::views::iota(0, 50) | std::views::transform([&] (auto n) {
         return s.make_row(permit, s.make_ckey(n), "a_16_byte_value_");
     });
     for (auto&& mf : mf_range) {
@@ -375,17 +375,17 @@ SEASTAR_THREAD_TEST_CASE(test_multi_range_reader) {
     auto keys = s.make_pkeys(10);
     auto ring = s.to_ring_positions(keys);
 
-    auto crs = boost::copy_range<std::vector<mutation_fragment>>(boost::irange(0, 3) | boost::adaptors::transformed([&] (auto n) {
+    auto crs = std::views::iota(0, 3) | std::views::transform([&] (auto n) {
         return s.make_row(permit, s.make_ckey(n), "value");
-    }));
+    }) | std::ranges::to<std::vector<mutation_fragment>>();
 
-    auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&] (auto& key) {
+    auto ms = keys | std::views::transform([&] (auto& key) {
         auto m = mutation(s.schema(), key);
         for (auto& mf : crs) {
             m.apply(mf);
         }
         return m;
-    }));
+    }) | std::ranges::to<std::vector<mutation>>();
 
     auto source = mutation_source([&] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
         return make_mutation_reader_from_mutations_v2(s.schema(), std::move(permit), ms, range);
@@ -663,18 +663,17 @@ SEASTAR_THREAD_TEST_CASE(test_make_forwardable) {
 
     auto keys = s.make_pkeys(10);
 
-    auto crs = boost::copy_range < std::vector <
-               mutation_fragment >> (boost::irange(0, 3) | boost::adaptors::transformed([&](auto n) {
+    auto crs = std::views::iota(0, 3) | std::views::transform([&](auto n) {
                    return s.make_row(permit, s.make_ckey(n), "value");
-               }));
+               }) | std::ranges::to<std::vector<mutation_fragment>>();
 
-    auto ms = boost::copy_range < std::vector < mutation >> (keys | boost::adaptors::transformed([&](auto &key) {
+    auto ms = keys | boost::adaptors::transformed([&](auto &key) {
         auto m = mutation(s.schema(), key);
         for (auto &mf : crs) {
             m.apply(mf);
         }
         return m;
-    }));
+    }) | std::ranges::to<std::vector<mutation>>();
 
     auto make_reader = [&] (auto& range) {
         return assert_that(

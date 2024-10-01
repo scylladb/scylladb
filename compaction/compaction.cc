@@ -1714,7 +1714,7 @@ public:
                 _estimation_per_shard[s].estimated_partitions += std::max(uint64_t(1), uint64_t(ceil(double(estimated_partitions) / shards.size())));
             }
         }
-        for (auto i : boost::irange(0u, smp::count)) {
+        for (auto i : std::views::iota(0u, smp::count)) {
             _run_identifiers[i] = run_id::create_random_id();
         }
     }

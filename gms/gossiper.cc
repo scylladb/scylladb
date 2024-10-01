@@ -1026,7 +1026,7 @@ future<> gossiper::failure_detector_loop() {
             auto nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
-            co_await coroutine::parallel_for_each(boost::irange(size_t(0), nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
+            co_await coroutine::parallel_for_each(std::views::iota(0u, nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
                 const auto& node = nodes[idx];
                 auto shard = idx % smp::count;
                 logger.debug("failure_detector_loop: Started new round for node={} on shard={}, live_nodes={}, live_endpoints_version={}",
@@ -1063,7 +1063,7 @@ future<> gossiper::replicate_live_endpoints_on_change(foreign_ptr<std::unique_pt
     per_shard_data[coordinator] = std::move(data0);
 
     // Prepare copies on each other shard
-    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&per_shard_data, coordinator] (auto shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&per_shard_data, coordinator] (auto shard) -> future<> {
         if (shard != this_shard_id()) {
             const auto& src = *per_shard_data[coordinator];
             per_shard_data[shard] = co_await smp::submit_to(shard, [&] {
@@ -1349,7 +1349,7 @@ future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) 
     auto p = make_foreign(make_endpoint_state_ptr(std::move(es)));
     const auto *eps = p.get();
     ep_states[this_shard_id()] = std::move(p);
-    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&, orig = this_shard_id()] (auto shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&, orig = this_shard_id()] (auto shard) -> future<> {
         if (shard != orig) {
             ep_states[shard] = co_await smp::submit_to(shard, [eps] {
                 return make_foreign(make_endpoint_state_ptr(*eps));

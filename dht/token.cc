@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <ostream>
+#include <ranges>
 #include <boost/lexical_cast.hpp>
 
 #include "dht/token.hh"
@@ -130,7 +131,7 @@ init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) 
         return std::vector<uint64_t>(1, uint64_t(0));
     }
     auto ret = std::vector<uint64_t>(shards);
-    for (auto s : boost::irange<unsigned>(0, shards)) {
+    for (auto s : std::views::iota(0u, shards)) {
         uint64_t token = (uint128_t(s) << 64) / shards;
         token >>= sharding_ignore_msb_bits;   // leftmost bits are ignored by zero_based_shard_of
         // token is the start of the next shard, and can be slightly before due to rounding errors; adjust

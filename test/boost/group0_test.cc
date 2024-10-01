@@ -204,7 +204,7 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
         size_t M = 4;
 
         // Run N concurrent tasks, each performing M schema changes in sequence.
-        auto successes = co_await map_reduce(boost::irange(size_t{0}, N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
+        auto successes = co_await map_reduce(std::views::iota(size_t{0}, N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
 
         // The number of new entries that appeared in group 0 history table should be exactly equal
         // to the number of successful schema changes.
@@ -215,7 +215,7 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
 
         // Run N concurrent tasks, each performing M schema changes in sequence.
         // (use different range of task_ids so the new tasks' statements don't conflict with existing keyspaces from previous tasks)
-        successes = co_await map_reduce(boost::irange(N, 2*N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
+        successes = co_await map_reduce(std::views::iota(N, 2*N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
 
         // Each task performs M schema changes. There are N tasks.
         // Thus, for each task, all other tasks combined perform (N-1) * M schema changes.
@@ -231,7 +231,7 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
         rclient.operation_mutex().consume(1337);
         mm.set_concurrent_ddl_retries(0);
 
-        successes = co_await map_reduce(boost::irange(2*N, 3*N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
+        successes = co_await map_reduce(std::views::iota(2*N, 3*N), std::bind_front(perform_schema_changes, std::ref(e), M), 0, std::plus{});
 
         // Each execution should have succeeded on first attempt because the mutex serialized them all.
         BOOST_REQUIRE_EQUAL(successes, N*M);

@@ -8,6 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 
+#include <ranges>
 #include <stdexcept>
 #include <optional>
 #include <variant>
@@ -46,7 +47,7 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
         }
         case 1: {
             auto nr_pushes = nr_dist(rand);
-            for (auto i : boost::irange(size_t(0), nr_pushes)) {
+            for (auto i : std::views::iota(size_t(0), nr_pushes)) {
                 (void)i;
                 auto n = rand();
                 c.push_back(n);
