@@ -7,6 +7,7 @@
  */
 
 #include "alternator/server.hh"
+#include "gms/application_state.hh"
 #include "log.hh"
 #include <fmt/ranges.h>
 #include <seastar/http/function_handlers.hh>
@@ -211,9 +212,28 @@ protected:
         // using _gossiper().get_live_members(). But getting
         // just the list of live nodes in this DC needs more elaborate code:
         auto& topology = _proxy.get_token_metadata_ptr()->get_topology();
-        sstring local_dc = topology.get_datacenter();
-        std::unordered_set<gms::inet_address> local_dc_nodes = topology.get_datacenter_endpoints().at(local_dc);
+        // /localnodes lists nodes in a single DC. By default the DC of this
+        // server is used, but it can be overridden by a "dc" query option.
+        // If the DC does not exist, we return an empty list - not an error.
+        sstring query_dc = req->get_query_param("dc");
+        sstring local_dc = query_dc.empty() ? topology.get_datacenter() : query_dc;
+        std::unordered_set<gms::inet_address> local_dc_nodes;
+        const auto& endpoints = topology.get_datacenter_endpoints();
+        auto dc_it = endpoints.find(local_dc);
+        if (dc_it != endpoints.end()) {
+            local_dc_nodes = dc_it->second;
+        }
+        // By default, /localnodes lists the nodes of all racks in the given
+        // DC, unless a single rack is selected by the "rack" query option.
+        // If the rack does not exist, we return an empty list - not an error.
+        sstring query_rack = req->get_query_param("rack");
         for (auto& ip : local_dc_nodes) {
+            if (!query_rack.empty()) {
+                auto rack = _gossiper.get_application_state_value(ip, gms::application_state::RACK);
+                if (rack != query_rack) {
+                    continue;
+                }
+            }
             // Note that it's not enough for the node to be is_alive() - a
             // node joining the cluster is also "alive" but not responsive to
             // requests. We need the node to be in normal state. See #19694.

@@ -318,9 +318,86 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     #    await manager.server_stop(server.server_id)
     await task
 
-# TODO: add a more thorough test for /localnodes, creating a cluster with
-# multiple nodes in multiple data centers, and check that we can get a list
-# of nodes in each data center.
+@pytest.mark.asyncio
+async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
+    """A test for /localnodes on a more general setup, with multiple DCs and
+       multiple racks - an 8-node setup with two DCs, two racks in each, and
+       two nodes in each rack.
+       Test both the default of returning the nodes on DC of the server being
+       connected - and the "dc" and "rack" options for explicitly choosing a
+       specific dc and/or rack.
+    """
+    # Start 8 nodes on two different dcs (called "dc1" and "dc2") and two
+    # different racks ("rack1" and "rack2"), two nodes in each rack.
+    config = alternator_config | {
+        'endpoint_snitch': 'GossipingPropertyFileSnitch'
+    }
+    servers = {}
+    for dc in ['dc1', 'dc2']:
+        for rack in ['rack1', 'rack2']:
+            servers[dc,rack] = await manager.servers_add(2, config=config, property_file={
+                'dc': dc, 'rack': rack})
+
+    def localnodes_request(server):
+        return f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
+
+    # Before we test various variations of the /localnodes request, let's wait
+    # until all nodes are visible to each other in /localnodes requests. This
+    # can take time, while nodes finish bootstrapping and gossip to each other
+    # (see #19694). After this one-time wait_for, the following checks will be
+    # able to check things immediately - without retries.
+    for dc in ['dc1', 'dc2']:
+        for rack in ['rack1', 'rack2']:
+            for server in servers[dc, rack]:
+                async def check_localnodes_eight():
+                    for option_dc in ['dc1', 'dc2']:
+                        response = requests.get(localnodes_request(server), {'dc': option_dc})
+                        if len(json.loads(response.content.decode('utf-8'))) < 4:
+                            return None # try again
+                    return True
+                assert await wait_for(check_localnodes_eight, time.time() + 60)
+
+    # Check that the option-less "/localnodes" returns for each of dc1's nodes
+    # the four dc1 servers, and for each of dc2's nodes, the four dc2 servers:
+    for dc in ['dc1', 'dc2']:
+        dc_servers = servers[dc, 'rack1'] + servers[dc, 'rack2']
+        expected_ips = [server.ip_addr for server in dc_servers]
+        for server in dc_servers:
+            response = requests.get(localnodes_request(server))
+            assert sorted(json.loads(response.content.decode('utf-8'))) == sorted(expected_ips)
+
+    # Check that the "dc" option works - it should return the nodes for the
+    # specified DC, regardless of which node on which DC the request is sent
+    # to (we test all combinations of one of 8 target nodes and 2 option dcs).
+    all_servers = sum(servers.values(), [])
+    for option_dc in ['dc1', 'dc2']:
+        expected_servers = servers[option_dc, 'rack1'] + servers[option_dc, 'rack2']
+        expected_ips = [server.ip_addr for server in expected_servers]
+        for server in all_servers:
+            response = requests.get(localnodes_request(server), {'dc': option_dc})
+            assert sorted(json.loads(response.content.decode('utf-8'))) == sorted(expected_ips)
+
+    # Check that the "rack" option works (without "dc") - it returns for each of dc1's
+    # nodes the same two servers from the specified rack in dc1, and for each of dc2's
+    # nodes, the same two dc2 servers in the specified rack:
+    for dc in ['dc1', 'dc2']:
+        dc_servers = servers[dc, 'rack1'] + servers[dc, 'rack2']
+        for option_rack in ['rack1', 'rack2']:
+            expected_ips = [server.ip_addr for server in servers[dc, option_rack]]
+            for server in dc_servers:
+                response = requests.get(localnodes_request(server), {'rack': option_rack})
+                assert sorted(json.loads(response.content.decode('utf-8'))) == sorted(expected_ips)
+
+    # Check that a combination of the "rack" and "dc" option works - it always returns
+    # the same two nodes belonging to the given rack and dc, no matter which of the 8
+    # servers the request is sent to.
+    for option_dc in ['dc1', 'dc2']:
+        for option_rack in ['rack1', 'rack2']:
+            expected_ips = [server.ip_addr for server in servers[option_dc, option_rack]]
+            for server in all_servers:
+                response = requests.get(localnodes_request(server), {'dc': option_dc, 'rack': option_rack})
+                assert sorted(json.loads(response.content.decode('utf-8'))) == sorted(expected_ips)
+
 
 # We have in test/alternator/test_cql_rbac.py many functional tests for
 # CQL-based Role Based Access Control (RBAC) and all those tests use the
