@@ -2416,94 +2416,94 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     table_states.resize(smp::count);
 
     std::exception_ptr ex;
-    try {
-        co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
-            table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
-                auto& cf = *table_shards;
-                auto st = std::make_unique<table_truncate_state>();
-
-                st->holder = cf.async_gate().hold();
-
-                // Force mutations coming in to re-acquire higher rp:s
-                // This creates a "soft" ordering, in that we will guarantee that
-                // any sstable written _after_ we issue the flush below will
-                // only have higher rp:s than we will get from the discard_sstable
-                // call.
-                st->low_mark_at = db_clock::now();
-                st->low_mark = cf.set_low_replay_position_mark();
-
-                st->cres.reserve(1 + cf.views().size());
-                auto& db = sharded_db.local();
-                auto& cm = db.get_compaction_manager();
-
-                if (do_stop) {
-                    st->stop_future = cf.stop();
-                } else {
-                    co_await cf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
-                        st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
-                    });
-                }
-                co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
-                    auto& vcf = db.find_column_family(v);
-                    if (do_stop) {
-                        st->stop_future = st->stop_future.then([&vcf] {
-                            return vcf.stop();
-                        });
-                    } else {
-                        co_await vcf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
-                            st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
-                        });
-                    }
-                });
-
-                co_return make_foreign(std::move(st));
-            });
-        });
-
-        const auto should_flush = with_snapshot && cf.can_flush();
-        dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
-        std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
-                [] (replica::table& cf) {
-                    // TODO:
-                    // this is not really a guarantee at all that we've actually
-                    // gotten all things to disk. Again, need queue-ish or something.
-                    return cf.flush();
-                } :
-                [] (replica::table& cf) {
-                    return cf.clear();
-                };
-        co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
-            unsigned shard = this_shard_id();
+  try {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
+        table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
             auto& cf = *table_shards;
-            auto& st = *table_states[shard];
+            auto st = std::make_unique<table_truncate_state>();
 
-            co_await flush_or_clear(cf);
+            st->holder = cf.async_gate().hold();
+
+            // Force mutations coming in to re-acquire higher rp:s
+            // This creates a "soft" ordering, in that we will guarantee that
+            // any sstable written _after_ we issue the flush below will
+            // only have higher rp:s than we will get from the discard_sstable
+            // call.
+            st->low_mark_at = db_clock::now();
+            st->low_mark = cf.set_low_replay_position_mark();
+
+            st->cres.reserve(1 + cf.views().size());
+            auto& db = sharded_db.local();
+            auto& cm = db.get_compaction_manager();
+
+          if (do_stop) {
+                st->stop_future = cf.stop();
+          } else {
+            co_await cf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
+                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+            });
+          }
             co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
                 auto& vcf = db.find_column_family(v);
-                co_await flush_or_clear(vcf);
+              if (do_stop) {
+                    st->stop_future = st->stop_future.then([&vcf] {
+                        return vcf.stop();
+                    });
+              } else {
+                co_await vcf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
+                    st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+                });
+              }
             });
-            st.did_flush = should_flush;
+
+            co_return make_foreign(std::move(st));
         });
+    });
 
-        auto truncated_at = truncated_at_opt.value_or(db_clock::now());
+    const auto should_flush = with_snapshot && cf.can_flush();
+    dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
+    std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
+            [] (replica::table& cf) {
+                // TODO:
+                // this is not really a guarantee at all that we've actually
+                // gotten all things to disk. Again, need queue-ish or something.
+                return cf.flush();
+            } :
+            [] (replica::table& cf) {
+                return cf.clear();
+            };
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+        unsigned shard = this_shard_id();
+        auto& cf = *table_shards;
+        auto& st = *table_states[shard];
 
-        if (with_snapshot) {
-            auto name = snapshot_name_opt.value_or(
-                format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
-            co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
-        }
-
-        co_await sharded_db.invoke_on_all([&] (database& db) {
-            auto shard = this_shard_id();
-            auto& cf = *table_shards;
-            auto& st = *table_states[shard];
-
-            return db.truncate(sys_ks.local(), cf, st, truncated_at);
+        co_await flush_or_clear(cf);
+        co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
+            auto& vcf = db.find_column_family(v);
+            co_await flush_or_clear(vcf);
         });
-        dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
-    } catch (...) {
-        ex = std::current_exception();
+        st.did_flush = should_flush;
+    });
+
+    auto truncated_at = truncated_at_opt.value_or(db_clock::now());
+
+    if (with_snapshot) {
+        auto name = snapshot_name_opt.value_or(
+            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
+        co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
     }
+
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        auto shard = this_shard_id();
+        auto& cf = *table_shards;
+        auto& st = *table_states[shard];
+
+        return db.truncate(sys_ks.local(), cf, st, truncated_at);
+    });
+    dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
+  } catch (...) {
+    ex = std::current_exception();
+  }
 
     if (do_stop) {
         co_await sharded_db.invoke_on_all([&] (database& db) {
