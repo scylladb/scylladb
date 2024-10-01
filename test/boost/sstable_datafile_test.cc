@@ -2863,12 +2863,20 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
                 BOOST_REQUIRE(res.has_digest);
 
+                testlog.info("Validating with no digest {}", sst->get_filename());
+
+                sstables::test(sst).set_digest(std::nullopt);
+                sstables::test(sst).rewrite_toc_without_component(component_type::Digest);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(!res.has_digest);
+
                 if (compression_params == no_compression_params) {
                     testlog.info("Validating with no checksums {}", sst->get_filename());
                     sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
                     auto res = sstables::validate_checksums(sst, permit).get();
                     BOOST_REQUIRE(res.status == validate_checksums_status::no_checksum);
-                    BOOST_REQUIRE(res.has_digest);
+                    BOOST_REQUIRE(!res.has_digest);
                 }
 
                 { // truncate the sstable
