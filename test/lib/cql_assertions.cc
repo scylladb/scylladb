@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 #include "transport/messages/result_message.hh"
