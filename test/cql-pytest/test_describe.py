@@ -2516,43 +2516,12 @@ def test_desc_restore(cql):
 
         restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
 
-    class DescRow:
-        def __init__(self, row: DescRowType):
-            self.keyspace_name = row.keyspace_name
-            self.type = row.type
-            self.name = row.name
-            self.create_statement = row.create_statement
+    def remove_other_keyspaces(rows: Iterable[DescRowType]) -> Iterable[DescRowType]:
+        return filter(lambda row: row.keyspace_name == ks or row.keyspace_name == None, rows)
 
-        def __eq__(self, other):
-            if isinstance(other, self.__class__):
-                return self.__dict__ == other.__dict__
-            else:
-                return False
-
-    def process_rows(rows: Iterable[DescRowType]) -> Iterable[DescRow]:
-        def remove_other_keyspaces(rows: Iterable[DescRow]) -> Iterable[DescRow]:
-            return filter(lambda row: row.keyspace_name == ks or row.keyspace_name == None, rows)
-
-        def remove_ids_from_mv_rows(rows: Iterable[DescRow]) -> Iterable[DescRow]:
-            def aux(row: DescRow) -> DescRow:
-                if row.type == "view":
-                    # ID is always the first option.
-                    row.create_statement = re.sub(r"WITH ID = [^\n]+\n\s*AND", "WITH", row.create_statement)
-                return row
-
-            return map(aux, rows)
-
-        # We need to map the rows to `DescRow` to be able to modify its fields (cf. `remove_ids_from_mv_rows()`).
-        row_iter = map(lambda row: DescRow(row), rows)
-        # The statements used for restoring the keyspaces are not sorted.
-        # Other keyspaces might've been created by other tests, so we exclude them here.
-        row_iter = remove_other_keyspaces(row_iter)
-        # See: scylladb/scylladb#20616.
-        row_iter = remove_ids_from_mv_rows(row_iter)
-
-        return row_iter
-
-    restore_stmts = list(process_rows(restore_stmts))
+    # Other test cases might've created keyspaces that would be included in the result
+    # of `DESC SCHEMA`, so we need to filter them out.
+    restore_stmts = list(remove_other_keyspaces(restore_stmts))
 
     with AuthSLContext(cql):
         try:
@@ -2560,9 +2529,10 @@ def test_desc_restore(cql):
                 cql.execute(stmt)
 
             res = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
-            # The statements responsible for creating keyspaces are not sorted.
-            # Since other tests might've created more keyspaces, we exclude them here.
-            res = list(process_rows(res))
+
+            # Other test cases might've created keyspaces that would be included in the result
+            # of `DESC SCHEMA`, so we need to filter them out.
+            res = list(remove_other_keyspaces(res))
 
             assert restore_stmts == res
         finally:
