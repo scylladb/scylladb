@@ -3376,7 +3376,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         };
 
         bool done = false;
-        auto readers = parallel_for_each(boost::irange(0, n_readers), [&] (auto id) {
+        auto readers = parallel_for_each(std::views::iota(0, n_readers), [&] (auto id) {
             generations[id] = last_generation;
             return seastar::async([&, id] {
                 while (!done) {

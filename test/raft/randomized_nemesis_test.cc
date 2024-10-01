@@ -2106,7 +2106,7 @@ future<> ping_shards() {
         return seastar::yield();
     }
 
-    return parallel_for_each(boost::irange(0u, smp::count), [] (shard_id s) {
+    return parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
         return smp::submit_to(s, [](){});
     });
 }

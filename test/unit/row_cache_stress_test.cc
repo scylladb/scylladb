@@ -74,7 +74,7 @@ struct table {
     }
 
     size_t index_of_key(const dht::decorated_key& dk) {
-        for (auto i : boost::irange<size_t>(0, p_keys.size())) {
+        for (auto i : std::views::iota(0u, p_keys.size())) {
             if (p_keys[i].equal(*s.schema(), dk)) {
                 return i;
             }
@@ -111,7 +111,7 @@ struct table {
 
     void mutate_next_phase() {
         testlog.trace("mutating, phase={}", mutation_phase);
-        for (auto i : boost::irange<int>(0, p_keys.size())) {
+        for (auto i : std::views::iota(0u, p_keys.size())) {
             auto t = s.new_timestamp();
             auto tag = value_tag(i, mutation_phase);
             auto m = get_mutation(i, t, tag);
@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
             // populate the initial phase, readers expect constant fragment count.
             t.mutate_next_phase();
 
-            auto readers = parallel_for_each(boost::irange(0u, concurrency), [&] (auto i) {
+            auto readers = parallel_for_each(std::views::iota(0u, concurrency), [&] (auto i) {
                 reader_id id{format("single-{:d}", i)};
                 return seastar::async([&, i, id] {
                     single_partition_reader(i, id);
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
                 });
             });
 
-            auto scanning_readers = parallel_for_each(boost::irange(0u, scan_concurrency), [&] (auto i) {
+            auto scanning_readers = parallel_for_each(std::views::iota(0u, scan_concurrency), [&] (auto i) {
                 reader_id id{format("scan-{:d}", i)};
                 return seastar::async([&, id] {
                     scanning_reader(id);

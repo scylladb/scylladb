@@ -11,6 +11,7 @@
 
 #include <deque>
 #include <random>
+#include <ranges>
 #include <algorithm>
 
 #include "utils/lsa/chunked_managed_vector.hh"
@@ -19,7 +20,6 @@
 
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
-#include <boost/range/irange.hpp>
 
 using namespace logalloc;
 
@@ -51,7 +51,7 @@ SEASTAR_TEST_CASE(test_random_walk) {
             }
             case 1: {
                 auto nr_pushes = nr_dist(rand);
-                for (auto i : boost::irange(size_t(0), nr_pushes)) {
+                for (auto i : std::views::iota(size_t(0), nr_pushes)) {
                     (void)i;
                     auto n = rand();
                     c.push_back(n);

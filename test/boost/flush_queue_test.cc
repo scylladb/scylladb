@@ -9,6 +9,7 @@
 
 #include <random>
 #include <bitset>
+#include <ranges>
 #include <boost/test/unit_test.hpp>
 #include <boost/range/irange.hpp>
 #include <seastar/core/semaphore.hh>
@@ -30,7 +31,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
         std::vector<int> result;
     };
 
-    auto r = boost::irange(0, 100);
+    auto r = std::views::iota(0, 100);
 
     return do_for_each(r, [](int) {
         constexpr size_t num_ops = 1000;
@@ -83,7 +84,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
         size_t n = 0;
     };
 
-    auto r = boost::irange(0, 100);
+    auto r = std::views::iota(0, 100);
 
     return do_for_each(r, [](int) {
         constexpr size_t num_ops = 1000;

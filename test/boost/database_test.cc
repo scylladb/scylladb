@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         int count = 0;
 
         auto insert_data = [&] (uint32_t begin, uint32_t end) {
-            return parallel_for_each(boost::irange(begin, end), [&] (auto i) {
+            return parallel_for_each(std::views::iota(begin, end), [&] (auto i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key-{}", tests::random::get_int<uint64_t>())));
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});

@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_large_partitions) {
         auto s = e.local_db().find_schema("ks", "cf");
 
         auto make_key = [&] (auto) { return to_hex(random_bytes(128, gen));  };
-        for (auto&& k : boost::irange(0, 4) | boost::adaptors::transformed(make_key)) {
+        for (auto&& k : std::views::iota(0, 4) | std::views::transform(make_key)) {
             for (auto i = 0; i < 1000; ++i) {
                 e.execute_cql(format("insert into cf (p, c, v) values (0x{}, {:d}, 0)", k, i)).get();
             }
@@ -262,7 +262,7 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_small_partitions) {
         auto s = e.local_db().find_schema("ks", "cf");
 
         auto make_key = [&] (auto) { return to_hex(random_bytes(128, gen));  };
-        for (auto&& k : boost::irange(0, 1000) | boost::adaptors::transformed(make_key)) {
+        for (auto&& k : std::views::iota(0, 1000) | std::views::transform(make_key)) {
             for (auto i = 0; i < 4; ++i) {
                 e.execute_cql(format("insert into cf (p, c, v) values (0x{}, {:d}, 0)", k, i)).get();
             }
@@ -372,7 +372,7 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
         e.execute_cql("create table cf (p blob, c int, v int, primary key (p, c))").get();
 
         auto make_key = [&] (auto) { return to_hex(random_bytes(128, gen));  };
-        for (auto&& k : boost::irange(0, 1000) | boost::adaptors::transformed(make_key)) {
+        for (auto&& k : std::views::iota(0, 1000) | std::views::transform(make_key)) {
             for (auto i = 0; i < 5; ++i) {
                 e.execute_cql(format("insert into cf (p, c, v) values (0x{}, {:d}, 0)", k, i)).get();
             }
@@ -801,7 +801,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
     const auto partition_size_sets = std::vector<std::vector<int>>{{12}, {8, 4}, {8, 16}, {22}, {8, 8, 8, 8}, {8, 8, 8, 16, 8}, {8, 20, 16, 16}, {50}, {21}, {21, 2}};
     const auto max_partition_set_size = std::ranges::max_element(partition_size_sets, [] (const std::vector<int>& a, const std::vector<int>& b) { return a.size() < b.size(); })->size();
-    auto pkeys = ranges::to<std::vector<dht::decorated_key>>(boost::irange(size_t{0}, max_partition_set_size) | boost::adaptors::transformed([schema] (int i) {
+    auto pkeys = ranges::to<std::vector<dht::decorated_key>>(std::views::iota(size_t{0}, max_partition_set_size) | std::views::transform([schema] (int i) {
         return dht::decorate_key(*schema, partition_key::from_single_value(*schema, int32_type->decompose(data_value(i))));
     }));
     std::ranges::sort(pkeys, dht::ring_position_less_comparator(*schema));

@@ -400,7 +400,7 @@ public:
     template<typename T>
     static future<T> invoke_on_task(sharded<task_manager>& tm, task_id id, std::function<future<T> (task_manager::task_variant)> func) {
         std::optional<T> res;
-        co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&tm, id, &res, &func] (unsigned shard) -> future<> {
+        co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&tm, id, &res, &func] (unsigned shard) -> future<> {
             auto local_res = co_await tm.invoke_on(shard, [id, func] (const task_manager& local_tm) -> future<std::optional<T>> {
                 const auto& all_tasks = local_tm.get_local_tasks();
                 if (auto it = all_tasks.find(id); it != all_tasks.end()) {

@@ -206,7 +206,7 @@ public:
     }
 
     future<> fill_memtable() {
-        auto idx = boost::irange(0, int(_cfg.partitions / _cfg.sstables));
+        auto idx = std::views::iota(0, int(_cfg.partitions / _cfg.sstables));
         auto local_keys = tests::generate_partition_keys(int(_cfg.partitions / _cfg.sstables), s, local_shard_only::yes, tests::key_size{_cfg.key_size, _cfg.key_size});
         return do_for_each(idx.begin(), idx.end(), [this, local_keys = std::move(local_keys)] (auto iteration) {
             auto mut = mutation(this->s, local_keys.at(iteration));
@@ -356,9 +356,9 @@ template <typename Func>
 future<> time_runs(unsigned iterations, unsigned parallelism, distributed<perf_sstable_test_env>& dt, Func func) {
     using namespace boost::accumulators;
     auto acc = make_lw_shared<accumulator_set<double, features<tag::mean, tag::error_of<tag::mean>>>>();
-    auto idx = boost::irange(0, int(iterations));
+    auto idx = std::views::iota(0, int(iterations));
     return do_for_each(idx.begin(), idx.end(), [parallelism, acc, &dt, func] (auto iter) {
-        auto idx = boost::irange(0, int(parallelism));
+        auto idx = std::views::iota(0, int(parallelism));
         return parallel_for_each(idx.begin(), idx.end(), [&dt, func, acc] (auto idx) {
             return dt.map_reduce(adder<double>(), func, std::move(idx)).then([acc] (double result) {
                 auto& a = *acc;

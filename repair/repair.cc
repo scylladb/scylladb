@@ -1388,7 +1388,7 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
-        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+        for (auto shard : std::views::iota(0u, smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
@@ -1506,7 +1506,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         if (rs.get_repair_module().is_aborted(id.uuid())) {
             throw abort_requested_exception();
         }
-        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+        for (auto shard : std::views::iota(0u, smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();

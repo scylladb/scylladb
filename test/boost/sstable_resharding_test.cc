@@ -62,11 +62,11 @@ void run_sstable_resharding_test(sstables::test_env& env) {
             return m;
         };
         auto cfg = std::make_unique<db::config>();
-        for (auto i : boost::irange(0u, smp::count)) {
+        for (auto i : std::views::iota(0u, smp::count)) {
             const auto keys = tests::generate_partition_keys(keys_per_shard, s, i);
             BOOST_REQUIRE(keys.size() == keys_per_shard);
             muts[i].reserve(keys_per_shard);
-            for (auto k : boost::irange(0u, keys_per_shard)) {
+            for (auto k : std::views::iota(0u, keys_per_shard)) {
                 auto m = get_mutation(keys[k], i);
                 muts[i].push_back(m);
                 mt->apply(std::move(m));
@@ -79,7 +79,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     // for a single shard. workaround that by setting shards manually. from this test perspective,
     // it doesn't matter because we check each partition individually of each sstable created
     // for a shard that owns the shared input sstable.
-    sstables::test(sst).set_shards(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, smp::count)));
+    sstables::test(sst).set_shards(std::views::iota(0u, smp::count) | std::ranges::to<std::vector<unsigned>>());
 
     auto filter_size = [&env] (shared_sstable sst) -> uint64_t {
         if (!env.get_storage_options().is_local_type()) {
@@ -129,7 +129,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
 
         auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
-        for (auto k : boost::irange(0u, keys_per_shard)) {
+        for (auto k : std::views::iota(0u, keys_per_shard)) {
             rd.produces(muts[shard][k]);
         }
         rd.produces_end_of_stream();
@@ -189,7 +189,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto sst_gen = env.make_sst_factory(single_sharded_s, version);
 
             std::vector<mutation> muts;
-            for (shard_id shard : boost::irange(0u, smp::count)) {
+            for (shard_id shard : std::views::iota(0u, smp::count)) {
                 const auto keys = tests::generate_partition_keys(10, key_s, shard);
                 for (auto& k : keys) {
                     muts.push_back(get_mutation(single_sharded_s, k, shard));

@@ -157,12 +157,13 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
                              table{redis::HASHes, hashes_schema},
                              table{redis::ZSETs, zsets_schema}};
 
-    auto ks_names = boost::copy_range<std::vector<sstring>>(
-            boost::irange<unsigned>(0, config.redis_database_count()) |
-            boost::adaptors::transformed([] (unsigned i) { return fmt::format("REDIS_{}", i); }));
+    auto ks_names =
+            std::views::iota(0u, config.redis_database_count()) |
+            std::views::transform([] (unsigned i) { return fmt::format("REDIS_{}", i); }) |
+            std::ranges::to<std::vector<sstring>>();
 
     while (true) {
-        bool schema_ok = boost::algorithm::all_of(ks_names, [&] (auto& ks_name) {
+        bool schema_ok = std::ranges::all_of(ks_names, [&] (auto& ks_name) {
             auto check = [&] (table t) {
                 return db.has_schema(ks_name, t.name);
             };

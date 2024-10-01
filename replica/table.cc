@@ -2411,7 +2411,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
         }
 
         tlogger.debug("Remapping tablet {} of table {} into new tablets [{}].",
-                      id, table_id, fmt::join(boost::irange(first_new_id, first_new_id+split_size), ", "));
+                      id, table_id, fmt::join(std::views::iota(first_new_id, first_new_id+split_size), ", "));
     }
 
     _storage_groups = std::move(new_storage_groups);

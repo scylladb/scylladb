@@ -11,6 +11,7 @@
 #include <iterator>
 #include <algorithm>
 
+#include <boost/range/irange.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include <seastar/core/thread.hh>
@@ -477,14 +478,14 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         r.produces_partition_start(to_key(1))
             .produces_static_row({{st_cdef, int32_type->decompose(int32_t(777))}});
 
-        for (auto idx: boost::irange(0, 1024)) {
+        for (auto idx: std::views::iota(0, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_partition_end();
 
         r.produces_partition_start(to_key(2))
             .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}});
-        for (auto idx: boost::irange(0, 1024)) {
+        for (auto idx: std::views::iota(0, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_partition_end()
@@ -504,20 +505,20 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         auto r = assert_that(std::move(rd));
         r.produces_partition_start(to_key(1))
             .produces_static_row({{st_cdef, int32_type->decompose(int32_t(777))}});
-        for (auto idx: boost::irange(70, 80)) {
+        for (auto idx: std::views::iota(70, 80)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
-        for (auto idx: boost::irange(1001, 1024)) {
+        for (auto idx: std::views::iota(1001, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_partition_end();
 
         r.produces_partition_start(to_key(2))
             .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}});
-        for (auto idx: boost::irange(70, 80)) {
+        for (auto idx: std::views::iota(70, 80)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
-        for (auto idx: boost::irange(1001, 1024)) {
+        for (auto idx: std::views::iota(1001, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
 
@@ -536,7 +537,7 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         r.produces_partition_start(to_key(1));
 
         r.fast_forward_to(to_ck(316), to_ck(379));
-        for (auto idx: boost::irange(316, 379)) {
+        for (auto idx: std::views::iota(316, 379)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
@@ -548,13 +549,13 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
                 .produces_end_of_stream();
 
         r.fast_forward_to(to_ck(442), to_ck(450));
-        for (auto idx: boost::irange(442, 450)) {
+        for (auto idx: std::views::iota(442, 450)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
 
         r.fast_forward_to(to_ck(1009), to_ck(1024));
-        for (auto idx: boost::irange(1009, 1024)) {
+        for (auto idx: std::views::iota(1009, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
@@ -576,7 +577,7 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         r.produces_partition_start(to_key(1));
         r.fast_forward_to(to_ck(200), to_ck(250));
 
-        for (auto idx: boost::irange(210, 241)) {
+        for (auto idx: std::views::iota(210, 241)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
@@ -592,19 +593,19 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
             .produces_end_of_stream();
 
         r.fast_forward_to(to_ck(200), to_ck(250));
-        for (auto idx: boost::irange(210, 241)) {
+        for (auto idx: std::views::iota(210, 241)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
 
         r.fast_forward_to(to_ck(900), to_ck(1010));
-        for (auto idx: boost::irange(1000, 1010)) {
+        for (auto idx: std::views::iota(1000, 1010)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
 
         r.fast_forward_to(to_ck(1010), to_ck(1024));
-        for (auto idx: boost::irange(1010, 1024)) {
+        for (auto idx: std::views::iota(1010, 1024)) {
             r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
         }
         r.produces_end_of_stream();
@@ -726,7 +727,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     {
         auto r = make_assertions(sst.make_reader());
         tombstone tomb = make_tombstone(1525385507816568, 1534898526);
-        for (auto pkey : boost::irange(1, 3)) {
+        for (auto pkey : std::views::iota(1, 3)) {
             r.produces_partition_start(to_pkey(pkey))
             .produces_static_row({{st_cdef, int32_type->decompose(static_row_values[pkey - 1])}});
 
@@ -747,7 +748,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
-        for (auto pkey : boost::irange(1, 3)) {
+        for (auto pkey : std::views::iota(1, 3)) {
             const tombstone tomb = make_tombstone(1525385507816568, rt_deletion_times[pkey - 1]);
             r.produces_partition_start(to_pkey(pkey));
             // First, fast-forward to a block that start with an end open marker set
@@ -814,7 +815,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
 
         auto r = make_assertions(sst.make_reader(query::full_partition_range, slice));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
-        for (auto pkey : boost::irange(1, 3)) {
+        for (auto pkey : std::views::iota(1, 3)) {
             auto slices = slice.get_all_ranges();
             const tombstone tomb = make_tombstone(1525385507816568, rt_deletion_times[pkey - 1]);
             r.produces_partition_start(to_pkey(pkey))
@@ -867,7 +868,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
                                                       streamed_mutation::forwarding::yes));
 
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
-        for (auto pkey : boost::irange(1, 3)) {
+        for (auto pkey : std::views::iota(1, 3)) {
             auto slices = slice.get_all_ranges();
             const tombstone tomb = make_tombstone(1525385507816568, rt_deletion_times[pkey - 1]);
             r.produces_partition_start(to_pkey(pkey))
@@ -3468,7 +3469,7 @@ SEASTAR_TEST_CASE(test_write_wide_partitions) {
     mutation mut1{s, key1};
     {
         mut1.set_static_cell("st", data_value{"hello"}, ts);
-        for (auto idx: boost::irange(0, 1024)) {
+        for (auto idx: std::views::iota(0, 1024)) {
             clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
             mut1.partition().apply_insert(*s, ckey, ts);
             mut1.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
@@ -3480,7 +3481,7 @@ SEASTAR_TEST_CASE(test_write_wide_partitions) {
     mutation mut2{s, key2};
     {
         mut2.set_static_cell("st", data_value{"goodbye"}, ts);
-        for (auto idx: boost::irange(0, 1024)) {
+        for (auto idx: std::views::iota(0, 1024)) {
             clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
             mut2.partition().apply_insert(*s, ckey, ts);
             mut2.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
@@ -3665,7 +3666,7 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20) USING TIMESTAMP 1525385507816578;
     // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30) USING TIMESTAMP 1525385507816588;
     std::vector<mutation> muts;
-    for (auto i : boost::irange(1, 4)) {
+    for (auto i : std::views::iota(1, 4)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
         muts.emplace_back(s, key);
 
@@ -3688,7 +3689,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
     std::vector<mutation> muts;
-    for (auto i : boost::irange(0, 65536)) {
+    for (auto i : std::views::iota(0, 65536)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
         muts.emplace_back(s, key);
         if (partition_tomb) {
@@ -3770,7 +3771,7 @@ SEASTAR_TEST_CASE(test_write_multiple_rows) {
     // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10) USING TIMESTAMP 1525385507816568;
     // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20) USING TIMESTAMP 1525385507816578;
     // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30) USING TIMESTAMP 1525385507816588;
-    for (auto i : boost::irange(1, 4)) {
+    for (auto i : std::views::iota(1, 4)) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, { i });
         mut.partition().apply_insert(*s, ckey, ts);
         mut.set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
@@ -3790,7 +3791,7 @@ SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
     builder.with_column("ck", int32_type, column_kind::clustering_key);
-    for (auto idx: boost::irange(1, 65)) {
+    for (auto idx: std::views::iota(1, 65)) {
         builder.with_column(to_bytes(format("rc{}", idx)), int32_type);
     }
     builder.set_compressor_params(compression_parameters::no_compression());
@@ -3805,7 +3806,7 @@ SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {0});
         mut.partition().apply_insert(*s, ckey, ts);
-        for (auto idx: boost::irange(1, 63)) {
+        for (auto idx: std::views::iota(1, 63)) {
             mut.set_cell(ckey, to_bytes(format("rc{}", idx)), data_value{idx}, ts);
         }
     }
@@ -3994,7 +3995,7 @@ SEASTAR_TEST_CASE(test_write_large_clustering_key) {
     // CREATE TABLE large_clustering_key (pk int, ck1 text, ck2 text, ..., ck35 text, rc int, PRIMARY KEY (pk, ck1, ck2, ..., ck35)) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
     builder.with_column("pk", int32_type, column_kind::partition_key);
-    for (auto idx: boost::irange(1, 36)) {
+    for (auto idx: std::views::iota(1, 36)) {
         builder.with_column(to_bytes(format("ck{}", idx)), utf8_type, column_kind::clustering_key);
     }
     builder.with_column("rc", int32_type);
@@ -4009,7 +4010,7 @@ SEASTAR_TEST_CASE(test_write_large_clustering_key) {
     //    - "X" for odd X
     // INSERT INTO large_clustering_key (pk, ck1, ..., ck35, rc) VALUES (0, '1', '', '3',..., '', '35', 1) USING TIMESTAMP 1525385507816568;
     std::vector<data_value> clustering_values;
-    for (auto idx: boost::irange(1, 36)) {
+    for (auto idx: std::views::iota(1, 36)) {
         clustering_values.emplace_back((idx % 2 == 1) ? std::to_string(idx) : std::string{});
     }
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, clustering_values);
@@ -4262,7 +4263,7 @@ SEASTAR_TEST_CASE(test_write_many_range_tombstones) {
     gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528226962};
     tombstone tomb{write_timestamp, tp};
     sstring ck_base(650, 'a');
-    for (auto idx: boost::irange(1000, 1100)) {
+    for (auto idx: std::views::iota(1000, 1100)) {
         range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2))), tomb,
                            bound_kind::excl_start,
                            clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2 + 1))),

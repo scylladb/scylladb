@@ -10,6 +10,7 @@
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <chrono>
+#include <ranges>
 
 #include "raft/raft.hh"
 #include "service/raft/raft_address_map.hh"
@@ -34,7 +35,7 @@ future<> ping_shards() {
 
     // Submit an empty message to other shards 100 times to account for task reordering in debug mode.
     for (int i = 0; i < 100; ++i) {
-        co_await parallel_for_each(boost::irange(0u, smp::count), [] (shard_id s) {
+        co_await parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
             return smp::submit_to(s, [](){});
         });
     }

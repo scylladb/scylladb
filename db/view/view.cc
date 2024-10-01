@@ -3121,7 +3121,7 @@ update_backlog node_update_backlog::fetch() {
 
 future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {
     _last_update.store(clock::now(), std::memory_order_relaxed);
-    auto [np, max] = co_await map_reduce(boost::irange(0u, smp::count),
+    auto [np, max] = co_await map_reduce(std::views::iota(0u, smp::count),
             [this] (shard_id shard) {
                 return smp::submit_to(shard, [this, shard] {
                     // Even if the shard's backlog didn't change, we still need to take it into account when calculating the new max.

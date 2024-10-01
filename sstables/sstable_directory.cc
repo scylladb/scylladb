@@ -432,7 +432,7 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
 
 future<>
 sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_directory) {
-    return parallel_for_each(boost::irange(0u, smp::count), [this, &source_directory] (unsigned shard_id) mutable {
+    return parallel_for_each(std::views::iota(0u, smp::count), [this, &source_directory] (unsigned shard_id) mutable {
         auto info_vec = std::exchange(_unshared_remote_sstables[shard_id], {});
         if (info_vec.empty()) {
             return make_ready_future<>();

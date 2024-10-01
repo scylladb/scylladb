@@ -702,7 +702,7 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
                     .build();
         }).then([execute_update_for_key, verify_row_for_key] {
             static auto make_key = [](int suffix) { return format("0xdeadbeefcafebabe{:02d}", suffix); };
-            auto suffixes = boost::irange(0, 10);
+            auto suffixes = std::views::iota(0, 10);
             return parallel_for_each(suffixes.begin(), suffixes.end(), [execute_update_for_key](int suffix) {
                 return execute_update_for_key(make_key(suffix));
             }).then([suffixes, verify_row_for_key] {
@@ -2987,10 +2987,10 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
 
             assert_that(e.execute_cql(select_query).get())
                     .is_rows()
-                    .with_rows(boost::copy_range<std::vector<std::vector<bytes_opt>>>(
-                                boost::irange(selected_cks[0], selected_cks[1] + 1)
-                                | boost::adaptors::reversed
-                                | boost::adaptors::transformed(make_expected_row)));
+                    .with_rows(std::views::iota(selected_cks[0], selected_cks[1] + 1)
+                                | std::views::reverse
+                                | std::views::transform(make_expected_row)
+                                | std::ranges::to<std::vector<std::vector<bytes_opt>>>());
         }
     }, std::move(cfg));
 }
@@ -4825,8 +4825,8 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
             return {raw_pk, int32_type->decompose(ck), raw_value};
         };
 
-        const auto normal_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::transformed(make_expected_row));
-        const auto reversed_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::reversed | boost::adaptors::transformed(make_expected_row));
+        const auto normal_rows = std::views::iota(0, num_rows) | std::views::transform(make_expected_row) | std::ranges::to<std::vector<std::vector<bytes_opt>>>();
+        const auto reversed_rows = std::views::iota(0, num_rows) | std::views::reverse | std::views::transform(make_expected_row) | std::ranges::to<std::vector<std::vector<bytes_opt>>>();
 
         db_config->max_memory_for_unlimited_query_soft_limit.set(256, utils::config_file::config_source::CommandLine);
         db_config->max_memory_for_unlimited_query_hard_limit.set(1024, utils::config_file::config_source::CommandLine);

@@ -945,7 +945,7 @@ template <typename Clock>
 future<> raft_cluster<Clock>::add_entries_concurrent(size_t n, std::optional<size_t> server) {
     const auto start = _next_val;
     _next_val += n;
-    return parallel_for_each(boost::irange(start, _next_val), [this, server](size_t v) { return add_entry(v, server); });
+    return parallel_for_each(std::views::iota(start, _next_val), [this, server](size_t v) { return add_entry(v, server); });
 }
 
 template <typename Clock>

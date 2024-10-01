@@ -433,7 +433,7 @@ private:
     template <typename T>
     future<T> map_reduce_shards(std::function<T()> map, std::function<T(T, T)> reduce = std::plus<T>{}, T initial = {}) {
         co_return co_await map_reduce(
-                boost::irange(0u, smp::count),
+                std::views::iota(0u, smp::count),
                 [map] (shard_id shard) {
                     return smp::submit_to(shard, [map] {
                         return map();

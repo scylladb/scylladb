@@ -177,10 +177,10 @@ SEASTAR_THREAD_TEST_CASE(combined_reader_galloping_within_partition_test) {
     };
 
     std::vector<mutation_reader> v;
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_partition(boost::irange(0, 5))));
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_partition(boost::irange(5, 10))));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_partition(std::views::iota(0, 5))));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_partition(std::views::iota(5, 10))));
     assert_that(make_combined_reader(s.schema(), permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        .produces(make_partition(boost::irange(0, 10)))
+        .produces(make_partition(std::views::iota(0, 10)))
         .produces_end_of_stream();
 }
 
@@ -202,16 +202,16 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_galloping_over_multiple_partit
 
     std::vector<mutation_reader> v;
     v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, {
-        make_partition_with_clustering_rows(s, k[0], boost::irange(5, 10)),
-        make_partition_with_clustering_rows(s, k[1], boost::irange(0, 5))
+        make_partition_with_clustering_rows(s, k[0], std::views::iota(5, 10)),
+        make_partition_with_clustering_rows(s, k[1], std::views::iota(0, 5))
     }));
     v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, {
-        make_partition_with_clustering_rows(s, k[0], boost::irange(0, 5)),
-        make_partition_with_clustering_rows(s, k[1], boost::irange(5, 10))
+        make_partition_with_clustering_rows(s, k[0], std::views::iota(0, 5)),
+        make_partition_with_clustering_rows(s, k[1], std::views::iota(5, 10))
     }));
     assert_that(make_combined_reader(s.schema(), permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        .produces(make_partition_with_clustering_rows(s, k[0], boost::irange(0, 10)))
-        .produces(make_partition_with_clustering_rows(s, k[1], boost::irange(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[0], std::views::iota(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[1], std::views::iota(0, 10)))
         .produces_end_of_stream();
 }
 
@@ -224,16 +224,16 @@ SEASTAR_THREAD_TEST_CASE(combined_reader_galloping_changing_multiple_partitions_
 
     std::vector<mutation_reader> v;
     v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, {
-        make_partition_with_clustering_rows(s, k[0], boost::irange(0, 5)),
-        make_partition_with_clustering_rows(s, k[1], boost::irange(0, 5))
+        make_partition_with_clustering_rows(s, k[0], std::views::iota(0, 5)),
+        make_partition_with_clustering_rows(s, k[1], std::views::iota(0, 5))
     }));
     v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, {
-        make_partition_with_clustering_rows(s, k[0], boost::irange(5, 10)),
-        make_partition_with_clustering_rows(s, k[1], boost::irange(5, 10)),
+        make_partition_with_clustering_rows(s, k[0], std::views::iota(5, 10)),
+        make_partition_with_clustering_rows(s, k[1], std::views::iota(5, 10)),
     }));
     assert_that(make_combined_reader(s.schema(), permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        .produces(make_partition_with_clustering_rows(s, k[0], boost::irange(0, 10)))
-        .produces(make_partition_with_clustering_rows(s, k[1], boost::irange(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[0], std::views::iota(0, 10)))
+        .produces(make_partition_with_clustering_rows(s, k[1], std::views::iota(0, 10)))
         .produces_end_of_stream();
 }
 
@@ -441,11 +441,11 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
 }
 
 std::vector<dht::decorated_key> generate_keys(schema_ptr s, int count) {
-    auto keys = ranges::to<std::vector<dht::decorated_key>>(
-        boost::irange(0, count) | boost::adaptors::transformed([s] (int key) {
+    auto keys =
+        std::views::iota(0, count) | std::views::transform([s] (int key) {
             auto pk = partition_key::from_single_value(*s, int32_type->decompose(data_value(key)));
             return dht::decorate_key(*s, std::move(pk));
-        }));
+        }) | std::ranges::to<std::vector<dht::decorated_key>>();
     std::ranges::sort(keys, dht::decorated_key::less_comparator(s));
     return keys;
 }
@@ -541,22 +541,22 @@ SEASTAR_THREAD_TEST_CASE(test_fast_forwarding_combining_reader_with_galloping) {
 
     auto pr = dht::partition_range::make(ring[0], ring[0]);
     std::vector<mutation_reader> v;
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(boost::irange(0, 5), 7), pr));
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(boost::irange(5, 10), 7), pr));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(std::views::iota(0, 5), 7), pr));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(std::views::iota(5, 10), 7), pr));
 
     assert_that(make_combined_reader(s.schema(), permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
-            .produces(make_partition_with_clustering_rows(s, pkeys[0], boost::irange(0, 10)))
+            .produces(make_partition_with_clustering_rows(s, pkeys[0], std::views::iota(0, 10)))
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make(ring[1], ring[1]))
-            .produces(make_partition_with_clustering_rows(s, pkeys[1], boost::irange(0, 10)))
+            .produces(make_partition_with_clustering_rows(s, pkeys[1], std::views::iota(0, 10)))
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make(ring[3], ring[4]))
-            .produces(make_partition_with_clustering_rows(s, pkeys[3], boost::irange(0, 10)))
+            .produces(make_partition_with_clustering_rows(s, pkeys[3], std::views::iota(0, 10)))
     .fast_forward_to(dht::partition_range::make({ ring[4], false }, ring[5]))
-            .produces(make_partition_with_clustering_rows(s, pkeys[5], boost::irange(0, 10)))
+            .produces(make_partition_with_clustering_rows(s, pkeys[5], std::views::iota(0, 10)))
             .produces_end_of_stream()
     .fast_forward_to(dht::partition_range::make_starting_with(ring[6]))
-            .produces(make_partition_with_clustering_rows(s, pkeys[6], boost::irange(0, 10)))
+            .produces(make_partition_with_clustering_rows(s, pkeys[6], std::views::iota(0, 10)))
             .produces_end_of_stream();
 }
 
@@ -639,8 +639,8 @@ SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping
 
     auto pr = dht::partition_range::make(ring[0], ring[0]);
     std::vector<mutation_reader> v;
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(boost::irange(0, 5), 3), streamed_mutation::forwarding::yes));
-    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(boost::irange(5, 10), 3), streamed_mutation::forwarding::yes));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(std::views::iota(0, 5), 3), streamed_mutation::forwarding::yes));
+    v.push_back(make_mutation_reader_from_mutations_v2(s.schema(), permit, make_n_mutations(std::views::iota(5, 10), 3), streamed_mutation::forwarding::yes));
 
     auto reader = make_combined_reader(s.schema(), permit, std::move(v), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto assertions = assert_that(std::move(reader));
@@ -1883,7 +1883,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
         remote_controls.emplace_back(nullptr);
     }
 
-    parallel_for_each(boost::irange(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+    parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
         return smp::submit_to(shard, [] {
             return make_foreign(std::make_unique<puppet_reader_v2::control>());
         }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>&& ctr) mutable {
@@ -2109,7 +2109,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         testlog.debug("Starting to close the reader");
         auto fut = reader.close();
 
-        parallel_for_each(boost::irange(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+        parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
             return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
                 control->buffer_filled.set_value();
             });
@@ -2119,7 +2119,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         testlog.debug("Reader is closed");
 
         BOOST_REQUIRE(eventually_true([&] {
-            return map_reduce(boost::irange(0u, smp::count), [&] (unsigned shard) {
+            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
                     return smp::submit_to(shard, [&remote_controls, shard] {
                         return remote_controls.at(shard)->destroyed;
                     });
@@ -2175,7 +2175,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         fut.get();
 
         const auto all_shard_fast_forwarded = map_reduce(
-                boost::irange(0u, multishard_reader_for_read_ahead::blocked_shard + 1u),
+                std::views::iota(0u, multishard_reader_for_read_ahead::blocked_shard + 1u),
                 [&] (unsigned shard) {
                     return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
                         return control->fast_forward_to == 1;
@@ -2194,7 +2194,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         reader.close().get();
 
         BOOST_REQUIRE(eventually_true([&] {
-            return map_reduce(boost::irange(0u, smp::count), [&] (unsigned shard) {
+            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
                     return smp::submit_to(shard, [&remote_controls, shard] {
                         return remote_controls.at(shard)->destroyed;
                     });
@@ -2226,11 +2226,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
         auto schema = env.local_db().find_column_family("multishard_combining_reader_next_partition_ks", "test").schema();
         auto& partitioner = schema->get_partitioner();
 
-        auto pkeys = ranges::to<std::vector<dht::decorated_key>>(
-                boost::irange(0, partition_count) |
-                boost::adaptors::transformed([schema, &partitioner] (int i) {
+        auto pkeys =
+                std::views::iota(0, partition_count) |
+                std::views::transform([schema, &partitioner] (int i) {
                     return partitioner.decorate_key(*schema, partition_key::from_singular(*schema, i));
-                }));
+                }) |
+                std::ranges::to<std::vector<dht::decorated_key>>();
 
         // We want to test corner cases around next_partition() called when it
         // cannot be resolved with just the buffer and it has to be forwarded
@@ -3835,10 +3836,11 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 
     auto make_tested = [s = g._s, &semaphore] (std::vector<mutation_bounds> ms, streamed_mutation::forwarding fwd) {
         auto permit = semaphore.make_permit();
-        auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
-                | boost::adaptors::transformed([s, fwd, &permit] (auto&& mb) {
+        auto rs = std::move(ms)
+                | std::views::transform([s, fwd, &permit] (auto&& mb) {
                     return make_reader_bounds(s, permit, std::move(mb), fwd);
-                }));
+                })
+                | std::ranges::to<std::vector<reader_bounds>>();
         auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
         return make_clustering_combined_reader(s, permit, fwd, std::move(q));
     };
@@ -4174,8 +4176,8 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             std::map<dht::decorated_key, mutation_reader, dht::decorated_key::less_comparator>
                 good_readers{dht::decorated_key::less_comparator(s)};
             for (auto& [k, ms]: good) {
-                auto rs = boost::copy_range<std::vector<reader_bounds>>(ms
-                        | boost::adaptors::transformed([&] (auto&& mb) {
+                auto rs = ms
+                        | std::views::transform([&] (auto&& mb) {
                             auto rb = make_reader_bounds(s, permit, std::move(mb), fwd_sm, &slice);
                             if (reversed) {
                                 // The bounds are calculated in 'table order' (using the mutation and its schema),
@@ -4186,7 +4188,8 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                                 rb.upper = std::move(rb.upper).reversed();
                             }
                             return rb;
-                        }));
+                        })
+                        | std::ranges::to<std::vector<reader_bounds>>();
                 std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
                         (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
                 auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));

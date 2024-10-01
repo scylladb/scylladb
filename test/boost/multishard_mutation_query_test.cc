@@ -159,7 +159,7 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(
 }
 
 static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
-    return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
+    return map_reduce(std::views::iota(0u, smp::count), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             return stats.*stat;
@@ -171,7 +171,7 @@ static void check_cache_population(distributed<replica::database>& db, size_t qu
         seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
-    parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
+    parallel_for_each(std::views::iota(0u, smp::count), [queriers, &db] (unsigned shard) {
         return db.invoke_on(shard, [queriers] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             tests::require_equal(stats.population, queriers);

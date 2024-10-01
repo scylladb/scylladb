@@ -1445,7 +1445,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
     const auto sstable_write_concurrency = 16;
 
     uint64_t num_sstables = 0;
-    parallel_for_each(boost::irange(0, sstable_write_concurrency), [&] (int i) {
+    parallel_for_each(std::views::iota(0, sstable_write_concurrency), [&] (int i) {
         return seastar::async([&] {
             while (num_sstables != target_num_sstables) {
                 ++num_sstables;
@@ -1502,7 +1502,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
 
         auto read_id = env.prepare("SELECT value FROM ks.tbl WHERE pk = ? AND ck = ?").get();
 
-        parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
+        parallel_for_each(std::views::iota(0, num_reads), [&] (int i) {
             return env.execute_prepared(read_id, {cql3::raw_value::make_value(tbl.pk.explode().front()), cql3::raw_value::make_value(tbl.ck.explode().front())}).then_wrapped(
                     [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
                 if (fut.failed()) {
@@ -1564,7 +1564,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
         uint64_t successful_reads = 0;
         uint64_t failed_reads = 0;
 
-        parallel_for_each(boost::irange(0, num_reads), [&] (int i) {
+        parallel_for_each(std::views::iota(0, num_reads), [&] (int i) {
             return env.execute_prepared(read_id, {cql3::raw_value::make_value(tbl.pk.explode().front()), cql3::raw_value::make_value(tbl.ck.explode().front())}).then_wrapped(
                         [&] (future<shared_ptr<cql_transport::messages::result_message>> fut) {
                 if (fut.failed()) {

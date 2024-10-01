@@ -131,10 +131,10 @@ auto fmt::formatter<column_mapping>::format(const column_mapping& cm, fmt::forma
         return fmt::format("{{id={}, name=0x{}, type={}}}", i, e.name(), e.type()->name());
     };
     return fmt::format_to(ctx.out(), "{{static=[{}], regular=[{}]}}",
-               fmt::join(boost::irange<column_id>(0, n_static) |
-                         boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }), ", "),
-               fmt::join(boost::irange<column_id>(0, n_regular) |
-                         boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }), ", "));
+               fmt::join(std::views::iota(column_id(0), n_static) |
+                         std::views::transform([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }), ", "),
+               fmt::join(std::views::iota(column_id(0), n_regular) |
+                         std::views::transform([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }), ", "));
 }
 
 thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;

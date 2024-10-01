@@ -19,7 +19,7 @@
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
+#include <ranges>
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
@@ -407,7 +407,7 @@ public:
 
     /// Returns an iterable range over tablet_id:s which includes all tablets in token ring order.
     auto tablet_ids() const {
-        return boost::irange<size_t>(0, tablet_count()) | boost::adaptors::transformed([] (size_t i) {
+        return std::views::iota(0u, tablet_count()) | std::views::transform([] (size_t i) {
             return tablet_id(i);
         });
     }
