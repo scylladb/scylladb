@@ -75,7 +75,7 @@ rows_assertions::rows_assertions::is_not_null() {
     for (auto&& row : rs.rows()) {
         for (const managed_bytes_opt& v : row) {
             if (!v) {
-                fail(seastar::format("Expected non-null values. {}\n", fmt::to_string(row)));
+                fail(seastar::format("Expected non-null values. {}\n", row));
             }
         }
     }
@@ -110,7 +110,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
             return {*this};
         }
     }
-    fail(seastar::format("Expected row not found: {} not in {}\n", fmt::to_string(expected_row), _rows));
+    fail(seastar::format("Expected row not found: {} not in {}\n", expected_row, _rows));
     return {*this};
 }
 
@@ -130,14 +130,14 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
         if (!std::equal(
             std::begin(expected_row), std::end(expected_row),
             std::begin(actual), std::end(actual))) {
-            fail(seastar::format("row {:d} differs, expected {} got {}", row_nr, fmt::to_string(row), fmt::to_string(actual)));
+            fail(seastar::format("row {} differs, expected {} got {}", row_nr, row, actual));
         }
         ++actual_i;
         ++row_nr;
     }
     if (actual_i != actual_end) {
         fail(seastar::format("Expected less rows ({:d}), got {:d}. Next row is: {}", rows.size(), rs.size(),
-                    fmt::to_string(*actual_i)));
+                    *actual_i));
     }
     return {*this};
 }
@@ -155,7 +155,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
                     std::begin(expected_row), std::end(expected_row));
         });
         if (found == std::end(actual)) {
-            fail(seastar::format("row {} not found in result set ({})", fmt::to_string(expected),
+            fail(seastar::format("row {} not found in result set ({})", expected,
                fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return fmt::to_string(r); }), ", ")));
         }
     }
