@@ -2091,6 +2091,16 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         dc_endpoints[dc].insert(ep);
     }
 
+    for (const auto& [ep, host_id] : endpoint_host_id) {
+        if (endpoint_rack.contains(ep)) {
+            continue;
+        }
+        const auto dc = sstring(rjson::to_string_view(client.get("/snitch/datacenter", {{"host", ep}})));
+        const auto rack = sstring(rjson::to_string_view(client.get("/snitch/rack", {{"host", ep}})));
+        endpoint_rack.emplace(ep, rack);
+        dc_endpoints[dc].insert(ep);
+    }
+
     const bool token_count_unknown = tablets_keyspace && !table;
 
     for (const auto& [dc, endpoints] : dc_endpoints) {
@@ -2125,14 +2135,13 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
             }
             sstring address = resolve_ips ? net::dns::resolve_addr(net::inet_address(ep)).get() : ep;
             const std::string load = endpoint_load.contains(ep) ? fmt::to_string(file_size_printer(endpoint_load.at(ep))) : "?";
-            table.add(
-                    fmt::format("{}{}", status, state),
-                    address,
-                    load,
-                    token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.at(ep)),
-                    !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
-                    endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
-                    endpoint_rack.at(ep));
+            table.add(fmt::format("{}{}", status, state),
+                      address,
+                      load,
+                      token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.contains(ep) ? endpoint_tokens.at(ep) : 0),
+                      !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
+                      endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
+                      endpoint_rack.at(ep));
         }
         table.print();
     }
