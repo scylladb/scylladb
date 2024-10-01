@@ -341,9 +341,11 @@ public:
                             return make_ready_future<std::optional<uint64_t>>(block.data_file_offset + block.width);
                         });
                     }
+                    tracing::trace(trace_state, "upper_bound_cache_only({}): past last block", pos);
                     return make_ready_future<std::optional<uint64_t>>(block.data_file_offset + block.width);
                 }
             }
+            tracing::trace(trace_state, "upper_bound_cache_only({}): no upper bound", pos);
             return make_ready_future<std::optional<uint64_t>>(std::nullopt);
         }
         auto& block = const_cast<promoted_index_block&>(*i);
@@ -352,6 +354,7 @@ public:
                 return make_ready_future<std::optional<uint64_t>>(block.data_file_offset);
             });
         }
+        tracing::trace(trace_state, "upper_bound_cache_only({}): index={}, offset={}", pos, block.index, block.data_file_offset);
         return make_ready_future<std::optional<uint64_t>>(block.data_file_offset);
     }
 
@@ -541,6 +544,8 @@ public:
 
         sstlog.trace("mc_bsearch_clustered_cursor {}: advance_to({}), _current_pos={}, _current_idx={}, cached={}",
             fmt::ptr(this), pos, _current_pos, _current_idx, _promoted_index.file().cached_bytes());
+        tracing::trace(_trace_state, "mc_bsearch_clustered_cursor {}: advance_to({}), _current_pos={}, _current_idx={}",
+            fmt::ptr(this), pos, _current_pos, _current_idx);
 
         if (_current_pos) {
             if (less(pos, *_current_pos)) {
