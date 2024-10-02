@@ -6109,6 +6109,94 @@ class scylla_repairs(gdb.Command):
         for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas'), link='_tracker_link'):
             self.process("follower", rm)
 
+
+class scylla_tablet_metadata(gdb.Command):
+    """Dump tablet-metadata
+
+    By default, tablet-metadata is dumped for all tables.
+    Tables can be filtered by --keyspace and --table.
+    For more information about usage, see:
+        scylla tablet-metadata --help
+    """
+    _token_bias = 9223372036854775808
+    _max_uint64 = 18446744073709551615
+
+    def _bias(self, n):
+        return n - self._token_bias
+
+    def _last_token_of_compaction_group(self, most_significant_bits, group):
+        if group == ((1 << most_significant_bits) - 1):
+            return self._bias(self._max_uint64)
+        else:
+            return self._bias(((group + 1) << (64 - most_significant_bits)) - 1);
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla tablet-metadata', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        parser = argparse.ArgumentParser(description="scylla tablet-metadata")
+        parser.add_argument("-k", "--keyspace", action="store", type=str,
+                help="Print tablet metadata for tables belonging to the given keyspace")
+        parser.add_argument("-t", "--table", action="store", type=str,
+                help="Print tablet metadata for the given table only (match by name, use together with --keyspace for an exact match)")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        db = find_db()
+        token_metadata = seastar_lw_shared_ptr(db['_shared_token_metadata']['_shared']).get()
+        tablet_metadata = std_unique_ptr(token_metadata['_impl']).get()['_tablets']
+        topology = std_unique_ptr(token_metadata['_impl']).get()['_topology']
+        this_node = topology['_this_node'].dereference()
+
+        gdb.write(f'This node: host_id: {this_node["_host_id"]["id"]}, shard: {current_shard()}\n\n')
+
+        def format_replica_set(replica_set):
+            return ", ".join([f'{replica["host"]["id"]}#{replica["shard"]}' for replica in small_vector(replica_set)])
+
+        tables = {}
+        for table in for_each_table(db):
+            schema = seastar_lw_shared_ptr(table['_schema']).get().dereference()
+            r = schema['_raw']
+            tables[str(r['_id']['id'])] = (str(r['_ks_name'])[1:-1], str(r['_cf_name'])[1:-1])
+
+        for table_id, tablet_map in unordered_map(tablet_metadata['_tablets']):
+            table_id = str(table_id['id'])
+            keyspace_name, table_name = tables[table_id]
+
+            if args.keyspace and keyspace_name != args.keyspace:
+                continue
+
+            if args.table and table_name != args.table:
+                continue
+
+            tablet_map = seastar_lw_shared_ptr(tablet_map['_value']).get()
+            log2_tablets = int(tablet_map['_log2_tablets'])
+            tablet_count = 2 ** log2_tablets
+            resize_decision = std_variant(tablet_map['_resize_decision']['way']).get().type.name.replace('locator::resize_decision::', '')
+            resize_decision_seq_num = int(tablet_map['_resize_decision']['sequence_number'])
+
+            tablet_transitions = {int(tablet_id['id']): transition_info
+                                  for tablet_id, transition_info in unordered_map(tablet_map['_transitions'])}
+
+            gdb.write(f'table {keyspace_name}.{table_name}: id: {table_id}, tablets: {tablet_count}, resize decision: {resize_decision}#{resize_decision_seq_num}, transitions: {len(tablet_transitions)}\n')
+
+            for tablet_id, tablet_info in enumerate(chunked_vector(tablet_map['_tablets'])):
+                last_token = self._last_token_of_compaction_group(log2_tablets, tablet_id)
+                replicas = format_replica_set(tablet_info['replicas'])
+                gdb.write(f'  tablet#{tablet_id}: last token: {last_token}, replicas: [{replicas}]\n')
+                if tablet_id in tablet_transitions:
+                    t = tablet_transitions[tablet_id]
+                    gdb.write('    transition: stage: {}, kind: {}, next: {}, pending_replica: {}, session_id: {}\n'.format(
+                        t['stage'],
+                        t['transition'],
+                        format_replica_set(t['next']),
+                        t['pending_replica'],
+                        t['session_id']))
+
+
 class scylla_gdb_func_collection_element(gdb.Function):
     """Return the element at the specified index/key from the container.
 
@@ -6315,6 +6403,7 @@ scylla_get_config_value()
 scylla_range_tombstones()
 scylla_sstable_promoted_index()
 scylla_sstable_dump_cached_index()
+scylla_tablet_metadata()
 
 
 # Convenience functions
