@@ -2247,7 +2247,7 @@ public:
         return _t.is_auto_compaction_disabled_by_user();
     }
     bool tombstone_gc_enabled() const noexcept override {
-        return _t._tombstone_gc_enabled;
+        return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _t.get_compaction_manager().get_tombstone_gc_state();
@@ -2450,6 +2450,18 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
             tablet_migrating_in = true;
         }
     }
+
+    // update the per compaction group tombstone GC enabled flag
+    for_each_storage_group([&] (size_t group_id, storage_group& sg) {
+        const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
+        const locator::tablet_info& tinfo = new_tablet_map->get_tablet_info(tid);
+        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas, this_replica);
+
+        sg.for_each_compaction_group([tombstone_gc_enabled] (const compaction_group_ptr& cg_ptr) {
+            cg_ptr->set_tombstone_gc_enabled(tombstone_gc_enabled);
+        });
+    });
+
     // TODO: possibly use row_cache::invalidate(external_updater) instead on all ranges of new replicas,
     //  as underlying source will be refreshed and external_updater::execute can refresh the sstable set.
     //  Also serves as a protection for clearing the cache on the new range, although it shouldn't be a
