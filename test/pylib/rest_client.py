@@ -359,6 +359,11 @@ class ScyllaRESTAPIClient():
             params["cf"] = table
         await self.client.post(url, host=node_ip, params=params)
 
+    async def stop_compaction(self, node_ip: str, type: str) -> None:
+        """Stop compaction of a given type"""
+        url = f"/compaction_manager/stop_compaction?type={type}"
+        await self.client.post(url, host=node_ip)
+
     async def dump_llvm_profile(self, node_ip : str):
         """Dump llvm profile to disk that can later be used for PGO or coverage reporting.
            no-op if the scylla binary is not instrumented."""
