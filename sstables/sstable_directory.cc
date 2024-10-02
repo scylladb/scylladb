@@ -55,7 +55,7 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location)
+sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, utils::UUID location)
         : _sstables_registry(sstables_registry)
         , _location(std::move(location))
 {
@@ -88,7 +88,7 @@ sstable_directory::make_components_lister() {
                 // collect and process them is by listing the bucket
                 return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(std::get<sstring>(os.location)), _manager, os);
             }
-            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), std::get<sstring>(os.location));
+            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), std::get<utils::UUID>(os.location));
         }
     }, _storage_opts->value);
 }

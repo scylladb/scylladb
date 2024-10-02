@@ -72,8 +72,9 @@ async def test_basic(manager: ManagerClient, s3_server):
 
     # Check that the ownership table is populated properly
     res = cql.execute("SELECT * FROM system.sstables;")
+    tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
     for row in res:
-        assert row.location.startswith(workdir), \
+        assert row.location == tid.id, \
             f'Unexpected entry location in registry: {row.location}'
         assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
@@ -120,7 +121,7 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
     print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
     for loc, gen in sstable_entries:
         cql.execute("UPDATE system.sstables SET status = 'removing'"
-                     f" WHERE location = '{loc}' AND generation = {gen};")
+                     f" WHERE location = {loc} AND generation = {gen};")
 
     print('Restart scylla')
     await manager.server_restart(server.server_id)
@@ -162,7 +163,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, s3_server):
     assert len(list(res)) > 0, 'No entries in registry'
     for row in res:
         cql.execute("UPDATE system.sstables SET state = 'quarantine'"
-                     f" WHERE location = '{row.location}' AND generation = {row.generation};")
+                     f" WHERE location = {row.location} AND generation = {row.generation};")
 
     print('Restart scylla')
     await manager.server_restart(server.server_id)
