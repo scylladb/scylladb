@@ -131,7 +131,7 @@ public:
 
     class sstables_registry_components_lister final : public components_lister {
         sstables_registry& _sstables_registry;
-        table_id _location;
+        table_id _owner;
 
         future<> garbage_collect(storage&);
 

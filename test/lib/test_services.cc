@@ -274,12 +274,12 @@ class mock_sstables_registry : public sstables::sstables_registry {
     };
     std::map<std::pair<table_id, generation_type>, entry> _entries;
 public:
-    virtual future<> create_entry(table_id location, sstring status, sstable_state state, sstables::entry_descriptor desc) override {
-        _entries.emplace(std::make_pair(location, desc.generation), entry { status, state, desc });
+    virtual future<> create_entry(table_id owner, sstring status, sstable_state state, sstables::entry_descriptor desc) override {
+        _entries.emplace(std::make_pair(owner, desc.generation), entry { status, state, desc });
         co_return;
     };
-    virtual future<> update_entry_status(table_id location, sstables::generation_type gen, sstring status) override {
-        auto it = _entries.find(std::make_pair(location, gen));
+    virtual future<> update_entry_status(table_id owner, sstables::generation_type gen, sstring status) override {
+        auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             it->second.status = status;
         } else {
@@ -287,8 +287,8 @@ public:
         }
         co_return;
     }
-    virtual future<> update_entry_state(table_id location, sstables::generation_type gen, sstables::sstable_state state) override {
-        auto it = _entries.find(std::make_pair(location, gen));
+    virtual future<> update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) override {
+        auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             it->second.state = state;
         } else {
@@ -296,8 +296,8 @@ public:
         }
         co_return;
     }
-    virtual future<> delete_entry(table_id location, sstables::generation_type gen) override {
-        auto it = _entries.find(std::make_pair(location, gen));
+    virtual future<> delete_entry(table_id owner, sstables::generation_type gen) override {
+        auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             _entries.erase(it);
         } else {
@@ -305,9 +305,9 @@ public:
         }
         co_return;
     }
-    virtual future<> sstables_registry_list(table_id location, entry_consumer consumer) override {
+    virtual future<> sstables_registry_list(table_id owner, entry_consumer consumer) override {
         for (auto& [loc_and_gen, e] : _entries) {
-            if (loc_and_gen.first == location) {
+            if (loc_and_gen.first == owner) {
                 co_await consumer(e.status, e.state, e.desc);
             }
         }
