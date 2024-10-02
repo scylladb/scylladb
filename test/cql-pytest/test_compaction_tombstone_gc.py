@@ -9,7 +9,7 @@ import time
 # sleep to let a ttl (of `seconds`) expire and
 # the commitlog minimum gc time, in seconds,
 # to be greater than the tombstone deletion time
-def sleep_till_whole_second(seconds=1):
+def sleep_till_whole_second(seconds=2):
     t = time.time()
     time.sleep(seconds - (t - int(t)))
 
@@ -18,7 +18,7 @@ def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace)
     Regression test for fixed https://github.com/scylladb/scylladb/issues/20423
     """
     schema = "k int, v int, primary key (k, v)"
-    with new_test_table(cql, test_keyspace, schema, extra="with gc_grace_seconds = 0") as table:
+    with new_test_table(cql, test_keyspace, schema, extra="with gc_grace_seconds = 1") as table:
         with nodetool.no_autocompaction_context(cql, table):
             # Insert initial data into the base table:
             # Row 1 is expected to be garbage collected after expiration
@@ -62,7 +62,7 @@ def test_tombstone_gc_with_delete_in_memtable(scylla_only, cql, test_keyspace):
     Reproduce https://github.com/scylladb/scylladb/issues/20423
     """
     schema = "k int, v int, primary key (k, v)"
-    with new_test_table(cql, test_keyspace, schema, extra="with gc_grace_seconds = 0") as table:
+    with new_test_table(cql, test_keyspace, schema, extra="with gc_grace_seconds = 1") as table:
         with nodetool.no_autocompaction_context(cql, table):
             # Insert initial data into the base table
             # This test case tests the explicit deletion case, while `test_tombstone_gc_with_conflict_in_memtable
@@ -108,7 +108,7 @@ def test_tombstone_gc_with_materialized_view_update_in_memtable(scylla_only, cql
     schema = "k int primary key, v int, w int"
     with new_test_table(cql, test_keyspace, schema) as table:
         # Create a materialized view with same partition key as the base, and using a regular column in the base as a clustering key in the view
-        with new_materialized_view(cql, table, '*', 'k, v', 'k is not null and v is not null', extra="with gc_grace_seconds = 0") as mv:
+        with new_materialized_view(cql, table, '*', 'k, v', 'k is not null and v is not null', extra="with gc_grace_seconds = 1") as mv:
             with nodetool.no_autocompaction_context(cql, mv):
                 # Insert initial data into the base table
                 cql.execute(f"insert into {table} (k, v, w) values (1, 1, 1)")
