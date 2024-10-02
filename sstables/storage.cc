@@ -506,7 +506,7 @@ future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
 class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
-    sstring _location;
+    std::variant<sstring, table_id> _location;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
@@ -515,14 +515,14 @@ class s3_storage : public sstables::storage {
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
     sstring owner() const {
-        return _location;
+        return std::get<sstring>(_location);
     }
 
 public:
-    s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
+    s3_storage(shared_ptr<s3::client> client, sstring bucket, std::variant<sstring, table_id> loc)
         : _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _location(std::move(dir))
+        , _location(std::move(loc))
     {
     }
 
@@ -546,7 +546,7 @@ public:
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
 
-    virtual sstring prefix() const override { return _location; }
+    virtual sstring prefix() const override { return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); }
 };
 
 sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) const {
@@ -668,7 +668,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
                     }, os.location)) {
                 on_internal_error(sstlog, "S3 storage options is missing 'location'");
             }
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::get<sstring>(os.location));
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location);
         }
     }, s_opts.value);
 }
