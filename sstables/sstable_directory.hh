@@ -131,7 +131,7 @@ public:
 
     class sstables_registry_components_lister final : public components_lister {
         sstables_registry& _sstables_registry;
-        utils::UUID _location;
+        utils::UUID _owner;
 
         future<> garbage_collect(storage&);
 

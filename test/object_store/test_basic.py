@@ -74,8 +74,8 @@ async def test_basic(manager: ManagerClient, s3_server):
     res = cql.execute("SELECT * FROM system.sstables;")
     tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
     for row in res:
-        assert row.location == tid.id, \
-            f'Unexpected entry location in registry: {row.location}'
+        assert row.owner == tid.id, \
+            f'Unexpected entry owner in registry: {row.owner}'
         assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
     print('Restart scylla')
@@ -93,7 +93,7 @@ async def test_basic(manager: ManagerClient, s3_server):
     cql.execute(f"DROP TABLE {ks}.{cf};")
     # Check that the ownership table is de-populated
     res = cql.execute("SELECT * FROM system.sstables;")
-    rows = "\n".join(f"{row.location} {row.status}" for row in res)
+    rows = "\n".join(f"{row.owner} {row.status}" for row in res)
     assert not rows, 'Unexpected entries in registry'
 
 
@@ -117,11 +117,11 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
     # Mark the sstables as "removing" to simulate the problem
     res = cql.execute("SELECT * FROM system.sstables;")
     for row in res:
-        sstable_entries.append((row.location, row.generation))
+        sstable_entries.append((row.owner, row.generation))
     print(f'Found entries: {[ str(ent[1]) for ent in sstable_entries ]}')
-    for loc, gen in sstable_entries:
+    for owner, gen in sstable_entries:
         cql.execute("UPDATE system.sstables SET status = 'removing'"
-                     f" WHERE location = {loc} AND generation = {gen};")
+                     f" WHERE owner = {owner} AND generation = {gen};")
 
     print('Restart scylla')
     await manager.server_restart(server.server_id)
@@ -163,7 +163,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, s3_server):
     assert len(list(res)) > 0, 'No entries in registry'
     for row in res:
         cql.execute("UPDATE system.sstables SET state = 'quarantine'"
-                     f" WHERE location = {row.location} AND generation = {row.generation};")
+                     f" WHERE owner = {row.owner} AND generation = {row.generation};")
 
     print('Restart scylla')
     await manager.server_restart(server.server_id)
@@ -233,7 +233,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     await flush
     print(f'Check the sstables table')
     res = cql.execute("SELECT * FROM system.sstables;")
-    ssts = "\n".join(f"{row.location} {row.generation} {row.status}" for row in res)
+    ssts = "\n".join(f"{row.owner} {row.generation} {row.status}" for row in res)
     print(f'sstables:\n{ssts}')
 
     print('Restart scylla')
