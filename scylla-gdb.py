@@ -651,7 +651,7 @@ class absl_container:
 
 
 def unordered_map(ref):
-    if ref.type.name.startswith('flat_hash_map'):
+    if ref.type.strip_typedefs().name.startswith('flat_hash_map'):
         try:
             return flat_hash_map(ref)
         except gdb.error:
