@@ -10,7 +10,7 @@
 #pragma once
 
 #include "auth/authenticator.hh"
-#include <boost/regex.hpp>
+#include <boost/regex_fwd.hpp>
 
 namespace cql3 {
 
