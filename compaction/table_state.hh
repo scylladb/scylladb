@@ -39,6 +39,7 @@ public:
     virtual bool compaction_enforce_min_threshold() const noexcept = 0;
     virtual const sstables::sstable_set& main_sstable_set() const = 0;
     virtual const sstables::sstable_set& maintenance_sstable_set() const = 0;
+    virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const = 0;
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const = 0;
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept = 0;
     virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept = 0;
