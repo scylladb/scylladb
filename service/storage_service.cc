@@ -5386,9 +5386,9 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
     };
 
     exponential_backoff_retry split_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
-    bool sleep = false;
 
     while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
+        bool sleep = false;
         try {
             // Ensures that latest changes to tablet metadata, in group0, are visible
             auto guard = co_await _group0->client().start_operation(_group0_as);
@@ -5406,11 +5406,16 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
                 release_guard(std::move(guard));
                 co_await split_all_compaction_groups();
             }
+        } catch (const seastar::abort_requested_exception& ex) {
+            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            break;
+        } catch (raft::request_aborted& ex) {
+            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            break;
         } catch (...) {
             slogger.error("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
                           table, std::current_exception(), split_retry.sleep_time());
             sleep = true;
-            break;
         }
         if (sleep) {
             co_await split_retry.retry(_group0_as);
