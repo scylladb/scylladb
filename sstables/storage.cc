@@ -556,10 +556,15 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
     if (!sst.generation().is_uuid_based()) {
         throw std::runtime_error("'S3' STORAGE only works with uuid_sstable_identifier enabled");
     }
-    if (sst.is_uploaded()) {
-        return format("/{}/{}", _bucket, sst.filename(type));
-    }
-    return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+
+    return std::visit(overloaded_functor {
+        [&] (const sstring& prefix) -> sstring {
+            return format("/{}/{}", _bucket, sst.filename(type, prefix));
+        },
+        [&] (const table_id& owner) -> sstring {
+            return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+        }
+    }, _location);
 }
 
 void s3_storage::open(sstable& sst) {
