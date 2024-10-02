@@ -77,19 +77,20 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            if (std::visit(overloaded_functor {
-                        [] (const sstring& prefix) { return prefix.empty(); },
-                        [] (const table_id& owner) { return owner.id.is_null(); }
-                    }, os.location)) {
-
-                on_internal_error(sstlog, "S3 storage options is missing 'location'");
-            }
-            if (_state == sstable_state::upload) {
-                // Sstables in this state are not tracked in registry, so the only way to
-                // collect and process them is by listing the bucket
-                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(std::get<sstring>(os.location)), _manager, os);
-            }
-            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), std::get<table_id>(os.location));
+            return std::visit(overloaded_functor {
+                [this, &os] (const sstring& prefix) -> std::unique_ptr<sstable_directory::components_lister> {
+                    if (prefix.empty()) {
+                        on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+                    }
+                    return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(prefix), _manager, os);
+                },
+                [this] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
+                    if (owner.id.is_null()) {
+                        on_internal_error(sstlog, "S3 storage options is missing 'owner'");
+                    }
+                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner);
+                }
+            }, os.location);
         }
     }, _storage_opts->value);
 }
