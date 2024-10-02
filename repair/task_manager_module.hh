@@ -158,6 +158,7 @@ private:
     std::optional<sstring> _failed_because;
     std::optional<semaphore> _user_ranges_parallelism;
     uint64_t _ranges_complete = 0;
+    gc_clock::time_point _flush_time;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
@@ -173,7 +174,8 @@ public:
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
             bool small_table_optimization,
-            std::optional<int> ranges_parallelism);
+            std::optional<int> ranges_parallelism,
+            gc_clock::time_point flush_time);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
