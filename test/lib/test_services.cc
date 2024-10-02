@@ -352,7 +352,7 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&dir] (data_dictionary::storage_options::s3& o) { o.prefix = dir; },
+        [&dir] (data_dictionary::storage_options::s3& o) { o.location = dir; },
     }, storage.value);
     return _impl->mgr.make_sstable(std::move(schema), storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
@@ -488,7 +488,7 @@ test_env::make_table_for_tests(schema_ptr s, sstring dir) {
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&dir] (data_dictionary::storage_options::s3& o) { o.prefix = dir; },
+        [&dir] (data_dictionary::storage_options::s3& o) { o.location = dir; },
     }, storage.value);
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), std::move(storage));
 }

@@ -662,10 +662,13 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
         [&manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
-            if (os.prefix.empty()) {
-                on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+            if (std::visit(overloaded_functor {
+                        [] (const sstring& prefix) { return prefix.empty(); },
+                        [] (const table_id& owner) { return owner.id.is_null(); }
+                    }, os.location)) {
+                on_internal_error(sstlog, "S3 storage options is missing 'location'");
             }
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.prefix);
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::get<sstring>(os.location));
         }
     }, s_opts.value);
 }
@@ -694,7 +697,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
     nopts.value = data_dictionary::storage_options::s3 {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
-        .prefix = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
+        .location = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
