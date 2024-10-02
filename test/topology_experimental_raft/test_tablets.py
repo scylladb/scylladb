@@ -1222,3 +1222,123 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     logger.info("Verify that the table's disk usage on first node shrunk by about half.")
     size_after = await manager.server_get_sstables_disk_usage(servers[0].server_id, "test", "test")
     assert size_before * 0.33 < size_after < size_before * 0.66
+<<<<<<< HEAD
+=======
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tombstone_gc_disabled_on_pending_replica(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add()]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds = 0;")
+
+    servers.append(await manager.server_add())
+
+    key = 7 # Whatever
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, 1) USING timestamp 9")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(rows) == 1
+
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+    dst_shard = 0
+
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments", one_shot=True)
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+    await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+
+    # write a tombstone with timestamp X to DB
+    await cql.run_async(f'DELETE FROM test.test USING timestamp 10 WHERE pk = {key}')
+
+    # flush both servers
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, "test")
+
+    await asyncio.sleep(1)
+
+    # major compact both servers
+    for s in servers:
+        await manager.api.keyspace_compaction(s.ip_addr, "test")
+
+    # write backdated data to test.test with timestamp X-1 with the same key as the tombstone
+    await cql.run_async(f'INSERT INTO test.test (pk, c) VALUES ({key}, 0) USING timestamp 9')
+
+    # release streaming
+    await manager.api.message_injection(servers[1].ip_addr, "stream_mutation_fragments")
+    await s1_log.wait_for('stream_mutation_fragments: done', from_mark=s1_mark)
+
+    logger.info("Waiting for migration to finish")
+    await migration_task
+    logger.info("Migration done")
+
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, "test")
+
+    # verify result
+    rows = await cql.run_async(f'SELECT pk, c FROM test.test WHERE pk = {key};')
+    assert len(rows) == 0
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_schema_change_during_cleanup(manager: ManagerClient):
+    logger.info("Start first node")
+    servers = [await manager.server_add()]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert rows == expected_rows
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    logger.info("Start second node.")
+    servers.append(await manager.server_add())
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    await inject_error_on(manager, "delay_tablet_compaction_groups_cleanup", servers)
+
+    logger.info("Read system.tablets.")
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablet_replicas) == 1
+
+    logger.info("Migrating one tablet to another node.")
+    t = tablet_replicas[0]
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token))
+
+    logger.info("Waiting for log")
+    await s1_log.wait_for('Initiating tablet cleanup of', from_mark=s1_mark, timeout=120)
+    time.sleep(1)
+    await cql.run_async("ALTER TABLE test.test WITH gc_grace_seconds = 0;")
+    await migration_task
+>>>>>>> cdf775d3cc (test: test tombstone GC disabled on pending replica)
