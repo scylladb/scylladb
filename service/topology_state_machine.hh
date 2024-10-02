@@ -183,6 +183,9 @@ struct topology {
     // When false, tablet load balancer will not try to rebalance tablets.
     bool tablet_balancing_enabled = true;
 
+    // Set of fenced tables
+    std::unordered_set<table_id> tablet_balancing_fenced_tables;
+
     // The set of nodes that should be considered dead during topology operations
     std::unordered_set<raft::server_id> ignored_nodes;
 

@@ -209,6 +209,7 @@ future<tablet_metadata> tablet_metadata::copy() const {
     }
 
     copy._balancing_enabled = _balancing_enabled;
+    copy._fenced_tables = _fenced_tables;
 
     co_return copy;
 }

@@ -251,6 +251,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
+            .with_column("tablet_balancing_fenced_tables", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
@@ -1862,6 +1863,15 @@ std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& t
     return tset;
 }
 
+static std::unordered_set<table_id> decode_table_ids(const set_type_impl::native_type& table_ids) {
+    std::unordered_set<table_id> ids_set;
+    for (auto& id: table_ids) {
+        auto uuid = value_cast<utils::UUID>(id);
+        ids_set.insert(table_id{uuid});
+    }
+    return ids_set;
+}
+
 static std::unordered_set<raft::server_id> decode_nodes_ids(const set_type_impl::native_type& nodes_ids) {
     std::unordered_set<raft::server_id> ids_set;
     for (auto& id: nodes_ids) {
@@ -3183,6 +3193,10 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
         } else {
             ret.tablet_balancing_enabled = true;
+        }
+
+        if (some_row.has("tablet_balancing_fenced_tables")) {
+            ret.tablet_balancing_fenced_tables = decode_table_ids(deserialize_set_column(*topology(), some_row, "tablet_balancing_fenced_tables"));
         }
 
         if (some_row.has("upgrade_state")) {

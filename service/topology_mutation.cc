@@ -195,6 +195,17 @@ topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_enabl
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::add_tablet_balancing_fenced_tables(const std::unordered_set<table_id>& value) {
+    return apply_set("tablet_balancing_fenced_tables", collection_apply_mode::update, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+}
+
+topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_fenced_tables(const std::unordered_set<table_id>& value) {
+    if (!value.empty()) {
+        return apply_set("tablet_balancing_fenced_tables", collection_apply_mode::overwrite, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+    }
+    return del("tablet_balancing_fenced_tables");
+}
+
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
     return del("transition_state");
 }
