@@ -514,6 +514,10 @@ class s3_storage : public sstables::storage {
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
+    sstring owner() const {
+        return _location;
+    }
+
 public:
     s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
         : _client(std::move(client))
@@ -557,7 +561,7 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
 
 void s3_storage::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().sstables_registry().create_entry(_location, status_creating, sst._state, std::move(desc)).get();
+    sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
     sst.write_toc(
@@ -587,7 +591,7 @@ future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type t
 }
 
 future<> s3_storage::seal(const sstable& sst) {
-    co_await sst.manager().sstables_registry().update_entry_status(_location, sst.generation(), status_sealed);
+    co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.generation(), status_sealed);
 }
 
 future<> s3_storage::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
@@ -597,19 +601,19 @@ future<> s3_storage::change_state(const sstable& sst, sstable_state state, gener
         // is moved from upload directory and this is another issue for S3 (#13018)
         co_await coroutine::return_exception(std::runtime_error("Cannot change state and generation of an S3 object"));
     }
-    co_await sst.manager().sstables_registry().update_entry_state(_location, sst.generation(), state);
+    co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.generation(), state);
 }
 
 future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sstables_registry = sst.manager().sstables_registry();
 
-    co_await sstables_registry.update_entry_status(_location, sst.generation(), status_removing);
+    co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing);
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await _client->delete_object(make_s3_object_name(sst, type));
     });
 
-    co_await sstables_registry.delete_entry(_location, sst.generation());
+    co_await sstables_registry.delete_entry(owner(), sst.generation());
 }
 
 future<atomic_delete_context> s3_storage::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
