@@ -508,6 +508,10 @@ public:
 private:
     sstring filename(component_type f) const {
         auto dir = _storage->prefix();
+        return filename(f, std::move(dir));
+    }
+
+    sstring filename(component_type f, sstring dir) const {
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
