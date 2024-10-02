@@ -1222,3 +1222,53 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     logger.info("Verify that the table's disk usage on first node shrunk by about half.")
     size_after = await manager.server_get_sstables_disk_usage(servers[0].server_id, "test", "test")
     assert size_before * 0.33 < size_after < size_before * 0.66
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_schema_change_during_cleanup(manager: ManagerClient):
+    logger.info("Start first node")
+    servers = [await manager.server_add()]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    logger.info("Populating table")
+
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert rows == expected_rows
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    logger.info("Start second node.")
+    servers.append(await manager.server_add())
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    await inject_error_on(manager, "delay_tablet_compaction_groups_cleanup", servers)
+
+    logger.info("Read system.tablets.")
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablet_replicas) == 1
+
+    logger.info("Migrating one tablet to another node.")
+    t = tablet_replicas[0]
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token))
+
+    logger.info("Waiting for log")
+    await s1_log.wait_for('Initiating tablet cleanup of', from_mark=s1_mark, timeout=120)
+    time.sleep(1)
+    await cql.run_async("ALTER TABLE test.test WITH gc_grace_seconds = 0;")
+    await migration_task
