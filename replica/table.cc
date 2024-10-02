@@ -889,6 +889,11 @@ lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() con
     return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
 }
 
+lw_shared_ptr<const sstables::sstable_set> table::sstable_set_for_tombstone_gc(const compaction_group& cg) const {
+    auto sg = storage_group_for_id(cg.group_id());
+    return sg->make_sstable_set();
+}
+
 bool tablet_storage_group_manager::all_storage_groups_split() {
     auto& tmap = tablet_map();
     if (_split_ready_seq_number == tmap.resize_decision().sequence_number) {
@@ -3487,6 +3492,9 @@ public:
     }
     const sstables::sstable_set& maintenance_sstable_set() const override {
         return *_cg.maintenance_sstables();
+    }
+    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
+        return _t.sstable_set_for_tombstone_gc(_cg);
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return sstables::get_fully_expired_sstables(*this, sstables, query_time);
