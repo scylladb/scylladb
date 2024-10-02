@@ -131,12 +131,12 @@ public:
 
     class sstables_registry_components_lister final : public components_lister {
         sstables_registry& _sstables_registry;
-        sstring _location;
+        table_id _location;
 
         future<> garbage_collect(storage&);
 
     public:
-        sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location);
+        sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id owner);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;

@@ -15,23 +15,23 @@ class system_keyspace_sstables_registry : public sstables::sstables_registry {
 public:
     system_keyspace_sstables_registry(system_keyspace& keyspace) : _keyspace(keyspace.shared_from_this()) {}
 
-    virtual seastar::future<> create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) override {
+    virtual seastar::future<> create_entry(table_id location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) override {
         return _keyspace->sstables_registry_create_entry(location, status, state, desc);
     }
 
-    virtual seastar::future<> update_entry_status(sstring location, sstables::generation_type gen, sstring status) override {
+    virtual seastar::future<> update_entry_status(table_id location, sstables::generation_type gen, sstring status) override {
         return _keyspace->sstables_registry_update_entry_status(location, gen, status);
     }
 
-    virtual seastar::future<> update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state) override {
+    virtual seastar::future<> update_entry_state(table_id location, sstables::generation_type gen, sstables::sstable_state state) override {
         return _keyspace->sstables_registry_update_entry_state(location, gen, state);
     }
 
-    virtual seastar::future<> delete_entry(sstring location, sstables::generation_type gen) override {
+    virtual seastar::future<> delete_entry(table_id location, sstables::generation_type gen) override {
         return _keyspace->sstables_registry_delete_entry(location, gen);
     }
 
-    virtual seastar::future<> sstables_registry_list(sstring location, entry_consumer consumer) override {
+    virtual seastar::future<> sstables_registry_list(table_id location, entry_consumer consumer) override {
         return _keyspace->sstables_registry_list(location, std::move(consumer));
     }
 };

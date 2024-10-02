@@ -514,8 +514,11 @@ class s3_storage : public sstables::storage {
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
-    sstring owner() const {
-        return std::get<sstring>(_location);
+    table_id owner() const {
+        if (std::holds_alternative<sstring>(_location)) {
+            on_internal_error(sstlog, format("Storage holds {} prefix, but registry owner is expected", std::get<sstring>(_location)));
+        }
+        return std::get<table_id>(_location);
     }
 
 public:
@@ -697,7 +700,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
     nopts.value = data_dictionary::storage_options::s3 {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
-        .location = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
+        .location = s.id(),
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }

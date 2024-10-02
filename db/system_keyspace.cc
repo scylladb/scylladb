@@ -1120,7 +1120,7 @@ schema_ptr system_keyspace::sstables_registry() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
         return schema_builder(NAME, SSTABLES_REGISTRY, id)
-            .with_column("location", utf8_type, column_kind::partition_key)
+            .with_column("location", uuid_type, column_kind::partition_key) // will be renamed to "owner" soon
             .with_column("generation", timeuuid_type, column_kind::clustering_key)
             .with_column("status", utf8_type)
             .with_column("state", utf8_type)
@@ -3276,32 +3276,37 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     co_return cdc::topology_description{std::move(entries)};
 }
 
-future<> system_keyspace::sstables_registry_create_entry(sstring location, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+future<> system_keyspace::sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+    utils::UUID location = owner.id;
     static const auto req = format("INSERT INTO system.{} (location, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{} into {}", location, desc.generation, SSTABLES_REGISTRY);
     co_await execute_cql(req, location, desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
+future<> system_keyspace::sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status) {
+    utils::UUID location = owner.id;
     static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Updating {}.{} -> status={} in {}", location, gen, status, SSTABLES_REGISTRY);
     co_await execute_cql(req, status, location, gen).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state) {
+future<> system_keyspace::sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) {
+    utils::UUID location = owner.id;
     static const auto req = format("UPDATE system.{} SET state = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
     auto new_state = sstables::state_to_dir(state);
     slogger.trace("Updating {}.{} -> state={} in {}", location, gen, new_state, SSTABLES_REGISTRY);
     co_await execute_cql(req, new_state, location, gen).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstables::generation_type gen) {
+future<> system_keyspace::sstables_registry_delete_entry(table_id owner, sstables::generation_type gen) {
+    utils::UUID location = owner.id;
     static const auto req = format("DELETE FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Removing {}.{} from {}", location, gen, SSTABLES_REGISTRY);
     co_await execute_cql(req, location, gen).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer) {
+future<> system_keyspace::sstables_registry_list(table_id owner, sstable_registry_entry_consumer consumer) {
+    utils::UUID location = owner.id;
     static const auto req = format("SELECT status, state, generation, version, format FROM system.{} WHERE location = ?", SSTABLES_REGISTRY);
     slogger.trace("Listing {} entries from {}", location, SSTABLES_REGISTRY);
 
