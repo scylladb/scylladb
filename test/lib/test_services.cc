@@ -304,7 +304,7 @@ public:
     }
     virtual future<> sstables_registry_list(sstring location, entry_consumer consumer) override {
         for (auto& [loc, e] : _entries) {
-            co_await consumer(loc, e.state, e.desc);
+            co_await consumer(e.status, e.state, e.desc);
         }
     }
 };
