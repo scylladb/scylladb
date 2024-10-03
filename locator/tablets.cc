@@ -316,6 +316,13 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     return get_token_range(id, _log2_tablets);
 }
 
+dht::token_range tablet_map::get_token_range_after_split(const token& t) const noexcept {
+    // when the tablets are split, the tablet count doubles, (i.e.) _log2_tablets increases by 1
+    const auto log2_tablets_after_split = _log2_tablets + 1;
+    auto id_after_split = tablet_id(dht::compaction_group_of(log2_tablets_after_split, t));
+    return get_token_range(id_after_split, log2_tablets_after_split);
+}
+
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     const auto& replicas = get_tablet_info(id).replicas;
     return replicas.at(size_t(id) % replicas.size());
