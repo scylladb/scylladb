@@ -38,6 +38,8 @@ private:
     const bool _is_column_family_level;
 
 protected:
+    mutable std::unordered_set<table_id> _fenced_tables;
+
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
     schema_altering_statement(cf_name name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
@@ -65,6 +67,8 @@ public:
     using event_t = cql_transport::event::schema_change;
     virtual future<std::tuple<::shared_ptr<event_t>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const;
     virtual future<std::tuple<::shared_ptr<event_t>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const;
+
+    const std::unordered_set<table_id>& fenced_tables() const noexcept { return _fenced_tables; };
 };
 
 }
