@@ -3189,7 +3189,9 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
         auto result_filename =
                 sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), big, file_type);
         auto eq = tests::compare_files(orig_filename, result_filename).get();
-        BOOST_REQUIRE(eq);
+        if (!eq) {
+            BOOST_FAIL(format("Files {} and {} are different", orig_filename, result_filename));
+        }
     }
 }
 
