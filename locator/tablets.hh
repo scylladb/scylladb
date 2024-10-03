@@ -434,6 +434,9 @@ public:
 
     bool needs_split() const;
 
+    /// Returns the token_range in which the given token will belong to after a tablet split
+    dht::token_range get_token_range_after_split(const token& t) const noexcept;
+
     const locator::resize_decision& resize_decision() const;
 public:
     void set_tablet(tablet_id, tablet_info);
