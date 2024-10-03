@@ -2194,6 +2194,8 @@ using compress_sstable = tests::random_schema_specification::compress_sstable;
 
 // A framework for scrub-related tests.
 // Lives in a seastar thread
+enum class random_schema { no, yes };
+template <random_schema create_random_schema>
 class scrub_test_framework {
 public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
@@ -2276,8 +2278,53 @@ public:
     }
 };
 
+template <>
+class scrub_test_framework<random_schema::no> {
+public:
+    using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
+
+private:
+    sharded<test_env> _env;
+
+public:
+    scrub_test_framework()
+    {
+        _env.start().get();
+    }
+
+    ~scrub_test_framework() {
+        _env.stop().get();
+    }
+
+    test_env& env() { return _env.local(); }
+
+    void run(schema_ptr schema, shared_sstable sst, test_func func) {
+        auto& env = this->env();
+
+        auto table = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(table);
+        table->start();
+
+        table->add_sstable_and_update_cache(sst).get();
+
+        bool found_sstable = false;
+        foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+            auto sstables = in_strategy_sstables(ts);
+            if (sstables.empty()) {
+                return;
+            }
+            BOOST_REQUIRE(sstables.size() == 1);
+            BOOST_REQUIRE(sstables.front() == sst);
+            found_sstable = true;
+
+            func(table, ts, sstables);
+        }).get();
+        BOOST_REQUIRE(found_sstable);
+    }
+};
+
 void scrub_validate_corrupted_content(compress_sstable compress) {
-    scrub_test_framework test(compress);
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2305,7 +2352,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
 }
 
 void scrub_validate_corrupted_file(compress_sstable compress) {
-    scrub_test_framework test(compress);
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2341,7 +2388,7 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
 }
 
 void scrub_validate_corrupted_digest(compress_sstable compress) {
-    scrub_test_framework test(compress);
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2379,7 +2426,7 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
 }
 
 void scrub_validate_no_digest(compress_sstable compress) {
-    scrub_test_framework test(compress);
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2424,7 +2471,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
 }
 
 void scrub_validate_valid(compress_sstable compress) {
-    scrub_test_framework test(compress);
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2487,7 +2534,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
     return;
 #endif
-    scrub_test_framework test(compress_sstable::no);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::no);
 
     auto schema = test.schema();
 
@@ -2676,7 +2723,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2700,7 +2747,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2748,7 +2795,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2788,7 +2835,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
