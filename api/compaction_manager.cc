@@ -203,5 +203,19 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
 }
 
+void unset_compaction_manager(http_context& ctx, routes& r) {
+    cm::get_compactions.unset(r);
+    cm::get_pending_tasks_by_table.unset(r);
+    cm::force_user_defined_compaction.unset(r);
+    cm::stop_compaction.unset(r);
+    cm::stop_keyspace_compaction.unset(r);
+    cm::get_pending_tasks.unset(r);
+    cm::get_completed_tasks.unset(r);
+    cm::get_total_compactions_completed.unset(r);
+    cm::get_bytes_compacted.unset(r);
+    cm::get_compaction_history.unset(r);
+    cm::get_compaction_info.unset(r);
+}
+
 }
 

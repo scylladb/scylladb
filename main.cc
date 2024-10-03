@@ -1616,6 +1616,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();
+            auto stop_cm_api = defer_verbose_shutdown("compaction manager API", [&ctx] {
+                api::unset_server_compaction_manager(ctx).get();
+            });
 
             cm.invoke_on_all([&](compaction_manager& cm) {
                 auto cl = db.local().commitlog();

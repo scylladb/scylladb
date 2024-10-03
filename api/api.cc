@@ -278,6 +278,10 @@ future<> set_server_compaction_manager(http_context& ctx) {
     return register_api(ctx, "compaction_manager", "The Compaction manager API", set_compaction_manager);
 }
 
+future<> unset_server_compaction_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_compaction_manager(ctx, r); });
+}
+
 future<> set_server_done(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
