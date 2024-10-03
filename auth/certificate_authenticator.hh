@@ -10,7 +10,7 @@
 #pragma once
 
 #include "auth/authenticator.hh"
-#include <boost/regex_fwd.hpp>
+#include <boost/regex_fwd.hpp>  // IWYU pragma: keep
 
 namespace cql3 {
 
