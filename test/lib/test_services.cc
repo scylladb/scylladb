@@ -269,14 +269,14 @@ class mock_sstables_registry : public sstables::sstables_registry {
         sstables::sstable_state state;
         sstables::entry_descriptor desc;
     };
-    std::map<sstring, entry> _entries;
+    std::map<std::pair<sstring, generation_type>, entry> _entries;
 public:
     virtual future<> create_entry(sstring location, sstring status, sstable_state state, sstables::entry_descriptor desc) override {
-        _entries.emplace(location, entry { status, state, desc });
+        _entries.emplace(std::make_pair(location, desc.generation), entry { status, state, desc });
         co_return;
     };
     virtual future<> update_entry_status(sstring location, sstables::generation_type gen, sstring status) override {
-        auto it = _entries.find(location);
+        auto it = _entries.find(std::make_pair(location, gen));
         if (it != _entries.end()) {
             it->second.status = status;
         } else {
@@ -285,7 +285,7 @@ public:
         co_return;
     }
     virtual future<> update_entry_state(sstring location, sstables::generation_type gen, sstables::sstable_state state) override {
-        auto it = _entries.find(location);
+        auto it = _entries.find(std::make_pair(location, gen));
         if (it != _entries.end()) {
             it->second.state = state;
         } else {
@@ -294,7 +294,7 @@ public:
         co_return;
     }
     virtual future<> delete_entry(sstring location, sstables::generation_type gen) override {
-        auto it = _entries.find(location);
+        auto it = _entries.find(std::make_pair(location, gen));
         if (it != _entries.end()) {
             _entries.erase(it);
         } else {
@@ -303,8 +303,10 @@ public:
         co_return;
     }
     virtual future<> sstables_registry_list(sstring location, entry_consumer consumer) override {
-        for (auto& [loc, e] : _entries) {
-            co_await consumer(e.status, e.state, e.desc);
+        for (auto& [loc_and_gen, e] : _entries) {
+            if (loc_and_gen.first == location) {
+                co_await consumer(e.status, e.state, e.desc);
+            }
         }
     }
 };
