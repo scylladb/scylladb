@@ -13,6 +13,7 @@
 #include "compaction/compaction_manager.hh"
 #include "api/api.hh"
 #include "api/api-doc/compaction_manager.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
@@ -23,6 +24,7 @@
 namespace api {
 
 namespace cm = httpd::compaction_manager_json;
+namespace ss = httpd::storage_service_json;
 using namespace json;
 using namespace seastar::httpd;
 
@@ -201,6 +203,18 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
+    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        int value = ctx.db.local().get_compaction_manager().throughput_mbs();
+        return make_ready_future<json::json_return_type>(value);
+    });
+
+    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
+        //TBD
+        unimplemented();
+        auto value = req->get_query_param("value");
+        return make_ready_future<json::json_return_type>(json_void());
+    });
+
 }
 
 void unset_compaction_manager(http_context& ctx, routes& r) {
@@ -215,6 +229,8 @@ void unset_compaction_manager(http_context& ctx, routes& r) {
     cm::get_bytes_compacted.unset(r);
     cm::get_compaction_history.unset(r);
     cm::get_compaction_info.unset(r);
+    ss::get_compaction_throughput_mb_per_sec.unset(r);
+    ss::set_compaction_throughput_mb_per_sec.unset(r);
 }
 
 }
