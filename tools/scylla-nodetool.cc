@@ -42,6 +42,7 @@
 
 #include "api/scrub_status.hh"
 #include "gms/application_state.hh"
+#include "db/config.hh"
 #include "db_clock.hh"
 #include "log.hh"
 #include "release.hh"
@@ -53,6 +54,7 @@
 #include "utils/pretty_printers.hh"
 #include "utils/rjson.hh"
 #include "utils/UUID.hh"
+#include "locator/token_metadata.hh"
 
 namespace bpo = boost::program_options;
 
@@ -1379,6 +1381,12 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
         std::unordered_map<sstring, sstring> params{{"host_id", op}};
         if (vm.contains("ignore-dead-nodes")) {
             params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
+            const auto str_ids  = utils::split_comma_separated_list(params["ignore_nodes"]);
+            if (!locator::check_host_ids_contain_only_uuid(str_ids)) {
+                fmt::print(std::cout, "\nWarning: Using IP addresses for '--ignore-dead-nodes' is deprecated and"
+                " will be disabled in a future release. Please use host IDs instead. Run \"nodetool status\" to list all"
+                " node IDs.\n\n");
+            }
         }
         client.post("/storage_service/remove_node", std::move(params));
     }
@@ -3802,7 +3810,7 @@ by any means!
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/removenode.html")),
                 {
-                    typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead nodes to ignore during removenode"),
+                    typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
                 },
                 {
                     typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),

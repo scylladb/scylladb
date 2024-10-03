@@ -1526,18 +1526,19 @@ future<> update_relabel_config_from_file(const std::string& name) {
     co_return;
 }
 
-std::vector<sstring> split_comma_separated_list(sstring comma_separated_list) {
+std::vector<sstring> split_comma_separated_list(const std::string_view comma_separated_list) {
     std::vector<sstring> strs, trimmed_strs;
-    boost::split(strs, std::move(comma_separated_list), boost::is_any_of(","));
-    for (sstring n : strs) {
+    boost::split(strs, comma_separated_list, boost::is_any_of(","));
+    trimmed_strs.reserve(strs.size());
+    for (sstring& n : strs) {
         std::replace(n.begin(), n.end(), '\"', ' ');
         std::replace(n.begin(), n.end(), '\'', ' ');
         boost::trim_all(n);
         if (!n.empty()) {
-            trimmed_strs.push_back(n);
+            trimmed_strs.push_back(std::move(n));
         }
     }
     return trimmed_strs;
 }
 
-}
+} // namespace utils

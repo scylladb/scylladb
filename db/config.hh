@@ -545,6 +545,6 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms:
  */
 future<> update_relabel_config_from_file(const std::string& name);
 
-std::vector<sstring> split_comma_separated_list(sstring comma_separated_list);
+std::vector<sstring> split_comma_separated_list(std::string_view comma_separated_list);
 
-}
+} // namespace utils
