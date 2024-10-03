@@ -2584,6 +2584,132 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
     });
 }
 
+// Following tests run scrub in validate mode with SSTables produced by Cassandra.
+// The purpose is to verify compatibility.
+//
+// The SSTables live in the source tree under:
+// test/resource/sstables/3.x/{uncompressed,lz4}/partition_key_with_values_of_different_types and
+// test/resource/sstables/3.x/{uncompressed,lz4}/integrity_check
+//
+// The former are pre-existing SSTables that we use to test the valid case.
+//
+// The latter were tailor-made to cover the invalid case by triggering the checksum and digest checks.
+// The SSTables were produced with the following schema:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   bool_val BOOLEAN,
+//                                   double_val DOUBLE,
+//                                   float_val FLOAT,
+//                                   int_val INT,
+//                                   long_val BIGINT,
+//                                   timestamp_val TIMESTAMP,
+//                                   timeuuid_val TIMEUUID,
+//                                   uuid_val UUID,
+//                                   text_val TEXT,
+//                                   PRIMARY KEY(pk))
+//      WITH compression = {<compression_params>};
+//
+//  where <compression_params> is one of the following:
+//  {'enabled': false} for the uncompressed case,
+//  {'chunk_length_in_kb': '4', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'} for the compressed case.
+
+static schema_builder make_cassandra_schema_builder() {
+    return schema_builder("test_ks", "test_table")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("bool_val", boolean_type)
+            .with_column("double_val", double_type)
+            .with_column("float_val", float_type)
+            .with_column("int_val", int32_type)
+            .with_column("long_val", long_type)
+            .with_column("timestamp_val", timestamp_type)
+            .with_column("timeuuid_val", timeuuid_type)
+            .with_column("uuid_val", uuid_type)
+            .with_column("text_val", utf8_type);
+}
+
+void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring sstable_dir,
+        generation_type::int_t gen, sstable::version_types version, bool valid) {
+    scrub_test_framework<random_schema::no> test;
+
+    auto schema = make_cassandra_schema_builder()
+            .set_compressor_params(cp)
+            .build();
+    auto sst = test.env().reusable_sst(schema, sstable_dir, gen, version).get();
+
+    test.run(schema, sst, [valid] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        using scrub = sstables::compaction_type_options::scrub;
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = scrub::mode::validate,
+            .quarantine_sstables = scrub::quarantine_invalid_sstables::no,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        if (valid) {
+            BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        } else {
+            BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        }
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE(!sst->get_checksum());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/partition_key_with_values_of_different_types", subdir),
+                1,
+                sstable::version_types::mc,
+                true
+        );
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid checksums...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_checksums", subdir),
+                1,
+                sstable::version_types::me,
+                false
+        );
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid digest...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_digest", subdir),
+                1,
+                sstable::version_types::me,
+                false
+        );
+    }
+}
+
 SEASTAR_TEST_CASE(sstable_validate_test) {
   return test_env::do_with_async([] (test_env& env) {
     auto schema = schema_builder("ks", get_name())
