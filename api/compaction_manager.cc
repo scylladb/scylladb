@@ -46,7 +46,7 @@ static std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_ha
     return std::move(a);
 }
 
-void set_compaction_manager(http_context& ctx, routes& r) {
+void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_manager>& cm) {
     cm::get_compactions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce0([](replica::database& db) {
             std::vector<cm::summary> summaries;

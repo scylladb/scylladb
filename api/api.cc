@@ -274,8 +274,10 @@ future<> unset_hinted_handoff(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff(ctx, r); });
 }
 
-future<> set_server_compaction_manager(http_context& ctx) {
-    return register_api(ctx, "compaction_manager", "The Compaction manager API", set_compaction_manager);
+future<> set_server_compaction_manager(http_context& ctx, sharded<compaction_manager>& cm) {
+    return register_api(ctx, "compaction_manager", "The Compaction manager API", [&cm] (http_context& ctx, routes& r) {
+        set_compaction_manager(ctx, r, cm);
+    });
 }
 
 future<> unset_server_compaction_manager(http_context& ctx) {
