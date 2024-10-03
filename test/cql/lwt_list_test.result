@@ -1,3 +1,10 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
 > CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
 OK
 > UPDATE t SET l = [-1] + l WHERE pk = 0;
@@ -213,4 +220,8 @@ Error from server: code=2200 [Invalid query] message="List prepend custom timest
 +----------------------------------------------+
 > 
 > DROP TABLE t;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
 OK

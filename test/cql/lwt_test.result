@@ -1,3 +1,9 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
 > --
 > -- basic: ensure the grammar works
 > --
@@ -2969,5 +2975,9 @@ Error from server: code=2200 [Invalid query] message="DELETE statements must res
 +---------+
 > -- stop this travesty
 > drop table t;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
 OK
 > 

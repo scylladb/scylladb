@@ -1,3 +1,10 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
 > create table t (pk int primary key, c text);
 OK
 > insert into  t (pk, c) values (1, 'abc');
@@ -82,3 +89,7 @@ OK
 OK
 > update tb set b = bigintAsBlob(2) where pk = 1 if b like 'a%';
 Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which b is not"
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

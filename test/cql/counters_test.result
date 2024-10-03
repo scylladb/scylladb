@@ -1,6 +1,11 @@
 > -- Error messages contain a keyspace name. Make the output stable.
-> CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}
+>     AND TABLETS = {'enabled': false};
 OK
+> USE ks;
+OK
+> 
 > CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter);
 OK
 > 
@@ -95,9 +100,8 @@ OK
 |    4 |    4 |
 |    3 |    3 |
 +------+------+
-> DROP KEYSPACE ks;
-OK
 > 
+> -- Test case for gh-7330, counter signed integer overflow in debug mode
 > CREATE TABLE counter_bug (t int, c counter, primary key(t));
 OK
 > UPDATE counter_bug SET c = c + 9223372036854775807 where t = 0;
@@ -124,3 +128,7 @@ OK
 |-----+---------------------|
 |   0 | 9223372036854775807 |
 +-----+---------------------+
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

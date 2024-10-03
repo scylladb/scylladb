@@ -1,6 +1,12 @@
 > -- Error messages contain a keyspace name. Make the output stable.
-> CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
 OK
+> USE ks;
+OK
+> 
 > create table ks.tb1 (pk int primary key, c1 counter) with cdc = {'enabled': true};
 Error from server: code=2200 [Invalid query] message="Cannot create CDC log for table ks.tb1. Counter support not implemented"
 > 
