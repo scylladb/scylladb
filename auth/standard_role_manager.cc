@@ -247,26 +247,28 @@ future<> standard_role_manager::start() {
         }
 
         auto handler = [this] () -> future<> {
-            try {
-                if (legacy_mode(_qp)) {
-                    co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
-
-                    if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
-                        if (legacy_metadata_exists()) {
-                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
-                        }
-                        co_return;
-                    }
-
-                    if (legacy_metadata_exists()) {
-                        co_await migrate_legacy_metadata();
-                        co_return;
-                    }
+            const bool legacy = legacy_mode(_qp);
+            if (legacy) {
+                if (!_superuser_created_promise.available()) {
+                    _superuser_created_promise.set_value();
                 }
-                co_await create_default_role_if_missing();
-            } catch (...) {
-                log.error("Failed to create default role: unknown error");
-                throw;
+                co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
+
+                if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
+                    if (legacy_metadata_exists()) {
+                        log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
+                    }
+                    co_return;
+                }
+
+                if (legacy_metadata_exists()) {
+                    co_await migrate_legacy_metadata();
+                    co_return;
+                }
+            }
+            co_await create_default_role_if_missing();
+            if (!legacy) {
+                _superuser_created_promise.set_value();
             }
         };
 
@@ -281,7 +283,8 @@ future<> standard_role_manager::stop() {
 }
 
 future<> standard_role_manager::ensure_superuser_is_created() {
-    co_return;
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    return _superuser_created_promise.get_shared_future();
 }
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
