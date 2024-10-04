@@ -136,6 +136,7 @@ standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::servic
     , _migration_manager(mm)
     , _stopped(make_ready_future<>())
     , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
+    , _superuser_created(this_shard_id() != 0)
 {}
 
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
@@ -251,6 +252,8 @@ future<> standard_role_manager::start() {
         auto handler = [this] () -> future<> {
             try {
                 if (legacy_mode(_qp)) {
+                    bool previous = _superuser_created.exchange(true);
+                    if (!previous) _superuser_created_promise.set_value();
                     co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
                     if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
@@ -266,9 +269,30 @@ future<> standard_role_manager::start() {
                     }
                 }
                 co_await create_default_role_if_missing();
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_value();
+            } catch (const exceptions::unavailable_exception& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const exceptions::request_failure_exception& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const sleep_aborted& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const std::exception& e) {
+                log.error("Failed to create default role: {}", e.what());
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_exception(std::current_exception());
+                throw e;
             } catch (...) {
                 log.error("Failed to create default role: unknown error");
-                throw;
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_exception(std::current_exception());
+                std::rethrow_exception(std::current_exception());
             }
         };
 
@@ -283,7 +307,10 @@ future<> standard_role_manager::stop() {
 }
 
 future<> standard_role_manager::ensure_superuser_is_created() {
-    co_return;
+    if (_superuser_created.load()) {
+        return make_ready_future();
+    }
+    return _superuser_created_promise.get_shared_future();
 }
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
