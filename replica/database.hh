@@ -620,6 +620,12 @@ private:
     // can wait on compaction (backpressure) which in turn takes deletion guard on completion.
     future<> safe_foreach_sstable(const sstables::sstable_set&, noncopyable_function<future<>(const sstables::shared_sstable&)> action);
 
+    // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
+    // Only the sstables in the compaction group is not sufficient, since there might be other compaction
+    // groups during tablet split with overlapping token range, and we need to include them all in a single
+    // sstable set to allow safe tombstone gc.
+    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc(const compaction_group&) const;
+
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
