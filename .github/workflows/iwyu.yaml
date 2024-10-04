@@ -9,7 +9,7 @@ env:
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
-  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction
+  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db
 
 permissions: {}
 
