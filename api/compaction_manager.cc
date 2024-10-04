@@ -47,10 +47,9 @@ static std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_ha
 }
 
 void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_manager>& cm) {
-    cm::get_compactions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return ctx.db.map_reduce0([](replica::database& db) {
+    cm::get_compactions.set(r, [&cm] (std::unique_ptr<http::request> req) {
+        return cm.map_reduce0([](compaction_manager& cm) {
             std::vector<cm::summary> summaries;
-            const compaction_manager& cm = db.get_compaction_manager();
 
             for (const auto& c : cm.get_compactions()) {
                 cm::summary s;
@@ -102,10 +101,9 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    cm::stop_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) {
+    cm::stop_compaction.set(r, [&cm] (std::unique_ptr<http::request> req) {
         auto type = req->get_query_param("type");
-        return ctx.db.invoke_on_all([type] (replica::database& db) {
-            auto& cm = db.get_compaction_manager();
+        return cm.invoke_on_all([type] (compaction_manager& cm) {
             return cm.stop_compaction(type);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
@@ -155,14 +153,14 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cm::get_compaction_history.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        std::function<future<>(output_stream<char>&&)> f = [&ctx] (output_stream<char>&& out) -> future<> {
+    cm::get_compaction_history.set(r, [&cm] (std::unique_ptr<http::request> req) {
+        std::function<future<>(output_stream<char>&&)> f = [&cm] (output_stream<char>&& out) -> future<> {
             auto s = std::move(out);
             bool first = true;
             std::exception_ptr ex;
             try {
                 co_await s.write("[");
-                co_await ctx.db.local().get_compaction_manager().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
+                co_await cm.local().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
                         cm::history h;
                         h.id = fmt::to_string(entry.id);
                         h.ks = std::move(entry.ks);
@@ -203,8 +201,8 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        int value = ctx.db.local().get_compaction_manager().throughput_mbs();
+    ss::get_compaction_throughput_mb_per_sec.set(r, [&cm](std::unique_ptr<http::request> req) {
+        int value = cm.local().throughput_mbs();
         return make_ready_future<json::json_return_type>(value);
     });
 
