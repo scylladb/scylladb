@@ -9,11 +9,10 @@
 
 #pragma once
 
-#include <boost/program_options.hpp>
+#include <boost/program_options/options_description.hpp>
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/shared_ptr.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
@@ -21,7 +20,6 @@
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
-#include "locator/host_id.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/updateable_value.hh"

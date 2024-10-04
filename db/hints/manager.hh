@@ -13,10 +13,8 @@
 #include "utils/assert.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_mutex.hh>
-#include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 // Scylla includes.

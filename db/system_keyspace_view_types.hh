@@ -8,9 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/seastar.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/smp.hh>
 #include <utility>
 #include <optional>
 #include "dht/token.hh"

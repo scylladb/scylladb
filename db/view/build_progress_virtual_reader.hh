@@ -15,8 +15,6 @@
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
 
-#include <boost/range/iterator_range.hpp>
-
 #include <iterator>
 #include <memory>
 

@@ -10,11 +10,10 @@
 #pragma once
 
 #include <stdint.h>
-#include <seastar/core/shared_ptr.hh>
 #include "schema/schema_fwd.hh"
 #include "utils/hash.hh"
 #include "sstables/version.hh"
-
+#include "seastarx.hh"
 
 namespace db {
 

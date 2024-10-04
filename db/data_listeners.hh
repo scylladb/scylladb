@@ -9,8 +9,7 @@
 #pragma once
 
 #include <seastar/core/distributed.hh>
-#include <seastar/core/future.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/future.hh>  // IWYU pragma: keep
 #include <seastar/core/weak_ptr.hh>
 
 #include "utils/hash.hh"
@@ -19,7 +18,6 @@
 #include "utils/top_k.hh"
 #include "schema/schema_registry.hh"
 
-#include <vector>
 #include <set>
 
 class frozen_mutation;

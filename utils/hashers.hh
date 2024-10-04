@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <memory>
 #include "bytes.hh"
 #include "utils/hashing.hh"
 
