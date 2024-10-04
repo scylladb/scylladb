@@ -124,6 +124,9 @@ public:
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _staging_condition;
     }
+    dht::token_range get_post_split_token_range_of(const dht::token& t) const noexcept override {
+        return table().get_post_split_token_range_of(t);
+    }
 };
 
 table_for_tests::data::data()
