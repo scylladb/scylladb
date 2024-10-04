@@ -166,6 +166,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     assert len(files) == 0
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     assert not res
+    objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.filter(Prefix=prefix) ])
+    assert len(objects) > 0
 
     print(f'Try to restore')
     tid = await manager.api.restore(server.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names)
@@ -178,3 +180,7 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = { x.name: x.value for x in res }
     assert rows == orig_rows, "Unexpected table contents after restore"
+
+    print(f'Check that backup files are still there') # regression test for #20938
+    post_objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.filter(Prefix=prefix) ])
+    assert objects == post_objects

@@ -58,7 +58,7 @@ private:
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
-            bool primary_replica_only);
+            bool primary_replica_only, bool unlink_sstables);
 
 public:
     sstables_loader(sharded<replica::database>& db,
