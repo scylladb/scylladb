@@ -22,6 +22,13 @@ To start a single ScyllaDB node instance in a Docker container, run:
 
  docker run --name some-scylla -d scylladb/scylla
 
+If you're on macOS and plan to start a multi-node cluster (3 nodes or more), start ScyllaDB with
+``–reactor-backend=epoll`` to override the default ``linux-aio`` reactor backend:
+
+.. code-block:: console
+
+ docker run --name some-scylla -d scylladb/scylla --reactor-backend=epoll
+
 The ``docker run`` command starts a new Docker instance in the background named some-scylla that runs the ScyllaDB server:
 
 .. code-block:: console
@@ -94,6 +101,12 @@ With a single ``some-scylla`` instance running,  joining new nodes to form a clu
 .. code-block:: console
 
  docker run --name some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
+
+If you're on macOS, ensure to add the ``–reactor-backend=epoll`` option when adding new nodes:
+
+.. code-block:: console
+
+ docker run --name some-scylla2 -d scylladb/scylla --reactor-backend=epoll --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
 
 To query when the node is up and running (and view the status of the entire cluster) use the ``nodetool status`` command:
 
