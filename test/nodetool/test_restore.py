@@ -8,26 +8,21 @@ import pytest
 
 from test.nodetool.rest_api_mock import expected_request
 
-@pytest.mark.parametrize("table",
-                         ["cf",
-                          pytest.param("",
-                                       marks=pytest.mark.xfail(
-                                           reason="full keyspace restore not implemented yet"))])
 @pytest.mark.parametrize("nowait,task_state,task_error", [(False, "failed", "error"),
                                                           (False, "done", ""),
                                                           (True, "", "")])
-def test_restore(nodetool, scylla_only, table, nowait, task_state, task_error):
+def test_restore(nodetool, scylla_only, nowait, task_state, task_error):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     keyspace = "ks"
+    table = "cf"
+    prefix = "foo/bar"
 
-    snapshot = "ss"
     params = {"endpoint": endpoint,
               "bucket": bucket,
-              "snapshot": snapshot,
-              "keyspace": keyspace}
-    if table:
-        params["table"] = table
+              "prefix": prefix,
+              "keyspace": keyspace,
+              "table": table}
 
     task_id = "2c4a3e5f"
     start_time = "2024-08-08T14:29:25Z"
@@ -48,25 +43,29 @@ def test_restore(nodetool, scylla_only, table, nowait, task_state, task_error):
         "progress_completed": 1.0,
         "children_ids": []
     }
+    # just generate filenames of TOC components of random sstables
+    sstables = [f"me-{id}-big-TOC.txt" for id in range(12)]
     expected_requests = [
         expected_request(
             "POST",
             "/storage_service/restore",
             params,
+            sstables,
             response=task_id)
     ]
     args = ["restore",
             "--endpoint", endpoint,
             "--bucket", bucket,
-            "--snapshot", snapshot,
-            "--keyspace", keyspace]
-    if table:
-        args.extend(["--table", table])
+            "--prefix", prefix,
+            "--keyspace", keyspace,
+            "--table", table]
     if nowait:
         args.append("--nowait")
+        args.extend(sstables)
         res = nodetool(*args, expected_requests=expected_requests)
         assert task_id in res.stdout
     else:
+        args.extend(sstables)
         # wait for the completion of backup task
         expected_requests.append(
             expected_request(

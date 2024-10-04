@@ -61,6 +61,12 @@ sstable_directory::sstables_registry_components_lister::sstables_registry_compon
 {
 }
 
+sstable_directory::restore_components_lister::restore_components_lister(const data_dictionary::storage_options::value_type& options,
+                                                                        std::vector<sstring> toc_filenames)
+        : _toc_filenames(std::move(toc_filenames))
+{
+}
+
 std::unique_ptr<sstable_directory::components_lister>
 sstable_directory::make_components_lister() {
     return std::visit(overloaded_functor {
@@ -108,6 +114,23 @@ sstable_directory::sstable_directory(replica::table& table,
         sstable_state::upload,
         std::move(error_handler_gen)
     )
+{}
+
+sstable_directory::sstable_directory(replica::table& table,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
+        std::vector<sstring> sstables,
+        io_error_handler_gen error_handler_gen)
+    : _manager(table.get_sstables_manager())
+    , _schema(table.schema())
+    , _storage_opts(std::move(storage_opts))
+    , _state(sstable_state::upload)
+    , _error_handler_gen(error_handler_gen)
+    , _storage(make_storage(_manager, *_storage_opts, _state))
+    , _lister(std::make_unique<sstable_directory::restore_components_lister>(_storage_opts->value,
+                                                                             std::move(sstables)))
+    , _sharder_ptr(std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()))
+    , _sharder(*_sharder_ptr)
+    , _unshared_remote_sstables(smp::count)
 {}
 
 sstable_directory::sstable_directory(sstables_manager& manager,
@@ -195,19 +218,25 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
     }
 }
 
-future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg) const {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
+        noncopyable_function<data_dictionary::storage_options()>&& get_storage_options,
+        sstables::sstable_open_config cfg) const {
+    shared_sstable sst;
+    auto storage_opts = std::invoke(get_storage_options);
+    sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
 
 future<>
-sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
+sstable_directory::process_descriptor(sstables::entry_descriptor desc,
+        process_flags flags,
+        noncopyable_function<data_dictionary::storage_options()>&& get_storage_options) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
-    auto sst = co_await load_sstable(desc, flags.sstable_open_config);
+    auto sst = co_await load_sstable(desc, std::move(get_storage_options), flags.sstable_open_config);
     validate(sst, flags);
 
     if (flags.need_mutate_level) {
@@ -287,6 +316,10 @@ future<> sstable_directory::sstables_registry_components_lister::prepare(sstable
     }
 }
 
+future<> sstable_directory::restore_components_lister::prepare(sstable_directory& dir, process_flags flags, storage& st) {
+    return make_ready_future();
+}
+
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
     return _lister->process(*this, flags);
 }
@@ -362,7 +395,8 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
         auto& desc = std::get<1>(t);
         _state->generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
-        return directory.process_descriptor(std::move(desc), flags);
+        return directory.process_descriptor(std::move(desc), flags,
+                                            [&directory] { return *directory._storage_opts; });
     });
 
     // For files missing TOC, it depends on where this is coming from.
@@ -394,7 +428,24 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
         }
 
         dirlog.debug("Processing {} entry from {}", desc.generation, _location);
-        return directory.process_descriptor(std::move(desc), flags);
+        return directory.process_descriptor(std::move(desc), flags,
+                                            [&directory] { return *directory._storage_opts; });
+    });
+}
+
+future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
+    co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
+        std::filesystem::path sst_path{toc_filename};
+        entry_descriptor desc = sstables::parse_path(sst_path, "", "");
+        if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
+            co_return;
+        }
+        dirlog.debug("Processing {} entry from {}", desc.generation, toc_filename);
+        co_await directory.process_descriptor(
+            std::move(desc), flags,
+            [&directory, prefix=sst_path.parent_path().native()] {
+                return directory._storage_opts->append_to_s3_prefix(prefix);;
+            });
     });
 }
 
@@ -411,6 +462,10 @@ future<> sstable_directory::filesystem_components_lister::commit() {
 }
 
 future<> sstable_directory::sstables_registry_components_lister::commit() {
+    return make_ready_future<>();
+}
+
+future<> sstable_directory::restore_components_lister::commit() {
     return make_ready_future<>();
 }
 
@@ -453,7 +508,7 @@ future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_o
 future<>
 sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_vec) {
     co_await _manager.dir_semaphore().parallel_for_each(info_vec, [this] (const sstables::entry_descriptor& info) {
-        return load_sstable(info).then([this] (auto sst) {
+        return load_sstable(info, [this] { return *_storage_opts; }).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
         });

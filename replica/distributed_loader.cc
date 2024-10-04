@@ -234,14 +234,16 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg) {
-    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix] (auto& global_table, auto& directory) {
+distributed_loader::get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg) {
+    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix, sstables=std::move(sstables)] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
             sharded_parameter([bucket, endpoint, prefix] {
                 data_dictionary::storage_options opts;
                 opts.value = data_dictionary::storage_options::s3{bucket, endpoint, prefix};
                 return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
-            }), &error_handler_gen_for_upload_dir);
+            }),
+            sstables,
+            &error_handler_gen_for_upload_dir);
     });
 }
 

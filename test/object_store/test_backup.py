@@ -153,6 +153,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     orig_res = cql.execute(f"SELECT * FROM {ks}.{cf}")
     orig_rows = { x.name: x.value for x in orig_res }
 
+    toc_names = [entry.name for entry in list_sstables() if entry.name.endswith('TOC.txt')]
+
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
@@ -166,7 +168,7 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     assert not res
 
     print(f'Try to restore')
-    tid = await manager.api.restore(server.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name)
+    tid = await manager.api.restore(server.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
     print(f'Check that sstables came back')
