@@ -456,7 +456,6 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _cf;
     sstring _prefix;
     std::vector<sstring> _sstables;
-    sstring _snapshot_name;
 
 protected:
     virtual future<> run() override;
