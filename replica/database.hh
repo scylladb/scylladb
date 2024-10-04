@@ -579,6 +579,8 @@ public:
     // If split is required, then the compaction group of the given tablet is guaranteed to
     // be split once it returns.
     future<> maybe_split_compaction_group_of(locator::tablet_id);
+
+    dht::token_range get_post_split_token_range_of(const dht::token&) const noexcept;
 private:
     // If SSTable doesn't need split, the same input SSTable is returned as output.
     // If SSTable needs split, then output SSTables are returned and the input SSTable is deleted.
