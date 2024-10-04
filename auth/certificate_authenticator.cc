@@ -76,7 +76,7 @@ auth::certificate_authenticator::certificate_authenticator(cql3::query_processor
                     continue;
                 } catch (std::out_of_range&) {
                     // just fallthrough
-                } catch (std::regex_error&) {
+                } catch (boost::regex_error&) {
                     std::throw_with_nested(std::invalid_argument(fmt::format("Invalid query expression: {}", map.at(cfg_query_attr))));
                 }
             }
