@@ -938,6 +938,7 @@ public:
     virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
+    dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
 };
 
 void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
