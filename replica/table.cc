@@ -2284,6 +2284,10 @@ public:
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _cg.get_staging_done_condition();
     }
+
+    dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
+        return _t.get_token_range_after_split(t);
+    }
 };
 
 compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range)
