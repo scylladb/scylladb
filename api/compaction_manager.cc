@@ -28,10 +28,10 @@ namespace ss = httpd::storage_service_json;
 using namespace json;
 using namespace seastar::httpd;
 
-static future<json::json_return_type> get_cm_stats(http_context& ctx,
+static future<json::json_return_type> get_cm_stats(sharded<compaction_manager>& cm,
         int64_t compaction_manager::stats::*f) {
-    return ctx.db.map_reduce0([f](replica::database& db) {
-        return db.get_compaction_manager().get_stats().*f;
+    return cm.map_reduce0([f](compaction_manager& cm) {
+        return cm.get_stats().*f;
     }, int64_t(0), std::plus<int64_t>()).then([](const int64_t& res) {
         return make_ready_future<json::json_return_type>(res);
     });
@@ -135,8 +135,8 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         }, std::plus<int64_t>());
     });
 
-    cm::get_completed_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cm_stats(ctx, &compaction_manager::stats::completed_tasks);
+    cm::get_completed_tasks.set(r, [&cm] (std::unique_ptr<http::request> req) {
+        return get_cm_stats(cm, &compaction_manager::stats::completed_tasks);
     });
 
     cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<http::request> req) {
