@@ -27,25 +27,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  read-toolchain:
-    if: github.event_name == 'pull_request' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/clang-tidy'))
-    uses: ./.github/workflows/read-toolchain.yaml
   clang-tidy:
     name: Run clang-tidy
-    needs:
-      - read-toolchain
     runs-on: ubuntu-latest
-    container: ${{ needs.read-toolchain.outputs.image }}
+    container: fedora:41
     steps:
-      - env:
-          IMAGE: ${{ needs.read-toolchain.image }}
-        run: |
-          echo ${{ needs.read-toolchain.image }}
+      - run: |
+          sudo dnf -y install git clang-tools-extra
       - uses: actions/checkout@v4
         with:
           submodules: true
       - run: |
-          sudo dnf -y install clang-tools-extra
+          sudo ./install-dependencies.sh
       - name: Generate the building system
         run: |
           cmake                                         \
