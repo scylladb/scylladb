@@ -10,6 +10,7 @@
 
 #include "bytes.hh"
 #include "utils/hashing.hh"
+#include <memory>
 
 template<typename H>
 concept HasherReturningBytes = HasherReturning<H, bytes>;
