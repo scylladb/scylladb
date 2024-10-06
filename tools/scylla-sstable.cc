@@ -671,7 +671,7 @@ private:
                 }
             });
         } else {
-            throw std::runtime_error(fmt::format("Cannot collect timestamp of cell (column {} of uknown type {})", cdef.name_as_text(), cdef.type->name()));
+            throw std::runtime_error(fmt::format("Cannot collect timestamp of cell (column {} of unknown type {})", cdef.name_as_text(), cdef.type->name()));
         }
     }
 
