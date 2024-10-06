@@ -1727,10 +1727,16 @@ public:
         // handler is being removed from the b::list, so if any live iterator points at it,
         // move it to the next object (this requires that the list is traversed in the forward
         // direction).
+        bool drop_end = false;
         for (auto& itp : _live_iterators) {
             if (&**itp == handler) {
                 ++*itp;
+                drop_end |= (*itp == end());
             }
+        }
+        if (drop_end) {
+            const auto [first, last] = std::ranges::remove_if(_live_iterators, [this] (iterator* pit) { return *pit == end(); });
+            _live_iterators.erase(first, last);
         }
     }
     class iterator_guard {
@@ -6779,7 +6785,7 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
             it->timeout_cb();
         }
         ++it;
-        if (need_preempt()) {
+        if (need_preempt() && it != _cancellable_write_handlers_list->end()) {
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
             seastar::thread::yield();
         }
