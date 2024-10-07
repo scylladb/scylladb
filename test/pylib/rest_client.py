@@ -307,7 +307,15 @@ class ScyllaRESTAPIClient():
         """Flush keyspace"""
         await self.client.post(f"/storage_service/keyspace_flush/{ks}", host=node_ip)
 
+<<<<<<< HEAD
     async def backup(self, node_ip: str, ks: str, tag: str, dest: str, bucket: str) -> str:
+=======
+    async def flush_all_keyspaces(self, node_ip: str) -> None:
+        """Flush all keyspaces"""
+        await self.client.post(f"/storage_service/flush", host=node_ip)
+
+    async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str) -> str:
+>>>>>>> afad1b3c85 (topology-custom: add test to verify tombstone gc in read path)
         """Backup keyspace's snapshot"""
         params = {"keyspace": ks,
                   "endpoint": dest,
