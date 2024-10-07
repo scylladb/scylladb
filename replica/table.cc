@@ -2523,6 +2523,25 @@ table::make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set
     };
 }
 
+max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const {
+    return [this](const dht::decorated_key& dk, ::is_shadowable is_shadowable) {
+        auto& sg = storage_group_for_token(dk.token());
+        auto max_purgeable_timestamp = api::max_timestamp;
+
+        // if a memtable with a minimum timestamp lower than the current maximum
+        // purgeable timestamp has the given key, the tombstone should not be purged
+        sg.for_each_active_memtable([&dk, is_shadowable, &max_purgeable_timestamp](const memtable& mt) {
+            // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
+            api::timestamp_type memtable_min_timestamp = is_shadowable ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
+            if (memtable_min_timestamp < max_purgeable_timestamp && mt.contains_partition(dk)) {
+                max_purgeable_timestamp = memtable_min_timestamp;
+            }
+        });
+
+        return max_purgeable_timestamp;
+    };
+}
+
 snapshot_source
 table::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
@@ -2538,7 +2557,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
-                can_always_purge,
+                get_max_purgeable_fn_for_cache_underlying_reader(),
                 _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {
