@@ -2681,7 +2681,7 @@ future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_
     });
 }
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, locator::token_metadata_ptr tmptr, const replica::table& t,
         streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
@@ -2689,9 +2689,9 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
     if (reason == streaming::stream_reason::repair && !t.views().empty()) {
         return make_ready_future<bool>(true);
     }
-    return do_with(t.views(), [&sys_dist_ks, &tm] (auto& views) {
+    return do_with(t.views(), [&sys_dist_ks, tmptr = std::move(tmptr)] (auto& views) {
         return map_reduce(views,
-                [&sys_dist_ks, &tm] (const view_ptr& view) { return check_view_build_ongoing(sys_dist_ks, tm, view->ks_name(), view->cf_name()); },
+                [&sys_dist_ks, tmptr] (const view_ptr& view) { return check_view_build_ongoing(sys_dist_ks, *tmptr, view->ks_name(), view->cf_name()); },
                 false,
                 std::logical_or<bool>());
     });
