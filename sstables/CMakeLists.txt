@@ -36,5 +36,5 @@ target_link_libraries(sstables
     libdeflate::libdeflate
     ZLIB::ZLIB)
 
-check_headers(check-headers streaming
+check_headers(check-headers sstables
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
