@@ -671,6 +671,7 @@ private:
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
     void refresh_compound_sstable_set();
 
+    max_purgeable_fn get_max_purgeable_fn_for_cache_underlying_reader() const;
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
