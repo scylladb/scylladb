@@ -650,7 +650,7 @@ public:
         }
     }
 
-    template <bool Const>
+    template <bool Const, typename Iterator> // Iterator will be derived from iterator_base
     class iterator_base {
     protected:
         using tree_ptr = std::conditional_t<Const, const tree*, tree*>;
@@ -722,7 +722,7 @@ public:
         reference operator*() const noexcept { return *_hook->template to_key<Key, Hook>(); }
         pointer operator->() const noexcept { return _hook->template to_key<Key, Hook>(); }
 
-        iterator_base& operator++() noexcept {
+        Iterator& operator++() noexcept {
             node_base_ptr n = revalidate();
 
             if (n->is_leaf()) [[likely]] {
@@ -754,16 +754,18 @@ public:
                 _hook = nd->_base.keys[_idx];
             }
 
-            return *this;
+            static_assert(std::is_base_of_v<iterator_base, Iterator>);
+            return static_cast<Iterator&>(*this);
         }
 
-        iterator_base& operator--() noexcept {
+        Iterator& operator--() noexcept {
             if (is_end()) {
                 node_base_ptr n = _tree->rightmost_node();
                 SCYLLA_ASSERT(n->num_keys > 0);
                 _idx = n->num_keys - 1u;
                 _hook = n->keys[_idx];
-                return *this;
+                static_assert(std::is_base_of_v<iterator_base, Iterator>);
+                return static_cast<Iterator&>(*this);
             }
 
             node_ptr n = node::from_base(revalidate());
@@ -784,17 +786,18 @@ public:
             }
 
             _hook = n->_base.keys[_idx];
-            return *this;
+            static_assert(std::is_base_of_v<iterator_base, Iterator>);
+            return static_cast<Iterator&>(*this);
         }
 
-        iterator_base operator++(int) noexcept {
-            iterator_base cur = *this;
+        Iterator operator++(int) noexcept {
+            auto cur = Iterator(*this);
             operator++();
             return cur;
         }
 
-        iterator_base operator--(int) noexcept {
-            iterator_base cur = *this;
+        Iterator operator--(int) noexcept {
+            auto cur = Iterator(*this);
             operator--();
             return cur;
         }
@@ -826,8 +829,8 @@ public:
         }
     };
 
-    using iterator_base_const = iterator_base<true>;
-    using iterator_base_nonconst = iterator_base<false>;
+    using iterator_base_const = iterator_base<true, const_iterator>;
+    using iterator_base_nonconst = iterator_base<false, iterator>;
 
     class const_iterator final : public iterator_base_const {
         friend class tree;
