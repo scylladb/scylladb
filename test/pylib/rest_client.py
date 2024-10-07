@@ -304,6 +304,37 @@ class ScyllaRESTAPIClient():
         """Flush keyspace"""
         await self.client.post(f"/storage_service/keyspace_flush/{ks}", host=node_ip)
 
+<<<<<<< HEAD
+=======
+    async def flush_all_keyspaces(self, node_ip: str) -> None:
+        """Flush all keyspaces"""
+        await self.client.post(f"/storage_service/flush", host=node_ip)
+
+    async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str) -> str:
+        """Backup keyspace's snapshot"""
+        params = {"keyspace": ks,
+                  "table": table,
+                  "endpoint": dest,
+                  "bucket": bucket,
+                  "prefix": prefix,
+                  "snapshot": tag}
+        return await self.client.post_json(f"/storage_service/backup", host=node_ip, params=params)
+
+    async def restore(self, node_ip: str, ks: str, cf: str, dest: str, bucket: str, prefix: str, sstables: list[str]) -> str:
+        """Restore keyspace:table from backup"""
+        params = {"keyspace": ks,
+                  "table": cf,
+                  "endpoint": dest,
+                  "bucket": bucket,
+                  "prefix": prefix}
+        return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
+
+    async def take_snapshot(self, node_ip: str, ks: str, tag: str) -> None:
+        """Take keyspace snapshot"""
+        params = { 'kn': ks, 'tag': tag }
+        await self.client.post(f"/storage_service/snapshots", host=node_ip, params=params)
+
+>>>>>>> afad1b3c85 (topology-custom: add test to verify tombstone gc in read path)
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
         await self.client.post(f"/storage_service/keyspace_cleanup/{ks}", host=node_ip)
