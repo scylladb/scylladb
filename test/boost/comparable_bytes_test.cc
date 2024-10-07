@@ -128,3 +128,7 @@ BOOST_AUTO_TEST_CASE(test_smallint) {
 BOOST_AUTO_TEST_CASE(test_int) {
     byte_comparable_test(generate_integer_test_data<int32_t>());
 }
+
+BOOST_AUTO_TEST_CASE(test_bigint) {
+    byte_comparable_test(generate_integer_test_data<int64_t>());
+}
