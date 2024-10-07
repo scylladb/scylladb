@@ -2681,17 +2681,31 @@ future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_
     });
 }
 
+<<<<<<< HEAD
 future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
         streaming::stream_reason reason) {
+=======
+future<> view_builder::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table) {
+    return _vug.register_staging_sstable(std::move(sst), std::move(table));
+}
+
+future<bool> check_needs_view_update_path(view_builder& vb, locator::token_metadata_ptr tmptr, const replica::table& t, streaming::stream_reason reason) {
+>>>>>>> eaa3b774a6 (view: check_needs_view_update_path: get token_metadata_ptr)
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
     }
     if (reason == streaming::stream_reason::repair && !t.views().empty()) {
         return make_ready_future<bool>(true);
     }
+<<<<<<< HEAD
     return do_with(t.views(), [&sys_dist_ks, &tm] (auto& views) {
         return map_reduce(views,
                 [&sys_dist_ks, &tm] (const view_ptr& view) { return check_view_build_ongoing(sys_dist_ks, tm, view->ks_name(), view->cf_name()); },
+=======
+    return do_with(std::move(tmptr), t.views(), [&vb] (locator::token_metadata_ptr& tmptr, auto& views) {
+        return map_reduce(views,
+                [&] (const view_ptr& view) { return vb.check_view_build_ongoing(*tmptr, view->ks_name(), view->cf_name()); },
+>>>>>>> eaa3b774a6 (view: check_needs_view_update_path: get token_metadata_ptr)
                 false,
                 std::logical_or<bool>());
     });
