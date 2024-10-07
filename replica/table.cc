@@ -878,6 +878,12 @@ void storage_group::for_each_compaction_group(std::function<void(const compactio
     }
 }
 
+void storage_group::for_each_active_memtable(noncopyable_function<void(const memtable&)> action) const noexcept {
+    for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+        action(cg->memtables()->active_memtable());
+    });
+}
+
 utils::small_vector<compaction_group_ptr, 3> storage_group::compaction_groups() noexcept {
     utils::small_vector<compaction_group_ptr, 3> cgs;
     for_each_compaction_group([&cgs] (const compaction_group_ptr& cg) {
