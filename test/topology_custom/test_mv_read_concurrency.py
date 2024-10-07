@@ -84,3 +84,55 @@ async def test_mv_read_concurrency(manager: ManagerClient) -> None:
 
     if failed:
         raise failed
+
+# This test verifies that the writes causing view updates don't make Scylla use excessive memory.
+# Similarly to the read timeout test, we create a table with a materialized view, and then run
+# an even larger number of writes causing view updates.
+# The test fails if Scylla aborts due to using too much memory.
+# Reproduces https://github.com/scylladb/scylladb/issues/15805
+@pytest.mark.asyncio
+@skip_mode('release', "error injections aren't enabled in release mode")
+async def test_mv_read_memory(manager: ManagerClient) -> None:
+    node_count = 1
+    # Disable cache to make reads use the read concurrency semaphore.
+    # Tests remove the rcs multipliers by default, here we set the serialize limit back back to the default used outside tests
+    # and we increase the kill limit. Without the view update read before write admission, the test exceeds even the increased limit.
+    # With the admission, the memory usage should stay within the limits and cause no errors.
+    cfg = {
+        'enable_tablets': True,
+        'enable_cache': False,
+        'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 2,
+        'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 10
+    }
+    servers = await manager.servers_add(node_count, config=cfg)
+
+    cql, _ = await manager.get_ready_cql(servers)
+    # Use just 1 tablet to make the test more predictable by running all view updates on the same shard
+    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
+                        "AND tablets = {'initial': 1}")
+    await cql.run_async(f"CREATE TABLE ks.tab (p int PRIMARY KEY, mvp int, v text)")
+    await cql.run_async(f"CREATE MATERIALIZED VIEW IF NOT EXISTS ks.mv AS SELECT p, mvp FROM ks.tab \
+        WHERE p IS NOT NULL AND mvp IS NOT NULL PRIMARY KEY (mvp, p)")
+    await wait_for_view(cql, 'mv', node_count)
+
+    row_count = 500
+
+    # The injection prolongs the time we hold the read concurrency semaphore resources during the rbw during a view update
+    await manager.api.enable_injection(servers[0].ip_addr, "keep_mv_read_semaphore_units_10ms_longer", one_shot=False)
+
+    stop_event = asyncio.Event()
+    async def do_mv_inserts(i: int):
+        insert_stmt = cql.prepare(f"INSERT INTO ks.tab(p, mvp, v) VALUES (?, ?, '{100000*'a'}') USING TIMEOUT 30s")
+        reps = 0
+        while not stop_event.is_set() and reps < 10:
+            try:
+                await manager.cql.run_async(insert_stmt, [i, i])
+                reps += 1
+            except WriteTimeout:
+                # A write timeout doesn't necessarily show that we run out of memory - the read queueing
+                # might just have done its job, so don't fail the test to avoid false negatives
+                logger.info(f"Write timeout on {i}")
+
+    insert_tasks = [asyncio.create_task(do_mv_inserts(i)) for i in range(row_count)]
+
+    await asyncio.gather(*insert_tasks)
