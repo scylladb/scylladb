@@ -811,7 +811,7 @@ private:
                     return info->next;
                 }
             }
-            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+            on_internal_error(tablet_logger, format("Invalid replica selector {}", static_cast<int>(info->writes)));
         });
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
