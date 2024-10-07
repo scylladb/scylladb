@@ -22,7 +22,7 @@ function (check_headers check_headers_target target)
     file(GLOB_RECURSE sources
       LIST_DIRECTORIES false
       RELATIVE ${CMAKE_SOURCE_DIR}
-      "${parsed_args_RECURSIVE}")
+      "${parsed_args_GLOB_RECURSE}")
   else()
     message(FATAL_ERROR "Please specify GLOB or GLOB_RECURSE.")
   endif()
