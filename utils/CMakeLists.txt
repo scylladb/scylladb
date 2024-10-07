@@ -45,6 +45,7 @@ target_sources(utils
     updateable_value.cc
     utf8.cc
     uuid.cc
+    labels.cc
     aws_sigv4.cc
     s3/client.cc)
 target_include_directories(utils
