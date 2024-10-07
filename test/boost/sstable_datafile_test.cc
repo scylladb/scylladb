@@ -926,7 +926,7 @@ static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes
     }
 }
 
-static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::function<shared_sstable()> sst_gen, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
+static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
         std::vector<bytes> min_components, std::vector<bytes> max_components, sstable_version_types version, bool remove = false) {
     auto mt = make_lw_shared<replica::memtable>(s);
     auto insert_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
@@ -975,8 +975,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "b"},
+                test_min_max_clustering_key(env, s, {"key1"}, {{"a", "b"},
                                                           {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
             }
             {
@@ -987,8 +986,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "b"},
+                test_min_max_clustering_key(env, s, {"key1"}, {{"a", "b"},
                                                           {"a", "c"}}, {"a", "b"}, {"a", "c"}, version);
             }
             {
@@ -999,8 +997,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("r1", int32_type)
                         .build();
                 BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} version={}", version));
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
+                test_min_max_clustering_key(env, s, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
             }
             {
                 auto s = schema_builder("ks", "cf")
@@ -1011,8 +1008,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("r1", int32_type)
                         .build();
                 BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} with compact storage version={}", version));
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
+                test_min_max_clustering_key(env, s, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
             }
             {
                 auto s = schema_builder("ks", "cf")
@@ -1022,8 +1018,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("r1", int32_type)
                         .build();
                 BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"z\"}} max={{\"a\", \"a\"}} version={}", version));
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "a"}, {"a", "z"}}, {"a", "z"}, {"a", "a"}, version);
+                test_min_max_clustering_key(env, s, {"key1"}, {{"a", "a"}, {"a", "z"}}, {"a", "z"}, {"a", "a"}, version);
             }
             {
                 auto s = schema_builder("ks", "cf")
@@ -1033,8 +1028,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("r1", int32_type)
                         .build();
                 BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"a\"}} max={{\"b\", \"z\"}} version={}", version));
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "z"}, {"a", "a"}}, {"a", "a"}, {"b", "z"}, version);
+                test_min_max_clustering_key(env, s, {"key1"}, {{"b", "z"}, {"a", "a"}}, {"a", "a"}, {"b", "z"}, version);
             }
             {
                 auto s = schema_builder("ks", "cf")
@@ -1042,8 +1036,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck1", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a"},
+                test_min_max_clustering_key(env, s, {"key1"}, {{"a"},
                                                           {"z"}}, {"a"}, {"z"}, version);
             }
             {
@@ -1052,8 +1045,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck1", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a"},
+                test_min_max_clustering_key(env, s, {"key1"}, {{"a"},
                                                           {"z"}}, {"a"}, {"z"}, version, true);
             }
             {
@@ -1061,8 +1053,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("pk", utf8_type, column_kind::partition_key)
                         .with_column("r1", int32_type)
                         .build();
-                auto sst_gen = env.make_sst_factory(s, version);
-                test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {}, {}, {}, version);
+                test_min_max_clustering_key(env, s, {"key1"}, {}, {}, {}, version);
             }
             if (version >= sstable_version_types::mc) {
                 {
@@ -1074,8 +1065,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                             .with_column("r1", int32_type)
                             .build();
                     BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\"}} max={{\"a\"}} with compact storage version={}", version));
-                auto sst_gen = env.make_sst_factory(s, version);
-                    test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "z"}, {"a"}}, {"a"}, {"a"}, version);
+                    test_min_max_clustering_key(env, s, {"key1"}, {{"a", "z"}, {"a"}}, {"a"}, {"a"}, version);
                 }
             }
         }
