@@ -613,9 +613,17 @@ schema_ptr system_keyspace::built_indexes() {
             {"bytes_in", long_type},
             {"bytes_out", long_type},
             {"columnfamily_name", utf8_type},
+            {"started_at", timestamp_type},
             {"compacted_at", timestamp_type},
+            {"compaction_type", utf8_type},
             {"keyspace_name", utf8_type},
             {"rows_merged", map_type_impl::get_instance(int32_type, long_type, true)},
+            {"shard_id", int32_type},
+            {"sstables_in", list_type_impl::get_instance(sstableinfo_type, false)},
+            {"sstables_out", list_type_impl::get_instance(sstableinfo_type, false)},
+            {"total_tombstone_purge_attempt", long_type},
+            {"total_tombstone_purge_failure_due_to_overlapping_with_memtable", long_type},
+            {"total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable", long_type},
         },
         // static columns
         {},
@@ -2413,6 +2421,26 @@ system_keyspace::query(distributed<replica::database>& db, const sstring& ks_nam
     });
 }
 
+static list_type_impl::native_type prepare_sstables(const std::vector<sstables::basic_info>& sstables) {
+    list_type_impl::native_type tmp;
+    for (auto& info : sstables) {
+        auto element = make_user_value(sstableinfo_type, {data_value(info.generation), data_value(info.origin), data_value(info.size)});
+        tmp.push_back(std::move(element));
+    }
+    return tmp;
+}
+
+static std::vector<sstables::basic_info> restore_sstables(const std::vector<user_type_impl::native_type>& sstables) {
+    std::vector<sstables::basic_info> tmp;
+    tmp.reserve(sstables.size());
+
+    for (auto& data : sstables) {
+        tmp.emplace_back(sstables::generation_type(value_cast<utils::UUID>(data[0])), value_cast<sstring>(data[1]), value_cast<int64_t>(data[2]));
+    }
+
+    return tmp;
+}
+
 static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t, int64_t>& rows_merged) {
     map_type_impl::native_type tmp;
     for (auto& r: rows_merged) {
@@ -2432,13 +2460,36 @@ future<> system_keyspace::update_compaction_history(compaction_history_entry ent
     }
 
     auto map_type = map_type_impl::get_instance(int32_type, long_type, true);
+    auto list_type = list_type_impl::get_instance(sstableinfo_type, false);
+    db_clock::time_point compacted_at{db_clock::duration{entry.compacted_at}};
+    db_clock::time_point started_at{db_clock::duration{entry.started_at}};
 
-    sstring req = format("INSERT INTO system.{} (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                    , COMPACTION_HISTORY);
+    std::function<future<::shared_ptr<cql3::untyped_result_set>>()> execute;
+    if (local_db().features().compaction_history_upgrade) {
+        static constexpr auto reqest_template = "INSERT INTO system.{} ( \
+                id, shard_id, keyspace_name, columnfamily_name, started_at, compacted_at, compaction_type, bytes_in, bytes_out, rows_merged, \
+                sstables_in, sstables_out, total_tombstone_purge_attempt, total_tombstone_purge_failure_due_to_overlapping_with_memtable, \
+                total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable \
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        sstring request = format(reqest_template, COMPACTION_HISTORY);
+        execute = [&, request=std::move(request)]() {
+            return execute_cql(request, entry.id, int32_t(entry.shard_id), entry.ks, entry.cf, started_at, compacted_at, entry.compaction_type,
+                        entry.bytes_in, entry.bytes_out, make_map_value(map_type, prepare_rows_merged(entry.rows_merged)),
+                        make_list_value(list_type, prepare_sstables(entry.sstables_in)), make_list_value(list_type, prepare_sstables(entry.sstables_out)),
+                        entry.total_tombstone_purge_attempt, entry.total_tombstone_purge_failure_due_to_overlapping_with_memtable,
+                        entry.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable);
+        };
+    } else {
+        static constexpr auto reqest_template = "INSERT INTO system.{} ( \
+                id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        sstring request = format(reqest_template, COMPACTION_HISTORY);
+        execute = [&, request=std::move(request)]() {
+            return execute_cql(request, entry.id, entry.ks, entry.cf, compacted_at, entry.bytes_in, entry.bytes_out,
+                        make_map_value(map_type, prepare_rows_merged(entry.rows_merged)));
+        };
+    }
 
-    db_clock::time_point tp{db_clock::duration{entry.compacted_at}};
-    return execute_cql(req, entry.id, entry.ks, entry.cf, tp, entry.bytes_in, entry.bytes_out,
-                       make_map_value(map_type, prepare_rows_merged(entry.rows_merged))).discard_result().handle_exception([] (auto ep) {
+    return execute().discard_result().handle_exception([] (auto ep) {
         slogger.error("update compaction history failed: {}: ignored", ep);
     });
 }
@@ -2448,14 +2499,27 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer con
     co_await _qp.query_internal(req, [&consumer] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
         compaction_history_entry entry;
         entry.id = row.get_as<utils::UUID>("id");
+        entry.shard_id = row.get_or<int32_t>("shard_id", 0);
         entry.ks = row.get_as<sstring>("keyspace_name");
         entry.cf = row.get_as<sstring>("columnfamily_name");
+        entry.compaction_type = row.get_or<sstring>("compaction_type", "");
+        entry.started_at = row.get_or<int64_t>("started_at", 0);
         entry.compacted_at = row.get_as<int64_t>("compacted_at");
         entry.bytes_in = row.get_as<int64_t>("bytes_in");
         entry.bytes_out = row.get_as<int64_t>("bytes_out");
         if (row.has("rows_merged")) {
             entry.rows_merged = row.get_map<int32_t, int64_t>("rows_merged");
         }
+        if (row.has("sstables_in")) {
+            entry.sstables_in = restore_sstables(row.get_list<user_type_impl::native_type>("sstables_in", sstableinfo_type));
+        }
+        if (row.has("sstables_out")) {
+            entry.sstables_out = restore_sstables(row.get_list<user_type_impl::native_type>("sstables_out", sstableinfo_type));
+        }
+        entry.total_tombstone_purge_attempt = row.get_or<int64_t>("total_tombstone_purge_attempt", 0);
+        entry.total_tombstone_purge_failure_due_to_overlapping_with_memtable = row.get_or<int64_t>("total_tombstone_purge_failure_due_to_overlapping_with_memtable", 0);
+        entry.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable = row.get_or<int64_t>("total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable", 0);
+
         co_await consumer(std::move(entry));
         co_return stop_iteration::no;
     });
