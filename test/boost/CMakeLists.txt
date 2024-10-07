@@ -1,3 +1,4 @@
+
 add_scylla_test(UUID_test
   KIND BOOST)
 add_scylla_test(aggregate_fcts_test
