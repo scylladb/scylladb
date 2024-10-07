@@ -15,8 +15,6 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/byteorder.hh>
 
-#include <boost/range/algorithm/for_each.hpp>
-
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
 #elif defined(__aarch64__)
@@ -209,10 +207,9 @@ public:
     template<typename FragmentedBuffer>
     requires FragmentRange<FragmentedBuffer>
     void process_fragmented(const FragmentedBuffer& buffer) {
-        using boost::range::for_each;
-        for_each(buffer, [this] (bytes_view bv) {
+        for (bytes_view bv : buffer) {
             process(reinterpret_cast<const uint8_t*>(bv.data()), bv.size());
-        });
+        }
     }
 
     uint32_t get() const {
