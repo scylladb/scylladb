@@ -2720,16 +2720,16 @@ future<> view_builder::register_staging_sstable(sstables::shared_sstable sst, lw
     return _vug.register_staging_sstable(std::move(sst), std::move(table));
 }
 
-future<bool> check_needs_view_update_path(view_builder& vb, const locator::token_metadata& tm, const replica::table& t, streaming::stream_reason reason) {
+future<bool> check_needs_view_update_path(view_builder& vb, locator::token_metadata_ptr tmptr, const replica::table& t, streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
     }
     if (reason == streaming::stream_reason::repair && !t.views().empty()) {
         return make_ready_future<bool>(true);
     }
-    return do_with(t.views(), [&vb, &tm] (auto& views) {
+    return do_with(std::move(tmptr), t.views(), [&vb] (locator::token_metadata_ptr& tmptr, auto& views) {
         return map_reduce(views,
-                [&vb, &tm] (const view_ptr& view) { return vb.check_view_build_ongoing(tm, view->ks_name(), view->cf_name()); },
+                [&] (const view_ptr& view) { return vb.check_view_build_ongoing(*tmptr, view->ks_name(), view->cf_name()); },
                 false,
                 std::logical_or<bool>());
     });
