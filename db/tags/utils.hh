@@ -16,7 +16,6 @@
 #include "seastarx.hh"
 
 #include "schema/schema.hh"
-#include "service/client_state.hh"
 #include "service/migration_manager.hh"
 
 namespace db {

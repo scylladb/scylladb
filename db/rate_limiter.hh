@@ -11,13 +11,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <chrono>
-#include <limits>
-#include <concepts>
 #include <vector>
-#include <optional>
-#include <random>
 
-#include <seastar/core/future.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/metrics_registration.hh>

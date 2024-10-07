@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <tuple>
-#include <optional>
 #include <seastar/core/seastar.hh>
 
 namespace db {

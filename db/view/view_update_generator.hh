@@ -10,9 +10,9 @@
 
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
-#include "db_clock.hh"
 #include "utils/chunked_vector.hh"
 #include "schema/schema_fwd.hh"
+#include "gc_clock.hh"
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/metrics_registration.hh>

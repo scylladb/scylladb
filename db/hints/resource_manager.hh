@@ -12,8 +12,6 @@
 #include <filesystem>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/gate.hh>
-#include <seastar/core/memory.hh>
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
 #include <unordered_set>

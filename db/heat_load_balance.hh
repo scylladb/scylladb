@@ -30,7 +30,7 @@
 #include "utils/assert.hh"
 #include <vector>
 #include <cassert>
-#include <fmt/ranges.h>
+#include <fmt/ranges.h>  // IWYU pragma: keep
 #include <boost/range/adaptor/map.hpp>
 #include "log.hh"
 

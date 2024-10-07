@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "function.hh"
 #include <span>
 

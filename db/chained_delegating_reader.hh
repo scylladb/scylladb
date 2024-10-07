@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <seastar/core/shared_future.hh>
-
 #include "readers/mutation_reader.hh"
 
 // A reader which allows to insert a deferring operation before reading.

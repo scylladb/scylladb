@@ -12,7 +12,6 @@
 
 #include "function.hh"
 #include "stateless_aggregate_function.hh"
-#include <optional>
 
 namespace db {
 namespace functions {

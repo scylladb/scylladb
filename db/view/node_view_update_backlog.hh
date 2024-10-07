@@ -18,7 +18,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <new>
 
 namespace db::view {
 

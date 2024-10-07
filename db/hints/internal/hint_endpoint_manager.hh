@@ -13,7 +13,6 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/smp.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 // Scylla includes.
@@ -22,15 +21,11 @@
 #include "db/hints/internal/hint_sender.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/resource_manager.hh"
-#include "utils/runtime.hh"
 #include "enum_set.hh"
 
 // STD.
 #include <cassert>
-#include <chrono>
 #include <filesystem>
-#include <memory>
-#include <unordered_map>
 
 namespace db::hints {
 
