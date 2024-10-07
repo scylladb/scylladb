@@ -9,7 +9,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition_v2.hh"
 #include "clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -715,13 +714,13 @@ mutation_partition_v2::upper_bound(const schema& schema, const query::clustering
     return _rows.lower_bound(position_in_partition_view::for_range_end(r), rows_entry::tri_compare(schema));
 }
 
-boost::iterator_range<mutation_partition_v2::rows_type::const_iterator>
+std::ranges::subrange<mutation_partition_v2::rows_type::const_iterator>
 mutation_partition_v2::range(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
-    return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
+    return std::ranges::subrange(lower_bound(schema, r), upper_bound(schema, r));
 }
 
-boost::iterator_range<mutation_partition_v2::rows_type::iterator>
+std::ranges::subrange<mutation_partition_v2::rows_type::iterator>
 mutation_partition_v2::range(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition_v2*>(this)->range(schema, r));
 }
@@ -748,7 +747,7 @@ void mutation_partition_v2::for_each_row(const schema& schema, const query::clus
             }
         }
     } else {
-        for (const auto& e : r | boost::adaptors::reversed) {
+        for (const auto& e : r | std::views::reverse) {
             if (func(e) == stop_iteration::yes) {
                 break;
             }
