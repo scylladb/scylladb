@@ -15,6 +15,9 @@ Alternator's compatibility with DynamoDB is described in the
 which is updated as the work on Alternator progresses and compatibility
 continues to improve.
 
+Alternator also adds several features and APIs that are not available in
+DynamoDB. These are described in [Alternator-specific APIs](new-apis.md).
+
 ## Running Alternator
 By default, Scylla does not listen for DynamoDB API requests. To enable
 this API in Scylla you must set at least two configuration options,
@@ -32,8 +35,9 @@ DynamoDB API requests. By default, it listens on this port on all network
 interfaces. To listen only on a specific interface, configure also the
 **alternator_address** option.
 
-The meaning of the **alternator_write_isolation** option is explained in detail
-in the "Write isolation policies" below. Alternator has four different choices
+The meaning of the **alternator_write_isolation** option is explained in the
+"Write isolation policies" section of [Alternator-specific APIs](new-apis.md).
+Alternator has four different choices
 for the implementation of writes, each with different advantages. You should
 carefully consider which of the options makes more sense for your intended
 use case and configure alternator_write_isolation accordingly. There is
@@ -64,77 +68,6 @@ Alternator does not provide such a load-balancing setup, so you should
 either set one up, or set up the client library to do the load balancing
 itself. Instructions, code and examples for doing this can be found in the
 [Alternator Load Balancing project](https://github.com/scylladb/alternator-load-balancing/).
-
-## Alternator-specific API
-
-### Write isolation policies
-DynamoDB API update requests may involve a read before the write - e.g., a
-_conditional_ update or an update based on the old value of an attribute.
-The read and the write should be treated as a single transaction - protected
-(_isolated_) from other parallel writes to the same item.
-
-Alternator could do this isolation by using Scylla's LWT (lightweight
-transactions) for every write operation, but this significantly slows
-down writes, and not necessary for workloads which don't use read-modify-write
-(RMW) updates.
-
-So Alternator supports four _write isolation policies_, which can be chosen
-on a per-table basis and may make sense for certain workloads as explained
-below.
-
-A default write isolation policy **must** be chosen using the
-`--alternator-write-isolation` configuration option. Additionally, the write
-isolation policy for a specific table can be overridden by tagging the table
-(at CreateTable time, or any time later with TagResource) with the key
-`system:write_isolation`, and one of the following values:
-
-  * `a`, `always`, or `always_use_lwt` - This mode performs every write
-    operation - even those that do not need a read before the write - as a
-    lightweight transaction.
-
-    This is the slowest choice, but also the only choice guaranteed to work
-    correctly for every workload.
-
-  * `f`, `forbid`, or `forbid_rmw` - This mode _forbids_ write requests
-    which need a read before the write. An attempt to use such statements
-    (e.g.,  UpdateItem with a ConditionExpression) will result in an error.
-    In this mode, the remaining write requests which are allowed - pure writes
-    without a read - are performed using standard Scylla writes, not LWT,
-    so they are significantly faster than they would have been in the
-    `always_use_lwt`, but their isolation is still correct.
-
-    This mode is the fastest mode which is still guaranteed to be always
-    safe. However, it is not useful for workloads that do need read-modify-
-    write requests on this table - which this mode forbids.
-
-  * `o`, or `only_rmw_uses_lwt` - This mode uses LWT only for updates that
-    require read-modify-write, and does normal quorum writes for write-only
-    updates.
-
-    The benefit of this mode is that it allows fast write-only updates to some
-    items, while still allowing some slower read-modify-write operations to
-    other items. However, This mode is only safe if the workload does not mix
-    read-modify-write and write-only updates to the same item, concurrently.
-    It cannot verify that this condition is actually honored by the workload.
-
-  * `u`, `unsafe`, or `unsafe_rmw` - This mode performs read-modify-write
-    operations as separate reads and writes, without any isolation guarantees.
-    It is the fastest option, but not safe - it does not correctly isolate
-    read-modify-write updates. This mode is not recommended for any use case,
-    and will likely be removed in the future.
-
-### Accessing system tables from Scylla
- * Scylla exposes lots of useful information via its internal system tables,
-   which can be found in system keyspaces: 'system', 'system\_auth', etc.
-   In order to access to these tables via alternator interface,
-   Scan and Query requests can use a special table name:
-   .scylla.alternator.KEYSPACE\_NAME.TABLE\_NAME
-   which will return results fetched from corresponding Scylla table.
-   This interface can be used only to fetch data from system tables.
-   Attempts to read regular tables via the virtual interface will result
-   in an error.
-   Example: in order to query the contents of Scylla's system.large_rows,
-   pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
 
 ## Alternator design and implementation
 
@@ -212,4 +145,5 @@ with Tablets enabled.
 
     getting-started
     compatibility
+    new-apis
 ```
