@@ -2857,8 +2857,9 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     // materialized view was created right after truncation started, and it
     // would not have compaction disabled when this function is called on it.
     if (!schema()->is_view()) {
-        auto compaction_disabled = std::ranges::all_of(storage_groups() | boost::adaptors::map_values,
-                                                       std::mem_fn(&storage_group::compaction_disabled));
+        auto compaction_disabled = std::ranges::all_of(storage_groups() | boost::adaptors::map_values, [] (const storage_group_ptr& sg) {
+            return sg->is_stopped() || sg->compaction_disabled();
+        });
         if (!compaction_disabled) {
             utils::on_internal_error(fmt::format("compaction not disabled on table {}.{} during TRUNCATE",
                 schema()->ks_name(), schema()->cf_name()));

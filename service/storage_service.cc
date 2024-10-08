@@ -784,7 +784,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             } else {
                 tablets = co_await replica::read_tablet_metadata(_qp);
             }
-            tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+            const auto& topology = _topology_state_machine._topology;
+            tablets->set_balancing_enabled(topology.tablet_balancing_enabled, topology.tablet_balancing_fenced_tables);
             tmptr->set_tablets(std::move(*tablets));
         }
 
@@ -6437,6 +6438,51 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
             .build()));
 
         sstring reason = format("Setting tablet balancing to {}", enabled);
+        rtlogger.info("{}", reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
+        }
+    }
+
+    while (_topology_state_machine._topology.is_busy()) {
+        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
+        co_await _topology_state_machine.event.wait();
+    }
+}
+
+future<> storage_service::set_tablet_balancing_fenced_tables(const std::unordered_set<table_id>& tables, bool enabled) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablet_balancing_fenced_tables(tables, enabled);
+        });
+    }
+
+    while (true) {
+        group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        std::vector<canonical_mutation> updates;
+        if (enabled) {
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                .add_tablet_balancing_fenced_tables(tables)
+                .build()));
+        } else {
+            auto fenced = boost::copy_range<std::unordered_set<table_id>>(_topology_state_machine._topology.tablet_balancing_fenced_tables | boost::adaptors::filtered([&] (table_id t) {
+                return !tables.contains(t);
+            }));
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                .set_tablet_balancing_fenced_tables(tables)
+                .build()));
+        }
+
+        auto reason = fmt::format("Setting tablet balancing: fenced tables={}: enabled={}", fmt::join(tables, ","), enabled);
         rtlogger.info("{}", reason);
         topology_change change{std::move(updates)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
