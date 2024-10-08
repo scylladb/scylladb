@@ -1388,6 +1388,9 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     this->set_min_max_position_range();
     this->set_first_and_last_keys();
     _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
+
+    _sstable_identifier = _components->scylla_metadata->get_optional_sstable_identifier();
+
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
     }
@@ -1871,6 +1874,15 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
 
         _components->scylla_metadata->data.set<scylla_metadata_type::ExtTimestampStats>(std::move(*ts_stats));
     }
+
+    sstable_id sid;
+    if (generation().is_uuid_based()) {
+        sid = sstable_id(generation().as_uuid());
+    } else {
+        sid = sstable_id(utils::UUID_gen::get_time_UUID());
+        sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
+    }
+    _components->scylla_metadata->data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
