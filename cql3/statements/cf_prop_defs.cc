@@ -154,6 +154,13 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         }
     }
 
+    auto memtable_flush_period = get_int(KW_MEMTABLE_FLUSH_PERIOD, DEFAULT_MEMTABLE_FLUSH_PERIOD);
+    if (memtable_flush_period != 0 && memtable_flush_period < DEFAULT_MEMTABLE_FLUSH_PERIOD_MIN_VALUE) {
+        throw exceptions::configuration_exception(format(
+            "{} must be 0 or greater than {}",
+            KW_MEMTABLE_FLUSH_PERIOD, DEFAULT_MEMTABLE_FLUSH_PERIOD_MIN_VALUE));
+    }
+
     speculative_retry::from_sstring(get_string(KW_SPECULATIVE_RETRY, speculative_retry(speculative_retry::type::NONE, 0).to_sstring()));
 }
 
