@@ -22,10 +22,10 @@ cassandra = find_cassandra()
 
 # By default, the Cassandra startup script simply looks for "java" in the
 # path, and in an ideal world, this should have just worked.
-# However, today Cassandra only supports Java versions 8 and 11, and your
-# Linux distribution might have one of those installed but not as the default
-# "java" command. So find_java() tries to find a supported version elsewhere
-# on your system.
+# However, Cassandra 3 and 4 only support Java versions 8 and 11, and
+# Cassandra 5 only supports Java 11 and 17, and your Linux distribution
+# might have one of those installed but not as the default "java" command.
+# So find_java() tries to find a supported version elsewhere on your system.
 # See https://github.com/scylladb/scylla/issues/10946
 # https://issues.apache.org/jira/browse/CASSANDRA-16895
 def java_major_version(java):
@@ -44,9 +44,12 @@ def find_java():
     # executable, and return the first one that works and has the appropriate
     # version. The first attempt is just "java" in the path, which is
     # preferred if has the right version.
-    for java in ['java', '/usr/lib/jvm/jre-11/bin/java', '/usr/lib/jvm/jre-1.8.0/bin/java']:
+    for java in ['/usr/lib/jvm/jre-11/bin/java', '/usr/lib/jvm/jre-1.8.0/bin/java', 'java']:
         try:
             version = java_major_version(java)
+            # FIXME: Since Cassandra 5, it now supports Java 17 but not
+            # Java 8, so this logic should be fixed. For now if you have
+            # Java 11 installed, all Cassandra versions will work.
             if version == 8 or version == 11:
                 return java
         except:
