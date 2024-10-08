@@ -77,3 +77,70 @@ isolation policy for a specific table can be overridden by tagging the table
    in an error.
    Example: in order to query the contents of Scylla's system.large_rows,
    pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
+
+## Service discovery
+As explained in [Scylla Alternator for DynamoDB users](compatibility.md),
+Alternator requires a load-balancer or a client-side load-balancing library
+to distribute requests between all Scylla nodes. This load-balancer needs
+to be able to _discover_ the Scylla nodes. Alternator provides two special
+requests, `/` and `/localnodes`, to help with this service discovery, which
+we will now explain.
+
+Some setups know exactly which Scylla nodes were brought up, so all that
+remains is to periodically verify that each node is still functional. The
+easiest way to do this is to make an HTTP (or HTTPS) GET request to the node,
+with URL `/`. This is a trivial GET request and does **not** need to be
+authenticated like other DynamoDB API requests. Note that Amazon DynamoDB
+also supports this unauthenticated `/` request.
+
+For example:
+```
+$ curl http://localhost:8000/
+healthy: localhost:8000
+```
+
+In other setups, the load balancer might not know which Scylla nodes exist.
+For example, it may be possible to add or remove Scylla nodes without a
+client-side load balancer knowing. For these setups we have the `/localnodes`
+request that can be used to discover which Scylla nodes exist: A load balancer
+that already knows at least one live node can discover the rest by sending
+a `/localnodes` request to the known node. It's again an unauthenticated
+HTTP (or HTTPS) GET request:
+
+```
+$ curl http://localhost:8000/localnodes
+["127.0.0.1","127.0.0.2"]
+```
+
+The response is a list of all functioning nodes in this data center, as a
+list of IP addresses in JSON format. Note that these are just IP addresses,
+not full URLs - they do not include the protocol and the port number.
+
+This request is called "localnodes" because it returns the _local_ nodes -
+the nodes in the same data center as the known node. This is usually what
+we need - we will have a separate load balancer per data center, just like
+Amazon DynamoDB has separate endpoint per AWS region.
+
+The `/localnodes` GET request can also take two optional parameters to
+list the nodes in a specific _data center_ or _rack_. These options are
+useful for certain use cases:
+
+* A `dc` option (e.g., `/localnodes?dc=dc1`) can be passed to list the
+  nodes in a specific Scylla data center, not the data center of the node
+  being contacted. This is useful when a client knowns of _some_ Scylla
+  node belonging to an unknown DC, but wants to list the nodes in _its_
+  DC, which it knows by name.
+
+* A `rack` option (e.g., `/localnodes?rack=rack1`) can be passed to list
+  only nodes in a given rack instead of an entire data center. This is useful
+  when a client in a multi-rack DC (e.g., a multi-AZ region in AWS) wants to
+  send requests to nodes in its own rack (which it knows by name), to avoid
+  cross-rack networking costs.
+
+Both `dc` and `rack` options can be specified together to list the nodes
+of a specific rack in a specific data center: `/localnodes?dc=dc1&rack=rack1`.
+
+If a certain data center or rack has no functional nodes, or doesn't even
+exist, an empty list (`[]`) is returned by the `/localnodes` request.
+A client should be prepared to consider expanding the node search to an
+entire data center, or other data centers, in that case.
