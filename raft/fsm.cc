@@ -1111,10 +1111,10 @@ void fsm::handle_read_quorum_reply(server_id from, const read_quorum_reply& repl
 std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id requester) {
     check_is_leader();
 
-    // Make sure that only a leader or a not that is part of the config can request read barrier
+    // Make sure that only a leader or a node that is part of the config can request read barrier
     // Nodes outside of the config may never get the data, so they will not be able to read it.
     if (requester != _my_id && leader_state().tracker.find(requester) == nullptr) {
-        throw std::runtime_error("Read barrier requested by a node outside of the configuration");
+        throw std::runtime_error(fmt::format("Read barrier requested by a node outside of the configuration {}", requester));
     }
 
     auto term_for_commit_idx = _log.term_for(_commit_idx);
