@@ -1538,3 +1538,34 @@ def test_alter_table_add_select_star(cql, test_keyspace):
             cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
+
+# Test that tombstones with future timestamps work correctly
+# when a write with lower timestamp arrives - in such case,
+# if the base row is covered by such a tombstone, a view update
+# needs to take it into account.
+# Reproduces issue #5793
+def test_views_with_future_tombstones(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, primary key (a, b, c)') as table:
+        with new_materialized_view(cql, table, '*', 'b, a, c', 'a is not null and b is not null and c is not null') as mv:
+            # Partition tombstone
+            cql.execute(f'delete from {table} using timestamp 10 where a=1')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (1,2,3,4,5) using timestamp 8')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            # On a single-node test, the update will be synchronous so no
+            # need for retry.
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Range tombstone
+            cql.execute(f'delete from {table} using timestamp 16 where a=2 and b > 1 and b < 4')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (2,3,4,5,6) using timestamp 12')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Row tombstone
+            cql.execute(f'delete from {table} using timestamp 24 where a=3 and b=4 and c=5')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (3,4,5,6,7) using timestamp 18')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
