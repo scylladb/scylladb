@@ -785,12 +785,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
-                    for (const auto& table : ks.metadata()->tables()) {
+                    auto tables_with_mvs = ks.metadata()->tables();
+                    auto views = ks.metadata()->views();
+                    tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+                    for (const auto& table_or_mv : tables_with_mvs) {
                         try {
-                            locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table->id());
+                            locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
                             locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                             auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                            new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table, tmptr, old_tablets);
+                            new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
                         } catch (const std::exception& e) {
                             error = e.what();
                             rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
@@ -799,11 +802,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             break;           // ... and only create mutations deleting the global req
                         }
 
-                        replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table->id());
+                        replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                         co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
                             auto last_token = new_tablet_map.get_last_token(tablet_id);
                             updates.emplace_back(co_await make_canonical_mutation_gently(
-                                    replica::tablet_mutation_builder(guard.write_timestamp(), table->id())
+                                    replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
                                             .set_new_replicas(last_token, tablet_info.replicas)
                                             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                                             .set_transition(last_token, locator::tablet_transition_kind::rebuild)
