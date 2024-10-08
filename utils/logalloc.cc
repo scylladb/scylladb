@@ -6,14 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/range/algorithm/heap_algorithm.hpp>
-#include <boost/range/algorithm/remove.hpp>
-#include <boost/range/algorithm.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
-#include <boost/range/adaptors.hpp>
 #include <stack>
+#include <ranges>
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
@@ -2666,10 +2663,10 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
         return c2->min_occupancy() < c1->min_occupancy();
     };
 
-    boost::range::make_heap(_regions, cmp);
+    std::ranges::make_heap(_regions, cmp);
 
     while (!check_for_work()) {
-        boost::range::pop_heap(_regions, cmp);
+        std::ranges::pop_heap(_regions, cmp);
         region::impl* r = _regions.back();
 
         if (!r->is_idle_compactible()) {
@@ -2678,7 +2675,7 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
 
         r->compact();
 
-        boost::range::push_heap(_regions, cmp);
+        std::ranges::push_heap(_regions, cmp);
     }
     return idle_cpu_handler_result::interrupted_by_higher_priority_task;
 }
@@ -2774,7 +2771,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         return c2->min_occupancy() < c1->min_occupancy();
     };
 
-    boost::range::make_heap(_regions, cmp);
+    std::ranges::make_heap(_regions, cmp);
 
     if (llogger.is_enabled(logging::log_level::debug)) {
         llogger.debug("Occupancy of regions:");
@@ -2790,7 +2787,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
                               regions, evictable_regions, regions - evictable_regions);
         });
         while (_segment_pool->total_memory_in_use() > target_mem) {
-            boost::range::pop_heap(_regions, cmp);
+            std::ranges::pop_heap(_regions, cmp);
             region::impl* r = _regions.back();
 
             if (!r->is_compactible()) {
@@ -2810,7 +2807,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
                 r->compact();
             }
 
-            boost::range::push_heap(_regions, cmp);
+            std::ranges::push_heap(_regions, cmp);
 
             if (preempt && need_preempt()) {
                 break;
