@@ -13,6 +13,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
 #include "utils/hash.hh"
@@ -532,6 +533,7 @@ private:
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
 public:
+    void on_flush_timer();
     void deregister_metrics();
 
     data_dictionary::table as_data_dictionary() const;
@@ -1181,6 +1183,8 @@ private:
             const dht::decorated_key& pk,
             const query::clustering_row_ranges& rows,
             db::timeout_clock::time_point timeout) const;
+
+    timer<lowres_clock> _flush_timer;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

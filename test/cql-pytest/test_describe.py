@@ -1205,7 +1205,9 @@ def new_random_table(cql, keyspace, udts=[]):
     min_idx_interval = random.randrange(100, 1000)
     extras["min_index_interval"] = min_idx_interval
     extras["max_index_interval"] = random.randrange(min_idx_interval, 10000)
-    extras["memtable_flush_period_in_ms"] = random.randrange(0, 10000)
+
+    memtable_flush_period = [0, random.randrange(60000, 200000)]
+    extras["memtable_flush_period_in_ms"] = random.choice(memtable_flush_period)
 
     if is_scylla(cql):
         # Extra properties which ScyllaDB supports but Cassandra doesn't
