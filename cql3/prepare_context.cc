@@ -27,14 +27,19 @@ std::vector<lw_shared_ptr<column_specification>> prepare_context::get_variable_s
     return std::move(_variable_specs);
 }
 
-std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes(const schema& schema) const {
+std::vector<uint16_t> prepare_context::get_partition_key_bind_indexes() const {
+    if (!_schema) {
+        return {};
+    }
+
+    auto& schema = *_schema;
     auto count = schema.partition_key_columns().size();
     std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
     std::vector<bool> set(count, false);
 
     for (auto&& [bind_index, target_spec] : _targets) {
         const auto* cdef = target_spec ? schema.get_column_definition(target_spec->name->name()) : nullptr;
-        if (cdef && cdef->is_partition_key()) {
+        if (cdef && cdef->is_partition_key() && !set[cdef->position()]) {
             partition_key_positions[cdef->position()] = bind_index;
             set[cdef->position()] = true;
         }
