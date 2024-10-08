@@ -343,7 +343,6 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
     auto candidates = control.candidates(table_s);
 
     if (candidates.empty()) {
-        state.estimated_remaining_tasks = 0;
         return compaction_descriptor();
     }
 
@@ -420,8 +419,6 @@ time_window_compaction_strategy::get_compaction_candidates(table_state& table_s,
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
     state.highest_window_seen = std::max(state.highest_window_seen, max_timestamp);
-
-    update_estimated_compaction_by_tasks(state, buckets, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(table_s, control, std::move(buckets), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
         state.highest_window_seen);
@@ -525,14 +522,16 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
     return bucket;
 }
 
-void time_window_compaction_strategy::update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
-                                                                           std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
-                                                                           int min_threshold, int max_threshold) {
-    int64_t n = 0;
-    timestamp_type now = state.highest_window_seen;
+int64_t time_window_compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+    auto& state = get_state(table_s);
+    auto min_threshold = table_s.min_compaction_threshold();
+    auto max_threshold = table_s.schema()->max_compaction_threshold();
+    auto candidate_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*table_s.main_sstable_set().all());
+    auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
 
-    for (auto& [bucket_key, bucket] : tasks) {
-        switch (compaction_mode(state, bucket, bucket_key, now, min_threshold)) {
+    int64_t n = 0;
+    for (auto& [bucket_key, bucket] : buckets) {
+        switch (compaction_mode(state, bucket, bucket_key, max_timestamp, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
             n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
             break;
@@ -543,7 +542,7 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(time_
             break;
         }
     }
-    state.estimated_remaining_tasks = n;
+    return n;
 }
 
 std::vector<compaction_descriptor>

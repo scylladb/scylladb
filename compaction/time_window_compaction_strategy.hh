@@ -60,7 +60,6 @@ public:
 };
 
 struct time_window_compaction_strategy_state {
-    int64_t estimated_remaining_tasks = 0;
     db_clock::time_point last_expired_check;
     // As api::timestamp_type is an int64_t, a primitive type, it must be initialized here.
     api::timestamp_type highest_window_seen = 0;
@@ -143,15 +142,9 @@ public:
         return api::timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
     }
 private:
-    void update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
-        std::map<api::timestamp_type, std::vector<shared_sstable>>& tasks,
-        int min_threshold, int max_threshold);
-
     friend class time_window_backlog_tracker;
 public:
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
-        return get_state(table_s).estimated_remaining_tasks;
-    }
+    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::time_window;
