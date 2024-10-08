@@ -833,7 +833,7 @@ private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
-    future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> raft_state_monitor_fiber(raft::server&, gate::holder, sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
 public:
     bool topology_global_queue_empty() const {
@@ -974,7 +974,7 @@ private:
     semaphore _join_node_response_handler_mutex{1};
 
     future<> _sstable_cleanup_fiber = make_ready_future<>();
-    future<> sstable_cleanup_fiber(raft::server& raft, sharded<service::storage_proxy>& proxy) noexcept;
+    future<> sstable_cleanup_fiber(raft::server& raft, gate::holder, sharded<service::storage_proxy>& proxy) noexcept;
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;

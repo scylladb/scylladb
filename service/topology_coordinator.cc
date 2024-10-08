@@ -109,6 +109,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     std::chrono::milliseconds _ring_delay;
 
+    gate::holder _group0_holder;
+
     using drop_guard_and_retake = bool_class<class retake_guard_tag>;
 
     // Engaged if an ongoing topology change should be rolled back. The string inside
@@ -2501,6 +2503,7 @@ public:
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
         , _ring_delay(ring_delay)
+        , _group0_holder(_group0.hold_group0_gate())
     {}
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
