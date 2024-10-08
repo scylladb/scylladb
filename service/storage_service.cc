@@ -6868,28 +6868,59 @@ void storage_service::init_messaging_service() {
             return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
         });
     });
-    ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
-        return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
+    ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc, &feat = _feature_service] (raft::server_id dst_id, raft_snapshot_pull_params params) {
+        return handle_raft_rpc(dst_id, [params = std::move(params), &feat] (storage_service& ss) -> future<raft_snapshot> {
             utils::chunked_vector<canonical_mutation> mutations;
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
             auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
 
-            // We may need to send additional raft-based tables to the requester that
-            // are not indicated in the parameter.
-            // For example, when a node joins, it requests a snapshot before it knows
-            // which features are enabled, so it doesn't know yet if these tables exist
-            // on other nodes.
-            // In the current "legacy" mode we assume the requesting node sends 2 RPCs - one for
-            // topology tables and one for auth tables, service levels, and additional tables.
-            // When we detect it's the second RPC, we add additional tables based on our feature flags.
-            // In the future we want to deprecate this parameter, so this condition should
-            // apply only for "legacy" snapshot pull RPCs.
+            // The RPC's semantics changed at some point and now we support two "modes":
+            //
+            // - Legacy: RPC sender specifies which tables to fetch in the params.tables parameter.
+            //   Sender uses two RPC calls to fetch everything.
+            // - New: The RPC handler chooses which tables to send back, params.tables is ignored.
+            //   Only one RPC call is used.
+            //
+            // The new mode, unlike legacy, works well with cluster features and allows adding
+            // more tables to group0 snapshot. We need to support both for the sake of upgrades
+            // (and also new nodes which do not know whether we support the new method or the old one).
             std::vector<table_id> additional_tables;
-            if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
+
+            // We decide whether it's new mode or not.
+            const bool new_mode = feat.snapshot_rpc_receiver_side && !utils::get_local_injector().enter("raft_pull_snapshot_handler_force_legacy");
+
+            // Detect the second legacy RPC attempt via the tables list.
+            const bool second_rpc_in_legacy_mode = params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id();
+
+            if (new_mode) {
+                // Include the tables that were fetched in the first version of this RPC
+                // (originally, across the two RPC calls).
+                auto auth_tables = db::system_keyspace::auth_tables();
+
+                additional_tables.reserve(3 + auth_tables.size() + 1);
+
+                additional_tables.push_back(db::system_keyspace::topology()->id());
+                additional_tables.push_back(db::system_keyspace::topology_requests()->id());
+                additional_tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+
+                for (const auto& schema : auth_tables) {
+                    additional_tables.push_back(schema->id());
+                }
+                additional_tables.push_back(db::system_keyspace::service_levels_v2()->id());
+            }
+
+            if (new_mode || second_rpc_in_legacy_mode) {
+                // Include the tables introduced after the first version of this RPC:
+                // - If we are in legacy mode, add them to the second RPC call
+                // - If we are in the new mode, just add them to the one and only RPC call
+
                 if (ss._feature_service.view_build_status_on_group0) {
                     additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
                 }
+
+                // Introduce more tables here, if needed, and protect each one
+                // with a cluster feature.
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {

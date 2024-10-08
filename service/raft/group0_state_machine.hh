@@ -108,7 +108,9 @@ class group0_state_machine : public raft_state_machine {
     seastar::gate _gate;
     abort_source _abort_source;
     bool _topology_change_enabled;
+    bool _snapshot_rpc_receiver_side_enabled = false;
     gms::feature::listener_registration _topology_on_raft_support_listener;
+    gms::feature::listener_registration _snapshot_rpc_receiver_side_listener;
 
     modules_to_reload get_modules_to_reload(const std::vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
