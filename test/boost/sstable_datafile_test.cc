@@ -3186,3 +3186,18 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
     });
 }
 
+SEASTAR_TEST_CASE(sstable_identifier_correctness) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(1);
+
+        auto mut1 = mutation(s, pks[0]);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+
+        BOOST_REQUIRE(sst->sstable_identifier());
+        BOOST_REQUIRE_EQUAL(sst->sstable_identifier()->uuid(), sst->generation().as_uuid());
+    });
+}

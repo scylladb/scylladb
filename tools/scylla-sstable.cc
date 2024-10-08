@@ -1438,6 +1438,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
+        case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
     }
     std::abort();
 }
@@ -1557,6 +1558,10 @@ public:
     void operator()(const sstables::disk_tagged_union_member<sstables::scylla_metadata_type, E, T>& m) const {
         _writer.Key(to_string(E));
         (*this)(m.value);
+    }
+
+    void operator()(const sstables::scylla_metadata::sstable_identifier& sid) const {
+        _writer.AsString(sid.value);
     }
 };
 

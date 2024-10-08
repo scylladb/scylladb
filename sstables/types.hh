@@ -533,6 +533,7 @@ enum class scylla_metadata_type : uint32_t {
     ScyllaBuildId = 7,
     ScyllaVersion = 8,
     ExtTimestampStats = 9,
+    SSTableIdentifier = 10,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -544,6 +545,19 @@ struct run_identifier {
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) { return f(id); }
+};
+
+using sstable_id = utils::tagged_uuid<struct sstable_id_tag>;
+
+// UUID is used for uniqueness across nodes, such that an imported sstable
+// will not have its identifier conflicted with the one of a local sstable.
+// The identifier is initialized using the sstable UUID generation, if available,
+// or a time-UUID otherwise.
+struct sstable_identifier_type {
+    sstable_id value;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(value); }
 };
 
 // Types of large data statistics.
@@ -583,6 +597,7 @@ struct scylla_metadata {
     using scylla_build_id = disk_string<uint32_t>;
     using scylla_version = disk_string<uint32_t>;
     using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
+    using sstable_identifier = sstable_identifier_type;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -593,7 +608,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableOrigin, sstable_origin>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaBuildId, scylla_build_id>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -623,6 +639,10 @@ struct scylla_metadata {
     }
     const ext_timestamp_stats* get_ext_timestamp_stats() const {
         return data.get<scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>();
+    }
+    sstable_id get_optional_sstable_identifier() const {
+        auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
+        return sid ? sid->value : sstable_id::create_null_id();
     }
 
     template <typename Describer>
