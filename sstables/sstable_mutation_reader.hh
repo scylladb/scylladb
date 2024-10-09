@@ -110,7 +110,7 @@ position_in_partition_view get_slice_lower_bound(const schema& s, const query::p
 // heuristics which learn from the usefulness of previous read aheads.
 template <typename DataConsumeRowsContext>
 inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer,
-        sstable::disk_read_range toread, uint64_t last_end, sstable::integrity_check integrity) {
+        sstable::disk_read_range toread, uint64_t last_end, integrity_check integrity) {
     // Although we were only asked to read until toread.end, we'll not limit
     // the underlying file input stream to this end, but rather to last_end.
     // This potentially enables read-ahead beyond end, until last_end, which
@@ -158,7 +158,7 @@ inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(con
 // Like data_consume_rows() with bounds, but iterates over whole range
 template <typename DataConsumeRowsContext>
 inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer,
-        sstable::integrity_check integrity) {
+        integrity_check integrity) {
     auto data_size = sst->data_size();
     return data_consume_rows<DataConsumeRowsContext>(s, std::move(sst), consumer, {0, data_size}, data_size, integrity);
 }
