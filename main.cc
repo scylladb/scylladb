@@ -1944,6 +1944,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().uninit_address_map().get();
             });
 
+            // Need to make sure storage service stopped using group0 before running group0_service.abort()
+            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
+            // here as well
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+               ss.local().wait_for_group0_stop().get();
+            });
+
             // Setup group0 early in case the node is bootstrapped already and the group exists.
             // Need to do it before allowing incoming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0.

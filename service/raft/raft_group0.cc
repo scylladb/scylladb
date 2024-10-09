@@ -393,9 +393,11 @@ future<> raft_group0::abort() {
     co_await smp::invoke_on_all([this]() {
         return uninit_rpc_verbs(_ms.local());
     });
-    co_await _shutdown_gate.close();
 
     _leadership_monitor_as.request_abort();
+
+    co_await _shutdown_gate.close();
+
     co_await std::move(_leadership_monitor);
 
     co_await stop_group0();
@@ -440,6 +442,7 @@ future<> raft_group0::leadership_monitor_fiber() {
             }
         });
 
+        auto holder = hold_group0_gate();
         while (true) {
             while (!group0_server().is_leader()) {
                 co_await group0_server().wait_for_state_change(&_leadership_monitor_as);
