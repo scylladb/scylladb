@@ -12,9 +12,7 @@
 #include <vector>
 #include <string>
 
-#include <boost/range/numeric.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/for_each.hpp>
+#include <ranges>
 
 #include "types/types.hh"
 
@@ -30,6 +28,7 @@ private:
     managed_bytes_view_opt _current;
 public:
     struct end_tag {};
+    tuple_deserializing_iterator() = default;
     tuple_deserializing_iterator(managed_bytes_view v) : _v(v) {
         parse();
     }
@@ -112,7 +111,7 @@ class tuple_type_impl : public concrete_type<std::vector<data_value>> {
     using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
 protected:
     std::vector<data_type> _types;
-    static boost::iterator_range<tuple_deserializing_iterator> make_range(managed_bytes_view v) {
+    static std::ranges::subrange<tuple_deserializing_iterator> make_range(managed_bytes_view v) {
         return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
     }
     tuple_type_impl(kind k, sstring name, std::vector<data_type> types, bool freeze_inner);
@@ -156,7 +155,7 @@ public:
     template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {
         auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };
-        auto size = boost::accumulate(range | boost::adaptors::transformed(item_size), 0);
+        auto size = std::ranges::fold_left(range | std::views::transform(item_size), 0, std::plus());
         auto ret = bytes(bytes::initialized_later(), size);
         auto out = ret.begin();
         auto put = [&out] (auto&& v) {
@@ -175,7 +174,7 @@ public:
                 write(out, int32_t(-1));
             }
         };
-        boost::range::for_each(range, put);
+        std::ranges::for_each(range, put);
         return ret;
     }
     template <typename Range> // range of managed_bytes_opt or managed_bytes_view_opt
