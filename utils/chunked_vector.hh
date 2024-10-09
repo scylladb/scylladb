@@ -42,8 +42,7 @@
 
 #include "utils/small_vector.hh"
 
-#include <boost/range/algorithm/equal.hpp>
-#include <boost/version.hpp>
+#include <ranges>
 #include <memory>
 #include <type_traits>
 #include <iterator>
@@ -315,7 +314,7 @@ public:
     std::reverse_iterator<const_iterator> crend() const { return std::reverse_iterator(cbegin()); }
 public:
     bool operator==(const chunked_vector& x) const {
-        return boost::equal(*this, x);
+        return std::ranges::equal(*this, x);
     }
 };
 

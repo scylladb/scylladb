@@ -20,14 +20,13 @@
 
 #include "log.hh"
 
+#include <ranges>
 #include <algorithm>
 #include <chrono>
 #include <type_traits>
 #include <optional>
 #include <unordered_map>
 
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/lexical_cast.hpp>
 
 
@@ -354,9 +353,10 @@ public:
     }
 
     std::vector<sstring> enabled_injections() const {
-        return boost::copy_range<std::vector<sstring>>(_enabled | boost::adaptors::filtered([] (const auto& pair) {
-            return !pair.second.is_ongoing_oneshot();
-        }) | boost::adaptors::map_keys);
+        return _enabled
+                | std::views::filter([] (const auto& pair) { return !pair.second.is_ongoing_oneshot(); })
+                | std::views::keys
+                | std::ranges::to<std::vector<sstring>>();
     }
 
     // \brief Inject a lambda call

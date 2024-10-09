@@ -10,8 +10,7 @@
 
 #include <seastar/util/noncopyable_function.hh>
 #include <vector>
-#include <boost/range/algorithm/replace.hpp>
-#include <boost/range/algorithm/remove.hpp>
+#include <algorithm>
 
 namespace utils {
 
@@ -85,10 +84,10 @@ public:
     friend class observer;
 private:
     void destroyed(observer* dead) {
-        _observers.erase(boost::remove(_observers, dead), _observers.end());
+        _observers.erase(std::ranges::remove(_observers, dead).begin(), _observers.end());
     }
     void moved(observer* from, observer* to) {
-        boost::replace(_observers, from, to);
+        std::ranges::replace(_observers, from, to);
     }
     void update_observers(observable* ob) {
         for (auto&& c : _observers) {

@@ -16,13 +16,12 @@
 #include "utils/logalloc.hh"
 #include "utils/managed_vector.hh"
 
-#include <boost/range/algorithm/equal.hpp>
-#include <boost/version.hpp>
 #include <type_traits>
 #include <iterator>
 #include <utility>
 #include <algorithm>
 #include <stdexcept>
+#include <ranges>
 
 namespace lsa {
 
@@ -263,7 +262,7 @@ public:
     std::reverse_iterator<const_iterator> crend() const { return std::reverse_iterator(cbegin()); }
 public:
     bool operator==(const chunked_managed_vector& x) const {
-        return boost::equal(*this, x);
+        return std::ranges::equal(*this, x);
     }
 
     // Returns the amount of external memory used to hold inserted items.

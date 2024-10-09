@@ -12,13 +12,12 @@
 #include <unordered_map>
 #include <memory_resource>
 #include <optional>
+#include <ranges>
+#include <algorithm>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/join.hpp>
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/future-util.hh>
@@ -659,13 +658,16 @@ private:
         // Future is waited on indirectly in `stop()` (via `_timer_reads_gate`).
         // FIXME: error handling
         (void)with_gate(_timer_reads_gate, [this] {
-            auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(boost::range::join(_unprivileged_lru_list, _lru_list)
-                    | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
+            auto to_reload = std::array<lru_list_type*, 2>({&_unprivileged_lru_list, &_lru_list})
+                    | std::views::transform([] (auto* list_ptr) -> decltype(auto) { return *list_ptr; })
+                    | std::views::join
+                    | std::views::filter([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _cfg.refresh < loading_cache_clock_type::now();
                     })
-                    | boost::adaptors::transformed([] (ts_value_lru_entry& lru_entry) {
+                    | std::views::transform([] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value_ptr();
-                    }));
+                    })
+                    | std::ranges::to<utils::chunked_vector<timestamped_val_ptr>>();
 
             return parallel_for_each(std::move(to_reload), [this] (timestamped_val_ptr ts_value_ptr) {
                 _logger.trace("on_timer(): {}: reloading the value", loading_values_type::to_key(ts_value_ptr));

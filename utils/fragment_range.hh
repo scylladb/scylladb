@@ -10,7 +10,7 @@
 
 #include <concepts>
 #include <compare>
-#include <boost/range/algorithm/copy.hpp>
+#include <algorithm>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/print.hh>
 #include <seastar/util/backtrace.hh>
@@ -123,7 +123,7 @@ bytes linearized(const FragmentedBuffer& buffer)
     bytes b(bytes::initialized_later(), buffer.size_bytes());
     auto dst = b.begin();
     for (bytes_view fragment : buffer) {
-        dst = boost::copy(fragment, dst);
+        dst = std::ranges::copy(fragment, dst).out;
     }
     return b;
 }
