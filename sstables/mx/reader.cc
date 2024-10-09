@@ -1265,6 +1265,8 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
+    integrity_check _integrity;
+    lw_shared_ptr<checksum> _checksum;
 
     // For reversed (single partition) reads, points to the current position in the sstable
     // of the reversing data source used underneath (see `partition_reversing_data_source`).
@@ -1279,7 +1281,8 @@ public:
                             tracing::trace_state_ptr trace_state,
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
-                            read_monitor& mon)
+                            read_monitor& mon,
+                            integrity_check integrity)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
             , _slice_holder(std::move(slice))
             , _slice(_slice_holder.get())
@@ -1291,7 +1294,8 @@ public:
             , _pr(pr)
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
-            , _monitor(mon) {
+            , _monitor(mon)
+            , _integrity(integrity) {
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1543,21 +1547,33 @@ private:
 
         sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
 
+        if (_integrity) {
+            // Caller must retain a reference to checksum component while in use by the stream.
+            _checksum = co_await _sst->read_checksum();
+            // The stream checks the digest only if the read range covers all data.
+            if (begin == 0 && *end == _sst->data_size()) {
+                co_await _sst->read_digest();
+            }
+        }
+
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
             if (reversed()) {
+                if (_integrity) {
+                    on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
+                }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
                         *_schema, _sst, *_index_reader, _consumer, { begin, *end });
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
+                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
             }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
+            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1715,10 +1731,11 @@ static mutation_reader make_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor) {
+        read_monitor& monitor,
+        integrity_check integrity) {
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor);
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity);
 }
 
 mutation_reader make_reader(
@@ -1730,9 +1747,10 @@ mutation_reader make_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor) {
+        read_monitor& monitor,
+        integrity_check integrity) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor);
+            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity);
 }
 
 mutation_reader make_reader(
@@ -1744,9 +1762,10 @@ mutation_reader make_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor) {
+        read_monitor& monitor,
+        integrity_check integrity) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor);
+            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity);
 }
 
 /// a reader which does not support seeking to given position.
