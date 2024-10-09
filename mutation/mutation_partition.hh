@@ -10,12 +10,13 @@
 
 #include <iosfwd>
 #include <boost/intrusive/set.hpp>
-#include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/util/optimized_optional.hh>
+
+#include <ranges>
 
 #include "schema/schema_fwd.hh"
 #include "tombstone.hh"
@@ -1451,12 +1452,12 @@ public:
     row_tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     // Can be called only for non-dummy entries
     row_tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
-    boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
+    std::ranges::subrange<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator lower_bound(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator upper_bound(const schema& schema, const query::clustering_range& r) const;
     rows_type::iterator lower_bound(const schema& schema, const query::clustering_range& r);
     rows_type::iterator upper_bound(const schema& schema, const query::clustering_range& r);
-    boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
+    std::ranges::subrange<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
     // Returns an iterator range of rows_entry, with only non-dummy entries.
     auto non_dummy_rows() const {
         return boost::make_iterator_range(_rows.begin(), _rows.end())
