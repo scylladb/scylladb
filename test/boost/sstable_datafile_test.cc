@@ -2815,12 +2815,23 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 testlog.info("Validating intact {}", sst->get_filename());
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::valid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+                BOOST_REQUIRE(res.has_digest);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
-                testlog.info("Validating corrupted {}", sst->get_filename());
+                testlog.info("Validating digest-corrupted {}", sst->get_filename());
+                auto valid_digest = sst->read_digest().get();
+                BOOST_REQUIRE(valid_digest.has_value());
+                sstables::test(sst).set_digest(valid_digest.value() + 1);
+
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
+                sstables::test(sst).set_digest(valid_digest); // restore it for next test cases
+
+                testlog.info("Validating checksum-corrupted {}", sst->get_filename());
 
                 { // corrupt the sstable
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
@@ -2830,7 +2841,8 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
 
                 testlog.info("Validating truncated {}", sst->get_filename());
 
@@ -2839,13 +2851,23 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
+
+                testlog.info("Validating with no digest {}", sst->get_filename());
+
+                sstables::test(sst).set_digest(std::nullopt);
+                sstables::test(sst).rewrite_toc_without_component(component_type::Digest);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(!res.has_digest);
 
                 if (compression_params == no_compression_params) {
                     testlog.info("Validating with no checksums {}", sst->get_filename());
                     sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
                     auto res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::no_checksum);
+                    BOOST_REQUIRE(!res.has_digest);
                 }
             }
         }
