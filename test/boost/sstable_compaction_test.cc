@@ -13,6 +13,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 
 #include "sstables/generation_type.hh"
@@ -2192,6 +2193,8 @@ using compress_sstable = tests::random_schema_specification::compress_sstable;
 
 // A framework for scrub-related tests.
 // Lives in a seastar thread
+enum class random_schema { no, yes };
+template <random_schema create_random_schema>
 class scrub_test_framework {
 public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
@@ -2274,8 +2277,53 @@ public:
     }
 };
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
-    scrub_test_framework test(compress_sstable::yes);
+template <>
+class scrub_test_framework<random_schema::no> {
+public:
+    using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
+
+private:
+    sharded<test_env> _env;
+
+public:
+    scrub_test_framework()
+    {
+        _env.start().get();
+    }
+
+    ~scrub_test_framework() {
+        _env.stop().get();
+    }
+
+    test_env& env() { return _env.local(); }
+
+    void run(schema_ptr schema, shared_sstable sst, test_func func) {
+        auto& env = this->env();
+
+        auto table = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(table);
+        table->start();
+
+        table->add_sstable_and_update_cache(sst).get();
+
+        bool found_sstable = false;
+        foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
+            auto sstables = in_strategy_sstables(ts);
+            if (sstables.empty()) {
+                return;
+            }
+            BOOST_REQUIRE(sstables.size() == 1);
+            BOOST_REQUIRE(sstables.front() == sst);
+            found_sstable = true;
+
+            func(table, ts, sstables);
+        }).get();
+        BOOST_REQUIRE(found_sstable);
+    }
+};
+
+void scrub_validate_corrupted_content(compress_sstable compress) {
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2302,8 +2350,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
-    scrub_test_framework test(compress_sstable::yes);
+void scrub_validate_corrupted_file(compress_sstable compress) {
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2338,60 +2386,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
-    scrub_test_framework test(compress_sstable::yes);
-
-    auto schema = test.schema();
-
-    auto muts = tests::generate_random_mutations(test.random_schema()).get();
-
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-        BOOST_REQUIRE(sstables.size() == 1);
-        auto sst = sstables.front();
-
-        sstables::compaction_type_options::scrub opts = {
-            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
-        };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
-
-        BOOST_REQUIRE(stats.has_value());
-        BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
-        BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
-    });
-}
-
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content_uncompressed) {
-    scrub_test_framework test(compress_sstable::no);
-
-    auto schema = test.schema();
-
-    auto muts = tests::generate_random_mutations(
-            test.random_schema(),
-            tests::uncompactible_timestamp_generator(test.seed()),
-            tests::no_expiry_expiry_generator(),
-            std::uniform_int_distribution<size_t>(10, 10)).get();
-    std::swap(*muts.begin(), *(muts.begin() + 1));
-
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
-        BOOST_REQUIRE(sstables.size() == 1);
-        auto sst = sstables.front();
-
-        sstables::compaction_type_options::scrub opts = {
-            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
-        };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
-
-        BOOST_REQUIRE(stats.has_value());
-        BOOST_REQUIRE_GT(stats->validation_errors, 0);
-        BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
-    });
-}
-
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_uncompressed) {
-    scrub_test_framework test(compress_sstable::no);
+void scrub_validate_corrupted_digest(compress_sstable compress) {
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2405,14 +2401,16 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_uncompr
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // Corrupt the data to cause an invalid checksum.
-        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
-        const auto wbuf_align = f.memory_dma_alignment();
-        const auto wbuf_len = f.disk_write_dma_alignment();
-        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-        f.dma_write(0, wbuf.get(), wbuf_len).get();
-        f.close().get();
+        // This test is about corrupted data with valid per-chunk checksums.
+        // This kind of corruption should be detected by the digest check.
+        // Triggering this is not trivial, so we corrupt the Digest file instead.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Digest).native(), open_flags::rw).get();
+        auto stream = make_file_input_stream(f);
+        auto close_stream = deferred_close(stream);
+        auto digest_str = util::read_entire_stream_contiguous(stream).get();
+        auto digest = boost::lexical_cast<uint32_t>(digest_str);
+        auto new_digest = to_sstring<bytes>(digest + 1); // a random invalid digest
+        f.dma_write(0, new_digest.c_str(), new_digest.size()).get();
 
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
@@ -2426,8 +2424,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_uncompr
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_uncompressed) {
-    scrub_test_framework test(compress_sstable::no);
+void scrub_validate_no_digest(compress_sstable compress) {
+    scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
 
@@ -2436,6 +2434,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_uncompre
     test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
+
+        // Checksum and digest checking should be orthogonal.
+        // Ensure that per-chunk checksums are properly checked when digest is missing.
+        sstables::test(sst).rewrite_toc_without_component(component_type::Digest);
 
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
@@ -2448,7 +2450,82 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_uncompre
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
         BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
+
+        // Corrupt the data to cause an invalid checksum.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        auto close_f = deferred_close(f);
+        const auto wbuf_align = f.memory_dma_alignment();
+        const auto wbuf_len = f.disk_write_dma_alignment();
+        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+        f.dma_write(0, wbuf.get(), wbuf_len).get();
+
+        stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        BOOST_REQUIRE(sst->is_quarantined());
+        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
     });
+}
+
+void scrub_validate_valid(compress_sstable compress) {
+    scrub_test_framework<random_schema::yes> test(compress);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema()).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_content) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with content-level corruption...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_content(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with invalid checksums...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_file(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with invalid digest...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_digest(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_no_digest) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with no digest...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_no_digest(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_valid(compress);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_uncompressed) {
@@ -2456,7 +2533,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
     return;
 #endif
-    scrub_test_framework test(compress_sstable::no);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::no);
 
     auto schema = test.schema();
 
@@ -2504,6 +2581,132 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
 
         utils::get_local_injector().disable("sstable_validate/pause");
     });
+}
+
+// Following tests run scrub in validate mode with SSTables produced by Cassandra.
+// The purpose is to verify compatibility.
+//
+// The SSTables live in the source tree under:
+// test/resource/sstables/3.x/{uncompressed,lz4}/partition_key_with_values_of_different_types and
+// test/resource/sstables/3.x/{uncompressed,lz4}/integrity_check
+//
+// The former are pre-existing SSTables that we use to test the valid case.
+//
+// The latter were tailor-made to cover the invalid case by triggering the checksum and digest checks.
+// The SSTables were produced with the following schema:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   bool_val BOOLEAN,
+//                                   double_val DOUBLE,
+//                                   float_val FLOAT,
+//                                   int_val INT,
+//                                   long_val BIGINT,
+//                                   timestamp_val TIMESTAMP,
+//                                   timeuuid_val TIMEUUID,
+//                                   uuid_val UUID,
+//                                   text_val TEXT,
+//                                   PRIMARY KEY(pk))
+//      WITH compression = {<compression_params>};
+//
+//  where <compression_params> is one of the following:
+//  {'enabled': false} for the uncompressed case,
+//  {'chunk_length_in_kb': '4', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'} for the compressed case.
+
+static schema_builder make_cassandra_schema_builder() {
+    return schema_builder("test_ks", "test_table")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("bool_val", boolean_type)
+            .with_column("double_val", double_type)
+            .with_column("float_val", float_type)
+            .with_column("int_val", int32_type)
+            .with_column("long_val", long_type)
+            .with_column("timestamp_val", timestamp_type)
+            .with_column("timeuuid_val", timeuuid_type)
+            .with_column("uuid_val", uuid_type)
+            .with_column("text_val", utf8_type);
+}
+
+void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring sstable_dir,
+        generation_type::int_t gen, sstable::version_types version, bool valid) {
+    scrub_test_framework<random_schema::no> test;
+
+    auto schema = make_cassandra_schema_builder()
+            .set_compressor_params(cp)
+            .build();
+    auto sst = test.env().reusable_sst(schema, sstable_dir, gen, version).get();
+
+    test.run(schema, sst, [valid] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+
+        using scrub = sstables::compaction_type_options::scrub;
+        sstables::compaction_type_options::scrub opts = {
+            .operation_mode = scrub::mode::validate,
+            .quarantine_sstables = scrub::quarantine_invalid_sstables::no,
+        };
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+
+        BOOST_REQUIRE(stats.has_value());
+        if (valid) {
+            BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
+        } else {
+            BOOST_REQUIRE_GT(stats->validation_errors, 0);
+        }
+        BOOST_REQUIRE(!sst->is_quarantined());
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE(!sst->get_checksum());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/partition_key_with_values_of_different_types", subdir),
+                1,
+                sstable::version_types::mc,
+                true
+        );
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid checksums...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_checksums", subdir),
+                1,
+                sstable::version_types::me,
+                false
+        );
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_cassandra_compat) {
+    for (const auto& [cp, subdir] : {
+            std::pair{compression_parameters::no_compression(), "uncompressed"},
+            {compression_parameters(compressor::lz4), "lz4"}
+        }) {
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid digest...", cp.get_compressor() ? "" : "un");
+        scrub_validate_cassandra_compat(
+                cp,
+                seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_digest", subdir),
+                1,
+                sstable::version_types::me,
+                false
+        );
+    }
 }
 
 SEASTAR_TEST_CASE(sstable_validate_test) {
@@ -2645,7 +2848,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2669,7 +2872,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2717,7 +2920,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 
@@ -2757,7 +2960,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
-    scrub_test_framework test(compress_sstable::yes);
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
 

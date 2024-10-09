@@ -1935,6 +1935,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     lw_shared_ptr<checksum> checksum;
     try {
         checksum = co_await read_checksum();
+        co_await read_digest();
     } catch (const malformed_sstable_exception& e) {
         ex = handle_sstable_exception(e, errors);
     }
@@ -2468,15 +2469,18 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
     }
 
+    std::optional<uint32_t> digest;
+    if (integrity == integrity_check::yes) {
+        digest = get_digest();
+    }
+
     if (_components->compression && raw == raw_stream::no) {
-        // Disabling integrity checks is not supported by compressed
-        // file input streams. `integrity` is ignored.
         if (_version >= sstable_version_types::mc) {
-             return make_compressed_file_m_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options), permit);
+            return make_compressed_file_m_format_input_stream(f, &_components->compression,
+               pos, len, std::move(options), permit, digest);
         } else {
             return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
-                pos, len, std::move(options), permit);
+                pos, len, std::move(options), permit, digest);
         }
     }
     if (_components->checksum && integrity == integrity_check::yes) {
@@ -2484,10 +2488,10 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
              return make_checksummed_file_m_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options));
+                *checksum, pos, len, std::move(options), digest);
         } else {
             return make_checksummed_file_k_l_format_input_stream(f, file_len,
-                *checksum, pos, len, std::move(options));
+                *checksum, pos, len, std::move(options), digest);
         }
     }
     return make_file_input_stream(f, pos, len, std::move(options));
@@ -2598,7 +2602,13 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
     co_return valid;
 }
 
-future<uint32_t> sstable::read_digest() {
+future<std::optional<uint32_t>> sstable::read_digest() {
+    if (_components->digest) {
+        co_return *_components->digest;
+    }
+    if (!has_component(component_type::Digest)) {
+        co_return std::nullopt;
+    }
     sstring digest_str;
 
     co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
@@ -2619,7 +2629,8 @@ future<uint32_t> sstable::read_digest() {
         maybe_rethrow_exception(std::move(ex));
     });
 
-    co_return boost::lexical_cast<uint32_t>(digest_str);
+    _components->digest = boost::lexical_cast<uint32_t>(digest_str);
+    co_return _components->digest;
 }
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum() {
@@ -2665,6 +2676,9 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
 
 future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_permit permit) {
     const auto digest = co_await sst->read_digest();
+    if (!digest) {
+        throw std::runtime_error(seastar::format("No digest available for SSTable: {}", sst->get_filename()));
+    }
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr, sstable::raw_stream::yes);
 
@@ -2675,9 +2689,9 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     try {
         if (sst->get_compression()) {
             if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
+                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, *digest);
             } else {
-                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
+                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, *digest);
             }
         } else {
             auto checksum = co_await sst->read_checksum();
@@ -2685,9 +2699,9 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
                 sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());
                 ret = validate_checksums_result::no_checksum;
             } else if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, digest);
+                valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, *checksum, *digest);
             } else {
-                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, digest);
+                valid = co_await do_validate_uncompressed<adler32_utils>(data_stream, *checksum, *digest);
             }
         }
     } catch (...) {

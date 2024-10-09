@@ -676,7 +676,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         auto make_is = [&] {
             f = open_file_dma(file_path, open_flags::ro).get();
-            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts, semaphore.make_permit());
+            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts, semaphore.make_permit(), std::nullopt);
         };
 
         auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {

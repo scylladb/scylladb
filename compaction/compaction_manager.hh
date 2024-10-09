@@ -228,7 +228,8 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::table_state* t);
 
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, tasks::task_info info);
+    using quarantine_invalid_sstables = sstables::compaction_type_options::scrub::quarantine_invalid_sstables;
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;

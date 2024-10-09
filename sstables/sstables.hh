@@ -928,6 +928,10 @@ public:
         return _components->checksum ? _components->checksum->shared_from_this() : nullptr;
     }
 
+    std::optional<uint32_t> get_digest() const {
+        return _components->digest;
+    }
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -1007,7 +1011,7 @@ public:
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
-    future<uint32_t> read_digest();
+    future<std::optional<uint32_t>> read_digest();
     future<lw_shared_ptr<checksum>> read_checksum();
 };
 

@@ -1740,9 +1740,13 @@ compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_o
 namespace compaction {
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
+    compaction_manager::quarantine_invalid_sstables _quarantine_sstables;
 public:
-    validate_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables)
+    validate_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping,
+            table_state* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables,
+            compaction_manager::quarantine_invalid_sstables quarantine_sstables)
         : sstables_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
+        , _quarantine_sstables(quarantine_sstables)
     {}
 
 protected:
@@ -1771,7 +1775,7 @@ private:
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
-                    sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
+                    sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate, _quarantine_sstables));
             co_return co_await sstables::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
@@ -1801,14 +1805,14 @@ static std::vector<sstables::shared_sstable> get_all_sstables(table_state& t) {
     return s;
 }
 
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub_validate_mode(table_state& t, tasks::task_info info) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub_validate_mode(table_state& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return compaction_stats_opt{};
     }
     // All sstables must be included, even the ones being compacted, such that everything in table is validated.
     auto all_sstables = get_all_sstables(t);
-    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables));
+    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables), quarantine_sstables);
 }
 
 namespace compaction {
@@ -2139,7 +2143,7 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub(table_state& t, sstables::compaction_type_options::scrub opts, tasks::task_info info) {
     auto scrub_mode = opts.operation_mode;
     if (scrub_mode == sstables::compaction_type_options::scrub::mode::validate) {
-        return perform_sstable_scrub_validate_mode(t, info);
+        return perform_sstable_scrub_validate_mode(t, info, opts.quarantine_sstables);
     }
     owned_ranges_ptr owned_ranges_ptr = {};
     sstring option_desc = fmt::format("mode: {};\nquarantine_mode: {}\n", opts.operation_mode, opts.quarantine_operation_mode);
