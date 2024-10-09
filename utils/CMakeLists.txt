@@ -46,6 +46,7 @@ target_sources(utils
     utf8.cc
     uuid.cc
     aws_sigv4.cc
+    s3/aws_error.cc
     s3/client.cc)
 target_include_directories(utils
   PUBLIC
