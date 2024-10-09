@@ -291,15 +291,12 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
         auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
         auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
 
-        std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
-        for (auto&& r : tablet_replicas) {
-            pending.erase(r);
-        }
-        std::optional<tablet_replica> pending_replica;
+        std::unordered_set<tablet_replica> pending = substract_sets(new_tablet_replicas, tablet_replicas);
         if (pending.size() > 1) {
             throw std::runtime_error(fmt::format("Too many pending replicas for table {} tablet {}: {}",
                                             table, tid, pending));
         }
+        std::optional<tablet_replica> pending_replica;
         if (pending.size() != 0) {
             pending_replica = *pending.begin();
         }
