@@ -104,6 +104,7 @@ sstable_directory::sstable_directory(replica::table& table,
 {}
 
 sstable_directory::sstable_directory(replica::table& table,
+        sstable_state state,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         io_error_handler_gen error_handler_gen)
     : sstable_directory(
@@ -111,7 +112,7 @@ sstable_directory::sstable_directory(replica::table& table,
         table.schema(),
         std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()),
         std::move(storage_opts),
-        sstable_state::upload,
+        state,
         std::move(error_handler_gen)
     )
 {}

@@ -281,7 +281,7 @@ class table_populator {
     sstring _ks;
     sstring _cf;
     global_table_ptr& _global_table;
-    std::unordered_map<sstables::sstable_state, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
+    std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
     sstables::generation_type _highest_generation;
 
@@ -300,47 +300,74 @@ public:
         SCYLLA_ASSERT(_sstable_directories.empty());
     }
 
-    future<> start() {
-        SCYLLA_ASSERT(this_shard_id() == 0);
-
-        // The table base directory (with sstable_state::normal) must be
-        // loaded and processed first as it now may contain the shared
-        // pending_delete_dir, possibly referring to sstables in sub-directories.
-        for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
-            co_await start_subdir(state);
-        }
-
-        co_await smp::invoke_on_all([this] {
-            _global_table->update_sstables_known_generation(_highest_generation);
-            return _global_table->disable_auto_compaction();
-        });
-
-        co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
-    }
-
-    future<> stop() {
-        for (auto it = _sstable_directories.begin(); it != _sstable_directories.end(); it = _sstable_directories.erase(it)) {
-            co_await it->second->stop();
-        }
-    }
+    future<> start();
+    future<> stop();
 
 private:
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
-    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction);
 
-    future<> start_subdir(sstables::sstable_state state);
+    future<> collect_subdirs();
+    future<> collect_subdirs(const data_dictionary::storage_options::local&, sstables::sstable_state state);
+    future<> collect_subdirs(const data_dictionary::storage_options::s3&, sstables::sstable_state state);
+    future<> process_subdir(sharded<sstables::sstable_directory>&);
+    future<> populate_subdir(sharded<sstables::sstable_directory>&);
 };
 
-future<> table_populator::start_subdir(sstables::sstable_state state) {
+future<> table_populator::start() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    co_await collect_subdirs();
+
+    for (auto dir : _sstable_directories) {
+        co_await process_subdir(*dir);
+    }
+
+    co_await smp::invoke_on_all([this] {
+        _global_table->update_sstables_known_generation(_highest_generation);
+        return _global_table->disable_auto_compaction();
+    });
+
+    for (auto dir : _sstable_directories) {
+        co_await populate_subdir(*dir);
+    }
+}
+
+future<> table_populator::stop() {
+    while (!_sstable_directories.empty()) {
+        co_await _sstable_directories.back()->stop();
+        _sstable_directories.pop_back();
+    }
+}
+
+future<> table_populator::collect_subdirs(const data_dictionary::storage_options::local& so, sstables::sstable_state state) {
+    co_await coroutine::parallel_for_each(_global_table->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
+        auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
+        co_await dptr->start(_global_table.as_sharded_parameter(), state,
+                        sharded_parameter([datadir] {
+                            auto opts = data_dictionary::make_local_options(std::filesystem::path(datadir));
+                            return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
+                        }), default_io_error_handler_gen());
+        _sstable_directories.push_back(std::move(dptr));
+    });
+}
+
+future<> table_populator::collect_subdirs(const data_dictionary::storage_options::s3& so, sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
-    auto& directory = *dptr;
-    co_await directory.start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
+    co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
+    _sstable_directories.push_back(std::move(dptr));
+}
 
+future<> table_populator::collect_subdirs() {
+    // The table base directory (with sstable_state::normal) must be
+    // loaded and processed first as it now may contain the shared
+    // pending_delete_dir, possibly referring to sstables in sub-directories.
+    for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
+        co_await std::visit([this, state] (const auto& so) -> future<> { co_await collect_subdirs(so, state); }, _global_table->get_storage_options().value);
+    }
     // directory must be stopped using table_populator::stop below
-    _sstable_directories[state] = dptr;
+}
 
+future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& directory) {
     co_await distributed_loader::lock_table(_global_table, directory);
 
     sstables::sstable_directory::process_flags flags {
@@ -368,14 +395,9 @@ sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_s
     return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
-future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction) {
-    dblog.debug("Populating {}/{}/{} state={} allow_offstrategy_compaction={}", _ks, _cf, _global_table->get_storage_options(), state, do_allow_offstrategy_compaction);
-
-    if (!_sstable_directories.contains(state)) {
-        co_return;
-    }
-
-    auto& directory = *_sstable_directories.at(state);
+future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& directory) {
+    auto state = directory.local().state();
+    dblog.debug("Populating {}/{}/{} state={}", _ks, _cf, _global_table->get_storage_options(), state);
 
     co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [this] () {
@@ -402,6 +424,7 @@ future<> table_populator::populate_subdir(sstables::sstable_state state, allow_o
         return make_sstable(*_global_table, state, gen, _highest_version);
     }, eligible_for_reshape_on_boot);
 
+    auto do_allow_offstrategy_compaction = allow_offstrategy_compaction(state == sstables::sstable_state::normal);
     co_await directory.invoke_on_all([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
         co_await dir.do_for_each_sstable([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::shared_sstable sst) {
             auto requires_offstrategy = sstables::offstrategy(do_allow_offstrategy_compaction && !eligible_for_reshape_on_boot(sst));
@@ -422,40 +445,34 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         auto uuid = s->id();
         sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
+        auto& cf = *gtable;
 
-        // might have more than one dir for a keyspace iff data_file_directories is > 1 and
-        // somehow someone placed sstables in more than one of them for a given ks. (import?)
-        co_await coroutine::parallel_for_each(gtable->get_config().all_datadirs, [&] (const sstring& datadir) -> future<> {
-            auto& cf = *gtable;
+        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
 
-            dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={} datadir={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options().type_string(), datadir);
+        auto metadata = table_populator(gtable, db, ks_name, cfname);
+        std::exception_ptr ex;
 
-            auto metadata = table_populator(gtable, db, ks_name, cfname);
-            std::exception_ptr ex;
-
+        try {
+            co_await metadata.start();
+        } catch (...) {
+            std::exception_ptr eptr = std::current_exception();
+            std::string msg =
+                format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
+                        ks_name, cfname, cf.get_storage_options(), eptr);
+            dblog.error("{}", msg);
             try {
-                co_await metadata.start();
+                std::rethrow_exception(eptr);
+            } catch (sstables::compaction_stopped_exception& e) {
+                // swallow compaction stopped exception, to allow clean shutdown.
             } catch (...) {
-                std::exception_ptr eptr = std::current_exception();
-                std::string msg =
-                    format("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
-                            ks_name, cfname, datadir, eptr);
-                dblog.error("Exception while populating keyspace '{}' with column family '{}' from datadir '{}': {}",
-                            ks_name, cfname, datadir, eptr);
-                try {
-                    std::rethrow_exception(eptr);
-                } catch (sstables::compaction_stopped_exception& e) {
-                    // swallow compaction stopped exception, to allow clean shutdown.
-                } catch (...) {
-                    ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
-                }
+                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
             }
+        }
 
-            co_await metadata.stop();
-            if (ex) {
-                co_await coroutine::return_exception_ptr(std::move(ex));
-            }
-        });
+        co_await metadata.stop();
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
 
         // system tables are made writable through sys_ks::mark_writable
         if (!is_system_keyspace(ks_name)) {
