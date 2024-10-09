@@ -32,15 +32,10 @@
 #include <ctime>
 #include <cstdlib>
 #include <fmt/chrono.h>
-#include <boost/iterator/transform_iterator.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/numeric.hpp>
-#include <boost/range/combine.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <seastar/net/inet_address.hh>
 #include <unordered_set>
 #include "utils/big_decimal.hh"
@@ -819,7 +814,7 @@ static bool find(const abstract_type& t, const Predicate& f) {
         bool operator()(const abstract_type&) { return false; }
         bool operator()(const reversed_type_impl& r) { return find(*r.underlying_type(), f); }
         bool operator()(const tuple_type_impl& t) {
-            return boost::algorithm::any_of(t.all_types(), [&] (const data_type& dt) { return find(*dt, f); });
+            return std::ranges::any_of(t.all_types(), [&] (const data_type& dt) { return find(*dt, f); });
         }
         bool operator()(const map_type_impl& m) { return find(*m.get_keys_type(), f) || find(*m.get_values_type(), f); }
         bool operator()(const listlike_collection_type_impl& l) { return find(*l.get_elements_type(), f); }
@@ -1043,7 +1038,7 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
         sstring operator()(const time_type_impl&) { return "time"; }
         sstring operator()(const timeuuid_type_impl&) { return "timeuuid"; }
         sstring operator()(const tuple_type_impl& t) {
-            return seastar::format("tuple<{}>", fmt::join(t.all_types() | boost::adaptors::transformed(std::mem_fn(
+            return seastar::format("tuple<{}>", fmt::join(t.all_types() | std::views::transform(std::mem_fn(
                                                                             &abstract_type::as_cql3_type)), ", "));
         }
         sstring operator()(const user_type_impl& u) { return u.get_name_as_cql_string(); }
@@ -1216,7 +1211,7 @@ static sstring map_to_string(const std::vector<std::pair<data_value, data_value>
         out << "(";
     }
 
-    fmt::print(out, "{}", fmt::join(v | boost::adaptors::transformed([] (const std::pair<data_value, data_value>& p) {
+    fmt::print(out, "{}", fmt::join(v | std::views::transform([] (const std::pair<data_value, data_value>& p) {
         std::ostringstream out;
         const auto& k = p.first;
         const auto& v = p.second;
@@ -1530,7 +1525,7 @@ template data_value list_type_impl::deserialize<>(ser::buffer_view<bytes_ostream
 
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {
     return fmt::to_string(fmt::join(
-            v | boost::adaptors::transformed([] (const data_value& e) { return e.type()->to_string_impl(e); }),
+            v | std::views::transform([] (const data_value& e) { return e.type()->to_string_impl(e); }),
             sep));
 }
 
@@ -2586,12 +2581,12 @@ size_t abstract_type::hash(managed_bytes_view v) const {
         size_t operator()(const abstract_type& t) { return std::hash<managed_bytes_view>()(v); }
         size_t operator()(const tuple_type_impl& t) {
             auto apply_hash = [] (auto&& type_value) {
-                auto&& type = boost::get<0>(type_value);
-                auto&& value = boost::get<1>(type_value);
+                auto&& type = std::get<0>(type_value);
+                auto&& value = std::get<1>(type_value);
                 return value ? type->hash(*value) : 0;
             };
             // FIXME: better accumulation function
-            return boost::accumulate(combine(t.all_types(), t.make_range(v)) | boost::adaptors::transformed(apply_hash),
+            return std::ranges::fold_left(std::views::zip(t.all_types(), t.make_range(v)) | std::views::transform(apply_hash),
                     0, std::bit_xor<>());
         }
         size_t operator()(const varint_type_impl& t) {
@@ -3067,7 +3062,7 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     // "org.apache.cassandra.db.marshal.FrozenType(...)".
     // Even when the tuple is frozen.
     // For more details see #4087
-    return seastar::format("org.apache.cassandra.db.marshal.TupleType({})", fmt::join(types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)), ", "));
+    return seastar::format("org.apache.cassandra.db.marshal.TupleType({})", fmt::join(types | std::views::transform(std::mem_fn(&abstract_type::name)), ", "));
 }
 
 static std::optional<std::vector<data_type>>
@@ -3607,7 +3602,7 @@ data_value::data_value(empty_type_representation e) : data_value(make_new(empty_
 
 sstring data_value::to_parsable_string() const {
     // For some reason trying to do it using fmt::format refuses to compile
-    // auto to_parsable_str_transform = boost::adaptors::transformed([](const data_value& dv) -> sstring {
+    // auto to_parsable_str_transform = std::views::transform([](const data_value& dv) -> sstring {
     //     return dv.to_parsable_string();
     // });
 
@@ -3656,7 +3651,7 @@ sstring data_value::to_parsable_string() const {
         }
         result << "}";
         return std::move(result).str();
-        //auto to_map_elem_transform = boost::adaptors::transformed(
+        //auto to_map_elem_transform = std::views::transform(
         //    [](const std::pair<data_value, data_value>& map_elem) -> sstring {
         //        return fmt::format("{{{}:{}}}", map_elem.first.to_parsable_string(), map_elem.second.to_parsable_string());
         //    }
