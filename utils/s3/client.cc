@@ -754,7 +754,13 @@ future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content)
+        .handle_exception([this](const std::exception_ptr& ex) -> future<> {
+            // Here we discard whatever exception is thrown when aborting multipart upload since we don't care about cleanly aborting it since there are other
+            // means to clean up dangling parts, for example `rclone cleanup` or S3 bucket's Lifecycle Management Policy
+            s3l.warn("Failed to abort multipart upload. Object: '{}'. Reason: {})", _object_name, ex);
+            co_return;
+        });
 }
 
 future<> client::multipart_upload::finalize_upload() {
