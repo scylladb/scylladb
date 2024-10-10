@@ -12,6 +12,7 @@
 #include <map>
 #include <variant>
 #include <seastar/core/sstring.hh>
+#include "utils/UUID.hh"
 #include "seastarx.hh"
 
 namespace data_dictionary {
@@ -28,7 +29,7 @@ struct storage_options {
     struct s3 {
         sstring bucket;
         sstring endpoint;
-        sstring prefix;
+        std::variant<sstring, utils::UUID> location;
         static constexpr std::string_view name = "S3";
 
         static s3 from_map(const std::map<sstring, sstring>&);
