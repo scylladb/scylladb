@@ -262,6 +262,10 @@ future<> service::stop() {
     });
 }
 
+future<> service::ensure_superuser_is_created() {
+    return _role_manager->ensure_superuser_is_created();
+}
+
 void service::update_cache_config() {
     auto db = _qp.db();
 
