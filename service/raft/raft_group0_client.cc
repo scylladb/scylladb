@@ -22,6 +22,11 @@
 #include "service/raft/group0_state_machine.hh"
 #include "replica/database.hh"
 #include "utils/to_string.hh"
+<<<<<<< HEAD
+=======
+#include "db/system_keyspace.hh"
+#include "replica/tablets.hh"
+>>>>>>> 1863ccd900 (tablets: Validate system.tablets update)
 
 
 namespace service {
@@ -294,6 +299,10 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
                 )
             };
     }
+}
+
+void raft_group0_client::validate_change(const topology_change& change) {
+    replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
 }
 
 template<typename Command>
