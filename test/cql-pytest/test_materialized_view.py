@@ -8,7 +8,7 @@ import time
 import re
 import pytest
 
-from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics
+from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 
 import nodetool
@@ -1354,3 +1354,56 @@ def test_create_materialized_view_slash_name(cql, test_keyspace, table1):
     finally:
         # We shouldn't reach here, but if we did, let the test fail cleanly
         cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."/xyz/"')
+
+@pytest.fixture(scope="module")
+def mv1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p', 'p is not null and c is not null') as mv:
+            yield mv
+
+# A materialized view cannot be written to directly - it can only be written
+# through its base table. This test verifies that all CQL operations that can
+# write to a table - INSERT, UPDATE, BATCH, DELETE, and TRUNCATE - are
+# rejected on a view table.
+def test_view_forbids_write(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'INSERT INTO {mv1} (c,p) VALUES (1,2)')
+    with pytest.raises(InvalidRequest, match=f'Cannot directly modify a materialized view'):
+        cql.execute(f'UPDATE {mv1} SET x=1 WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'BEGIN BATCH UPDATE {mv1} SET x=1 WHERE c=1 AND p=2; APPLY BATCH')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'DELETE FROM {mv1} WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot TRUNCATE materialized view directly'):
+        cql.execute(f'TRUNCATE {mv1}')
+
+# A materialized view should not be operated on with operations that have
+# "TABLE" in their name - DROP TABLE, ALTER TABLE, and DESC TABLE. There
+# are identical operations with "MATERIALIZED VIEW" in their name, which
+# should be used instead.
+@pytest.mark.xfail(reason="issue #21026")
+def test_view_forbids_table_ops(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f'DROP TABLE {mv1}')
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f"ALTER TABLE {mv1} WITH comment='hello'")
+    # Unlike the previous operations, in DESC TABLE cassandra doesn't explain
+    # that DESC TABLE cannot be used on a view and that DESC MATERIALIZED VIEW
+    # should be used instead - it just reports that the table is "not found".
+    # Reproduces #21026 (DESC TABLE was allowed on a view):
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'DESC TABLE {mv1}')
+
+# A materialized view cannot have its own materialized views, nor secondary
+# indexes. Verify that.
+def test_view_forbids_view_or_index(cql, mv1):
+    # Cassandra and Scylla print different error messages here. Cassandra
+    # just claims that "Base table '{mv1}' doesn't exist" (it exists, but it's
+    # not a base table). Scylla says "Materialized views cannot be created
+    # against other materialized views". Let's allow both:
+    with pytest.raises(InvalidRequest, match='Base table|materialized views'):
+        with new_materialized_view(cql, mv1, '*', 'v, p', 'v is not null and p is not null'):
+            pass
+    with pytest.raises(InvalidRequest, match='materialized views'):
+        with new_secondary_index(cql, mv1, 'x'):
+            pass
