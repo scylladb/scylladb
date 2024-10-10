@@ -84,7 +84,8 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
 }
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_send_snapshot, snap);
+    auto l = [](auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_send_snapshot(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), snap);
 }
 
 future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_request& append_request) {
@@ -102,41 +103,50 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
 }
 
 void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_append_entries_reply, reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_append_entries_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), reply);
 }
 
 void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_request, vote_request);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_vote_request(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), vote_request);
 }
 
 void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_reply, vote_reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_vote_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), vote_reply);
 }
 
 void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_timeout_now, timeout_now);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_timeout_now(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), timeout_now);
 }
 
 void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum, read_quorum);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_quorum(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), read_quorum);
 }
 
 void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& read_quorum_reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum_reply, read_quorum_reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_quorum_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), read_quorum_reply);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_add_entry, cmd);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_add_entry(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), cmd);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
         const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_modify_config, add, del);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_modify_config(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), add, del);
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l));
 }
 
 future<> raft_rpc::abort() {

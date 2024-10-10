@@ -461,6 +461,7 @@ class RpcVerb(ASTBase):
             static void register_my_verb(netw::messaging_service* ms, std::function<return_value(args...)>&&);
             static future<> unregister_my_verb(netw::messaging_service* ms);
             static future<> send_my_verb(netw::messaging_service* ms, netw::msg_addr id, args...);
+            static future<> send_my_verb(netw::messaging_service* ms, locator::host_id id, args...);
 
     Each method accepts a pointer to an instance of messaging_service
     object, which contains the underlying seastar RPC protocol
@@ -555,8 +556,8 @@ class RpcVerb(ASTBase):
             res.extend(self.params)
         return ', '.join([p.to_string() for p in res])
 
-    def send_function_signature_params_list(self, include_placeholder_names):
-        res = 'netw::messaging_service* ms, netw::msg_addr id'
+    def send_function_signature_params_list(self, include_placeholder_names, dst_type):
+        res = f'netw::messaging_service* ms, {dst_type} id'
         if self.with_timeout:
             res += ', netw::messaging_service::clock_type::time_point timeout'
         if self.cancellable:
@@ -1613,7 +1614,8 @@ def generate_rpc_verbs_declarations(hout, module_name):
         fprintln(hout, reindent(4, f'''static void register_{name}(netw::messaging_service* ms,
     std::function<{verb.handler_function_return_values()} ({verb.handler_function_parameters_str()})>&&);
 static future<> unregister_{name}(netw::messaging_service* ms);
-static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False)});
+static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False, dst_type="netw::msg_addr")});
+static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False, dst_type="locator::host_id")});
 '''))
 
     fprintln(hout, reindent(4, 'static future<> unregister(netw::messaging_service* ms);'))
@@ -1633,7 +1635,11 @@ future<> {module_name}_rpc_verbs::unregister_{name}(netw::messaging_service* ms)
     return ms->unregister_handler({verb.messaging_verb_enum_case()});
 }}
 
-{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True)}) {{
+{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True, dst_type="netw::msg_addr")}) {{
+    {verb.send_function_invocation()}
+}}
+
+{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True, dst_type="locator::host_id")}) {{
     {verb.send_function_invocation()}
 }}''')
 
