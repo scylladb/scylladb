@@ -136,6 +136,7 @@ standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::servic
     , _migration_manager(mm)
     , _stopped(make_ready_future<>())
     , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
+    , _superuser_created(this_shard_id() != 0)
 {}
 
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
@@ -243,41 +244,73 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 }
 
 future<> standard_role_manager::start() {
-    return once_among_shards([this] {
-        return futurize_invoke([this] () {
-            if (legacy_mode(_qp)) {
-                return create_legacy_metadata_tables_if_missing();
-            }
-            return make_ready_future<>();
-        }).then([this] {
-            _stopped = auth::do_after_system_ready(_as, [this] {
-                return seastar::async([this] {
-                    if (legacy_mode(_qp)) {
-                        _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
+    return once_among_shards([this] () -> future<> {
+        if (legacy_mode(_qp)) {
+            co_await create_legacy_metadata_tables_if_missing();
+        }
 
-                        if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                            if (legacy_metadata_exists()) {
-                                log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
-                            }
+        auto handler = [this] () -> future<> {
+            try {
+                if (legacy_mode(_qp)) {
+                    bool previous = _superuser_created.exchange(true);
+                    if (!previous) _superuser_created_promise.set_value();
+                    co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
-                            return;
-                        }
-
+                    if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
                         if (legacy_metadata_exists()) {
-                            migrate_legacy_metadata().get();
-                            return;
+                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }
+                        co_return;
                     }
-                    create_default_role_if_missing().get();
-                });
-            });
-        });
+
+                    if (legacy_metadata_exists()) {
+                        co_await migrate_legacy_metadata();
+                        co_return;
+                    }
+                }
+                co_await create_default_role_if_missing();
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_value();
+            } catch (const exceptions::unavailable_exception& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const exceptions::request_failure_exception& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const sleep_aborted& e) {
+                // If we fail to create the default role, we should not signal that we are ready.
+                log.warn("Failed to create default role: {}; will retry", e.what());
+                throw e;
+            } catch (const std::exception& e) {
+                log.error("Failed to create default role: {}", e.what());
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_exception(std::current_exception());
+                throw e;
+            } catch (...) {
+                log.error("Failed to create default role: unknown error");
+                bool previous = _superuser_created.exchange(true);
+                if (!previous) _superuser_created_promise.set_exception(std::current_exception());
+                std::rethrow_exception(std::current_exception());
+            }
+        };
+
+        _stopped = auth::do_after_system_ready(_as, handler);
+        co_return;
     });
 }
 
 future<> standard_role_manager::stop() {
     _as.request_abort();
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
+}
+
+future<> standard_role_manager::ensure_superuser_is_created() {
+    if (_superuser_created.load()) {
+        return make_ready_future();
+    }
+    return _superuser_created_promise.get_shared_future();
 }
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {

@@ -2136,6 +2136,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().drain_on_shutdown().get();
             });
 
+            auth_service.invoke_on_all([] (auth::service& auth_service) -> future<> {
+                co_await auth_service.ensure_superuser_is_created();
+                co_return;
+            }).get();
             ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
