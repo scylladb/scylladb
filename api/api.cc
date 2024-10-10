@@ -299,8 +299,7 @@ future<> set_server_done(http_context& ctx) {
 
 future<> set_server_commitlog(http_context& ctx, sharded<replica::database>& db) {
     return register_api(ctx, "commitlog", "The commit log API", [&db] (http_context& ctx, routes& r) {
-        (void)db;
-        set_commitlog(ctx, r);
+        set_commitlog(ctx, r, db);
     });
 }
 

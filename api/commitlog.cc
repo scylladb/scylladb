@@ -32,7 +32,7 @@ static auto acquire_cl_metric(http_context& ctx, std::function<T (const db::comm
     });
 }
 
-void set_commitlog(http_context& ctx, routes& r) {
+void set_commitlog(http_context& ctx, routes& r, sharded<replica::database>& db) {
     httpd::commitlog_json::get_active_segment_names.set(r,
             [&ctx](std::unique_ptr<request> req) {
         auto res = make_shared<std::vector<sstring>>();
