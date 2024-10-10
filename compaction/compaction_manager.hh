@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <boost/icl/interval_map.hpp>
-
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -42,11 +40,6 @@ class compaction_history_entry;
 }
 
 namespace sstables { class test_env_compaction_manager; }
-
-class repair_history_map {
-public:
-    boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max> map;
-};
 
 namespace compaction {
 using throw_if_stopping = bool_class<struct throw_if_stopping_tag>;
@@ -162,7 +155,7 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 
-    per_table_history_maps _repair_history_maps;
+    per_table_history_maps _reconcile_history_maps;
     tombstone_gc_state _tombstone_gc_state;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.

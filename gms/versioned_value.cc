@@ -19,15 +19,6 @@ namespace gms {
 static_assert(std::is_nothrow_default_constructible_v<versioned_value>);
 static_assert(std::is_nothrow_move_constructible_v<versioned_value>);
 
-constexpr char versioned_value::DELIMITER;
-constexpr const char versioned_value::DELIMITER_STR[];
-constexpr const char* versioned_value::STATUS_UNKNOWN;
-constexpr const char* versioned_value::STATUS_BOOTSTRAPPING;
-constexpr const char* versioned_value::STATUS_NORMAL;
-constexpr const char* versioned_value::STATUS_LEFT;
-constexpr const char* versioned_value::REMOVED_TOKEN;
-constexpr const char* versioned_value::SHUTDOWN;
-
 versioned_value versioned_value::network_version() {
     return versioned_value(format("{}", netw::messaging_service::current_version));
 }

@@ -17,6 +17,7 @@ target_sources(service
     qos/standard_service_level_distributed_data_accessor.cc
     qos/raft_service_level_distributed_data_accessor.cc
     raft/discovery.cc
+    raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
     raft/group0_state_machine_merger.cc
     raft/raft_group0.cc

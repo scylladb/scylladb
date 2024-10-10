@@ -362,6 +362,8 @@ static std::string_view experimental_features_help_string() {
     return s;
 }
 
+using namespace std::chrono_literals;
+
 db::config::config(std::shared_ptr<db::extensions> exts)
     : utils::config_file()
     /**
@@ -732,6 +734,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , query_page_size_in_bytes(this, "query_page_size_in_bytes", liveness::LiveUpdate, value_status::Used, 1 << 20,
         "The size of pages in bytes, after a page accumulates this much data, the page is cut and sent to the client."
         " Setting a too large value increases the risk of OOM.")
+    , group0_tombstone_gc_refresh_interval_in_ms(this, "group0_tombstone_gc_refresh_interval_in_ms", value_status::Used,
+              std::chrono::duration_cast<std::chrono::milliseconds>(60min).count(),
+              "The interval in milliseconds at which we update the time point for safe tombstone expiration in group0 tables.")
     /**
     * @Group Network timeout settings
     */

@@ -2679,20 +2679,20 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     } else {
         co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
             std::vector<sstring> pieces;
-            boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+            boost::split(pieces, value.value(), boost::is_any_of(versioned_value::DELIMITER));
             if (pieces.empty()) {
                 slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, application_state::STATUS, value);
                 co_return;
             }
             const sstring& move_name = pieces[0];
-            if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
+            if (move_name == versioned_value::STATUS_BOOTSTRAPPING) {
                 co_await handle_state_bootstrap(endpoint, pid);
-            } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
-                       move_name == sstring(versioned_value::SHUTDOWN)) {
+            } else if (move_name == versioned_value::STATUS_NORMAL ||
+                       move_name == versioned_value::SHUTDOWN) {
                 co_await handle_state_normal(endpoint, pid);
-            } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
+            } else if (move_name == versioned_value::REMOVED_TOKEN) {
                 co_await handle_state_removed(endpoint, std::move(pieces), pid);
-            } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
+            } else if (move_name == versioned_value::STATUS_LEFT) {
                 co_await handle_state_left(endpoint, std::move(pieces), pid);
             } else {
                 co_return; // did nothing.

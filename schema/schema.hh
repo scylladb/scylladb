@@ -535,6 +535,7 @@ struct schema_static_props {
         use_schema_commitlog = true;
         use_null_sharder = true; // schema commitlog lives only on the null shard
     }
+    bool is_group0_table = false; // the table is a group 0 table
 };
 
 class schema_describe_helper {
