@@ -1365,7 +1365,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
     }
 
     if (!has_available_units(permit.base_resources())) {
-        auto reason = _resources.memory >= permit.base_resources().memory ? reason::memory_resources : reason::count_resources;
+        auto reason = _resources.memory >= permit.base_resources().memory ? reason::count_resources : reason::memory_resources;
         if (_inactive_reads.empty()) {
             return {can_admit::no, reason};
         } else {
