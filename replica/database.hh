@@ -1628,6 +1628,7 @@ public:
     }
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
+    locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
     lang::manager& lang() noexcept { return _lang_manager; }
