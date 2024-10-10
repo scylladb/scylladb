@@ -26,6 +26,7 @@ struct sstable_writer::writer_impl {
     metadata_collector _collector;
     column_stats _c_stats;
     mutation_fragment_stream_validating_filter _validator;
+    sstable_enabled_features _features = sstable_enabled_features::all();
 
     writer_impl(sstable& sst, const schema& schema, const sstable_writer_config& cfg)
         : _sst(sst)
@@ -33,7 +34,11 @@ struct sstable_writer::writer_impl {
         , _cfg(cfg)
         , _collector(_schema, sst.get_filename(), sst.manager().get_local_host_id())
         , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validation_level)
-    {}
+    {
+        if (!cfg.correct_pi_block_width) {
+            _features.disable(CorrectLastPiBlockWidth);
+        }
+    }
 
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
     virtual void consume(tombstone t) = 0;

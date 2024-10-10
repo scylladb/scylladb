@@ -75,6 +75,7 @@ inline atomic_cell make_atomic_cell(const abstract_type& type,
 atomic_cell make_counter_cell(api::timestamp_type timestamp, fragmented_temporary_buffer::view value);
 
 position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key);
+position_in_partition_view get_slice_lower_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key);
 
 // data_consume_rows() iterates over rows in the data file from
 // a particular range, feeding them into the consumer. The iteration is

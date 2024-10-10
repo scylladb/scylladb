@@ -108,6 +108,7 @@ struct sstable_writer_config {
     run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
+    bool correct_pi_block_width = true;
 
 private:
     explicit sstable_writer_config() {}

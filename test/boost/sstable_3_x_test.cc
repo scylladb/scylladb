@@ -3190,7 +3190,9 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
         auto result_filename =
                 sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), big, file_type);
         auto eq = tests::compare_files(orig_filename, result_filename).get();
-        BOOST_REQUIRE(eq);
+        if (!eq) {
+            BOOST_FAIL(format("Files {} and {} are different", orig_filename, result_filename));
+        }
     }
 }
 
@@ -4248,6 +4250,9 @@ SEASTAR_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
 
 SEASTAR_TEST_CASE(test_write_many_range_tombstones) {
   return test_env::do_with_async([] (test_env& env) {
+    // Golden copy sstables were written without this feature, which affects Index contents.
+    env.manager().set_correct_pi_block_width(false);
+
     sstring table_name = "many_range_tombstones";
     // CREATE TABLE many_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
     schema_builder builder("sst3", table_name);
