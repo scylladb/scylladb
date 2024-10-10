@@ -128,12 +128,14 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
 
     await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_from}}}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.test_mv AS SELECT pk FROM test.test WHERE pk IS NOT NULL PRIMARY KEY (pk)")
 
     logger.info("Populating table")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in range(128)])
 
     async def check_allocated_replica(expected: int):
         replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+        replicas = replicas + await get_all_tablet_replicas(manager, servers[0], 'test', 'test_mv', is_view=True)
         for r in replicas:
             logger.info(f"{r.replicas}")
             assert len(r.replicas) == expected

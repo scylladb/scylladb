@@ -13,7 +13,7 @@ class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
 
-async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str) -> list[TabletReplicas]:
+async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> list[TabletReplicas]:
     """
     Retrieves the tablet distribution for a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
@@ -27,7 +27,10 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
     # reflects the finalized tablet movement.
     await read_barrier(manager.api, server.ip_addr)
 
-    table_id = await manager.get_table_id(keyspace_name, table_name)
+    if is_view:
+        table_id = await manager.get_view_id(keyspace_name, table_name)
+    else:
+        table_id = await manager.get_table_id(keyspace_name, table_name)
     rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return [TabletReplicas(
