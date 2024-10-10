@@ -35,7 +35,7 @@
 // permissive enough policy and then run the test with env set respectively
 // E.g. like this
 //
-//   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
+//   export PROXY_S3_SERVER_HOST=s3.us-east-2.amazonaws.com
 //   export S3_SERVER_PORT_FOR_TEST=443
 //   export S3_BUCKET_FOR_TEST=xemul
 //   export AWS_ACCESS_KEY_ID=${aws_access_key_id}
@@ -45,8 +45,8 @@
 
 s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
-        .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
-        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .port = std::stoul(tests::getenv_safe("PROXY_S3_SERVER_PORT")),
+        .use_https = false,
         .aws = {{
             .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
             .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
@@ -68,7 +68,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 
     testlog.info("Make client\n");
     semaphore mem(16<<20);
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto cln = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*cln);
 
     testlog.info("Put object {}\n", name);
@@ -114,7 +114,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
 
     testlog.info("Make client\n");
     semaphore mem(16<<20);
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto cln = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object (with copy = {})\n", with_copy_upload);
@@ -175,7 +175,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_fallback) {
     testlog.info("Make client");
     semaphore mem(0);
     mem.broken(); // so that any attempt to use it throws
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto cln = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
@@ -231,7 +231,7 @@ future<> test_client_upload_file(std::string_view test_name, size_t total_size, 
 
     // 2. upload the file to s3
     semaphore mem{memory_size};
-    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
+    auto client = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"),
                                    make_minio_config(),
                                    mem);
     co_await client->upload_file(file_path, object_name);
@@ -289,7 +289,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
 
     testlog.info("Make client\n");
     semaphore mem(16<<20);
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto cln = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*cln);
 
     testlog.info("Put object {}\n", name);
@@ -331,7 +331,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream) {
 
     testlog.info("Make client\n");
     semaphore mem(16<<20);
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto cln = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*cln);
 
     testlog.info("Put object {}\n", name);
@@ -354,7 +354,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
     const sstring name(fmt::format("/{}/testobject-{}",
                                    tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
     semaphore mem(16<<20);
-    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto client = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*client);
     auto data = sstring("1234567890ABCDEF").release();
     client->put_object(name, std::move(data)).get();
@@ -396,7 +396,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects) {
     const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
     const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
     semaphore mem(16<<20);
-    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto client = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*client);
 
     // Put extra object to check list-by-prefix filters it out
@@ -420,7 +420,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete) {
     const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
     const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
     semaphore mem(16<<20);
-    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config(), mem);
+    auto client = s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_minio_config(), mem);
     auto close_client = deferred_close(*client);
 
     populate_bucket(client, bucket, prefix, 8);

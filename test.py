@@ -36,6 +36,7 @@ from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
+from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher, get_resource_gather
 from test.pylib.util import LogPrefixAdapter
@@ -1552,6 +1553,12 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                                   LogPrefixAdapter(logging.getLogger('s3_mock'), {'prefix': 's3_mock'}))
     await mock_s3_server.start()
     TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = "http://" + os.environ[ms.ENV_ADDRESS] + ":" + os.environ[ms.ENV_PORT]
+    proxy_s3_server = S3ProxyServer(await hosts.lease_host(), 9002, minio_uri, 3,
+                                    LogPrefixAdapter(logging.getLogger('s3_proxy'), {'prefix': 's3_proxy'}))
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
 
     console.print_start_blurb()
     max_failures = options.max_failures
