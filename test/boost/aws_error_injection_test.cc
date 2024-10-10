@@ -39,14 +39,14 @@ static std::string get_address() {
 
 static s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
-        .port = get_port(),
-        .use_https = false,
-        .aws = {{
-            .access_key_id = "foo",
-            .secret_access_key = "bar",
-            .session_token = "baz",
-            .region = "us-east-1",
-        }},
+            .port = get_port(),
+            .use_https = false,
+            .aws = {{
+                    .access_key_id = "foo",
+                    .secret_access_key = "bar",
+                    .session_token = "baz",
+                    .region = "us-east-1",
+            }},
     };
     return make_lw_shared<s3::endpoint_config>(std::move(cfg));
 }
@@ -58,7 +58,9 @@ static void register_policy(const std::string& key, failure_policy policy) {
     req._headers["Content-Length"] = "0";
     req.query_parameters["Key"] = key;
     req.query_parameters["Policy"] = std::to_string(std::to_underlying(policy));
-    cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); }).get();
+    cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> {
+           return seastar::make_ready_future();
+       }).get();
 }
 
 void test_client_upload_file(std::string_view test_name, failure_policy policy, size_t total_size, size_t memory_size) {
