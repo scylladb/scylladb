@@ -110,6 +110,7 @@ class raft_group0_client {
 
     template <typename Command>
     void validate_change(const Command& change) {}
+    void validate_change(const topology_change& change);
 
 public:
     raft_group0_client(service::raft_group_registry&, db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
