@@ -17,6 +17,8 @@
 using request = http::request;
 using reply = http::reply;
 
+class compaction_manager;
+
 namespace service {
 
 class load_meter;
@@ -120,7 +122,8 @@ future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& 
 future<> unset_hinted_handoff(http_context& ctx);
 future<> set_server_cache(http_context& ctx);
 future<> unset_server_cache(http_context& ctx);
-future<> set_server_compaction_manager(http_context& ctx);
+future<> set_server_compaction_manager(http_context& ctx, sharded<compaction_manager>& cm);
+future<> unset_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg);
 future<> unset_server_task_manager(http_context& ctx);

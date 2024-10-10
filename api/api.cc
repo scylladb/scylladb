@@ -274,14 +274,14 @@ future<> unset_hinted_handoff(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff(ctx, r); });
 }
 
-future<> set_server_compaction_manager(http_context& ctx) {
-    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
-
-    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
-        rb->register_function(r, "compaction_manager",
-                "The Compaction manager API");
-        set_compaction_manager(ctx, r);
+future<> set_server_compaction_manager(http_context& ctx, sharded<compaction_manager>& cm) {
+    return register_api(ctx, "compaction_manager", "The Compaction manager API", [&cm] (http_context& ctx, routes& r) {
+        set_compaction_manager(ctx, r, cm);
     });
+}
+
+future<> unset_server_compaction_manager(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_compaction_manager(ctx, r); });
 }
 
 future<> set_server_done(http_context& ctx) {
