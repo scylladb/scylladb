@@ -15,7 +15,7 @@
 class test_reader_lifecycle_policy
         : public reader_lifecycle_policy_v2
         , public enable_shared_from_this<test_reader_lifecycle_policy> {
-    using factory_function = std::function<mutation_reader(
+    using reader_factory_function = std::function<mutation_reader(
             schema_ptr,
             reader_permit,
             const dht::partition_range&,
@@ -34,14 +34,14 @@ class test_reader_lifecycle_policy
         }
     };
 
-    factory_function _factory_function;
+    reader_factory_function _reader_factory_function;
     std::vector<foreign_ptr<std::unique_ptr<reader_context>>> _contexts;
     std::vector<future<>> _destroy_futures;
     bool _evict_paused_readers = false;
 
 public:
-    explicit test_reader_lifecycle_policy(factory_function f, bool evict_paused_readers = false)
-        : _factory_function(std::move(f))
+    explicit test_reader_lifecycle_policy(reader_factory_function reader_factory, bool evict_paused_readers = false)
+        : _reader_factory_function(std::move(reader_factory))
         , _contexts(smp::count)
         , _evict_paused_readers(evict_paused_readers) {
     }
@@ -59,7 +59,7 @@ public:
         } else {
             _contexts[shard] = make_foreign(std::make_unique<reader_context>(range, slice));
         }
-        return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, std::move(trace_state), fwd_mr);
+        return _reader_factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, std::move(trace_state), fwd_mr);
     }
     virtual const dht::partition_range* get_read_range() const override {
         const auto shard = this_shard_id();
