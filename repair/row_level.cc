@@ -273,7 +273,8 @@ mutation_reader repair_reader::make_reader(
     read_strategy strategy,
     const dht::sharder& remote_sharder,
     unsigned remote_shard,
-    gc_clock::time_point compaction_time) {
+    gc_clock::time_point compaction_time,
+    size_t max_buffer_size) {
     switch (strategy) {
         case read_strategy::local: {
             auto ms = mutation_source([&cf, compaction_time] (
@@ -302,13 +303,20 @@ mutation_reader repair_reader::make_reader(
             // So we release the one on _permit so the only one is the one the
             // shard reader will obtain.
             _permit.release_base_resources();
-            return make_multishard_streaming_reader(db, _schema, _permit, [this] {
+            auto rd = make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
                 if (shard_range) {
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
             }, compaction_time);
+            // Setting the repair buffer size as the multishard reader's buffer
+            // size helps avoid extra cross-shard round-trips and possible
+            // evict-recreate cycles.
+            // Cap the reader's buffer size at 128K to avoid too much memory
+            // consumption during the read.
+            rd.set_max_buffer_size(std::min(max_buffer_size, size_t(128*1024)));
+            return rd;
         }
         case read_strategy::multishard_filter: {
             // We can't have two permits with count resource for 1 repair.
@@ -336,14 +344,15 @@ repair_reader::repair_reader(
     unsigned remote_shard,
     uint64_t seed,
     read_strategy strategy,
-    gc_clock::time_point compaction_time)
+    gc_clock::time_point compaction_time,
+    size_t max_buffer_size)
     : _schema(s)
     , _permit(std::move(permit))
     , _range(dht::to_partition_range(range))
     , _sharder(remote_sharder, range, remote_shard)
     , _seed(seed)
     , _local_read_op(strategy == read_strategy::local ? std::optional(cf.read_in_progress()) : std::nullopt)
-    , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard, compaction_time))
+    , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard, compaction_time, max_buffer_size))
 { }
 
 future<mutation_fragment_opt>
@@ -1172,7 +1181,8 @@ private:
                         read_strategy);
                     return read_strategy;
                 }),
-                _compaction_time);
+                _compaction_time,
+                _max_row_buf_size);
         }
         try {
             while (cur_size < _max_row_buf_size) {
