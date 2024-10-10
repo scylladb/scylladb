@@ -23,11 +23,9 @@ aws_error::aws_error(aws_error_type error_type, std::string&& error_message, ret
     : _type(error_type), _message(std::move(error_message)), _is_retryable(is_retryable) {
 }
 
-aws_error aws_error::parse(seastar::sstring&& body) {
-    aws_error ret_val;
-
+std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
     if (body.empty()) {
-        return ret_val;
+        return {};
     }
 
     auto doc = std::make_unique<rapidxml::xml_document<>>();
@@ -35,7 +33,7 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error&) {
         // Most likely not an XML which is possible, just return
-        return ret_val;
+        return {};
     }
 
     const auto* error_node = doc->first_node("Error");
@@ -47,11 +45,12 @@ aws_error aws_error::parse(seastar::sstring&& body) {
     }
 
     if (!error_node) {
-        return ret_val;
+        return {};
     }
 
     const auto* code_node = error_node->first_node("Code");
     const auto* message_node = error_node->first_node("Message");
+    aws_error ret_val;
 
     if (code_node && message_node) {
         std::string code = code_node->value();
@@ -61,6 +60,7 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         } else if (auto colon_loc = code.find(':'); colon_loc != std::string::npos) {
             code = code.substr(0, colon_loc);
         }
+
         const auto& all_errors = aws_error::get_errors();
         if (auto found = all_errors.find(code); found != all_errors.end()) {
             ret_val = found->second;
@@ -72,6 +72,35 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         ret_val._type = aws_error_type::UNKNOWN;
     }
     return ret_val;
+}
+
+aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code) {
+    const auto& all_errors = get_errors();
+    switch (http_code) {
+    case seastar::http::reply::status_type::unauthorized:
+    case seastar::http::reply::status_type::forbidden:
+        return all_errors.at("AccessDenied");
+    case seastar::http::reply::status_type::not_found:
+        return all_errors.at("ResourceNotFound");
+    case seastar::http::reply::status_type::too_many_requests:
+        return all_errors.at("SlowDown");
+    case seastar::http::reply::status_type::internal_server_error:
+        return all_errors.at("InternalError");
+    case seastar::http::reply::status_type::bandwidth_limit_exceeded:
+        return all_errors.at("Throttling");
+    case seastar::http::reply::status_type::service_unavailable:
+        return all_errors.at("ServiceUnavailable");
+    case seastar::http::reply::status_type::request_timeout:
+    case seastar::http::reply::status_type::page_expired:
+    case seastar::http::reply::status_type::login_timeout:
+    case seastar::http::reply::status_type::gateway_timeout:
+    case seastar::http::reply::status_type::network_connect_timeout:
+    case seastar::http::reply::status_type::network_read_timeout:
+        return all_errors.at("RequestTimeout");
+    default:
+        int code_value = static_cast<int>(http_code);
+        return {aws_error_type::UNKNOWN, "Unknown error has been encountered", retryable{code_value >= 500 && code_value < 600}};
+    }
 }
 
 const aws_errors& aws_error::get_errors() {
@@ -131,7 +160,15 @@ const aws_errors& aws_error::get_errors() {
         {"RequestTimeTooSkewedException", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
-        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)}};
+        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        {"NoSuchUpload", aws_error(aws_error_type::NO_SUCH_UPLOAD, retryable::no)},
+        {"BucketAlreadyOwnedByYou", aws_error(aws_error_type::BUCKET_ALREADY_OWNED_BY_YOU, retryable::no)},
+        {"ObjectAlreadyInActiveTierError", aws_error(aws_error_type::OBJECT_ALREADY_IN_ACTIVE_TIER, retryable::no)},
+        {"NoSuchBucket", aws_error(aws_error_type::NO_SUCH_BUCKET, retryable::no)},
+        {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
+        {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
+        {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
+        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)}};
     return aws_error_map;
 }
 } // namespace aws
