@@ -2070,7 +2070,12 @@ def write_build_file(f,
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
-        seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
+        if modeval['build_seastar_shared_libs']:
+            seastar_lib_type = 'shared'
+            seastar_lib_ext = 'so'
+        else:
+            seastar_lib_type = 'static'
+            seastar_lib_ext = 'a'
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
@@ -2244,12 +2249,12 @@ def write_build_file(f,
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = seastar\n'.format(**locals()))
+        f.write('  target = seastar-{seastar_lib_type}\n'.format(**locals()))
         f.write('build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = $builddir/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = seastar_testing\n'.format(**locals()))
+        f.write('  target = seastar_testing-{seastar_lib_type}\n'.format(**locals()))
         f.write('build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
