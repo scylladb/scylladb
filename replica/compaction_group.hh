@@ -215,6 +215,7 @@ public:
     const dht::token_range& token_range() const noexcept;
 
     size_t memtable_count() const noexcept;
+    void for_each_active_memtable(noncopyable_function<void(const memtable&)> action) const noexcept;
 
     const compaction_group_ptr& main_compaction_group() const noexcept;
     const std::vector<compaction_group_ptr>& split_ready_compaction_groups() const;
