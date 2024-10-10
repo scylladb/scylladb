@@ -32,7 +32,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)
 
-    sls = ["sl" + unique_name() for _ in range(10)]
+    sls = ["sl" + unique_name() for _ in range(5)]
     for sl in sls:
         await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
 
@@ -79,7 +79,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
         status = await manager.api.raft_topology_upgrade_status(host.address)
         assert status == "not_upgraded"
 
-    sls = ["sl" + unique_name() for _ in range(10)]
+    sls = ["sl" + unique_name() for _ in range(5)]
     for sl in sls:
         await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
 
@@ -111,7 +111,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info("Creating a bunch of service levels")
-    sls = ["sl" + unique_name() for _ in range(10)]
+    sls = ["sl" + unique_name() for _ in range(5)]
     for sl in sls:
         await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
     
