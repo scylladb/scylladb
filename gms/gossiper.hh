@@ -32,6 +32,7 @@
 #include <seastar/core/scheduling.hh>
 #include "locator/token_metadata.hh"
 #include "locator/types.hh"
+#include "gms/gossip_address_map.hh"
 
 namespace gms {
 
@@ -280,7 +281,7 @@ private:
     // Must be called under lock_endpoint.
     future<> replicate(inet_address, endpoint_state, permit_id);
 public:
-    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map);
 
     /**
      * Register for interesting state changes.
@@ -673,6 +674,7 @@ private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
+    gossip_address_map& _address_map;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;

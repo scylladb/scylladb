@@ -89,10 +89,11 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map)
         : _abort_source(as)
         , _shared_token_metadata(stm)
         , _messaging(ms)
+        , _address_map(address_map)
         , _gcfg(std::move(gcfg)) {
     // Gossiper's stuff below runs only on CPU0
     if (this_shard_id() != 0) {

@@ -32,6 +32,7 @@
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_address_map.hh"
+#include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
@@ -162,6 +163,7 @@ private:
     sharded<service::mapreduce_service> _mapreduce_service;
     sharded<direct_failure_detector::failure_detector> _fd;
     sharded<service::raft_address_map> _raft_address_map;
+    sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
 
@@ -694,6 +696,11 @@ private:
                 return make_ready_future<>();
             }).get();
 
+            _gossip_address_map.start().get();
+            auto stop_gossip_address_map = defer([this] {
+                _gossip_address_map.stop().get();
+            });
+
             uint16_t port = 7000;
             seastar::server_socket tmp;
 
@@ -765,7 +772,7 @@ private:
             gcfg.seeds = std::move(seeds);
             gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg)).get();
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
             auto stop_ms_fd_gossiper = defer([this] {
                 _gossiper.stop().get();
             });

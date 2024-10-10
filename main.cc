@@ -113,6 +113,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "gms/gossip_address_map.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -1390,6 +1391,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               }
             }
 
+            static sharded<gms::gossip_address_map> gossip_address_map;
+            supervisor::notify("starting gossip address map");
+            gossip_address_map.start().get();
+            auto stop_gossip_address_map = defer_verbose_shutdown("gossip_address_map", [] {
+                gossip_address_map.stop().get();
+            });
+
             sys_ks.local().build_bootstrap_info().get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
@@ -1528,7 +1536,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
