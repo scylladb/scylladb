@@ -1878,6 +1878,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_cache(ctx).get();
             });
 
+            api::set_server_commitlog(ctx, db).get();
+
             if (cfg->maintenance_mode()) {
                 startlog.info("entering maintenance mode.");
 
