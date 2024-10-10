@@ -39,6 +39,8 @@ namespace cql3 {
 
 namespace statements {
 
+static logging::logger mylogger("create_view");
+
 create_view_statement::create_view_statement(
         cf_name view_name,
         cf_name base_name,
@@ -380,7 +382,9 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
         m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
-            co_return coroutine::exception(std::current_exception());
+            auto ex = std::current_exception();
+            mylogger.warn("{}", ex);
+            co_return coroutine::exception(std::move(ex));
         }
     }
 

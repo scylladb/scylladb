@@ -76,11 +76,14 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     std::vector<mutation> m;
 
+    auto cfm = get_cf_meta_data(qp.db());
     try {
-        m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
+        m = co_await service::prepare_new_column_family_announcement(qp.proxy(), cfm, ts);
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
-            co_return coroutine::exception(std::current_exception());
+            auto ex = std::current_exception();
+            mylogger.warn("{}", ex);
+            co_return coroutine::exception(std::move(ex));
         }
     }
 

@@ -35,6 +35,8 @@ namespace cql3 {
 
 namespace statements {
 
+static logging::logger mylogger("create_index");
+
 create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
                                                std::vector<::shared_ptr<index_target::raw>> raw_targets,
@@ -169,7 +171,9 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
 
     if (db.existing_index_names(keyspace()).contains(_index_name)) {
         if (!_if_not_exists) {
-            throw exceptions::invalid_request_exception("Index already exists");
+            auto ex = std::make_exception_ptr(exceptions::invalid_request_exception(format("Index {}.{} already exists", keyspace(), _index_name)));
+            mylogger.warn("{}", ex);
+            std::rethrow_exception(std::move(ex));
         }
     }
 
