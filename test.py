@@ -617,6 +617,8 @@ class Test:
         self.id = test_no
         self.path = ""
         self.args: List[str] = []
+        # Arguments which are required by a program regardless of additional test specific arguments
+        self.core_args : List[str] = []
         self.valid_exit_codes = [0]
         # Name with test suite name
         self.name = os.path.join(suite.name, shortname.split('.')[0])
@@ -968,7 +970,8 @@ class PythonTest(Test):
 
     def __init__(self, test_no: int, shortname: str, casename: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
-        self.path = "pytest"
+        self.path = "python"
+        self.core_args = ["-m", "pytest"]
         self.casename = casename
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
@@ -1244,10 +1247,10 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             test.time_end = 0
 
             path = test.path
-            args = test.args
+            args = test.core_args + test.args
             if options.cpus:
                 path = 'taskset'
-                args = ['-c', options.cpus, test.path, *test.args]
+                args = ['-c', options.cpus, test.path, *args]
 
             test_running_event = asyncio.Event()
             test_resource_watcher = resource_gather.cgroup_monitor(test_event=test_running_event)
