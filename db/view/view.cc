@@ -942,7 +942,14 @@ void view_updates::create_entry(data_dictionary::database db, const partition_ke
         return;
     }
 
-    auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
+    // After the optimization of #20679, we can reach create_entry() instead
+    // of delete_entry() even in the case of deletion, so for deletion
+    // (!is_live) we need to pass update.tomb() and not just {} - like
+    // delete_entry() does. Note that this is only needed because we *don't*
+    // currently disable read-before-write when there is a partition
+    // tombstone, and that read-before-write reads all these individual rows
+    // that we don't want to generate rows for individually.
+    auto view_rows = get_view_rows(base_key, update, std::nullopt, update.is_live(*_base) ? row_tombstone{} : update.tomb());
     auto update_marker = compute_row_marker(update);
     const auto kind = update.column_kind();
     for (const auto& [r, action]: view_rows) {
@@ -1155,8 +1162,12 @@ void view_updates::generate_update(
         const partition_key& base_key,
         const clustering_or_static_row& update,
         const std::optional<clustering_or_static_row>& existing,
+        // "existing" being unset means the old row didn't exist. But it's
+        // also possible that the caller knew that read-before-write would
+        // not be needed at all, because the view has the same key columns as
+        // the base (see issue #20679). In this case, we can't assume existing
+        // being missing does indicates that the row is missing.
         gc_clock::time_point now) {
-
     // Note that the base PK columns in update and existing are the same, since we're intrinsically dealing
     // with the same base row. So we have to check 3 things:
     //   1) that the clustering key doesn't have a null, which can happen for compact tables. If that's the case,
@@ -1176,6 +1187,23 @@ void view_updates::generate_update(
     if (!_base_info->has_base_non_pk_columns_in_view_pk) {
         if (update.is_static_row()) {
             // TODO: support static rows in views with pk only including columns from base pk
+            return;
+        }
+        // Optimization suggested in #20679: Here, the view key has the same
+        // columns as the base key, so the base row simply corresponds to a
+        // view row and we can send the update directly to it after the
+        // appropriate conversions (reordering the columns and converting
+        // unselected columns to empty virtual columns) - and we don't need
+        // "existing" (in fact it might not have been read) or the *_entry()
+        // functions that require it.
+        // However, if for some reason "existing" does exist, it means we did
+        // read it (e.g., because another view exists and it needed the read-
+        // before write), so we might as well fall through to use it - it can
+        // be useful for certain optimizations (see for example the test
+        // boost/view_schema_test test_view_update_generating_writetime which
+        // confirms one of them).
+        if (!existing) {
+            create_entry(db, base_key, update, now);
             return;
         }
         // The view key is necessarily the same pre and post update.

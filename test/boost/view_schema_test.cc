@@ -3023,6 +3023,20 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
 
         ::shared_ptr<cql_transport::messages::result_message> msg;
 
+        // The following check verifies a specific optimization for a table
+        // where the view key has the same column and there are unselected
+        // columns: Updating the value of an *unselected* column which
+        // already existed (and therefore a virtual column already exists
+        // in the view table) can avoid a view update.
+        // This optimization CAN'T be done if the base row isn't read (read-
+        // before-write) because of the optimization of #20679, but it's
+        // even more important to avoid the read-before-write than to avoid
+        // the write. However, in this specific test, we have *two* views,
+        // one of them (mv2) cannot avoid a read-before-write, so Scylla is
+        // forced to do a read-before-write anyway - so can use the
+        // optimization tested by this test. Only because of this, this
+        // test should continue to pass after #20679.
+
         // Updating timestamp for unselected column will not be propagated,
         // and its creation will be propagated for a virtual column only
         e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
