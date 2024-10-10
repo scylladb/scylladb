@@ -95,8 +95,8 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     std::vector<mutation> m;
     std::vector<sstring> warnings;
 
+    auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
     try {
-        auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
@@ -117,7 +117,9 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         }
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
-          co_return coroutine::exception(std::current_exception());
+            auto ex = std::current_exception();
+            mylogger.warn("{}", ex);
+            co_return coroutine::exception(std::move(ex));
         }
     }
 
