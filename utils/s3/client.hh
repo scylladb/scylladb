@@ -17,6 +17,7 @@
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "retry_strategy.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -76,6 +77,7 @@ class client : public enable_shared_from_this<client> {
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
+    std::unique_ptr<aws::retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
@@ -83,14 +85,16 @@ class client : public enable_shared_from_this<client> {
 
     void authorize(http::request&);
     group_client& find_or_create_client();
-    future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, http::reply::status_type expected = http::reply::status_type::ok);
+    future<> make_request(http::request req,
+                          http::experimental::client::reply_handler handle = ignore_reply,
+                          http::reply::status_type expected = http::reply::status_type::ok);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
     future<> make_request(http::request req, reply_handler_ext handle, http::reply::status_type expected = http::reply::status_type::ok);
-
+    future<> do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler);
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
 
-    explicit client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag);
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = std::make_unique<aws::default_retry_strategy>());
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name);
