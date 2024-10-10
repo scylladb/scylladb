@@ -52,6 +52,7 @@
 #include "utils/class_registrator.hh"
 #include "utils/error_injection.hh"
 #include "utils/runtime.hh"
+#include "utils/s3/object_storage_endpoint_param.hh"
 #include "log.hh"
 #include "utils/directories.hh"
 #include "debug.hh"
@@ -162,46 +163,6 @@ public:
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
 
-struct object_storage_endpoint_param {
-    sstring endpoint;
-    s3::endpoint_config config;
-};
-
-namespace YAML {
-template<>
-struct convert<::object_storage_endpoint_param> {
-    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
-        ep.endpoint = node["name"].as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        if (node["aws_region"] || std::getenv("AWS_DEFAULT_REGION")) {
-            ep.config.aws.emplace();
-
-            // https://github.com/scylladb/scylla-pkg/issues/3845
-            // Allow picking up aws values via standard env vars as well.
-            // Value in config has prio, but fall back to env.
-            // This has the added benefit of potentially reducing the amount of
-            // sensitive data in config files (i.e. credentials)
-            auto get_node_value_or_env = [&](const char* key, const char* var) {
-                auto child = node[key];
-                if (child) {
-                    return child.as<std::string>();
-                }
-                auto val = std::getenv(var);
-                if (val) {
-                    return std::string(val);
-                }
-                return std::string{};
-            };
-            ep.config.aws->region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
-            ep.config.aws->access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
-            ep.config.aws->secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
-            ep.config.aws->session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
-        }
-        return true;
-    }
-};
-}
 
 static future<> read_object_storage_config(db::config& db_cfg) {
     sstring cfg_name;
@@ -214,35 +175,7 @@ static future<> read_object_storage_config(db::config& db_cfg) {
         }
     }
 
-    auto cfg_file = co_await open_file_dma(cfg_name, open_flags::ro);
-    sstring data;
-    std::exception_ptr ex;
-
-    try {
-        auto sz = co_await cfg_file.size();
-        data = seastar::to_sstring(co_await cfg_file.dma_read_exactly<char>(0, sz));
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await cfg_file.close();
-    if (ex) {
-        co_await coroutine::return_exception_ptr(ex);
-    }
-
-    std::unordered_map<sstring, s3::endpoint_config> cfg;
-    YAML::Node doc = YAML::Load(data.c_str());
-    for (auto&& section : doc) {
-        auto sec_name = section.first.as<std::string>();
-        if (sec_name != "endpoints") {
-            co_await coroutine::return_exception(std::runtime_error(fmt::format("While parsing object_storage config: section {} currently unsupported.", sec_name)));
-        }
-
-        auto endpoints = section.second.as<std::vector<object_storage_endpoint_param>>();
-        for (auto&& ep : endpoints) {
-            cfg[ep.endpoint] = std::move(ep.config);
-        }
-    }
-
+    auto cfg = co_await read_endpoints_config(cfg_name);
     db_cfg.object_storage_config.set(std::move(cfg));
 }
 

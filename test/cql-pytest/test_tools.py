@@ -7,6 +7,7 @@
 #############################################################################
 
 import contextlib
+import dataclasses
 import glob
 import itertools
 import functools
@@ -20,9 +21,11 @@ import tempfile
 import random
 import re
 import shutil
+import boto3
 import util
+from pathlib import Path
 from typing import Iterable, Type, Union
-
+from test.pylib.minio_server import MinioServer
 
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
@@ -1223,6 +1226,73 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
                     for replica_set in replica_sets:
                         actual_shard = replica_set['shard']
                         assert actual_shard == shard_id
+
+
+@dataclasses.dataclass
+class s3_options:
+    address: str
+    port: int
+    access_key: str
+    secret_key: str
+    bucket: str
+    conffile: str
+    region: str
+
+def get_minio_options():
+    return s3_options(
+        os.environ.get(MinioServer.ENV_ADDRESS),
+        os.environ.get(MinioServer.ENV_PORT),
+        os.environ.get(MinioServer.ENV_ACCESS_KEY),
+        os.environ.get(MinioServer.ENV_SECRET_KEY),
+        os.environ.get(MinioServer.ENV_BUCKET),
+        os.environ.get(MinioServer.ENV_CONFFILE),
+        MinioServer.DEFAULT_REGION)
+
+
+def get_s3_resource(options):
+    return boto3.resource(
+        "s3",
+        endpoint_url=f'http://{options.address}:{options.port}',
+        aws_access_key_id=options.access_key,
+        aws_secret_access_key=options.secret_key,
+        aws_session_token=None,
+        config=boto3.session.Config(signature_version='s3v4'),
+        verify=False)
+
+
+@contextlib.contextmanager
+def s3_location(prefix):
+    '''Returns s3_options
+
+    ensures the safe object uploads to S3, preventing name collisions and orphaned objects.
+    '''
+    s3_options = get_minio_options()
+    assert s3_options.conffile and s3_options.address
+    # make sure it is unique per pytest session
+    yield s3_options
+    s3 = get_s3_resource(s3_options)
+    bucket = s3.Bucket(s3_options.bucket)
+    objects_to_delete = bucket.objects.filter(Prefix=prefix)
+    objects_to_delete.delete()
+
+
+def test_scylla_sstable_upload(request, cql, test_keyspace, scylla_path, scylla_data_dir) -> None:
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+        with nodetool.no_autocompaction_context(cql, "system.tablets"):
+            prefix = request.node.name
+            with s3_location(prefix) as s3_options:
+                args = [scylla_path, "sstable", "upload",
+                        "--endpoint", s3_options.address,
+                        "--object-storage-config", s3_options.conffile,
+                        "--to", f"/{s3_options.bucket}/{prefix}",
+                        "--logger-log-level", "s3=trace",
+                        ] + sstables
+                subprocess.run(args, text=True, check=True)
+                s3 = get_s3_resource(s3_options)
+                all_objects = s3.Bucket(s3_options.bucket).objects.filter(Prefix=prefix)
+                actual_ssts = set(Path(o.key).name for o in all_objects if o.key.endswith("-Data.db"))
+                expected_ssts = set(Path(sst).name for sst in sstables)
+                assert actual_ssts == expected_ssts
 
 
 def test_scylla_sstable_no_args(scylla_path):

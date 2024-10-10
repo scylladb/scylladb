@@ -674,6 +674,18 @@ The content is dumped in JSON, using the following schema when ``--vnodes`` comm
 
     $SHARD_ID := Uint
 
+upload
+^^^^^^
+
+Uploads one or more SSTables from local storage to object storage.
+
+.. code-block:: console
+
+    scylla sstable upload \
+      --endpoint s3.us-east-2.amazonaws.com \
+      --object-store-config /etc/scylladb/conf/object-store.yaml \
+      --to bucket-foo/ks/cf /path/to/me-14-big-Data.db
+
 script
 ^^^^^^
 
