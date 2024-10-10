@@ -766,7 +766,10 @@ future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content).handle_exception([](const auto&) -> future<> {
+        // After all retries failed return success, dangling parts will be removed by other means - `rclone cleanup` or S3 bucket's Lifecycle Management Policy
+        co_return;
+    });
 }
 
 future<> client::multipart_upload::finalize_upload() {
