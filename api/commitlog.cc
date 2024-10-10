@@ -9,12 +9,14 @@
 #include "commitlog.hh"
 #include "db/commitlog/commitlog.hh"
 #include "api/api-doc/commitlog.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include "api/api_init.hh"
 #include "replica/database.hh"
 #include <vector>
 
 namespace api {
 using namespace seastar::httpd;
+namespace ss = httpd::storage_service_json;
 
 template<typename T>
 static auto acquire_cl_metric(http_context& ctx, std::function<T (const db::commitlog*)> func) {
@@ -66,6 +68,11 @@ void set_commitlog(http_context& ctx, routes& r) {
     httpd::commitlog_json::get_max_disk_size.set(r, [&ctx](std::unique_ptr<request> req) {
         return acquire_cl_metric<uint64_t>(ctx, std::bind(&db::commitlog::disk_limit, std::placeholders::_1));
     });
+
+    ss::get_commitlog.set(r, [&ctx](const_req req) {
+        return ctx.db.local().commitlog()->active_config().commit_log_location;
+    });
+
 }
 
 void unset_commitlog(http_context& ctx, routes& r) {
@@ -75,6 +82,7 @@ void unset_commitlog(http_context& ctx, routes& r) {
     httpd::commitlog_json::get_pending_tasks.unset(r);
     httpd::commitlog_json::get_total_commit_log_size.unset(r);
     httpd::commitlog_json::get_max_disk_size.unset(r);
+    ss::get_commitlog.unset(r);
 }
 
 }
