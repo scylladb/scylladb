@@ -115,19 +115,19 @@ public:
 
     virtual void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
         for (const auto& addr: add) {
-            auto ip_for_id = _address_map.find(addr.id);
+            auto ip_for_id = _address_map.find(locator::host_id{addr.id.uuid()});
             if (!ip_for_id) {
                 // Make sure that the addresses of new nodes in the configuration are in the address map
                 auto ips = _gossiper.get_nodes_with_host_id(locator::host_id(addr.id.uuid()));
                 for (auto ip : ips) {
                     if (_gossiper.is_normal(ip)) {
-                        _address_map.add_or_update_entry(addr.id, ip);
+                        _address_map.add_or_update_entry(locator::host_id{addr.id.uuid()}, ip);
                     }
                 }
             }
             // Entries explicitly managed via `rpc::on_configuration_change() should NOT be
             // expirable.
-            _address_map.set_nonexpiring(addr.id);
+            _address_map.set_nonexpiring(locator::host_id{addr.id.uuid()});
             // Notify the direct failure detector that it should track
             // (or liveness of a specific raft server id.
             if (addr != _my_id) {
@@ -139,7 +139,7 @@ public:
             // RPC 'send' may yield before resolving IP address,
             // e.g. on _shutdown_gate, so keep the deleted
             // entries in the map for a bit.
-            _address_map.set_expiring(addr.id);
+            _address_map.set_expiring(locator::host_id{addr.id.uuid()});
             _direct_fd.remove_endpoint(addr.id.id);
         }
     }
@@ -600,7 +600,7 @@ struct group0_members {
     }
 
     std::optional<gms::inet_address> get_inet_addr(const raft::config_member& member) const {
-        return _address_map.find(member.addr.id);
+        return _address_map.find(locator::host_id{member.addr.id.uuid()});
     }
 
     std::vector<gms::inet_address> get_inet_addrs(seastar::compat::source_location l =
@@ -610,7 +610,7 @@ struct group0_members {
         std::vector<raft::server_id> missing;
         ret.reserve(members.size());
         for (const auto& srv: members) {
-            auto addr = _address_map.find(srv.addr.id);
+            auto addr = _address_map.find(locator::host_id{srv.addr.id.uuid()});
             if (!addr.has_value()) {
                 missing.push_back(srv.addr.id);
             } else {
@@ -723,7 +723,7 @@ future<> raft_group0::setup_group0(
                         replace_info->raft_id, replace_info->ip_addr);
 
         // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
-        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
+        _raft_gr.address_map().opt_add_entry(locator::host_id{replace_info->raft_id.uuid()}, replace_info->ip_addr);
     }
 
     std::vector<gms::inet_address> seeds;

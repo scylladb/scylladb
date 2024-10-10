@@ -29,8 +29,8 @@ class storage_proxy;
 class storage_service;
 struct group0_state_machine_merger;
 
-template <typename C> class raft_address_map_t;
-using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
+template <typename C> class address_map_t;
+using raft_address_map = address_map_t<seastar::lowres_clock>;
 
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)

@@ -66,7 +66,7 @@ future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am,
     const auto timeout = std::chrono::seconds{30};
     const auto deadline = lowres_clock::now() + timeout;
     while (true) {
-        const auto ip = am.find(id);
+        const auto ip = am.find(locator::host_id{id.uuid()});
         if (ip) {
             co_return *ip;
         }
@@ -358,7 +358,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     inet_address id2ip(locator::host_id id) const {
-        auto ip = _address_map.find(raft::server_id(id.uuid()));
+        auto ip = _address_map.find(id);
         if (!ip) {
             throw std::runtime_error(::format("no ip address mapping for {}", id));
         }
@@ -366,7 +366,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
-        auto ip = _address_map.find(id);
+        auto ip = _address_map.find(locator::host_id{id.uuid()});
         if (!ip) {
             rtlogger.warn("cannot send command {} with term {} and index {} "
                          "to {} because mapping to ip is not available",

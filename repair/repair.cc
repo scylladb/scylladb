@@ -1195,7 +1195,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             }
 
             auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
-                auto ip = addr_map.local().find(raft::server_id(host.uuid()));
+                auto ip = addr_map.local().find(host);
                 if (!ip) {
                     throw std::runtime_error(format("Could not get ip address for host {} from raft_address_map", host));
                 }
@@ -2433,7 +2433,7 @@ future<> repair_service::repair_tablet(locator::tablet_metadata_guard& guard, lo
     auto tablet_id = gid.tablet;
 
     auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
-        auto ip = addr_map.local().find(raft::server_id(host.uuid()));
+        auto ip = addr_map.local().find(host);
         if (!ip) {
             throw std::runtime_error(format("Could not get ip address for host {} from raft_address_map", host));
         }

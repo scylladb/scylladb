@@ -112,7 +112,7 @@ void raft_group_registry::init_rpc_verbs() {
             // a previously learned gossiper address: otherwise an RPC from
             // a node outside of the config could permanently
             // change the address map of a healthy cluster.
-            self._address_map.opt_add_entry(from, std::move(addr));
+            self._address_map.opt_add_entry(locator::host_id{from.uuid()}, std::move(addr));
             // Execute the actual message handling code
             if constexpr (is_one_way) {
                 handler(rpc);
@@ -490,7 +490,7 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
             if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
                 std::string dead_voters_str;
                 for (const auto id: dead_voters) {
-                    const auto ip = am.find(id);
+                    const auto ip = am.find(locator::host_id{id.uuid()});
                     if (ip) {
                         fmt::format_to(std::back_inserter(dead_voters_str), ",{}", *ip);
                     } else {
@@ -547,7 +547,7 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
     auto dst_id = raft::server_id{id};
-    auto addr = _address_map.find(dst_id);
+    auto addr = _address_map.find(locator::host_id{dst_id.uuid()});
     if (!addr) {
         {
             auto& rate_limit = _rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));

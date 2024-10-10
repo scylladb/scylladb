@@ -322,7 +322,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {
   // FIXME: The translation will ultimately be done by messaging_service
-  auto from_ip = _address_map.find(from_id);
+  auto from_ip = _address_map.find(locator::host_id{from_id.uuid()});
   if (!from_ip.has_value()) {
     // This is virtually impossible. We've just received the
     // snapshot from the sender and must have updated our

@@ -420,7 +420,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         if (!used_ips) {
             used_ips.emplace();
             for (const auto& [sid, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
-                if (const auto used_ip = am.find(sid)) {
+                if (const auto used_ip = am.find(locator::host_id{sid.uuid()})) {
                     used_ips->insert(*used_ip);
                 }
             }
@@ -461,7 +461,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     auto process_left_node = [&] (raft::server_id id) -> future<> {
         locator::host_id host_id{id.uuid()};
 
-        if (const auto ip = am.find(id)) {
+        if (const auto ip = am.find(host_id)) {
             co_await remove_ip(*ip, host_id, true);
         }
 
@@ -469,14 +469,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             update_topology(host_id, std::nullopt, t.left_nodes_rs.at(id));
         }
 
-        _group0->modifiable_address_map().set_expiring(id);
+        _group0->modifiable_address_map().set_expiring(host_id);
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(host_id);
     };
 
     auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
-        auto ip = am.find(id);
+        auto ip = am.find(host_id);
 
         rtlogger.trace("loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
                       id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count, rs.cleanup);
@@ -529,7 +529,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     auto process_transition_node = [&](raft::server_id id, const replica_state& rs) -> future<> {
         locator::host_id host_id{id.uuid()};
-        auto ip = am.find(id);
+        auto ip = am.find(host_id);
 
         rtlogger.trace("loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
                       id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
@@ -586,7 +586,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         case node_state::replacing: {
             SCYLLA_ASSERT(_topology_state_machine._topology.req_param.contains(id));
             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-            auto existing_ip = am.find(replaced_id);
+            auto existing_ip = am.find(locator::host_id{replaced_id.uuid()});
             if (!existing_ip) {
                 // FIXME: What if not known?
                 on_fatal_internal_error(rtlogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
@@ -640,7 +640,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             co_await process_transition_node(id, rs);
         }
         for (const auto& [id, rs]: t.new_nodes) {
-            _group0->modifiable_address_map().set_nonexpiring(id);
+            _group0->modifiable_address_map().set_nonexpiring(locator::host_id{id.uuid()});
         }
         for (auto id : t.get_excluded_nodes()) {
             locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
@@ -950,7 +950,7 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
         if (!app_state_ptr) {
             co_return;
         }
-        raft::server_id id(utils::UUID(app_state_ptr->value()));
+        locator::host_id id(utils::UUID(app_state_ptr->value()));
         rslog.debug("raft_ip_address_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
 
         const auto prev_ip = _address_map.find(id);
@@ -987,17 +987,16 @@ class storage_service::raft_ip_address_updater: public gms::i_endpoint_state_cha
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
             (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
-                const auto hid = locator::host_id{id.uuid()};
                 if (_address_map.find(id) != endpoint ||
-                    _ss.get_token_metadata().get_endpoint_for_host_id_if_known(hid) == endpoint)
+                    _ss.get_token_metadata().get_endpoint_for_host_id_if_known(id) == endpoint)
                 {
                     co_return;
                 }
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
                 storage_service::nodes_to_notify_after_sync nodes_to_notify;
                 auto lock = co_await _ss.get_token_metadata_lock();
-                co_await _ss.mutate_token_metadata([this, hid, &nodes_to_notify](mutable_token_metadata_ptr t) -> future<> {
-                    nodes_to_notify = co_await _ss.sync_raft_topology_nodes(std::move(t), hid, {});
+                co_await _ss.mutate_token_metadata([this, id, &nodes_to_notify](mutable_token_metadata_ptr t) -> future<> {
+                    nodes_to_notify = co_await _ss.sync_raft_topology_nodes(std::move(t), id, {});
                 }, storage_service::acquire_merge_lock::no);
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
@@ -1197,10 +1196,11 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
         if (hoep.has_host_id()) {
             id = raft::server_id{hoep.id().uuid()};
         } else {
-            id = _group0->address_map().find_by_addr(hoep.endpoint());
-            if (!id) {
+            auto hid = _group0->address_map().find_by_addr(hoep.endpoint());
+            if (!hid) {
                 throw std::runtime_error(::format("Cannot find a mapping to IP {}", hoep.endpoint()));
             }
+            id = raft::server_id{hid->uuid()};
         }
         if (!_topology_state_machine._topology.find(*id)) {
             throw std::runtime_error(::format("Node {} is not found in the cluster", *id));
@@ -1936,7 +1936,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         std::unordered_set<inet_address> ips;
         const auto& am = _group0->address_map();
         for (auto id : _topology_state_machine._topology.normal_nodes | std::views::keys) {
-            auto ip = am.find(id);
+            auto ip = am.find(locator::host_id{id.uuid()});
             if (ip) {
                 ips.insert(*ip);
             }
@@ -2928,11 +2928,11 @@ void storage_service::set_group0(raft_group0& group0) {
 
 future<> storage_service::init_address_map(raft_address_map& address_map, gms::generation_type new_generation) {
     for (auto [ip, host] : co_await _sys_ks.local().load_host_ids()) {
-        address_map.add_or_update_entry(raft::server_id(host.uuid()), ip);
+        address_map.add_or_update_entry(host, ip);
     }
     const auto& topology = get_token_metadata().get_topology();
-    raft::server_id myid{topology.my_host_id().uuid()};
-    address_map.add_or_update_entry(myid,topology.my_address(), new_generation);
+    auto myid = topology.my_host_id();
+    address_map.add_or_update_entry(myid, topology.my_address(), new_generation);
     // Make my entry non expiring
     address_map.set_nonexpiring(myid);
     _raft_ip_address_updater = make_shared<raft_ip_address_updater>(address_map, *this);
@@ -4044,7 +4044,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         }
 
         const auto& am = _group0->address_map();
-        auto ip = am.find(id);
+        auto ip = am.find(host_id);
         if (!ip) {
             // What to do if there is no mapping? Wait and retry?
             on_fatal_internal_error(rtlogger, ::format("Remove node cannot find a mapping from node id {} to its ip", id));
@@ -5569,7 +5569,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             case raft_topology_cmd::command::barrier_and_drain: {
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
-                        if (!_group0->address_map().find(n.first)) {
+                        if (!_group0->address_map().find(locator::host_id{n.first.uuid()})) {
                             rtlogger.error("The topology transition is in a double write state but the IP of the node in transition is not known");
                             break;
                         }
@@ -5688,7 +5688,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    auto existing_ip = _group0->address_map().find(replaced_id);
+                                    auto existing_ip = _group0->address_map().find(locator::host_id(replaced_id.uuid()));
                                     SCYLLA_ASSERT(existing_ip);
                                     co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
                                 }
@@ -5725,7 +5725,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto id = it->first;
                         rtlogger.debug("streaming to remove node {}", id);
                         const auto& am = _group0->address_map();
-                        auto ip = am.find(id); // map node id to ip
+                        auto ip = am.find(locator::host_id{id.uuid()}); // map node id to ip
                         SCYLLA_ASSERT (ip); // what to do if address is unknown?
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
                         auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
@@ -5740,7 +5740,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 // FIXME: we should not need to translate ids to IPs here. See #6403.
                                 std::list<gms::inet_address> ignored_ips;
                                 for (const auto& ignored_id : _topology_state_machine._topology.ignored_nodes) {
-                                    auto ip = _group0->address_map().find(ignored_id);
+                                    auto ip = _group0->address_map().find(locator::host_id{ignored_id.uuid()});
                                     if (!ip) {
                                         on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
                                     }
@@ -5843,7 +5843,7 @@ future<> storage_service::update_fence_version(token_metadata::version_t new_ver
 }
 
 inet_address storage_service::host2ip(locator::host_id host) const {
-    auto ip = _group0->address_map().find(raft::server_id(host.uuid()));
+    auto ip = _group0->address_map().find(host);
     if (!ip) {
         throw std::runtime_error(::format("Cannot map host {} to ip", host));
     }
@@ -6933,7 +6933,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                         if (ignored_ids.contains(id)) {
                             continue;
                         }
-                        if (auto ip = amap.find(id)) {
+                        if (auto ip = amap.find(locator::host_id{id.uuid()})) {
                             sync_nodes.push_back(*ip);
                         } else {
                             untranslated_ids.push_back(id);

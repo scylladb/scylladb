@@ -50,7 +50,7 @@ void group0_state_id_handler::refresh() {
     std::vector<raft::server_id> group0_members_missing_state_id;
 
     const auto& group0_members_state_ids = group0_members | std::ranges::views::transform([&](const auto& member) -> std::optional<utils::UUID> {
-        const auto endpoint_addr = _address_map.find(member.addr.id);
+        const auto endpoint_addr = _address_map.find(locator::host_id{member.addr.id.uuid()});
         if (!endpoint_addr) {
             group0_members_missing_endpoint.push_back(member.addr.id);
             return std::nullopt;

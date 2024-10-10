@@ -48,8 +48,8 @@ class server;
 namespace service {
 
 template <typename Clock>
-class raft_address_map_t;
-using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
+class address_map_t;
+using raft_address_map = address_map_t<seastar::lowres_clock>;
 class raft_group0;
 class tablet_allocator;
 

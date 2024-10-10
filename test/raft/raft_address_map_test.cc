@@ -12,8 +12,7 @@
 #include <chrono>
 #include <ranges>
 
-#include "raft/raft.hh"
-#include "service/raft/raft_address_map.hh"
+#include "service/address_map.hh"
 #include "gms/inet_address.hh"
 #include "utils/UUID.hh"
 
@@ -22,10 +21,11 @@
 #include <seastar/util/later.hh>
 #include <seastar/util/defer.hh>
 
-using namespace raft;
 using namespace service;
 using namespace std::chrono_literals;
 using namespace seastar::testing;
+
+using server_id = locator::host_id;
 
 // Can be used to wait for delivery of messages that were sent to other shards.
 future<> ping_shards() {
@@ -53,7 +53,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     using seastar::manual_clock;
 
     {
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -72,7 +72,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // m.add_or_update_entry() adds an expiring entry
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -87,7 +87,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Set two expirable entries with different timestamps, check for
         // automatic rearming of expiration timer after the first one expires.
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -107,7 +107,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Do not throw on re-mapping address for the same id
         // - happens when IP address changes after a node restart
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -120,7 +120,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Check that add_or_update_entry() doesn't transition the entry type
         // to expiring.
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -133,7 +133,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that set_expiring() doesn't insert a new entry
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -144,7 +144,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Check that set_nonexpiring() inserts a new non-expiring entry if the
         // entry is missing
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -162,7 +162,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that add_or_update_entry() throws when called without an actual IP address
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -172,7 +172,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that opt_add_entry() throws when called without an actual IP address
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -183,7 +183,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Check that add_or_update_entry() doesn't overwrite a new IP address
         // with an obsolete one
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -195,7 +195,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     {
         // Check that add_or_update_entry() adds an IP address if the entry
         // doesn't have it regardless of the generation number
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -206,7 +206,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check the basic functionality of find_by_addr()
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -221,7 +221,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that find_by_addr() properly updates timestamps of entries
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -238,7 +238,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
     {
         // Check that find_by_addr() throws when called without an actual IP address
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -265,7 +265,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
     using seastar::manual_clock;
 
     {
-        sharded<raft_address_map_t<manual_clock>> m_svc;
+        sharded<address_map_t<manual_clock>> m_svc;
         m_svc.start().get();
         auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
         auto& m = m_svc.local();
@@ -275,7 +275,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         m.add_or_update_entry(id1, addr1);
         m.set_nonexpiring(id1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
@@ -285,7 +285,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         m.set_expiring(id1);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(!m.find(id1));
@@ -296,18 +296,18 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         // Expiring entries are replicated
         m.add_or_update_entry(id1, addr1);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1));
         }).get();
 
         // Can't call add_or_update_entry on shard other than 0
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
             BOOST_CHECK_THROW(m.add_or_update_entry(id1, addr2), std::runtime_error);
         }).get();
 
         // Can add expiring entries on shard other than 0 - and they indeed expire
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             m.opt_add_entry(id2, addr2);
             BOOST_CHECK(m.find(id2) && *m.find(id2) == addr2);
             manual_clock::advance(expiration_time);
@@ -317,25 +317,25 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
 
         // Add entry on two shards, make it non-expiring on shard 0,
         // the non-expiration must be replicated
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             m.opt_add_entry(id2, addr2);
         }).get();
         m.set_nonexpiring(id2);
         ping_shards().get();
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             manual_clock::advance(expiration_time);
             BOOST_CHECK(m.find(id2) && *m.find(id2) == addr2);
         }).get();
 
         // Cannot set it to expiring on shard 1
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
             BOOST_CHECK_THROW(m.set_expiring(id2), std::runtime_error);
         }).get();
 
         // Cannot set it to non-expiring on shard 1
         m.set_expiring(id2);
-        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+        m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
             BOOST_CHECK_THROW(m.set_nonexpiring(id2), std::runtime_error);
         }).get();

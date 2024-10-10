@@ -42,7 +42,7 @@ raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
                 loc.file_name(), loc.line(), loc.function_name(), id);
             return make_ready_future<>();
         }
-        auto ip_addr = _address_map.find(id);
+        auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
         if (!ip_addr) {
             rlogger.debug("{}:{}: {} dropping outgoing message to {} - IP address not found",
                 loc.file_name(), loc.line(), loc.function_name(), id);
@@ -70,7 +70,7 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
     if (!_failure_detector->is_alive(id)) {
         return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
     }
-    auto ip_addr = _address_map.find(id);
+    auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
     if (!ip_addr) {
         const auto msg = format("Failed to send {} {}: ip address not found", loc.function_name(), id);
         return make_exception_future<Ret>(raft::transport_error(msg));
@@ -93,7 +93,7 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
         rlogger.debug("Failed to send append_entires to {}: node is not seen as alive by the failure detector", id);
         co_return;
     }
-    auto ip_addr = _address_map.find(id);
+    auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
     if (!ip_addr) {
         const auto msg = format("Failed to send append_entires to {}: ip address not found", id);
         co_await coroutine::return_exception_ptr(std::make_exception_ptr(raft::transport_error(msg)));
