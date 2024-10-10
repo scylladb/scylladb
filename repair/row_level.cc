@@ -298,10 +298,6 @@ mutation_reader repair_reader::make_reader(
             return rd;
         }
         case read_strategy::multishard_split: {
-            // We can't have two permits with count resource for 1 repair.
-            // So we release the one on _permit so the only one is the one the
-            // shard reader will obtain.
-            _permit.release_base_resources();
             return make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
                 if (shard_range) {
@@ -311,10 +307,6 @@ mutation_reader repair_reader::make_reader(
             }, compaction_time);
         }
         case read_strategy::multishard_filter: {
-            // We can't have two permits with count resource for 1 repair.
-            // So we release the one on _permit so the only one is the one the
-            // shard reader will obtain.
-            _permit.release_base_resources();
             return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time),
                 [&remote_sharder, remote_shard](const dht::decorated_key& k) {
                     return remote_sharder.shard_for_reads(k.token()) == remote_shard;
