@@ -336,8 +336,8 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
     return group0_cmd;
 }
 
-raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, maintenance_mode_enabled maintenance_mode)
-        : _raft_gr(raft_gr), _sys_ks(sys_ks), _maintenance_mode(maintenance_mode) {
+raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
+        : _raft_gr(raft_gr), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
 }
 
 size_t raft_group0_client::max_command_size() const {
