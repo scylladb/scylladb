@@ -106,6 +106,9 @@ class raft_group0_client {
         service::broadcast_tables::query_result get();
     };
 
+    template <typename Command>
+    void validate_change(const Command& change) {}
+
 public:
     raft_group0_client(service::raft_group_registry&, db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
 
