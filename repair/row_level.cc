@@ -1997,7 +1997,9 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
             co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
         } else {
             for (repair_row_on_wire& row : rows_on_wire) {
-                co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
+                auto cmd = repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)};
+                co_await sink(cmd);
+                co_await cmd.row.clear_gently();
             }
             co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
         }

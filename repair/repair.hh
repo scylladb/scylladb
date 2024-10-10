@@ -26,6 +26,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "utils/hash.hh"
 #include "repair/hash.hh"
+#include "utils/stall_free.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 #include "schema/schema.hh"
@@ -209,6 +210,7 @@ public:
     partition_key& get_key() { return _key; }
     std::list<frozen_mutation_fragment>& get_mutation_fragments() { return _mfs; }
     void push_mutation_fragment(frozen_mutation_fragment mf) { _mfs.push_back(std::move(mf)); }
+    future<> clear_gently() { return utils::clear_gently(_mfs); };
 };
 
 using repair_row_on_wire = partition_key_and_mutation_fragments;
