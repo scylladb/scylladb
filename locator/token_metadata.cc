@@ -570,8 +570,7 @@ std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_h
     std::unordered_map<inet_address, host_id> map;
     map.reserve(nodes.size());
     for (const auto& [endpoint, node] : nodes) {
-        // Restrict to members
-        if (!node->is_member()) {
+        if (node->left() || node->is_none()) {
             continue;
         }
         if (const auto& host_id = node->host_id()) {
