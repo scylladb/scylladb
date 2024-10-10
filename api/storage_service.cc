@@ -30,7 +30,6 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
-#include "db/commitlog/commitlog.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 #include <seastar/http/exception.hh>
@@ -544,10 +543,6 @@ static future<json::json_return_type> describe_ring_as_json_for_table(const shar
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    ss::get_commitlog.set(r, [&ctx](const_req req) {
-        return ctx.db.local().commitlog()->active_config().commit_log_location;
-    });
-
     ss::get_token_endpoint.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         const auto keyspace_name = req->get_query_param("keyspace");
         const auto table_name = req->get_query_param("cf");
@@ -1578,7 +1573,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
-    ss::get_commitlog.unset(r);
     ss::get_token_endpoint.unset(r);
     ss::toppartitions_generic.unset(r);
     ss::get_release_version.unset(r);
