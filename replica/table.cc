@@ -3567,7 +3567,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     co_await utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
-    auto permit = sem.make_tracking_only_permit(base, "push-view-updates-2", timeout, tr_state);
+    auto permit = co_await sem.obtain_permit(base, "push-view-updates-2", estimate_read_memory_cost(), timeout, tr_state);
     auto reader = source.make_reader_v2(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
