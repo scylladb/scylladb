@@ -1401,6 +1401,7 @@ mutation_reader sstable_set::make_full_scan_reader(
         tracing::trace_state_ptr trace_ptr,
         read_monitor_generator& monitor_generator) const {
     std::vector<mutation_reader> readers;
+    readers.reserve(size());
     for_each_sstable([&] (const shared_sstable& sst) mutable {
         readers.emplace_back(sst->make_full_scan_reader(schema, permit, trace_ptr, monitor_generator(sst)));
     });
