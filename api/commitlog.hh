@@ -15,5 +15,6 @@ class routes;
 namespace api {
 struct http_context;
 void set_commitlog(http_context& ctx, seastar::httpd::routes& r);
+void unset_commitlog(http_context& ctx, seastar::httpd::routes& r);
 
 }

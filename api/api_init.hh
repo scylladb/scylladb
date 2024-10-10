@@ -135,5 +135,6 @@ future<> unset_load_meter(http_context& ctx);
 future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_server_cql_server_test(http_context& ctx);
 future<> set_server_commitlog(http_context& ctx, sharded<replica::database>&);
+future<> unset_server_commitlog(http_context& ctx);
 
 }

@@ -68,4 +68,13 @@ void set_commitlog(http_context& ctx, routes& r) {
     });
 }
 
+void unset_commitlog(http_context& ctx, routes& r) {
+    httpd::commitlog_json::get_active_segment_names.unset(r);
+    httpd::commitlog_json::get_archiving_segment_names.unset(r);
+    httpd::commitlog_json::get_completed_tasks.unset(r);
+    httpd::commitlog_json::get_pending_tasks.unset(r);
+    httpd::commitlog_json::get_total_commit_log_size.unset(r);
+    httpd::commitlog_json::get_max_disk_size.unset(r);
+}
+
 }

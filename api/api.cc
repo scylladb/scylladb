@@ -304,6 +304,10 @@ future<> set_server_commitlog(http_context& ctx, sharded<replica::database>& db)
     });
 }
 
+future<> unset_server_commitlog(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_commitlog(ctx, r); });
+}
+
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
