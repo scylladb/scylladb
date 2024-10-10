@@ -59,6 +59,7 @@ class compaction_group {
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
     seastar::gate _async_gate;
+    bool _tombstone_gc_enabled = true;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -111,6 +112,14 @@ public:
 
     const dht::token_range& token_range() const noexcept {
         return _token_range;
+    }
+
+    void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
+        _tombstone_gc_enabled = tombstone_gc_enabled;
+    }
+
+    bool tombstone_gc_enabled() const noexcept {
+        return _tombstone_gc_enabled;
     }
 
     void set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept;
