@@ -388,14 +388,15 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
 
-    # Tablets are only possible when enabled and the replication strategy is NetworkTopology one
-    tablets_possible = (replication_strategy == 'NetworkTopologyStrategy') and with_tablets
+    # Tablets are only possible when the replication strategy is NetworkTopology
+    tablets_possible = (replication_strategy == 'NetworkTopologyStrategy')
+    tablets_enabled_by_default = tablets_possible and with_tablets
 
     # First, check if a kesypace is able to be created with default CQL statement that
     # doesn't contain tablets parameters. When possible, tablets should be activated
     await cql.run_async(f"CREATE KEYSPACE test_d WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}};")
     res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test_d'").one()
-    if tablets_possible:
+    if tablets_enabled_by_default:
         assert res.initial_tablets == 0
     else:
         assert res is None
