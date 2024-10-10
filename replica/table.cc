@@ -1583,6 +1583,9 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 void
 table::start() {
     start_compaction();
+    if (_schema->memtable_flush_period() > 0) {
+        _flush_timer.arm(std::chrono::milliseconds(_schema->memtable_flush_period()));
+    }
 }
 
 future<>
@@ -1590,6 +1593,7 @@ table::stop() {
     if (_async_gate.is_closed()) {
         co_return;
     }
+    _flush_timer.cancel();
     // Allow `compaction_group::stop` to stop ongoing compactions
     // while they may still hold the table _async_gate
     auto gate_closed_fut = _async_gate.close();
@@ -2340,6 +2344,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _index_manager(this->as_data_dictionary())
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _row_locker(_schema)
+    , _flush_timer([this]{ on_flush_timer(); })
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
     if (!_config.enable_disk_writes) {
@@ -2348,6 +2353,17 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
     recalculate_tablet_count_stats();
     set_metrics();
+}
+
+void table::on_flush_timer() {
+    tlogger.debug("on table {}.{} flush timer, period {}ms", _schema->ks_name(), _schema->cf_name(), _schema->memtable_flush_period());
+    (void)with_gate(_async_gate, [this] {
+        return with_lock(_flush_timer_mutex, [this] {
+            return flush().finally([this] {
+                _flush_timer.rearm(timer<>::clock::now() + std::chrono::milliseconds(_schema->memtable_flush_period()));
+            });
+        });
+    });
 }
 
 locator::table_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
@@ -2954,25 +2970,33 @@ void table::set_schema(schema_ptr s) {
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 
-    for_each_compaction_group([&] (compaction_group& cg) {
-        for (auto& m: *cg.memtables()) {
-            m->set_schema(s);
+    with_lock(_flush_timer_mutex, [this, &s] {
+        _flush_timer.cancel();
+
+        for_each_compaction_group([&] (compaction_group& cg) {
+            for (auto& m: *cg.memtables()) {
+                m->set_schema(s);
+            }
+        });
+
+        _cache.set_schema(s);
+        if (_counter_cell_locks) {
+            _counter_cell_locks->set_schema(s);
         }
-    });
+        _schema = std::move(s);
 
-    _cache.set_schema(s);
-    if (_counter_cell_locks) {
-        _counter_cell_locks->set_schema(s);
-    }
-    _schema = std::move(s);
+        for (auto&& v : _views) {
+            v->view_info()->set_base_info(
+                v->view_info()->make_base_dependent_view_info(*_schema));
+        }
 
-    for (auto&& v : _views) {
-        v->view_info()->set_base_info(
-            v->view_info()->make_base_dependent_view_info(*_schema));
-    }
+        set_compaction_strategy(_schema->compaction_strategy());
+        trigger_compaction();
 
-    set_compaction_strategy(_schema->compaction_strategy());
-    trigger_compaction();
+        if (_schema->memtable_flush_period() > 0) {
+            _flush_timer.arm(std::chrono::milliseconds(_schema->memtable_flush_period()));
+        }
+    }).get();
 }
 
 static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
