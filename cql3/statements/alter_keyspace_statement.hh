@@ -25,6 +25,7 @@ class ks_prop_defs;
 class alter_keyspace_statement : public schema_altering_statement {
     sstring _name;
     ::shared_ptr<ks_prop_defs> _attrs;
+    bool changes_tablets(query_processor& qp) const;
 
 public:
     alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs);
