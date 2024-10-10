@@ -34,6 +34,14 @@ public:
     }
 };
 
+struct combined_reader_statistics {
+    // Histogram describing a distribution of clustering keys. The vector
+    // gathers a number of clustering keys merged (value) from a given
+    // number of sstable files (index). The length of the vector is equal
+    // to the number of compacted sstables + 1
+    std::vector<int64_t> rows_merged_histogram;
+};
+
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
@@ -41,15 +49,18 @@ mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::vector<mutation_reader>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        combined_reader_statistics* statistics = nullptr);
 mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding);
+        mutation_reader::forwarding,
+        combined_reader_statistics* statistics = nullptr);
 mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
         mutation_reader&& a,
         mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        combined_reader_statistics* statistics = nullptr);
