@@ -58,7 +58,6 @@ public:
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value) const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
-    std::map<sstring, sstring> get_all_options_flattened(const gms::feature_service& feat) const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&, const gms::feature_service&);
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&, const gms::feature_service&);
 };

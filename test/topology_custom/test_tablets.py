@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -188,6 +188,54 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
         host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
         for k in range(4):
             await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS(test.test) WHERE pk={k}", host=host[0])
+
+
+# ALTER tablets KS cannot change RF of any DC by more than 1 at a time.
+# In a multi-dc environment, we can create replicas in a DC that didn't have replicas before,
+# but the above requirement should still be honoured, because we'd be changing RF from 0 to N in the new DC.
+# Reproduces https://github.com/scylladb/scylladb/issues/20039#issuecomment-2271365060
+# See also cql-pytest/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
+@pytest.mark.asyncio
+async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": "true"}
+
+    logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
+    # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
+    await manager.servers_add(2, config=config, property_file={'dc': f'dc1', 'rack': 'myrack'})
+    await manager.servers_add(2, config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+
+    cql = manager.get_cql()
+    await cql.run_async("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}")
+    # need to create a table to not change only the schema, but also tablets replicas
+    await cql.run_async("create table ks.t (pk int primary key)")
+    with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+        # changing RF of dc2 from 0 to 2 should fail
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 2}")
+
+    # changing RF of dc2 from 0 to 1 should succeed
+    await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 1}")
+    # ensure that RFs of both DCs are equal to 1 now, i.e. that omitting dc1 in above command didn't change it
+    res = await cql.run_async("SELECT * FROM system_schema.keyspaces  WHERE keyspace_name = 'ks'")
+    assert res[0].replication['dc1'] == '1'
+    assert res[0].replication['dc2'] == '1'
+
+    # incrementing RF of 2 DCs at once should NOT succeed, because it'd leave 2 pending tablets replicas
+    with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 2}")
+    # as above, but decrementing
+    with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 0}")
+    # as above, but decrement 1 RF and increment the other
+    with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 0}")
+    # as above, but RFs are swapped
+    with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+        await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 2}")
+
+    # check that we can remove all replicas from dc2 by changing RF from 1 to 0
+    await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc2': 0}")
+    # check that we can remove all replicas from the cluster, i.e. change RF of dc1 from 1 to 0 as well:
+    await cql.run_async("alter keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 0}")
 
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
