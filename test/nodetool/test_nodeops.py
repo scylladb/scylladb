@@ -24,31 +24,31 @@ def test_rebuild_with_dc(nodetool):
 
 
 def test_removenode(nodetool):
-    nodetool("removenode", "675ed9f4-6564-6dbd-can8-43fddce952gy", expected_requests=[
+    nodetool("removenode", "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86", expected_requests=[
         expected_request("POST", "/storage_service/remove_node",
-                         params={"host_id": "675ed9f4-6564-6dbd-can8-43fddce952gy"})])
+                         params={"host_id": "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86"})])
 
 
 def test_removenode_ignore_nodes_one_node(nodetool):
     nodetool("removenode",
-             "675ed9f4-6564-6dbd-can8-43fddce952gy",
+             "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86",
              "--ignore-dead-nodes",
-             "88eed9f4-6564-6dbd-can8-43fddce952gy",
+             "c0f4683f-61aa-43d4-98b5-99e2c5d27952",
              expected_requests=[
                  expected_request("POST", "/storage_service/remove_node", params={
-                     "host_id": "675ed9f4-6564-6dbd-can8-43fddce952gy",
-                     "ignore_nodes": "88eed9f4-6564-6dbd-can8-43fddce952gy"})])
+                     "host_id": "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86",
+                     "ignore_nodes": "c0f4683f-61aa-43d4-98b5-99e2c5d27952"})])
 
 
 def test_removenode_ignore_nodes_two_nodes(nodetool):
     nodetool("removenode",
-             "675ed9f4-6564-6dbd-can8-43fddce952gy",
+             "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86",
              "--ignore-dead-nodes",
-             "88eed9f4-6564-6dbd-can8-43fddce952gy,99eed9f4-6564-6dbd-can8-43fddce952gy",
+             "c0f4683f-61aa-43d4-98b5-99e2c5d27952,7f066eb5-b76c-4587-922f-d71e2d7c3b51",
              expected_requests=[
                  expected_request("POST", "/storage_service/remove_node", params={
-                     "host_id": "675ed9f4-6564-6dbd-can8-43fddce952gy",
-                     "ignore_nodes": "88eed9f4-6564-6dbd-can8-43fddce952gy,99eed9f4-6564-6dbd-can8-43fddce952gy"})])
+                     "host_id": "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86",
+                     "ignore_nodes": "c0f4683f-61aa-43d4-98b5-99e2c5d27952,7f066eb5-b76c-4587-922f-d71e2d7c3b51"})])
 
 
 def test_removenode_status(nodetool):
@@ -67,7 +67,7 @@ def test_removenode_force(nodetool):
 def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
     check_nodetool_fails_with(
             nodetool,
-            ("removenode", "status", "--ignore-dead-nodes", "675ed9f4-6564-6dbd-can8-43fddce952gy"),
+            ("removenode", "status", "--ignore-dead-nodes", "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86"),
             {"expected_requests": []},
             ["error processing arguments: cannot use --ignore-dead-nodes with status or force"])
 
@@ -75,6 +75,6 @@ def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
 def test_removenode_force_with_ignore_dead_nodes(nodetool, scylla_only):
     check_nodetool_fails_with(
             nodetool,
-            ("removenode", "force", "--ignore-dead-nodes", "675ed9f4-6564-6dbd-can8-43fddce952gy"),
+            ("removenode", "force", "--ignore-dead-nodes", "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86"),
             {"expected_requests": []},
             ["error processing arguments: cannot use --ignore-dead-nodes with status or force"])

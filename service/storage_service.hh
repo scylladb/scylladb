@@ -373,8 +373,6 @@ private:
 
 public:
 
-    static std::list<locator::host_id_or_endpoint> parse_node_list(sstring comma_separated_list);
-
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
@@ -699,7 +697,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes);
+    future<> removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, std::optional<locator::host_id> coordinator_host_id, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
@@ -865,13 +863,13 @@ private:
     // as well as the system.peers table.
     shared_ptr<raft_ip_address_updater> _raft_ip_address_updater;
 
-    std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const std::list<locator::host_id_or_endpoint>& hoeps);
+    std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const;
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> raft_decommission();
-    future<> raft_removenode(locator::host_id host_id, std::list<locator::host_id_or_endpoint> ignore_nodes_params);
+    future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
