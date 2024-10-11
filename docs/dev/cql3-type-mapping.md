@@ -17,7 +17,7 @@
 | smallint  | short_type_impl        | short_type                  | org.apache.cassandra.db.marshal.ShortType          |
 | text      | utf8_type_impl         | utf8_type                   | org.apache.cassandra.db.marshal.UTF8Type           |
 | time      | time_type_impl         | time_type                   | org.apache.cassandra.db.marshal.TimeType           |
-| timestamp | imestamp_type_impl     | timestamp_type              | org.apache.cassandra.db.marshal.TimestampType      |
+| timestamp | timestamp_type_impl    | timestamp_type              | org.apache.cassandra.db.marshal.TimestampType      |
 | timeuuid  | timeuuid_type_impl     | timeuuid_type               | org.apache.cassandra.db.marshal.TimeUUIDType       |
 | tinyint   | byte_type_impl         | byte_type                   | org.apache.cassandra.db.marshal.ByteType           |
 | uuid      | uuid_type_impl         | uuid_type                   | org.apache.cassandra.db.marshal.UUIDType           |
