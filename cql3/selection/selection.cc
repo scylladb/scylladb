@@ -143,6 +143,11 @@ protected:
             on_internal_error(cql_logger, "simple_selectors::add_input_row() called, but we don't support aggregation");
         }
 
+        virtual size_t get_input_row_count() const override {
+            on_internal_error(cql_logger, "simple_selectors::get_input_row_count() called, but we don't support aggregation");
+            return 0;
+        }
+
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
             return std::move(rs.current);
         }
@@ -344,6 +349,7 @@ protected:
         const selection_with_processing& _sel;
         std::vector<raw_value> _temporaries;
         bool _requires_thread;
+        size_t _input_row_count;
     public:
         explicit selectors_with_processing(const selection_with_processing& sel)
             : _sel(sel)
@@ -353,6 +359,7 @@ protected:
                     return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
                 });
              }))
+            , _input_row_count(0)
         { }
 
         virtual bool requires_thread() const override {
@@ -361,6 +368,7 @@ protected:
 
         virtual void reset() override {
             _temporaries = _sel._initial_values_for_temporaries;
+            _input_row_count = 0;
         }
 
         virtual bool is_aggregate() const override {
@@ -421,6 +429,11 @@ protected:
             for (size_t i = 0; i != _sel._inner_loop.size(); ++i) {
                 _temporaries[i] = expr::evaluate(_sel._inner_loop[i], inputs);
             }
+            ++_input_row_count;
+        }
+
+        virtual size_t get_input_row_count() const override {
+            return _input_row_count;
         }
 
         std::vector<shared_ptr<functions::function>> used_functions() const {
