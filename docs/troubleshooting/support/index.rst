@@ -9,15 +9,6 @@ Errors and Support
    Error Messages </troubleshooting/error-messages/index>
    Change Log Level </troubleshooting/log-level>
 
-.. raw:: html
-
-   <div class="panel callout radius animated">
-            <div class="row">
-              <div class="medium-3 columns">
-                <h5 id="getting-started">ScyllaDB Errors and Support</h5>
-              </div>
-              <div class="medium-9 columns">
-
 * :doc:`How to Report a ScyllaDB Problem </troubleshooting/report-scylla-problem/>`
 
 * :doc:`Error Messages </troubleshooting/error-messages/index/>`
@@ -29,9 +20,3 @@ Errors and Support
 * :ref:`What to Do if You're Having a Performance Issue <report-performance-problem>`
 
 Also check out the `Onboarding lesson <https://university.scylladb.com/courses/scylla-operations/lessons/onboarding/topic/onboarding/>`_ on ScyllaDB University
-
-.. raw:: html
-
-   </div>
-   </div>
-   </div>
