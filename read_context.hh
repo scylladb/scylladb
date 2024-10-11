@@ -198,7 +198,7 @@ public:
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
     const tombstone_gc_state* tombstone_gc_state() const { return _tombstone_gc_state; }
-    api::timestamp_type get_max_purgeable(const dht::decorated_key& dk, is_shadowable is) const { return _get_max_purgeable(dk, is); }
+    api::timestamp_type get_max_purgeable(const dht::decorated_key& dk, is_shadowable is) const { return _get_max_purgeable(dk, is).timestamp; }
 public:
     future<> ensure_underlying() {
         if (_underlying_snapshot) {
