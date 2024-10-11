@@ -174,6 +174,7 @@ private:
     std::unique_ptr<selectors> _selectors;
     const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
     const uint64_t _limit; ///< Maximum number of rows to return.
+    const uint64_t _per_partition_limit; ///< Maximum number of rows to return per partition.
     std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
@@ -238,7 +239,8 @@ public:
 
     result_set_builder(const selection& s, gc_clock::time_point now,
                        std::vector<size_t> group_by_cell_indices = {},
-                       uint64_t limit = std::numeric_limits<uint64_t>::max());
+                       uint64_t limit = std::numeric_limits<uint64_t>::max(),
+                       uint64_t per_partition_limit = std::numeric_limits<uint64_t>::max());
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);
