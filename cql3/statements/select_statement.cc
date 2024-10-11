@@ -497,13 +497,9 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
-    uint64_t per_partition_limit = std::numeric_limits<uint64_t>::max();
-    if (_per_partition_limit) {
-        auto val = expr::evaluate(*_per_partition_limit, options);
-        if (!val.is_null()) {
-            auto l = val.view().validate_and_deserialize<int32_t>(*int32_type);
-            per_partition_limit = l < 0 ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(l);
-        }
+    uint64_t per_partition_limit = query::max_rows;
+    if (auto parsed = get_limit(options, _per_partition_limit); parsed.has_value()) {
+        per_partition_limit = parsed.value();
     }
 
     if (aggregate || nonpaged_filtering) {
