@@ -2822,7 +2822,7 @@ table::make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set
 }
 
 max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const {
-    return [this](const dht::decorated_key& dk, ::is_shadowable is_shadowable) {
+    return [this](const dht::decorated_key& dk, ::is_shadowable is_shadowable) -> max_purgeable {
         auto& sg = storage_group_for_token(dk.token());
         auto max_purgeable_timestamp = api::max_timestamp;
 
@@ -2830,7 +2830,7 @@ max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const
             max_purgeable_timestamp = std::min(cg->memtables()->min_live_timestamp(dk, is_shadowable, cg->max_seen_timestamp()), max_purgeable_timestamp);
         });
 
-        return max_purgeable_timestamp;
+        return { .timestamp = max_purgeable_timestamp };
     };
 }
 
