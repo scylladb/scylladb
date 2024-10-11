@@ -13,15 +13,6 @@ Cluster and Node
    NullPointerException </troubleshooting/nodetool-nullpointerexception/> 
    Failed Schema Sync </troubleshooting/failed-schema-sync/> 
 
-.. raw:: html
-
-   <div class="panel callout radius animated">
-            <div class="row">
-              <div class="medium-3 columns">
-                <h5 id="getting-started">Cluster and Node Issues</h5>
-              </div>
-              <div class="medium-9 columns">
-
 * :doc:`Handling Node Failures </troubleshooting/handling-node-failures>`
 * :doc:`Failure to Add, Remove, or Replace a Node </troubleshooting/failed-add-remove-replace>`
 * :doc:`Failed Decommission Problem </troubleshooting/failed-decommission/>`
@@ -29,9 +20,3 @@ Cluster and Node
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
 * :doc:`Nodetool Throws NullPointerException </troubleshooting/nodetool-nullpointerexception>`
 * :doc:`Failed Schema Sync </troubleshooting/failed-schema-sync>`
-
-.. raw:: html
-
-   </div>
-   </div>
-   </div>

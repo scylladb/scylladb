@@ -13,17 +13,6 @@ Procedures
    Migrate from Cassandra to ScyllaDB <cassandra-to-scylla-migration-process>
    Disable Housekeeping </getting-started/installation-common/disable-housekeeping>
 
-
-.. raw:: html
-
-
-   <div class="panel callout radius animated">
-            <div class="row">
-              <div class="medium-3 columns">
-                <h5 id="getting-started">Procedures</h5>
-              </div>
-              <div class="medium-9 columns">
-
 Procedures to create, out-scale, down-scale, and backup ScyllaDB clusters 
 
 * :doc:`Cluster management procedures </operating-scylla/procedures/cluster-management/index>`
@@ -37,11 +26,6 @@ Procedures to create, out-scale, down-scale, and backup ScyllaDB clusters
 * :doc:`How to Change Log Level in Runtime </troubleshooting/log-level/>`
 * For training material and hands-on examples also check out the `Cluster Management Repair and ScyllaDB Manager lesson <https://university.scylladb.com/courses/scylla-operations/lessons/cluster-management-repair-and-scylla-manager/>`_ on ScyllaDB University.
 
-.. raw:: html
-
-   </div>
-   </div>
-   </div>
 
 
 
