@@ -126,7 +126,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     _db.local().get_token_metadata().get_topology().my_address())));
         }
         return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, s, &as] (reader_permit permit) mutable {
+            auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
@@ -248,7 +248,6 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             });
           }
             return make_ready_future<rpc::sink<int>>(sink);
-        });
       });
     });
     ms.register_stream_mutation_done([this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
