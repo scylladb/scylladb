@@ -496,8 +496,10 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
+    auto per_partition_limit = get_limit(options, _per_partition_limit, true);
+
     if (aggregate || nonpaged_filtering) {
-        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
+        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit, per_partition_limit.value());
         coordinator_result<void> result_void = co_await utils::result_do_until(
                 [&p, &builder, limit] {
                     return p->is_exhausted() || (limit < builder.result_set_size());

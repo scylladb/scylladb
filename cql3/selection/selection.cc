@@ -505,11 +505,12 @@ selection::collect_metadata(const schema& schema, const std::vector<prepared_sel
 
 result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now,
                                        std::vector<size_t> group_by_cell_indices,
-                                       uint64_t limit)
+                                       uint64_t limit, uint64_t per_partition_limit)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _group_by_cell_indices(std::move(group_by_cell_indices))
     , _limit(limit)
+    , _per_partition_limit(per_partition_limit)
     , _last_group(_group_by_cell_indices.size())
     , _group_began(false)
     , _now(now)
