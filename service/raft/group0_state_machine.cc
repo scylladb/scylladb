@@ -53,26 +53,30 @@ namespace service {
 
 static logging::logger slogger("group0_raft_sm");
 
-group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled)
-        : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
-        , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
-            // Using features to decide whether to start fetching topology snapshots
-            // or not is technically not correct because we also use features to guard
-            // whether upgrade can be started, and upgrade starts by writing
-            // to the system.topology table (namely, to the `upgrade_state` column).
-            // If some node at that point didn't mark the feature as enabled
-            // locally, there is a risk that it might try to pull a snapshot
-            // and will decide not to use `raft_pull_snapshot` verb.
-            //
-            // The above issue is mitigated by requiring administrators to
-            // wait until the SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES feature
-            // is enabled on all nodes.
-            //
-            // The biggest value of using a cluster feature here is so that
-            // the node won't try to fetch a topology snapshot if the other
-            // node doesn't support it yet.
-            _topology_change_enabled = true;
-        })) {
+group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
+        const raft_address_map& address_map, group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
+        bool topology_change_enabled)
+    : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
+    , _state_id_handler(sp.local_db(), gossiper, address_map, server_accessor)
+    , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
+        // Using features to decide whether to start fetching topology snapshots
+        // or not is technically not correct because we also use features to guard
+        // whether upgrade can be started, and upgrade starts by writing
+        // to the system.topology table (namely, to the `upgrade_state` column).
+        // If some node at that point didn't mark the feature as enabled
+        // locally, there is a risk that it might try to pull a snapshot
+        // and will decide not to use `raft_pull_snapshot` verb.
+        //
+        // The above issue is mitigated by requiring administrators to
+        // wait until the SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES feature
+        // is enabled on all nodes.
+        //
+        // The biggest value of using a cluster feature here is so that
+        // the node won't try to fetch a topology snapshot if the other
+        // node doesn't support it yet.
+        _topology_change_enabled = true;
+    })) {
+    _state_id_handler.start();
 }
 
 static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -207,6 +211,40 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
 }
 
+static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
+    auto validate_schema = [&db](const std::vector<canonical_mutation>& mutations) {
+        for (const auto& mut : mutations) {
+            // Get the schema for the column family
+            auto schema = db.find_schema(mut.column_family_id());
+            if (!schema) {
+                on_internal_error(slogger, "ensure_group0_schema: schema not found");
+            }
+
+            if (!schema->static_props().is_group0_table) {
+                on_internal_error(slogger, fmt::format("ensure_group0_schema: schema is not group0: {}", schema->cf_name()));
+            }
+        }
+    };
+
+    std::visit(overloaded_functor{
+            [validate_schema](const schema_change& change) {
+                validate_schema(change.mutations);
+            },
+            [](const broadcast_table_query&) {
+                // no mutations to validate
+            },
+            [validate_schema](const topology_change& change) {
+                validate_schema(change.mutations);
+            },
+            [validate_schema](const write_mutations& change) {
+                validate_schema(change.mutations);
+            },
+            [validate_schema](const mixed_change& change) {
+                validate_schema(change.mutations);
+            },
+        }, cmd.change);
+}
+
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
 
@@ -222,6 +260,12 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
         auto cmd = ser::deserialize(is, boost::type<group0_command>{});
+
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+        // Ensure that the schema of the mutations is a group0 schema.
+        // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
+        ensure_group0_schema(cmd, _client.sys_ks().local_db());
+#endif
 
         slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
                 cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
@@ -255,6 +299,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         // apply remainder
         co_await merge_and_apply(m);
     }
+
+    co_await _state_id_handler.advertise_state_id(m.last_id());
 }
 
 future<raft::snapshot_id> group0_state_machine::take_snapshot() {
@@ -317,7 +363,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
         tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size());
+        tables.reserve(auth_tables.size() + 1);
 
         for (const auto& schema : auth_tables) {
             tables.push_back(schema->id());
@@ -354,6 +400,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 }
 
 future<> group0_state_machine::abort() {
+    _state_id_handler.stop();
     _abort_source.request_abort();
     return _gate.close();
 }

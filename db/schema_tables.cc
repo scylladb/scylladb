@@ -102,6 +102,13 @@ namespace {
             props.enable_schema_commitlog();
         }
     });
+    const auto set_group0_table_options =
+        schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+            if (ks_name == schema_tables::NAME) {
+                // all schema tables are group0 tables
+                props.is_group0_table = true;
+            }
+        });
 }
 
 schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts,
@@ -201,8 +208,6 @@ future<> save_system_schema(cql3::query_processor& qp) {
 
 namespace v3 {
 
-static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::seconds>(days(7)).count();
-
 schema_ptr keyspaces() {
     static thread_local auto schema = [] {
         schema_builder builder(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
@@ -222,7 +227,6 @@ schema_ptr keyspaces() {
         // comment
         "keyspace definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -249,7 +253,6 @@ schema_ptr scylla_keyspaces() {
         // comment
         "scylla-specific information for keyspaces"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -294,7 +297,6 @@ schema_ptr tables() {
         // comment
         "table definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -313,8 +315,7 @@ schema_ptr scylla_tables(schema_features features) {
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
-            .with_column("version", uuid_type)
-            .set_gc_grace_seconds(schema_gc_grace);
+            .with_column("version", uuid_type);
         // Each bit in `offset` denotes a different schema feature,
         // so different values of `offset` are used for different combinations of features.
         uint16_t offset = 0;
@@ -381,7 +382,6 @@ static schema_ptr columns_schema(const char* columns_table_name) {
         // comment
         "column definitions"
         );
-    builder.set_gc_grace_seconds(schema_gc_grace);
     builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
     return builder.build();
 }
@@ -443,7 +443,6 @@ static schema_ptr computed_columns_schema(const char* columns_table_name) {
         // comment
         "computed columns"
         );
-    builder.set_gc_grace_seconds(schema_gc_grace);
     builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
     return builder.build();
 }
@@ -472,7 +471,6 @@ schema_ptr dropped_columns() {
         // comment
         "dropped column registry"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -497,7 +495,6 @@ schema_ptr triggers() {
         // comment
         "trigger definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -545,7 +542,6 @@ schema_ptr views() {
         // comment
         "view definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -571,7 +567,6 @@ schema_ptr indexes() {
         // comment
         "secondary index definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -597,7 +592,6 @@ schema_ptr types() {
         // comment
         "user defined type definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -626,7 +620,6 @@ schema_ptr functions() {
         // comment
         "user defined function definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -655,7 +648,6 @@ schema_ptr aggregates() {
         // comment
         "user defined aggregate definitions"
         );
-        builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();
@@ -684,8 +676,7 @@ schema_ptr scylla_aggregates() {
         // comment
         "scylla-specific information for user defined aggregates"
         );
-        
-        builder.set_gc_grace_seconds(schema_gc_grace);
+
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
         return builder.build();
     }();

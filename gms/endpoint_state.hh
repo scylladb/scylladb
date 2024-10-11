@@ -119,20 +119,18 @@ public:
 
 public:
     std::string_view get_status() const noexcept {
-        constexpr std::string_view empty = "";
-        auto* app_state = get_application_state_ptr(application_state::STATUS);
+        constexpr std::string_view empty;
+        const auto* app_state = get_application_state_ptr(application_state::STATUS);
         if (!app_state) {
             return empty;
         }
-        const auto& value = app_state->value();
+        const std::string_view value = app_state->value();
         if (value.empty()) {
             return empty;
         }
-        auto pos = value.find(',');
-        if (pos == sstring::npos) {
-            return std::string_view(value);
-        }
-        return std::string_view(value.c_str(), pos);
+        const auto pos = value.find(',');
+        // npos allowed (full value)
+        return value.substr(0, pos);
     }
 
     bool is_shutdown() const noexcept {

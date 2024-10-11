@@ -13,7 +13,7 @@ import functools
 import operator
 import time
 import re
-from contextlib import suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
@@ -22,7 +22,6 @@ from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
-from contextlib import asynccontextmanager
 from typing import Optional, List
 
 
@@ -472,22 +471,22 @@ async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_e
     await wait_for(new_coordinator_elected, deadline=deadline)
 
 @asynccontextmanager
-async def new_test_keyspace(cql, opts):
+async def new_test_keyspace(cql, opts, host=None):
     """
     A utility function for creating a new temporary keyspace with given
     options. It can be used in a "async with", as:
         async with new_test_keyspace(cql, '...') as keyspace:
     """
     keyspace = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + keyspace + " " + opts)
+    await cql.run_async("CREATE KEYSPACE " + keyspace + " " + opts, host=host)
     try:
         yield keyspace
     finally:
-        await cql.run_async("DROP KEYSPACE " + keyspace)
+        await cql.run_async("DROP KEYSPACE " + keyspace, host=host)
 
 previously_used_table_names = []
 @asynccontextmanager
-async def new_test_table(cql, keyspace, schema, extra=""):
+async def new_test_table(cql, keyspace, schema, extra="", host=None, reuse_tables=True):
     """
     A utility function for creating a new temporary table with a given schema.
     Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -498,16 +497,20 @@ async def new_test_table(cql, keyspace, schema, extra=""):
        async with create_table(cql, test_keyspace, '...') as table:
     """
     global previously_used_table_names
-    if not previously_used_table_names:
-        previously_used_table_names.append(unique_name())
-    table_name = previously_used_table_names.pop()
+    if reuse_tables:
+        if not previously_used_table_names:
+            previously_used_table_names.append(unique_name())
+        table_name = previously_used_table_names.pop()
+    else:
+        table_name = unique_name()
     table = keyspace + "." + table_name
-    await cql.run_async("CREATE TABLE " + table + "(" + schema + ")" + extra)
+    await cql.run_async("CREATE TABLE " + table + "(" + schema + ")" + extra, host=host)
     try:
         yield table
     finally:
-        await cql.run_async("DROP TABLE " + table)
-        previously_used_table_names.append(table_name)
+        await cql.run_async("DROP TABLE " + table, host=host)
+        if reuse_tables:
+            previously_used_table_names.append(table_name)
 
 @asynccontextmanager
 async def new_materialized_view(cql, table, select, pk, where, extra=""):
@@ -532,3 +535,18 @@ async def get_raft_log_size(cql, host) -> int:
 async def get_raft_snap_id(cql, host) -> str:
     query = "select snapshot_id from system.raft limit 1"
     return (await cql.run_async(query, host=host))[0].snapshot_id
+
+
+@contextmanager
+def disable_schema_agreement_wait(cql: Session):
+    """
+    A context manager that temporarily disables the schema agreement wait
+    for the given cql session.
+    """
+    assert hasattr(cql.cluster, "max_schema_agreement_wait")
+    old_value = cql.cluster.max_schema_agreement_wait
+    cql.cluster.max_schema_agreement_wait = 0
+    try:
+        yield
+    finally:
+        cql.cluster.max_schema_agreement_wait = old_value

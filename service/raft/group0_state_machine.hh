@@ -10,9 +10,9 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 
-#include <seastar/core/abort_source.hh>
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
+#include "service/raft/group0_state_id_handler.hh"
 #include "utils/UUID_gen.hh"
 #include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
@@ -104,17 +104,19 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
-    raft_address_map& _address_map;
+    const raft_address_map& _address_map;
     seastar::gate _gate;
     abort_source _abort_source;
     bool _topology_change_enabled;
+    group0_state_id_handler _state_id_handler;
     gms::feature::listener_registration _topology_on_raft_support_listener;
 
     modules_to_reload get_modules_to_reload(const std::vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, raft_address_map& address_map, gms::feature_service& feat, bool topology_change_enabled);
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, const raft_address_map& address_map,
+            group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
