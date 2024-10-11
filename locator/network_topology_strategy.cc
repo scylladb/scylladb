@@ -19,6 +19,8 @@
 
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
+
+#include <absl/container/flat_hash_map.h>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptors.hpp>
 #include "exceptions/exceptions.hh"
@@ -552,6 +554,36 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
         }
     }
     return filtered;
+}
+
+sstring network_topology_strategy::sanity_check_read_replicas(const effective_replication_map& erm,
+                                                              const inet_address_vector_replica_set& read_replicas) const {
+    const auto& topology = erm.get_topology();
+
+    struct rf_node_count {
+        size_t replication_factor{0};
+        size_t node_count{0};
+    };
+
+    absl::flat_hash_map<sstring, rf_node_count> data_centers_replication_factor;
+    std::ranges::for_each(read_replicas, [&data_centers_replication_factor, &topology, this](const auto& node) {
+        auto res = data_centers_replication_factor.emplace(topology.get_datacenter(node), rf_node_count{0, 0});
+        if (res.second) {
+            // For new item add replication factor.
+            res.first->second.replication_factor = get_replication_factor(res.first->first);
+        }
+        ++res.first->second.node_count;
+    });
+
+    for (const auto& [key, item] : data_centers_replication_factor) {
+        if (item.replication_factor < item.node_count) {
+            return seastar::format("network_topology_strategy: ERM inconsistency, Datacenter [{}] has higher count of read replicas (accounting for "
+                                   "current consistency level): [{}] than its replication factor [{}]",
+                    key, item.node_count, item.replication_factor);
+        }
+    }
+
+    return {};
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;

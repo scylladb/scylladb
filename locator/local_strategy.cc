@@ -38,6 +38,13 @@ size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 
+sstring local_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const {
+    if (read_replicas.size() > 1) {
+        return seastar::format("local_strategy: the number of replicas for local_strategy is {}, cannot be higher than 1", read_replicas.size());
+    }
+    return {};
+}
+
 using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");
