@@ -12,6 +12,7 @@
 #include <rapidxml/rapidxml.hpp>
 #endif
 
+#include <memory>
 #include "utils/s3/aws_error.hh"
 
 namespace aws {
