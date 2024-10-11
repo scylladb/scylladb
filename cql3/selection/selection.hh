@@ -177,6 +177,10 @@ private:
     const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
     const uint64_t _limit; ///< Maximum number of rows to return.
     const uint64_t _per_partition_limit; ///< Maximum number of rows to return per partition.
+    uint64_t _per_partition_remaining; ///< Remaining rows to return for the current partition.
+    uint64_t _per_partition_remaining_previous_partition; ///< Value of _per_partition_remaining before the current partition.
+                                                          ///< Necessary because the next page might continue the same partition,
+                                                          ///< but accept_partition_end() and accept_new_partition() will be called anyway.
     std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
@@ -249,6 +253,8 @@ public:
     void add_collection(const column_definition& def, bytes_view c);
     void start_new_row();
     void complete_row();
+    void accept_new_partition(const std::vector<bytes>& key);
+    void accept_partition_end();
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
@@ -297,7 +303,9 @@ public:
         }
 
         void accept_new_partition(const partition_key& key, uint64_t row_count) {
-            _partition_key = key.explode(_schema);
+            auto partition_key = key.explode(_schema);
+            _builder.accept_new_partition(partition_key);
+            _partition_key = std::move(partition_key);
             _row_count = row_count;
             _filter.reset(&key);
         }
@@ -362,6 +370,7 @@ public:
                 }
                 _builder.complete_row();
             }
+            _builder.accept_partition_end();
             return _filter.get_rows_dropped();
         }
     };
