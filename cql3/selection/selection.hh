@@ -52,6 +52,8 @@ public:
     */
     virtual void add_input_row(result_set_builder& rs) = 0;
 
+    virtual std::uint64_t get_input_row_count() const = 0;
+
     virtual std::vector<managed_bytes_opt> get_output_row() = 0;
 
     // When not aggregating, each input row becomes one output row.
