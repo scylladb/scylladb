@@ -131,6 +131,31 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
     out.write(src, bytes_to_read);
 }
 
+// Fixed length signed floating point number encode/decode.
+// To encode :
+//   If positive : invert first bit to make it greater than all negatives
+//   If negative : invert all bytes to make negatives with bigger magnitude smaller
+// Decoding is identical except the logic to identify postive/negative values
+template <std::floating_point T>
+static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& out, bool perform_encode) {
+    // Read and write float as uint32_t; double as uint64_t;
+    using uint_t = std::conditional_t<std::is_same_v<T, float>, uint32_t, uint64_t>;
+
+    // Peek the first byte to deduce sign.
+    // Positive values have their sign bit flipped in their encoded format.
+    uint8_t curr_byte = uint8_t(src[0]);
+    const bool src_is_positive = perform_encode ? curr_byte < 0x80 : curr_byte >= 0x80;
+
+    if (src_is_positive) {
+        constexpr uint_t sign_mask = uint_t(1) << (sizeof(T) * 8 - 1);
+        // flip sign bit and write rest of the bits unchanged
+        out.write<uint_t>(read_simple<uint_t>(src) ^ sign_mask);
+    } else {
+        // invert all bytes;
+        out.write<uint_t>(~read_simple<uint_t>(src));
+    }
+}
+
 // Extract and return a prefix of the specified length from the
 // managed_bytes_view, advancing the original view past the extracted prefix.
 static managed_bytes_view consume_prefix(managed_bytes_view& mbv, size_t length) {
@@ -158,6 +183,12 @@ struct to_comparable_bytes_visitor {
 
     void operator()(const long_type_impl&) {
         encode_signed_long_type(consume_prefix(serialized_bytes_view, sizeof(int64_t)), out);
+    }
+
+    // Encoding for float and double
+    template <std::floating_point T>
+    void operator()(const floating_type_impl<T>&) {
+        convert_fixed_length_float<T>(serialized_bytes_view, out, true);
     }
 
     // Encoding for simple_date_type_impl and time_type_impl
@@ -220,6 +251,12 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const long_type_impl&) {
         decode_signed_long_type(comparable_bytes_view, out);
+    }
+
+    // Decoding for float and double
+    template <std::floating_point T>
+    void operator()(const floating_type_impl<T>&) {
+        convert_fixed_length_float<T>(comparable_bytes_view, out, false);
     }
 
     // Decoder for simple_date_type_impl and time_type_impl; they are written as it is.
