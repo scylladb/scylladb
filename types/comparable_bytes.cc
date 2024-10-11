@@ -167,6 +167,19 @@ struct to_comparable_bytes_visitor {
         encode_signed_long_type(read_simple<int64_t>(serialized_bytes_view), out);
     }
 
+    // Encoding for simple_date_type_impl and time_type_impl
+    // They are both fixed length unsigned integers and are already byte comparable in their serialized form
+    template <std::integral T>
+    void operator()(const simple_type_impl<T>&) {
+        out.write(serialized_bytes_view.prefix(sizeof(T)));
+        serialized_bytes_view.remove_prefix(sizeof(T));
+    }
+
+    // timestamp_type is encoded as fixed length signed integer
+    void operator()(const timestamp_type_impl&) {
+        convert_signed_fixed_length_integer<db_clock::rep>(serialized_bytes_view, out);
+    }
+
     // TODO: Handle other types
 
     void operator()(const abstract_type& type) {
@@ -211,6 +224,17 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const long_type_impl&) {
         decode_signed_long_type(comparable_bytes_view, out);
+    }
+
+    // Decoder for simple_date_type_impl and time_type_impl; they are written as it is.
+    template <std::integral T>
+    void operator()(const simple_type_impl<T>&) {
+        out.write(comparable_bytes_view.prefix(sizeof(T)));
+        comparable_bytes_view.remove_prefix(sizeof(T));
+    }
+
+    void operator()(const timestamp_type_impl&) {
+        convert_signed_fixed_length_integer<db_clock::rep>(comparable_bytes_view, out);
     }
 
     // TODO: Handle other types

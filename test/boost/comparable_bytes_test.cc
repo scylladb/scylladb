@@ -90,11 +90,31 @@ void byte_comparable_test(std::vector<data_value>&& test_data) {
 }
 
 template <std::integral int_type>
-static std::vector<data_value> generate_integer_test_data() {
+static std::vector<data_value> generate_integer_test_data(
+        // Function to create a data_value from the underlying integer type.
+        std::function<data_value(int_type)> create_data_value_func = {},
+        // Function to filter out values that should not be included in the test data.
+        std::function<bool(int_type)> filter_func = {}) {
+    if (!create_data_value_func) {
+        if constexpr (std::is_signed_v<int_type>) {
+            // If a custom create_data_value_fn is not provided, create data_value
+            // directly from the underlying integer type.
+            create_data_value_func = [](int_type num) {
+                return data_value(num);
+            };
+        } else {
+            // For unsigned integer types, the caller must provide a custom create_data_value_fn,
+            // as the data_value class doesn't have an unambiguous constructor for unsigned values.
+            SCYLLA_ASSERT(false);
+        }
+    }
+
     std::vector<data_value> test_data;
     auto push_to_test_data = [&] (int_type num) {
         for (int_type n : std::initializer_list<int_type>{num, ~num}) {
-            test_data.push_back(n);
+            if (!filter_func || filter_func(n)) {
+                test_data.push_back(create_data_value_func(n));
+            }
         }
     };
 
@@ -131,4 +151,26 @@ BOOST_AUTO_TEST_CASE(test_int) {
 
 BOOST_AUTO_TEST_CASE(test_bigint) {
     byte_comparable_test(generate_integer_test_data<int64_t>());
+}
+
+BOOST_AUTO_TEST_CASE(test_date) {
+    byte_comparable_test(generate_integer_test_data<uint32_t>([] (uint32_t days) {
+        return data_value(simple_date_native_type{days});
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_time) {
+    constexpr int64_t max_ns_in_a_day = 24L * 60 * 60 * 1000 * 1000 * 1000;
+    byte_comparable_test(generate_integer_test_data<int64_t>([] (int64_t nanoseconds) {
+        return data_value(time_native_type{nanoseconds});
+    }, [] (int64_t ns_candidate) {
+        // allow only valid nanosecond values
+        return ns_candidate >= 0 && ns_candidate <= max_ns_in_a_day;
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_timestamp) {
+    byte_comparable_test(generate_integer_test_data<db_clock::rep>([] (db_clock::rep milliseconds) {
+        return data_value(db_clock::time_point(db_clock::duration(milliseconds)));
+    }));
 }
