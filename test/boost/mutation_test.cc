@@ -2738,7 +2738,7 @@ class basic_compacted_fragments_consumer_base {
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
     max_purgeable_fn _get_max_purgeable;
-    api::timestamp_type _max_purgeable;
+    max_purgeable _max_purgeable;
 
     std::vector<mutation> _mutations;
     mutation_rebuilder_v2 _mutation;
@@ -2748,7 +2748,7 @@ private:
         if (!t) {
             return true;
         }
-        return t.timestamp < _max_purgeable;
+        return t.timestamp < _max_purgeable.timestamp;
     }
     bool is_tombstone_purgeable(const tombstone& t) {
         return t.deletion_time < _gc_before && can_gc(t);
