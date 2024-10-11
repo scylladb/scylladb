@@ -8,6 +8,7 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <random>
 #include <seastar/util/lazy.hh>
 
 #include "bytes_ostream.hh"
@@ -164,4 +165,49 @@ BOOST_AUTO_TEST_CASE(test_timestamp) {
     byte_comparable_test(generate_integer_test_data<db_clock::rep>([] (db_clock::rep milliseconds) {
         return data_value(db_clock::time_point(db_clock::duration(milliseconds)));
     }));
+}
+
+template <std::floating_point fp_type>
+static std::vector<data_value> generate_floating_point_test_data() {
+    std::vector<data_value> test_data;
+    for (fp_type n : {-1e30f, -1e3f, -1.0f, -0.001f, -1e-30f, -0.0f, 0.0f, 1e-30f, 0.001f, 1.0f, 1e3f, 1e30f,
+                -std::numeric_limits<float>::min(), std::numeric_limits<float>::min(),
+                -std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                std::numeric_limits<float>::quiet_NaN()}) {
+        test_data.emplace_back(n);
+    }
+
+    // double has a few more test items
+    int random_exponent_min = -30, random_exponent_max = 30;
+    if constexpr (std::is_same_v<fp_type, double>) {
+        for (fp_type n : std::vector<double>{-1e200, -1e100, 1e100, 1e200,
+                    -std::numeric_limits<double>::min(), std::numeric_limits<double>::min(),
+                    -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()}) {
+            test_data.emplace_back(n);
+        }
+        random_exponent_min = -300;
+        random_exponent_max = 300;
+    }
+
+    // generate some random test data
+    std::random_device rd;
+    const auto seed = rd();
+    testlog.info("seed used to generate floating point test data : {}", seed);
+    std::mt19937 gen(seed);
+    std::uniform_int_distribution<int64_t> fp_value(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max());
+    std::uniform_int_distribution<int> fp_exponent(random_exponent_min, random_exponent_max);
+    for (int i = 0; i < 100; i++) {
+        test_data.push_back(fp_type(fp_value(gen) * std::pow(10, fp_exponent(gen))));
+    }
+
+    return test_data;
+}
+
+BOOST_AUTO_TEST_CASE(test_float) {
+    byte_comparable_test(generate_floating_point_test_data<float>());
+}
+
+BOOST_AUTO_TEST_CASE(test_double) {
+    byte_comparable_test(generate_floating_point_test_data<double>());
 }
