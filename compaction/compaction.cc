@@ -135,20 +135,21 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     return "(invalid)";
 }
 
-static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
+static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
         const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
-        return api::min_timestamp;
+        return { .timestamp = api::min_timestamp };
     }
 
     auto timestamp = api::max_timestamp;
     if (gc_check_only_compacting_sstables) {
         // If gc_check_only_compacting_sstables is enabled, do not
         // check memtables and other sstables not being compacted.
-        return timestamp;
+        return { .timestamp = timestamp };
     }
 
+    auto source = max_purgeable::timestamp_source::none;
     api::timestamp_type memtable_min_timestamp;
     if (is_shadowable) {
         // For shadowable tombstones, check the minimum live row_marker timestamp
@@ -174,6 +175,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
     // newer data.
     if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
         timestamp = memtable_min_timestamp;
+        source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
@@ -217,9 +219,10 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         if (sst->filter_has_key(*hk)) {
             bloom_filter_checks++;
             timestamp = min_timestamp;
+            source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return timestamp;
+    return { .timestamp = timestamp, .source = source };
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {
