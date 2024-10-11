@@ -145,6 +145,30 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
     out.write(bytes_view(value_ptr, sizeof(int64_t)));
 }
 
+// Fixed length signed floating point number encode/decode.
+// To encode :
+//   If positive : invert first bit to make it greater than all negatives
+//   If negative : invert all bytes to make negatives with bigger magnitude smaller
+// Decoding is identical except the logic to identify positive/negative values
+template <std::floating_point T, bool src_is_byte_comparable>
+static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& out) {
+    // Read and write float as uint32_t; double as uint64_t;
+    using uint_t = std::conditional_t<std::is_same_v<T, float>, uint32_t, uint64_t>;
+    static_assert(sizeof(uint_t) == sizeof(T), "cannot read floating point type as unsigned int as their sizes are not equal");
+    uint_t value_be = read_simple_native<uint_t>(src);
+
+    // Deduce sign - the values have their sign bit flipped in byte comparable format.
+    // Since value_be is in big endian, use a big endian sign mask to check sign
+    static const auto sign_mask_be = seastar::cpu_to_be<uint_t>(uint_t(1) << (sizeof(uint_t) * 8 - 1));
+    bool negative_value = value_be & sign_mask_be;
+    if constexpr (src_is_byte_comparable) {
+        negative_value = !negative_value;
+    }
+
+    // Flip all the bits for a negative value or only the sign bit for a positive value.
+    write_native_int<uint_t>(out, value_be ^ (negative_value ? uint_t(-1) : sign_mask_be));
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -165,6 +189,12 @@ struct to_comparable_bytes_visitor {
     // The long type uses variable-length encoding, unlike other smaller fixed-length signed integers.
     void operator()(const long_type_impl&) {
         encode_signed_long_type(read_simple<int64_t>(serialized_bytes_view), out);
+    }
+
+    // Encoding for float and double
+    template <std::floating_point T>
+    void operator()(const floating_type_impl<T>&) {
+        convert_fixed_length_float<T, false>(serialized_bytes_view, out);
     }
 
     // Encoding for simple_date_type_impl and time_type_impl
@@ -224,6 +254,12 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const long_type_impl&) {
         decode_signed_long_type(comparable_bytes_view, out);
+    }
+
+    // Decoding for float and double
+    template <std::floating_point T>
+    void operator()(const floating_type_impl<T>&) {
+        convert_fixed_length_float<T, true>(comparable_bytes_view, out);
     }
 
     // Decoder for simple_date_type_impl and time_type_impl; they are written as it is.
