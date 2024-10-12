@@ -29,7 +29,8 @@ Options
 * ``--keyspace`` - Name of a keyspace to copy SSTables from
 * ``--table`` - Name of a table to copy SSTables from
 * ``--snapshot`` - Name of a snapshot to copy sstables from
-* ``--endpoint`` - ID of the configured object storage endpoint to copy SSTables to
+* ``--endpoint`` - Name of the configured object storage endpoint to copy SSTables to.
+  This should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--bucket`` - Name of the bucket to backup SSTables to
 * ``--prefix`` - Prefix to backup SSTables to
 * ``--nowait`` - Don't wait on the backup process
