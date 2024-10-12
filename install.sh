@@ -574,7 +574,7 @@ PYSCRIPTS=$(find dist/common/scripts/ -maxdepth 1 -type f -exec grep -Pls '\A#!/
 for i in $PYSCRIPTS; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
-for i in seastar/scripts/perftune.py seastar/scripts/seastar-addr2line; do
+for i in seastar/scripts/{perftune.py,addr2line.py,seastar-addr2line}; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
