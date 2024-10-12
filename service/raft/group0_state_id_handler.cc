@@ -88,7 +88,7 @@ void group0_state_id_handler::refresh() {
     });
 
     if (_state_id_last_reconcile && utils::timeuuid_tri_compare(_state_id_last_reconcile, min_state_id) > 0) {
-        slogger.info("Skipping due to the stale miminum state id: {}", min_state_id);
+        slogger.info("Skipping due to the stale minimum state id: {}", min_state_id);
         return;
     }
 
