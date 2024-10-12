@@ -14,6 +14,8 @@
 
 #include "utils/s3/aws_error.hh"
 
+#include <memory>
+
 namespace aws {
 
 aws_error::aws_error(aws_error_type error_type, retryable is_retryable) : _type(error_type), _is_retryable(is_retryable) {
