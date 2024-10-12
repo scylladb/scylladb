@@ -10,6 +10,7 @@
 
 #include <random>
 #include <algorithm>
+#include <ranges>
 
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
@@ -33,25 +34,6 @@
 #include "db/hints/manager.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
-#include <boost/range/algorithm_ext/push_back.hpp>
-#include <boost/iterator/counting_iterator.hpp>
-#include <boost/range/adaptors.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/none_of.hpp>
-#include <boost/algorithm/cxx11/partition_copy.hpp>
-#include <boost/range/algorithm/count_if.hpp>
-#include <boost/range/algorithm/find.hpp>
-#include <boost/range/algorithm/find_if.hpp>
-#include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/remove.hpp>
-#include <boost/range/algorithm/heap_algorithm.hpp>
-#include <boost/range/numeric.hpp>
-#include <boost/range/empty.hpp>
-#include <boost/range/algorithm/min_element.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/combine.hpp>
-#include <boost/range/algorithm/transform.hpp>
-#include <boost/range/algorithm/partition.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
 #include "utils/assert.hh"
@@ -1528,7 +1510,7 @@ public:
     }
     // return true on last ack
     bool response(gms::inet_address from) {
-        auto it = boost::find(_targets, from);
+        auto it = std::ranges::find(_targets, from);
         if (it != _targets.end()) {
             signal(from);
             using std::swap;
@@ -1542,7 +1524,7 @@ public:
     // return true if handler is no longer needed because
     // CL cannot be reached
     bool failure_response(gms::inet_address from, size_t count, error err, std::optional<sstring> msg) {
-        if (boost::find(_targets, from) == _targets.end()) {
+        if (std::ranges::find(_targets, from) == _targets.end()) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
             // getting reply back. The chance is low though since initial
@@ -1604,8 +1586,8 @@ public:
         _proxy->remove_response_handler(_id);
     }
     db::view::update_backlog max_backlog() {
-        return boost::accumulate(
-                get_targets() | boost::adaptors::transformed([this] (gms::inet_address ep) {
+        return std::ranges::fold_left(
+                get_targets() | std::views::transform([this] (gms::inet_address ep) {
                     return _proxy->get_backlog_of(ep);
                 }),
                 db::view::update_backlog::no_backlog(),
@@ -1742,7 +1724,7 @@ public:
         _live_iterators.push_back(itp);
     }
     void unregister_live_iterator(iterator* itp) {
-        _live_iterators.erase(boost::remove(_live_iterators, itp), _live_iterators.end());
+        _live_iterators.erase(std::ranges::remove(_live_iterators, itp).begin(), _live_iterators.end());
     }
     void update_live_iterators(abstract_write_response_handler* handler) {
         // handler is being removed from the b::list, so if any live iterator points at it,
@@ -1816,10 +1798,10 @@ public:
             auto dc = topology.get_datacenter(target);
 
             if (!_dc_responses.contains(dc)) {
-                auto pending_for_dc = boost::range::count_if(pending_endpoints, [&topology, &dc] (const gms::inet_address& ep){
+                auto pending_for_dc = std::ranges::count_if(pending_endpoints, [&topology, &dc] (const gms::inet_address& ep){
                     return topology.get_datacenter(ep) == dc;
                 });
-                size_t total_endpoints_for_dc = boost::range::count_if(targets, [&topology, &dc] (const gms::inet_address& ep){
+                size_t total_endpoints_for_dc = std::ranges::count_if(targets, [&topology, &dc] (const gms::inet_address& ep){
                     return topology.get_datacenter(ep) == dc;
                 });
                 _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(*erm, dc) + pending_for_dc, total_endpoints_for_dc, 0});
@@ -2385,7 +2367,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
 
 bool paxos_response_handler::learned(gms::inet_address ep) {
     if (_learned < _required_participants) {
-        if (boost::range::find(_live_endpoints, ep) != _live_endpoints.end()) {
+        if (std::ranges::find(_live_endpoints, ep) != _live_endpoints.end()) {
             _learned++;
             return _learned == _required_participants;
         }
@@ -3263,13 +3245,14 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     }
 
     // filter out natural_endpoints from pending_endpoints if the latter is not yet updated during node join
-    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
-        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
-    });
+    auto itend = std::ranges::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
+        return std::ranges::find(natural_endpoints, p) != natural_endpoints.end();
+    }).begin();
     pending_endpoints.erase(itend, pending_endpoints.end());
 
-    auto all = boost::range::join(natural_endpoints, pending_endpoints);
-    auto all_hids = all | boost::adaptors::transformed([&erm] (const gms::inet_address& ep) {
+    auto all = natural_endpoints;
+    std::ranges::copy(pending_endpoints, std::back_inserter(all));
+    auto all_hids = all | std::views::transform([&erm] (const gms::inet_address& ep) {
         const auto& tm = erm->get_token_metadata();
         const auto maybe_host_id = tm.get_host_id_if_known(ep);
         if (maybe_host_id) {
@@ -3352,7 +3335,7 @@ storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db
     inet_address_vector_replica_set endpoints;
     const auto& m = mut.value;
     endpoints.reserve(m.size());
-    boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
+    std::ranges::copy(m | std::views::keys, std::inserter(endpoints, endpoints.begin()));
     auto mh = std::make_unique<per_destination_mutation>(m);
 
     slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
@@ -3452,7 +3435,7 @@ future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mut
 
 template<typename Range>
 future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, std::move(permit), [this, tr_state = std::move(tr_state), allow_limit] (const typename std::decay_t<Range>::value_type& m, db::consistency_level cl, db::write_type type, service_permit permit) mutable {
+    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, std::move(permit), [this, tr_state = std::move(tr_state), allow_limit] (const std::ranges::range_value_t<Range>& m, db::consistency_level cl, db::write_type type, service_permit permit) mutable {
         return create_write_response_handler(m, cl, type, tr_state, std::move(permit), allow_limit);
     });
 }
@@ -3548,12 +3531,13 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
     const auto my_address = this->my_address();
     // Early return if coordinator can become the leader (so one extra internode message can be
     // avoided). With token-aware drivers this is the expected case, so we are doing it ASAP.
-    if (boost::algorithm::any_of_equal(live_endpoints, my_address)) {
+    if (std::ranges::contains(live_endpoints, my_address)) {
         return my_address;
     }
 
-    const auto local_endpoints = boost::copy_range<inet_address_vector_replica_set>(live_endpoints
-        | boost::adaptors::filtered(erm.get_topology().get_local_dc_filter()));
+    const auto local_endpoints = live_endpoints
+        | std::views::filter(erm.get_topology().get_local_dc_filter())
+        | std::ranges::to<inet_address_vector_replica_set>();
 
     if (local_endpoints.empty()) {
         // FIXME: O(n log n) to get maximum
@@ -3568,7 +3552,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 
 template<typename Range>
 future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout) {
-    if (boost::empty(mutations)) {
+    if (std::ranges::empty(mutations)) {
         co_return;
     }
 
@@ -3610,9 +3594,11 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             co_await apply_fence(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
-            auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
+            auto fms = mutations
+                    | std::views::transform([] (auto& m) {
                 return std::move(m.fm);
-            }));
+            })
+                    | std::ranges::to<std::vector<frozen_mutation>>();
 
             // Coordinator is preferred as the leader - if it's not selected we can assume
             // that the query was non-token-aware and bump relevant metric.
@@ -3660,17 +3646,17 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
         auto local_dc_filter = erm.get_topology().get_local_dc_filter();
-        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter)));
+        auto itend = std::ranges::remove_if(natural_endpoints, std::not_fn(std::cref(local_dc_filter))).begin();
         natural_endpoints.erase(itend, natural_endpoints.end());
-        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter)));
+        itend = std::ranges::remove_if(pending_endpoints, std::not_fn(std::cref(local_dc_filter))).begin();
         pending_endpoints.erase(itend, pending_endpoints.end());
     }
 
     // filter out natural_endpoints from pending_endpoints if the latter is not yet updated during node join
     // should never happen, but better to be safe
-    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
-        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
-    });
+    auto itend = std::ranges::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
+        return std::ranges::find(natural_endpoints, p) != natural_endpoints.end();
+    }).begin();
     pending_endpoints.erase(itend, pending_endpoints.end());
 
     const size_t participants = pending_endpoints.size() + natural_endpoints.size();
@@ -3680,8 +3666,9 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
     inet_address_vector_replica_set live_endpoints;
     live_endpoints.reserve(participants);
 
-    boost::copy(boost::range::join(natural_endpoints, pending_endpoints) |
-            boost::adaptors::filtered(std::bind_front(&storage_proxy::is_alive, this)), std::back_inserter(live_endpoints));
+    auto all_as_spans = std::array{std::span(natural_endpoints), std::span(pending_endpoints)};
+    std::ranges::copy(all_as_spans | std::views::join |
+            std::views::filter(std::bind_front(&storage_proxy::is_alive, this)), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -3734,12 +3721,12 @@ future<result<>> storage_proxy::mutate_result(std::vector<mutation> mutations, d
 }
 
 future<result<>> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
-    auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
+    auto mid = raw_counters ? mutations.begin() : std::ranges::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
-    });
+    }).begin();
     return seastar::when_all_succeed(
-        mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, permit, timeout),
-        mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker), allow_limit)
+        mutate_counters(std::ranges::subrange(mutations.begin(), mid), cl, tr_state, permit, timeout),
+        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker), allow_limit)
     ).then([] (std::tuple<result<>> res) {
         // For now, only mutate_internal returns a result<>
         return std::get<0>(std::move(res));
@@ -3763,7 +3750,7 @@ future<result<>>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state, service_permit permit,
                                std::optional<clock_type::time_point> timeout_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker,
                                db::allow_per_partition_rate_limit allow_limit) {
-    if (boost::empty(mutations)) {
+    if (std::ranges::empty(mutations)) {
         return make_ready_future<result<>>(bo::success());
     }
 
@@ -3820,7 +3807,7 @@ static inet_address_vector_replica_set endpoint_filter(
         const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return boost::copy_range<inet_address_vector_replica_set>(endpoints.begin()->second);
+        return endpoints.begin()->second | std::ranges::to<inet_address_vector_replica_set>();
     }
 
     // strip out dead endpoints and localhost
@@ -3841,7 +3828,7 @@ static inet_address_vector_replica_set endpoint_filter(
     typedef inet_address_vector_replica_set return_type;
 
     if (validated.size() <= 2) {
-        return boost::copy_range<return_type>(validated | boost::adaptors::map_values);
+        return validated | std::views::values | std::ranges::to<return_type>();
     }
 
     if (validated.size() - validated.count(local_rack) >= 2) {
@@ -3851,18 +3838,19 @@ static inet_address_vector_replica_set endpoint_filter(
 
     if (validated.bucket_count() == 1) {
         // we have only 1 `other` rack
-        auto res = validated | boost::adaptors::map_values;
+        auto res = validated | std::views::values;
         if (validated.size() > 2) {
-            return boost::copy_range<return_type>(
-                    boost::copy_range<std::vector<gms::inet_address>>(res)
-                            | boost::adaptors::sliced(0, 2));
+            return
+                    res | std::ranges::to<std::vector<gms::inet_address>>()
+                            | std::views::take(2)
+                            | std::ranges::to<return_type>();
         }
-        return boost::copy_range<return_type>(res);
+        return res | std::ranges::to<return_type>();
     }
 
     // randomize which racks we pick from if more than 2 remaining
 
-    std::vector<sstring> racks = boost::copy_range<std::vector<sstring>>(validated | boost::adaptors::map_keys);
+    std::vector<sstring> racks = validated | std::views::keys | std::ranges::to<std::vector<sstring>>();
 
     static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
 
@@ -3875,7 +3863,8 @@ static inet_address_vector_replica_set endpoint_filter(
 
     // grab a random member of up to two racks
     for (auto& rack : racks) {
-        auto cpy = boost::copy_range<std::vector<gms::inet_address>>(validated.equal_range(rack) | boost::adaptors::map_values);
+        auto this_rack = validated.equal_range(rack);
+        auto cpy = std::ranges::subrange(this_rack.first, this_rack.second) | std::views::values | std::ranges::to<std::vector<gms::inet_address>>();
         std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
         result.emplace_back(cpy[rdist(rnd_engine)]);
     }
@@ -4041,7 +4030,7 @@ bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const
     return hints_enabled(type) &&
             _hints_manager.started() && // If the manager hasn't started yet, no mutation will be performed to another node.
                                         // No hint will need to be stored.
-            boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
+            std::ranges::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -4072,8 +4061,8 @@ future<> storage_proxy::send_to_endpoint(
         inet_address_vector_replica_set targets;
         targets.reserve(pending_endpoints.size() + 1);
         inet_address_vector_topology_change dead_endpoints;
-        boost::algorithm::partition_copy(
-                boost::range::join(pending_endpoints, target),
+        std::ranges::partition_copy(
+                std::array{std::span(pending_endpoints), std::span(target.begin(), target.end())} | std::views::join,
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
                 std::bind_front(&storage_proxy::is_alive, this));
@@ -4225,7 +4214,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         local.emplace_back("", handler.get_targets());
     }
 
-    auto all = boost::range::join(local, dc_groups);
+    using dc_and_address = std::pair<const sstring, inet_address_vector_replica_set>;
+    auto all = utils::small_vector<dc_and_address*, 10>();
+    all.reserve(local.size() + dc_groups.size());
+    std::ranges::copy(local | std::views::transform([] (auto& x) { return &x; }), std::back_inserter(all));
+    std::ranges::copy(dc_groups | std::views::transform([] (auto& x) { return &x; }), std::back_inserter(all));
+
     auto my_address = this->my_address();
 
     // lambda for applying mutation locally
@@ -4251,7 +4245,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // OK, now send and/or apply locally
-    for (typename decltype(dc_groups)::value_type& dc_targets : all) {
+    for (typename decltype(dc_groups)::value_type& dc_targets : all | std::views::transform([](dc_and_address* p) -> dc_and_address& { return *p; })) {
         auto& forward = dc_targets.second;
         // last one in forward list is a coordinator
         auto coordinator = forward.back();
@@ -4313,7 +4307,7 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
 {
     if (hints_enabled(type)) {
         db::hints::manager& hints_manager = hints_manager_for(type);
-        return boost::count_if(targets, [&mh, ermptr, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
+        return std::ranges::count_if(targets, [&mh, ermptr, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
             return mh->store_hint(hints_manager, target, ermptr, tr_state);
         });
     } else {
@@ -4326,7 +4320,7 @@ future<result<>> storage_proxy::schedule_repair(locator::effective_replication_m
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
-    return mutate_internal(diffs | boost::adaptors::map_values | boost::adaptors::transformed([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }), cl, false, std::move(trace_state), std::move(permit));
+    return mutate_internal(diffs | std::views::values | std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }), cl, false, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
@@ -4642,7 +4636,7 @@ private:
     }
 
     void register_live_count(const std::vector<version>& replica_versions, uint64_t reconciled_live_rows, uint64_t limit) {
-        bool any_not_at_end = boost::algorithm::any_of(replica_versions, [] (const version& v) {
+        bool any_not_at_end = std::ranges::any_of(replica_versions, [] (const version& v) {
             return !v.reached_partition_end;
         });
         if (any_not_at_end && reconciled_live_rows < limit && limit - reconciled_live_rows > _short_read_diff) {
@@ -4658,7 +4652,7 @@ private:
         auto partitions_left = partition_limit;
         auto rows_left = row_limit;
         auto pv = versions.rbegin();
-        for (auto&& m_a_rc : rp | boost::adaptors::reversed) {
+        for (auto&& m_a_rc : rp | std::views::reverse) {
             auto row_count = m_a_rc.live_row_count;
             if (row_count < rows_left && partitions_left) {
                 rows_left -= row_count;
@@ -4783,7 +4777,7 @@ private:
 
             // Update total live count and live partition count
             _live_partition_count = 0;
-            _total_live_count = boost::accumulate(rp, uint64_t(0), [this] (uint64_t lc, const mutation_and_live_row_count& m_a_rc) {
+            _total_live_count = std::ranges::fold_left(rp, uint64_t(0), [this] (uint64_t lc, const mutation_and_live_row_count& m_a_rc) {
                 _live_partition_count += !!m_a_rc.live_row_count;
                 return lc + m_a_rc.live_row_count;
             });
@@ -4809,7 +4803,7 @@ private:
         auto rows_left = original_row_limit;
         auto partitions_left = original_partition_limit;
         auto pv = versions.rbegin();
-        for (auto&& m_a_rc : rp | boost::adaptors::reversed) {
+        for (auto&& m_a_rc : rp | std::views::reverse) {
             auto row_count = m_a_rc.live_row_count;
             if (row_count < rows_left && partitions_left > !!row_count) {
                 rows_left -= row_count;
@@ -4914,7 +4908,7 @@ public:
             _is_short_read = _is_short_read || r.result->is_short_read();
             r.reached_end = !r.result->is_short_read() && r.result->row_count() < cmd.get_row_limit()
                             && (cmd.partition_limit == query::max_partitions
-                                || boost::range::count_if(r.result->partitions(), [] (const partition& p) {
+                                || std::ranges::count_if(r.result->partitions(), [] (const partition& p) {
                                     return p.row_count();
                                 }) < cmd.partition_limit);
             _all_reached_end = _all_reached_end && r.reached_end;
@@ -4950,7 +4944,7 @@ public:
 
         // reconcile all versions
         for (std::vector<version>& v : versions) {
-            auto it = boost::range::find_if(v, [] (auto&& ver) {
+            auto it = std::ranges::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
             auto m = mutation(schema, it->par->mut().key());
@@ -4972,9 +4966,9 @@ public:
         bool has_diff = false;
 
         // calculate differences
-        for (auto z : boost::combine(versions, reconciled_partitions)) {
-            const mutation& m = z.get<1>().mut;
-            for (const version& v : z.get<0>()) {
+        for (auto z : std::views::zip(versions, reconciled_partitions)) {
+            const mutation& m = std::get<1>(z).mut;
+            for (const version& v : std::get<0>(z)) {
                 auto diff = v.par
                           ? m.partition().difference(*schema, (co_await unfreeze_gently(v.par->mut(), schema)).partition())
                           : mutation_partition(*schema, m.partition());
@@ -5004,7 +4998,7 @@ public:
             }
             // filter out partitions with empty diffs
             for (auto it = _diffs.begin(); it != _diffs.end();) {
-                if (boost::algorithm::none_of(it->second | boost::adaptors::map_values, std::mem_fn(&std::optional<mutation>::operator bool))) {
+                if (std::ranges::none_of(it->second | std::views::values, std::mem_fn(&std::optional<mutation>::operator bool))) {
                     it = _diffs.erase(it);
                 } else {
                     ++it;
@@ -5169,7 +5163,7 @@ protected:
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const gms::inet_address& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
@@ -5195,7 +5189,7 @@ protected:
     }
     void make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const gms::inet_address& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
@@ -5222,7 +5216,7 @@ protected:
     }
     void make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
-        for (const gms::inet_address& ep : boost::make_iterator_range(begin, end)) {
+        for (const gms::inet_address& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
             (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
                 std::exception_ptr ex;
@@ -5451,7 +5445,7 @@ public:
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less than write_timeout ms ago do only local repair
                             auto local_dc_filter = exec->_effective_replication_map_ptr->get_topology().get_local_dc_filter();
-                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter)));
+                            auto i = std::ranges::remove_if(exec->_targets, std::not_fn(std::cref(local_dc_filter))).begin();
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
@@ -6020,7 +6014,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                             if (range.empty()) {
                                 on_internal_error(slogger, "empty range passed to `find_min`");
                             }
-                            return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
+                            return std::ranges::min(range | std::views::transform(ep_to_hr));
                         };
                         auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
                         if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
@@ -6530,7 +6524,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
 inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
     inet_address_vector_replica_set eps = erm.get_natural_endpoints_without_node_being_replaced(token);
-    auto itend = boost::range::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+    auto itend = std::ranges::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive, this))).begin();
     eps.erase(itend, eps.end());
     return eps;
 }
@@ -6538,7 +6532,7 @@ inet_address_vector_replica_set storage_proxy::get_live_endpoints(const locator:
 void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const {
     topo.sort_by_proximity(my_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
-    auto it = boost::range::find(eps, my_address());
+    auto it = std::ranges::find(eps, my_address());
     if (it != eps.end() && it != eps.begin()) {
         std::iter_swap(it, eps.begin());
     }
@@ -6547,7 +6541,7 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
     auto endpoints = erm.get_endpoints_for_reading(token);
     validate_read_replicas(erm, endpoints);
-    auto it = boost::range::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+    auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this))).begin();
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm.get_topology(), endpoints);
     return endpoints;
@@ -6828,7 +6822,7 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
 void storage_proxy::on_down(const gms::inet_address& endpoint) {
     return cancel_write_handlers([endpoint] (const abstract_write_response_handler& handler) {
         const auto& targets = handler.get_targets();
-        return boost::find(targets, endpoint) != targets.end();
+        return std::ranges::find(targets, endpoint) != targets.end();
     });
 };
 
