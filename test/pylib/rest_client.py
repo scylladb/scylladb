@@ -128,7 +128,7 @@ class UnixRESTClient(RESTClient):
     def __init__(self, sock_path: str):
         # NOTE: using Python requests style URI for Unix domain sockets to avoid using "localhost"
         #       host parameter is ignored but set to socket name as convention
-        self.uri_scheme: str = "http+unix"
+        self.uri_scheme: str = "http"
         self.default_host: str = f"{os.path.basename(sock_path)}"
         self.connector = UnixConnector(path=sock_path)
 
