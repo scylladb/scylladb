@@ -14,6 +14,7 @@
 #include <cstring>
 #include <new>
 #include <utility>
+#include <ranges>
 #include <algorithm>
 #include <initializer_list>
 #include <memory>
@@ -141,6 +142,19 @@ public:
             _end = std::uninitialized_copy(first, last, _end);
         } else {
             std::copy(first, last, std::back_inserter(*this));
+        }
+    }
+
+    // This constructor supports converting ranges to small vectors via
+    // std::range::to<utils::small_vector<T, N>>().
+    small_vector(std::from_range_t, std::ranges::range auto&& range) : small_vector() {
+        using Range = decltype(range);
+        if constexpr (std::ranges::sized_range<Range> || std::ranges::forward_range<Range>) {
+            auto n = std::ranges::distance(range);
+            reserve(n);
+            _end = std::ranges::uninitialized_copy(range, std::ranges::subrange(_end, _end + n)).out;
+        } else {
+            std::ranges::copy(range, std::back_inserter(*this));
         }
     }
 
