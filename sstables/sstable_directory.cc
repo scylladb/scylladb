@@ -55,9 +55,9 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, sstring location)
+sstable_directory::sstables_registry_components_lister::sstables_registry_components_lister(sstables::sstables_registry& sstables_registry, table_id owner)
         : _sstables_registry(sstables_registry)
-        , _location(std::move(location))
+        , _owner(std::move(owner))
 {
 }
 
@@ -77,15 +77,20 @@ sstable_directory::make_components_lister() {
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
         [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            if (os.prefix.empty()) {
-                on_internal_error(dirlog, "S3 storage options is missing 'prefix'");
-            }
-            if (_state == sstable_state::upload) {
-                // Sstables in this state are not tracked in registry, so the only way to
-                // collect and process them is by listing the bucket
-                return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(os.prefix), _manager, os);
-            }
-            return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), os.prefix);
+            return std::visit(overloaded_functor {
+                [this, &os] (const sstring& prefix) -> std::unique_ptr<sstable_directory::components_lister> {
+                    if (prefix.empty()) {
+                        on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+                    }
+                    return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(prefix), _manager, os);
+                },
+                [this] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
+                    if (owner.id.is_null()) {
+                        on_internal_error(sstlog, "S3 storage options is missing 'owner'");
+                    }
+                    return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner);
+                }
+            }, os.location);
         }
     }, _storage_opts->value);
 }
@@ -415,20 +420,20 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 }
 
 future<> sstable_directory::sstables_registry_components_lister::process(sstable_directory& directory, process_flags flags) {
-    dirlog.debug("Start processing registry entry {} (state {})", _location, directory._state);
-    return _sstables_registry.sstables_registry_list(_location, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
+    dirlog.debug("Start processing registry entry {} (state {})", _owner, directory._state);
+    return _sstables_registry.sstables_registry_list(_owner, [this, flags, &directory] (sstring status, sstable_state state, entry_descriptor desc) {
         if (state != directory._state) {
             return make_ready_future<>();
         }
         if (status != "sealed") {
-            dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _location);
+            dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _owner);
             return make_ready_future<>();
         }
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
             return make_ready_future<>();
         }
 
-        dirlog.debug("Processing {} entry from {}", desc.generation, _location);
+        dirlog.debug("Processing {} entry from {}", desc.generation, _owner);
         return directory.process_descriptor(std::move(desc), flags,
                                             [&directory] { return *directory._storage_opts; });
     });
@@ -472,7 +477,7 @@ future<> sstable_directory::restore_components_lister::commit() {
 
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     std::set<generation_type> gens_to_remove;
-    co_await _sstables_registry.sstables_registry_list(_location, coroutine::lambda([&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+    co_await _sstables_registry.sstables_registry_list(_owner, coroutine::lambda([&st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
         if (status == "sealed") {
             co_return;
         }
@@ -482,7 +487,7 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
         co_await st.remove_by_registry_entry(std::move(desc));
     }));
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
-        co_await _sstables_registry.delete_entry(_location, gen);
+        co_await _sstables_registry.delete_entry(_owner, gen);
     });
 }
 

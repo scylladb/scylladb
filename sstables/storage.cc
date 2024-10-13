@@ -506,7 +506,7 @@ future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
 class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
-    sstring _location;
+    std::variant<sstring, table_id> _location;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
@@ -514,11 +514,18 @@ class s3_storage : public sstables::storage {
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
+    table_id owner() const {
+        if (std::holds_alternative<sstring>(_location)) {
+            on_internal_error(sstlog, format("Storage holds {} prefix, but registry owner is expected", std::get<sstring>(_location)));
+        }
+        return std::get<table_id>(_location);
+    }
+
 public:
-    s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
+    s3_storage(shared_ptr<s3::client> client, sstring bucket, std::variant<sstring, table_id> loc)
         : _client(std::move(client))
         , _bucket(std::move(bucket))
-        , _location(std::move(dir))
+        , _location(std::move(loc))
     {
     }
 
@@ -542,22 +549,27 @@ public:
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
 
-    virtual sstring prefix() const override { return _location; }
+    virtual sstring prefix() const override { return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); }
 };
 
 sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) const {
     if (!sst.generation().is_uuid_based()) {
         throw std::runtime_error("'S3' STORAGE only works with uuid_sstable_identifier enabled");
     }
-    if (sst.is_uploaded()) {
-        return format("/{}/{}", _bucket, sst.filename(type));
-    }
-    return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+
+    return std::visit(overloaded_functor {
+        [&] (const sstring& prefix) -> sstring {
+            return format("/{}/{}", _bucket, sst.filename(type, prefix));
+        },
+        [&] (const table_id& owner) -> sstring {
+            return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+        }
+    }, _location);
 }
 
 void s3_storage::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().sstables_registry().create_entry(_location, status_creating, sst._state, std::move(desc)).get();
+    sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
     sst.write_toc(
@@ -587,7 +599,7 @@ future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type t
 }
 
 future<> s3_storage::seal(const sstable& sst) {
-    co_await sst.manager().sstables_registry().update_entry_status(_location, sst.generation(), status_sealed);
+    co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.generation(), status_sealed);
 }
 
 future<> s3_storage::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
@@ -597,19 +609,19 @@ future<> s3_storage::change_state(const sstable& sst, sstable_state state, gener
         // is moved from upload directory and this is another issue for S3 (#13018)
         co_await coroutine::return_exception(std::runtime_error("Cannot change state and generation of an S3 object"));
     }
-    co_await sst.manager().sstables_registry().update_entry_state(_location, sst.generation(), state);
+    co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.generation(), state);
 }
 
 future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sstables_registry = sst.manager().sstables_registry();
 
-    co_await sstables_registry.update_entry_status(_location, sst.generation(), status_removing);
+    co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing);
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await _client->delete_object(make_s3_object_name(sst, type));
     });
 
-    co_await sstables_registry.delete_entry(_location, sst.generation());
+    co_await sstables_registry.delete_entry(owner(), sst.generation());
 }
 
 future<atomic_delete_context> s3_storage::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
@@ -658,10 +670,13 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
         [&manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
-            if (os.prefix.empty()) {
-                on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+            if (std::visit(overloaded_functor {
+                        [] (const sstring& prefix) { return prefix.empty(); },
+                        [] (const table_id& owner) { return owner.id.is_null(); }
+                    }, os.location)) {
+                on_internal_error(sstlog, "S3 storage options is missing 'location'");
             }
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.prefix);
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location);
         }
     }, s_opts.value);
 }
@@ -690,7 +705,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
     nopts.value = data_dictionary::storage_options::s3 {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
-        .prefix = format("{}/{}/{}", mgr.config().data_file_directories()[0], s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id())),
+        .location = s.id(),
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }

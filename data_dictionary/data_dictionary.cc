@@ -363,7 +363,9 @@ storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
     SCYLLA_ASSERT(!is_local_type());
     storage_options ret = *this;
     s3 s3_options = std::get<s3>(value);
-    s3_options.prefix += s;
+    SCYLLA_ASSERT(std::holds_alternative<sstring>(s3_options.location));
+    sstring prefix = std::get<sstring>(s3_options.location);
+    s3_options.location = prefix + s;
     ret.value = std::move(s3_options);
     return ret;
 }
@@ -458,7 +460,14 @@ auto fmt::formatter<data_dictionary::storage_options>::format(const data_diction
             return fmt::format_to(ctx.out(), "{}", so.dir);
         },
         [&ctx] (const data_dictionary::storage_options::s3& so) -> decltype(ctx.out()) {
-            return fmt::format_to(ctx.out(), "s3://{}/{}", so.bucket, so.prefix);
+            return std::visit(overloaded_functor {
+                [&ctx, &so] (const sstring& prefix) -> decltype(ctx.out()) {
+                    return fmt::format_to(ctx.out(), "s3://{}/{}", so.bucket, prefix);
+                },
+                [&ctx, &so] (const table_id& owner) -> decltype(ctx.out()) {
+                    return fmt::format_to(ctx.out(), "s3://{} (owner {})", so.bucket, owner);
+                }
+            }, so.location);
         }
     }, so.value);
 }
