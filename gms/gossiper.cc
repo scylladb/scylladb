@@ -1534,7 +1534,8 @@ const endpoint_state& gossiper::get_endpoint_state(inet_address ep) const {
     return *it->second;
 }
 
-endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {
+endpoint_state& gossiper::my_endpoint_state() {
+    auto ep = get_broadcast_address();
     auto it = _endpoint_state_map.find(ep);
     if (it == _endpoint_state_map.end()) {
         it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr({})).first;
