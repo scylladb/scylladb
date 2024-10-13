@@ -238,16 +238,14 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 }
 
 future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
-    return futurize_invoke([this, from, syn_msg = std::move(syn_msg)] () mutable {
-        auto g_digest_list = syn_msg.get_gossip_digests();
-        do_sort(g_digest_list);
-        utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
-        std::map<inet_address, endpoint_state> delta_ep_state_map;
-        this->examine_gossiper(g_digest_list, delta_gossip_digest_list, delta_ep_state_map);
-        gms::gossip_digest_ack ack_msg(std::move(delta_gossip_digest_list), std::move(delta_ep_state_map));
-        logger.debug("Calling do_send_ack_msg to node {}, syn_msg={}, ack_msg={}", from, syn_msg, ack_msg);
-        return ser::gossip_rpc_verbs::send_gossip_digest_ack(&_messaging, from, std::move(ack_msg));
-    });
+    auto g_digest_list = syn_msg.get_gossip_digests();
+    do_sort(g_digest_list);
+    utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
+    std::map<inet_address, endpoint_state> delta_ep_state_map;
+    examine_gossiper(g_digest_list, delta_gossip_digest_list, delta_ep_state_map);
+    gms::gossip_digest_ack ack_msg(std::move(delta_gossip_digest_list), std::move(delta_ep_state_map));
+    logger.debug("Calling do_send_ack_msg to node {}, syn_msg={}, ack_msg={}", from, syn_msg, ack_msg);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack(&_messaging, from, std::move(ack_msg));
 }
 
 static bool should_count_as_msg_processing(const std::map<inet_address, endpoint_state>& map) {
