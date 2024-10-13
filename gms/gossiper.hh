@@ -654,6 +654,7 @@ public:
 public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
+    bool is_shutdown(const endpoint_state& eps) const;
     bool is_normal(const inet_address& endpoint) const;
     bool is_left(const inet_address& endpoint) const;
     // Check if a node is in NORMAL or SHUTDOWN status which means the node is

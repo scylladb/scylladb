@@ -1857,17 +1857,15 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
         mark_alive(ep);
     } else {
         logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
-        co_await mark_dead(ep, std::move(ep_state), pid);
+        co_await mark_dead(ep, ep_state, pid);
     }
 
-    auto eps_new = get_endpoint_state_ptr(ep);
-    if (eps_new) {
-        co_await _subscribers.for_each([ep, eps_new, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            return subscriber->on_join(ep, eps_new, pid);
-        });
-    }
+    co_await _subscribers.for_each([ep, ep_state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        return subscriber->on_join(ep, ep_state, pid);
+    });
+
     // check this at the end so nodes will learn about the endpoint
-    if (is_shutdown(ep)) {
+    if (is_shutdown(*ep_state)) {
         co_await mark_as_shutdown(ep, pid);
     }
 }
@@ -1878,6 +1876,10 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
 
 bool gossiper::is_shutdown(const inet_address& endpoint) const {
     return get_gossip_status(endpoint) == versioned_value::SHUTDOWN;
+}
+
+bool gossiper::is_shutdown(const endpoint_state& eps) const {
+    return get_gossip_status(eps) == versioned_value::SHUTDOWN;
 }
 
 bool gossiper::is_normal(const inet_address& endpoint) const {
