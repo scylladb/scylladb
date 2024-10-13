@@ -427,12 +427,10 @@ time_window_compaction_strategy::get_compaction_candidates(table_state& table_s,
 timestamp_type
 time_window_compaction_strategy::get_window_lower_bound(std::chrono::seconds sstable_window_size, timestamp_type timestamp) {
     using namespace std::chrono;
-    auto timestamp_in_sec = duration_cast<seconds>(microseconds(timestamp)).count();
-
     // mask out window size from timestamp to get lower bound of its window
-    auto window_lower_bound_in_sec = seconds(timestamp_in_sec - (timestamp_in_sec % sstable_window_size.count()));
+    auto num_windows = microseconds(timestamp) / sstable_window_size;
 
-    return timestamp_type(duration_cast<microseconds>(window_lower_bound_in_sec).count());
+    return duration_cast<microseconds>(num_windows * sstable_window_size).count();
 }
 
 std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
