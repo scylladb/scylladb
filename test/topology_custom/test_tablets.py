@@ -8,6 +8,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.util import unique_name
 from test.topology.conftest import skip_mode
 from test.topology.util import wait_for_cql_and_get_hosts
 from contextlib import nullcontext as does_not_raise
@@ -416,3 +417,20 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     await cql.run_async(f"CREATE KEYSPACE test_n WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} AND TABLETS = {{'enabled': false}};")
     res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test_n'").one()
     assert res is None
+
+@pytest.mark.asyncio
+async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
+    cfg = {"enable_tablets": True, "force_gossip_topology_changes": True}
+    with pytest.raises(Exception, match="Failed to add server"):
+        await manager.server_add(config=cfg)
+
+@pytest.mark.asyncio
+async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
+    cfg = {"enable_tablets": False, "force_gossip_topology_changes": True}
+    await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}};")
+    res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks_name}'").one()
+    logger.info(res)
+    await cql.run_async(f"DROP KEYSPACE {ks_name}")
