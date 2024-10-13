@@ -85,6 +85,8 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
     if (!cfg.enable_tablets()) {
         fcfg._disabled_features.insert("TABLETS"s);
+    } else if (cfg.force_gossip_topology_changes()) {
+        throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --enable-tablets or --force-gossip-topology-changes, not both.");
     }
     if (!cfg.uuid_sstable_identifiers_enabled()) {
         fcfg._disabled_features.insert("UUID_SSTABLE_IDENTIFIERS"s);

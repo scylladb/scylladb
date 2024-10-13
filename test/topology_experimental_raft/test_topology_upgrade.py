@@ -24,6 +24,7 @@ async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient
     # First, force the first node to start in legacy mode
     cfg = {
         'force_gossip_topology_changes': True,
+        'enable_tablets': False,
         'ring_delay_ms': 15000 if mode == 'debug' else 5000,
     }
 
