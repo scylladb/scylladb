@@ -32,7 +32,6 @@ private:
     application_state_map _application_state;
     /* fields below do not get serialized */
     clk::time_point _update_timestamp;
-    bool _is_normal = false;
 
 public:
     bool operator==(const endpoint_state& other) const {
@@ -45,14 +44,12 @@ public:
         : _heart_beat_state()
         , _update_timestamp(clk::now())
     {
-        update_is_normal();
     }
 
     endpoint_state(heart_beat_state initial_hb_state) noexcept
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(clk::now())
     {
-        update_is_normal();
     }
 
     endpoint_state(heart_beat_state&& initial_hb_state,
@@ -61,7 +58,6 @@ public:
         , _application_state(application_state)
         , _update_timestamp(clk::now())
     {
-        update_is_normal();
     }
 
     // Valid only on shard 0
@@ -95,12 +91,10 @@ public:
 
     void add_application_state(application_state key, versioned_value value) {
         _application_state[key] = std::move(value);
-        update_is_normal();
     }
 
     void add_application_state(const endpoint_state& es) {
         _application_state = es._application_state;
-        update_is_normal();
     }
 
     /* getters and setters */
@@ -131,18 +125,6 @@ public:
         const auto pos = value.find(',');
         // npos allowed (full value)
         return value.substr(0, pos);
-    }
-
-    bool is_shutdown() const noexcept {
-        return get_status() == versioned_value::SHUTDOWN;
-    }
-
-    bool is_normal() const noexcept {
-        return _is_normal;
-    }
-
-    void update_is_normal() noexcept {
-        _is_normal = get_status() == versioned_value::STATUS_NORMAL;
     }
 
     bool is_cql_ready() const noexcept;

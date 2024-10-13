@@ -1350,7 +1350,6 @@ future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) 
     // Use foreign_ptr<std::unique_ptr> to ensure destroy on remote shards on exception
     std::vector<foreign_ptr<endpoint_state_ptr>> ep_states;
     ep_states.resize(smp::count);
-    es.update_is_normal();
     auto p = make_foreign(make_endpoint_state_ptr(std::move(es)));
     const auto *eps = p.get();
     ep_states[this_shard_id()] = std::move(p);
