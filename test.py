@@ -243,6 +243,8 @@ class TestSuite(ABC):
                 await test.run(options)
                 if test.success or not test.is_flaky or test.is_cancelled:
                     break
+        except asyncio.CancelledError:
+            test.is_cancelled = True
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(test.failed)
@@ -1351,6 +1353,7 @@ def parse_cmd_line() -> argparse.Namespace:
         further segregated per build mode. Default: ./testlog.""",
     )
     parser.add_argument("--gather-metrics", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--max-failures", type=int, default=-1, help="Maximum number of failures to tolerate before cancelling rest of tests.")
     parser.add_argument('--mode', choices=all_modes.keys(), action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
@@ -1519,22 +1522,26 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     signaled_task = asyncio.create_task(signaled.wait())
     pending = {signaled_task}
 
-    async def cancel(pending):
+    async def cancel(pending, msg):
         for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        print("... done.")
-        raise asyncio.CancelledError
+            task.cancel(msg)
+        await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
+        print("...done")
 
     async def reap(done, pending, signaled):
         nonlocal console
         if signaled.is_set():
-            await cancel(pending)
+            await cancel(pending, "Signal received")
+        failed = 0
         for coro in done:
             result = coro.result()
             if isinstance(result, bool):
                 continue    # skip signaled task result
-            console.print_progress(result)
+            if not result.success:
+                failed += 1
+            if not result.did_not_run:
+                console.print_progress(result)
+        return failed
 
     ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
@@ -1547,6 +1554,8 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
 
     console.print_start_blurb()
+    max_failures = options.max_failures
+    failed = 0
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
@@ -1554,14 +1563,19 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             if len(pending) > options.jobs:
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                await reap(done, pending, signaled)
+                failed += await reap(done, pending, signaled)
+                if 0 < max_failures <= failed:
+                    print("Too much failures, stopping")
+                    await cancel(pending, "Too much failures, stopping")
             pending.add(asyncio.create_task(test.suite.run(test, options)))
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            await reap(done, pending, signaled)
-
+            failed += await reap(done, pending, signaled)
+            if 0 < max_failures <= failed:
+                print("Too much failures, stopping")
+                await cancel(pending, "Too much failures, stopping")
     except asyncio.CancelledError:
         return
     finally:
@@ -1582,7 +1596,7 @@ def read_log(log_filename: pathlib.Path) -> str:
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(failed_tests, options: argparse.Namespace) -> None:
+def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace) -> None:
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
@@ -1595,8 +1609,10 @@ def print_summary(failed_tests, options: argparse.Namespace) -> None:
             for test in failed_tests:
                 test.print_summary()
                 print("-"*78)
-        print("Summary: {} of the total {} tests failed".format(
-            len(failed_tests), TestSuite.test_count()))
+        if cancelled_tests > 0:
+            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed, {cancelled_tests} cancelled")
+        else:
+            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed")
 
 
 def format_unidiff(fromfile: str, tofile: str) -> str:
@@ -1628,6 +1644,7 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
     junit_filename = os.path.join(tmpdir, mode, "xml", "junit.xml")
     total = 0
     failed = 0
+    skipped = 0
     xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
     for suite in TestSuite.suites.values():
         for test in suite.junit_tests():
@@ -1642,10 +1659,13 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             if test.failed:
                 failed += 1
                 test.write_junit_failure_report(xml_res)
+            if test.did_not_run:
+                skipped += 1
     if total == 0:
         return
     xml_results.set("tests", str(total))
     xml_results.set("failures", str(failed))
+    xml_results.set("skipped", str(skipped))
     with open(junit_filename, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
@@ -1848,9 +1868,10 @@ async def main() -> int:
     if signaled.is_set():
         return -signaled.signo      # type: ignore
 
-    failed_tests = [t for t in TestSuite.all_tests() if t.success is not True]
+    failed_tests = [test for test in TestSuite.all_tests() if test.failed]
+    cancelled_tests = sum(1 for test in TestSuite.all_tests() if test.did_not_run)
 
-    print_summary(failed_tests, options)
+    print_summary(failed_tests, cancelled_tests, options)
 
     for mode in options.modes:
         junit_file = f"{options.tmpdir}/{mode}/allure/boost.junit.xml"
