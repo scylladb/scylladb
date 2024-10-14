@@ -295,7 +295,7 @@ class list_reader_selector : public reader_selector {
 
 public:
     explicit list_reader_selector(schema_ptr s, std::vector<mutation_reader> readers)
-        : reader_selector(s, dht::ring_position_view::min())
+        : reader_selector(s, dht::ring_position_view::min(), readers.size())
         , _readers(std::move(readers)) {
     }
 
