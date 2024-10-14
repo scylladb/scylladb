@@ -206,7 +206,7 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
     await manager.servers_add(2, config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
 
     cql = manager.get_cql()
-    await cql.run_async("create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}")
+    await cql.run_async("create keyspace if not exists ks with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}")
     # need to create a table to not change only the schema, but also tablets replicas
     await cql.run_async("create table ks.t (pk int primary key)")
     with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
