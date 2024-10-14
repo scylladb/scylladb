@@ -2252,6 +2252,7 @@ public:
                         throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
+                    lblogger.debug("Adding replica {} of candidate {} to skipped list with the viable targets {}", src, candidate, skip.viable_targets);
                     src_node_info.skipped_candidates.emplace_back(src, tablets, std::move(skip.viable_targets));
                 };
 
