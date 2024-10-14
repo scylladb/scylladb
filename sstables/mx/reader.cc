@@ -1768,6 +1768,8 @@ class mx_sstable_full_scan_reader : public mp_row_consumer_reader_mx {
     Consumer _consumer;
     std::unique_ptr<DataConsumeRowsContext> _context;
     read_monitor& _monitor;
+    integrity_check _integrity;
+    lw_shared_ptr<checksum> _checksum;
 public:
     mx_sstable_full_scan_reader(shared_sstable sst, schema_ptr schema,
              reader_permit permit,
@@ -1776,8 +1778,22 @@ public:
              integrity_check integrity)
         : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
-        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, integrity))
-        , _monitor(mon) {
+        , _monitor(mon)
+        , _integrity(integrity) {}
+private:
+    bool is_initialized() const {
+        return bool(_context);
+    }
+    future<> maybe_initialize() {
+        if (is_initialized()) {
+            co_return;
+        }
+        if (_integrity) {
+            // Caller must retain a reference to checksum component while in use by the stream.
+            _checksum = co_await _sst->read_checksum();
+            co_await _sst->read_digest();
+        }
+        _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity);
         _monitor.on_read_started(_context->reader_position());
     }
 public:
@@ -1794,6 +1810,9 @@ public:
     virtual future<> fill_buffer() override {
         if (_end_of_stream) {
             return make_ready_future<>();
+        }
+        if (!is_initialized()) {
+            return maybe_initialize().then([this] { return fill_buffer(); });
         }
         if (_context->eof()) {
             _end_of_stream = true;
