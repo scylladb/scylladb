@@ -11,6 +11,7 @@ import os
 import random
 import sys
 import asyncio
+
 import requests
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -216,7 +217,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # addition, it is possible just to start this server using another script - `start_s3_proxy.py` to run it locally to
 # provide proxy between tests and minio
 class S3ProxyServer:
-    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, logger=None):
+    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, seed: int, logger=None):
+        print(f'Setting minio proxy random seed to {seed}')
+        random.seed(seed)
         self.req_states = LRUCache(10000)
         handler = partial(InjectingHandler, self.req_states, logger, minio_uri, max_retries)
         self.server = ThreadingHTTPServer((host, port), handler)
