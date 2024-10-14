@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <ranges>
 #include "data_dictionary.hh"
 #include "cql3/description.hh"
 #include "impl.hh"
@@ -19,9 +20,6 @@
 #include <fmt/std.h>
 #include <ios>
 #include <ostream>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/algorithm/string/join.hpp>
 #include <array>
 #include "replica/database.hh"
 
@@ -258,16 +256,18 @@ void keyspace_metadata::remove_user_type(const user_type ut) {
 }
 
 std::vector<schema_ptr> keyspace_metadata::tables() const {
-    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([] (auto&& s) { return !s->is_view(); }));
+    return _cf_meta_data
+            | std::views::values
+            | std::views::filter([] (const auto& s) { return !s->is_view(); })
+            | std::ranges::to<std::vector<schema_ptr>>();
 }
 
 std::vector<view_ptr> keyspace_metadata::views() const {
-    return boost::copy_range<std::vector<view_ptr>>(_cf_meta_data
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered(std::mem_fn(&schema::is_view))
-            | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
+    return _cf_meta_data
+            | std::views::values
+            | std::views::filter([] (const auto& s) { return s->is_view(); })
+            | std::views::transform([] (auto& s) { return view_ptr(s); })
+            | std::ranges::to<std::vector<view_ptr>>();
 }
 
 storage_options::local storage_options::local::from_map(const std::map<sstring, sstring>& values) {
