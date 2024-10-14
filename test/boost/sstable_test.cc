@@ -404,20 +404,16 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         for (const auto& entry : std::filesystem::directory_iterator(uncompressed_dir().c_str())) {
             std::filesystem::copy(entry.path(), uncompressed_dir_copy / entry.path().filename());
         }
-        auto generation_dir = (uncompressed_dir_copy / sstables::staging_dir).native();
-        std::filesystem::create_directories(generation_dir);
 
         auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
-        test::create_links(*sstp, generation_dir).get();
-        auto file_path = sstable::filename(generation_dir, "ks", "cf", la, generation_from_value(1), big, component_type::Data);
+        auto file_path = sstable::filename(uncompressed_dir_copy.native(), "ks", "cf", la, generation_from_value(1), big, component_type::Data);
         auto exists = file_exists(file_path).get();
         BOOST_REQUIRE(exists);
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get();
         // mutate_sstable_level results in statistics rewrite
         sstp->mutate_sstable_level(10).get();
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get();
+        sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
