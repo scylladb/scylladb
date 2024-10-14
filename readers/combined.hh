@@ -20,8 +20,10 @@ class reader_selector {
 protected:
     schema_ptr _s;
     dht::ring_position_view _selector_position;
+    size_t _max_reader_count;
 public:
-    reader_selector(schema_ptr s, dht::ring_position_view rpv) noexcept : _s(std::move(s)), _selector_position(std::move(rpv)) {}
+    reader_selector(schema_ptr s, dht::ring_position_view rpv, size_t max_reader_count) noexcept
+    : _s(std::move(s)), _selector_position(std::move(rpv)), _max_reader_count(max_reader_count) {}
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
@@ -32,6 +34,10 @@ public:
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
         dht::ring_position_comparator cmp(*_s);
         return !_selector_position.is_max() && (!pos || cmp(*pos, _selector_position) >= 0);
+    }
+
+    size_t max_reader_count() const {
+        return _max_reader_count;
     }
 };
 

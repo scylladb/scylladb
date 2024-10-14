@@ -797,7 +797,7 @@ public:
             const dht::partition_range& pr,
             tracing::trace_state_ptr trace_state,
             sstable_reader_factory_type fn)
-        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position_view::min())
+        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position_view::min(), sstables->size())
         , _pr(&pr)
         , _sstables(std::move(sstables))
         , _trace_state(std::move(trace_state))
