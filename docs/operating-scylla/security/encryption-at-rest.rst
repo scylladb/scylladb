@@ -5,11 +5,15 @@ Encryption at Rest
 Introduction
 ----------------------
 
-ScyllaDB protects your sensitive data with data-at-rest encryption.
-It protects the privacy of your user's data, reduces the risk of data breaches, and helps meet regulatory requirements.
-In particular, it provides an additional level of protection for your data persisted in storage or its backups.
+ScyllaDB protects your sensitive data with data-at-rest encryption. It protects
+the privacy of your user's data, reduces the risk of data breaches, and helps
+meet regulatory requirements. In particular, it provides an additional level of
+protection for your data persisted in storage or its backups.
 
-When ScyllaDB's Encryption at Rest is used together with Encryption in Transit (:doc:`Node to Node </operating-scylla/security/node-node-encryption>`  and :doc:`Client to Node </operating-scylla/security/client-node-encryption>`), you benefit from end to end data encryption.
+When ScyllaDB's Encryption at Rest is used together with Encryption in Transit
+(:doc:`Node to Node </operating-scylla/security/node-node-encryption>` and
+:doc:`Client to Node </operating-scylla/security/client-node-encryption>`), you
+benefit from end to end data encryption.
 
 About Encryption at Rest
 -----------------------------
@@ -24,23 +28,36 @@ The following can be encrypted:
   - hints logs
   - KMIP Password (part of scylla.yaml)
 
-Encryption at Rest works at table level granularity, so you can choose to encrypt only sensitive tables. For both system and table data, you can use different algorithms that are supported by `OpenSSL <https://www.openssl.org/>`_ in a file block encryption scheme.
+Encryption at Rest works at table level granularity, so you can choose to
+encrypt only sensitive tables. For both system and table data, you can use
+different algorithms that are supported by `OpenSSL <https://www.openssl.org/>`_
+in a file block encryption scheme.
 
-.. note:: SSTables of a particular table can have different encryption keys, use different encryption algorithms, or not be encrypted at all - at the same time.
+.. note:: SSTables of a particular table can have different encryption keys, use
+   different encryption algorithms, or not be encrypted at all - at the same
+   time.
 
 When is Data Encrypted?
 ========================
 
-As SSTables are immutable, tables are encrypted only once, as a result of memtable flush, compaction, or upgrade (with :doc:`Nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables>`).
+As SSTables are immutable, tables are encrypted only once, as a result of
+memtable flush, compaction, or upgrade (with :doc:`Nodetool upgradesstables
+</operating-scylla/nodetool-commands/upgradesstables>`).
 
-Once a table is encrypted, all resulting SSTables are encrypted using the most current key and algorithm.
-When you encrypt an existing table, the new SSTables are encrypted. The old SSTables which existed before the encryption are not updated. These tables are encrypted according to the same actions as described previously.
+Once a table is encrypted, all resulting SSTables are encrypted using the most
+current key and algorithm. When you encrypt an existing table, the new SSTables
+are encrypted. The old SSTables which existed before the encryption are not
+updated. These tables are encrypted according to the same actions as described
+previously.
 
 When is Data Decrypted?
 ========================
 
-When ScyllaDB reads an encrypted SSTable from disk, it fetches the encryption key's ID from the SSTable and uses it to extract the key and decrypt the data.
-When ScyllaDB reads an encrypted system table, it fetches the system table encryption key location from the scylla.yaml file. It locates the key and uses it to extract the key and decrypt the data.
+When ScyllaDB reads an encrypted SSTable from disk, it fetches the encryption
+key's ID from the SSTable and uses it to extract the key and decrypt the data.
+When ScyllaDB reads an encrypted system table, it fetches the system table
+encryption key location from the scylla.yaml file. It locates the key and uses
+it to extract the key and decrypt the data.
 
 
 Encryption Key Types
@@ -51,20 +68,31 @@ Two types of encryption keys are available: System Keys and Table Keys.
 System Keys
 ====================
 
-System keys are used for encrypting system data, such as commit logs, hints, and/or other user table keys. When a Replicated Key Provider is used for encrypting SSTables, the table keys are stored in the encrypted_keys table, and the system key is used to encrypt the encrypted_keys table. The system key is stored as the contents of a local file and is encrypted with a single key that you provide. The default location of system keys is ``/etc/scylla/resources/system_keys/`` and can be changed with the ``system_key_directory`` option in scylla.yaml file. When a Local Key Provider is used for encrypting system info, you can provide your own key, or ScyllaDB can make one for you.
+System keys are used for encrypting system data, such as commit logs, hints,
+and/or other user table keys. When a Replicated Key Provider is used for
+encrypting SSTables, the table keys are stored in the encrypted_keys table, and
+the system key is used to encrypt the encrypted_keys table. The system key is
+stored as the contents of a local file and is encrypted with a single key that
+you provide. The default location of system keys is
+``/etc/scylla/resources/system_keys/`` and can be changed with the
+``system_key_directory`` option in scylla.yaml file. When a Local Key Provider
+is used for encrypting system info, you can provide your own key, or ScyllaDB
+can make one for you.
 
 .. _Replicated:
 
 Table Keys
 ===================
-Table keys are used for encrypting SSTables. Depending on your key provider, this key is stored in different locations:
+Table keys are used for encrypting SSTables. Depending on your key provider,
+this key is stored in different locations:
 
 * Replicated Key Provider - encrypted_keys table
 * KMIP Key Provider - KMIP server
 * KMS Key Provider - AWS
 * GCP Key Provider - GCP
 * Azure Key Provider - Azure
-* Local Key Provider - in a local file with multiple keys. You can provide your own key or ScyllaDB can make one for you.
+* Local Key Provider - in a local file with multiple keys. You can provide your
+  own key or ScyllaDB can make one for you.
 
 .. _ear-key-providers:
 
@@ -76,7 +104,8 @@ Table keys are used for encrypting SSTables. Depending on your key provider, thi
 Key Providers
 ----------------------
 
-When encrypting the system tables or SSTables, you need to state which provider is holding your keys. You can use the following options:
+When encrypting the system tables or SSTables, you need to state which provider
+is holding your keys. You can use the following options:
 
 .. list-table::
    :widths: 33 33 33
@@ -90,7 +119,8 @@ When encrypting the system tables or SSTables, you need to state which provider 
      - Stores the key on the same machine as the data.
    * - Replicated Key Provider
      - ReplicatedKeyProviderFactory
-     - Stores table keys in a ScyllaDB table where the table itself is encrypted using the system key (available from 2019.1.3)
+     - Stores table keys in a ScyllaDB table where the table itself is encrypted
+       using the system key (available from 2019.1.3)
    * - KMIP Key Provider
      - KmipKeyProviderFactory
      - External key management server (available from 2019.1.3)
@@ -108,20 +138,28 @@ When encrypting the system tables or SSTables, you need to state which provider 
 About Local Key Storage
 ==========================
 
-Local keys are used for encrypting user data, such as SSTables.
-Currently, this is the only option  available for user data and, as such, is the default key storage manager.
-With local key storage, keys are stored locally on disk in a text file. The location of this file is specified in the scylla.yaml.
+Local keys are used for encrypting user data, such as SSTables. Currently, this
+is the only option  available for user data and, as such, is the default key
+storage manager. With local key storage, keys are stored locally on disk in a
+text file. The location of this file is specified in the scylla.yaml.
 
-.. caution:: Care should be taken so that no unauthorized person can access the key data from the file system. Make sure that the owner of this file is the ``scylla`` user and that the file is **not** readable by **other users**, not accessible by **other roles**.
+.. caution:: Care should be taken so that no unauthorized person can access the
+   key data from the file system. Make sure that the owner of this file is the
+   ``scylla`` user and that the file is **not** readable by **other users**, not
+   accessible by **other roles**.
 
-You should also consider keeping the key directory on a network drive (using TLS for the file sharing) to avoid having keys and data on the same storage media, in case your storage is stolen or discarded.
+You should also consider keeping the key directory on a network drive (using TLS
+for the file sharing) to avoid having keys and data on the same storage media,
+in case your storage is stolen or discarded.
 
 .. _ear-cipher-algorithms:
 
 Cipher Algorithms
 ----------------------
 
-The following cipher_algorithims are available for use with ScyllaDB using `OpenSSL <https://www.openssl.org/>`_. Note that the default algorithm (AES/CBC/PKCS5Padding with key strength 128 ) is recommended.
+The following cipher_algorithims are available for use with ScyllaDB using
+`OpenSSL <https://www.openssl.org/>`_. Note that the default algorithm
+(AES/CBC/PKCS5Padding with key strength 128 ) is recommended.
 
 .. list-table::
    :widths: 70 30
@@ -141,12 +179,14 @@ The following cipher_algorithims are available for use with ScyllaDB using `Open
 Create Encryption Keys
 -----------------------------
 
-Depending on your key provider, you will either have the option of allowing ScyllaDB to generate an encryption key, or you will have to provide one:
+Depending on your key provider, you will either have the option of allowing
+ScyllaDB to generate an encryption key, or you will have to provide one:
 
 * KMIP Key Provider - you don't need to generate any key yourself
 * KMS Key Provider - you must generate a key yourself in AWS
 * Replicated Key Provider - you must generate a system key yourself
-* Local Key Provider - If you do not generate your own secret key, ScyllaDB will create one for you
+* Local Key Provider - If you do not generate your own secret key, ScyllaDB will
+  create one for you
 
 
 Use the key generator script
@@ -157,7 +197,11 @@ The Key Generator script generates a key in the directory of your choice.
 **Procedure**
 
 
-#. Create (if it doesn't exist) a local directory for storing the key.  Make sure that the owner of the directory is ``scylla`` and not another user. Make sure that the ``scylla`` user can read, write, and execute over the parent directory. Following this procedure makes ``/etc/scylla/encryption_keys/`` the parent directory of your keys.
+#. Create (if it doesn't exist) a local directory for storing the key.  Make
+   sure that the owner of the directory is ``scylla`` and not another user. Make
+   sure that the ``scylla`` user can read, write, and execute over the parent
+   directory. Following this procedure makes ``/etc/scylla/encryption_keys/``
+   the parent directory of your keys.
 
    For example:
 
@@ -167,7 +211,8 @@ The Key Generator script generates a key in the directory of your choice.
       sudo chown -R scylla:scylla /etc/scylla/encryption_keys
       sudo chmod -R 700 /etc/scylla/encryption_keys
 
-#. Create a key using the local file key generator script making sure that the keyfile owner is ``scylla`` and not another user. Run the command:
+#. Create a key using the local file key generator script making sure that the
+   keyfile owner is ``scylla`` and not another user. Run the command:
 
    .. code-block:: none
 
@@ -182,12 +227,14 @@ The Key Generator script generates a key in the directory of your choice.
    * ``-p,--padding <arg>`` - the encryption algorithm padding method (i.e. PKCS5)
    * ``key-path`` - is the directory you want to place the key into (/etc/scylla/encryption_keys, for example)
 
-   And ``<op>`` is one of ``generate`` or ``append``, the first creating a new key file with the generated key, the latter
-   appending a new key of the required type to an existing file.
+   And ``<op>`` is one of ``generate`` or ``append``, the first creating a new
+   key file with the generated key, the latter appending a new key of the
+   required type to an existing file.
 
    For Example:
 
-   To create a secret key and a system key using other encryption settings in a different location:
+   To create a secret key and a system key using other encryption settings in a
+   different location:
 
    .. code-block:: none
 
@@ -219,16 +266,21 @@ The Key Generator script generates a key in the directory of your choice.
       AES/CBC/PKCS5Padding:128:GGpOSxTGhtPRPLrNPYvVMQ==
 
 
-   Once you have created a key, copy the key to each node, using the procedure described in `Copy keys to nodes`_.
+   Once you have created a key, copy the key to each node, using the procedure
+   described in `Copy keys to nodes`_.
 
 Copy keys to nodes
 ======================
 
-Every key you generate needs to be copied to the nodes for use in local key providers.
+Every key you generate needs to be copied to the nodes for use in local key
+providers.
 
 **Procedure**
 
-#. Securely copy the key file, using ``scp`` or similar, to the same path on all nodes in the cluster. Make sure the key on each target node is moved to the same location as the source directory and that the target directory has the same permissions as the source directory.
+#. Securely copy the key file, using ``scp`` or similar, to the same path on all
+   nodes in the cluster. Make sure the key on each target node is moved to the
+   same location as the source directory and that the target directory has the
+   same permissions as the source directory.
 
 #. Repeat for all nodes in the cluster.
 
@@ -237,9 +289,12 @@ Every key you generate needs to be copied to the nodes for use in local key prov
 Set the KMIP Host
 ----------------------
 
-If you are using :term:`KMIP <Key Management Interoperability Protocol (KMIP)>` to encrypt tables or system information, add the KMIP server information to the ``scylla.yaml`` configuration file.
+If you are using :term:`KMIP <Key Management Interoperability Protocol (KMIP)>`
+to encrypt tables or system information, add the KMIP server information to the
+``scylla.yaml`` configuration file.
 
-#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and add the following in KMIP host(s) section:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and add the
+   following in KMIP host(s) section:
 
    .. code-block:: yaml
 
@@ -262,11 +317,19 @@ If you are using :term:`KMIP <Key Management Interoperability Protocol (KMIP)>` 
    Where:
 
    * ``<name>`` - The cluster name.
-   * ``hosts`` - The list of hosts specified by IP and port for the KMIP server. The KMIP connection management only supports failover, so all requests go through a single KMIP server. There is no load balancing, as currently no KMIP servers support read replication or other strategies for availability. Hosts are tried in the order they appear, and the next one in the list is tried if the previous one fails. The default number of retries is three, but you can customize it with "max_command_retries".
+   * ``hosts`` - The list of hosts specified by IP and port for the KMIP server.
+     The KMIP connection management only supports failover, so all requests go
+     through a single KMIP server. There is no load balancing, as currently no
+     KMIP servers support read replication or other strategies for availability.
+     Hosts are tried in the order they appear, and the next one in the list is
+     tried if the previous one fails. The default number of retries is three,
+     but you can customize it with "max_command_retries".
    * ``certificate`` - The name of the certificate and path used to identify yourself to the KMIP server.
    * ``keyfile`` - The name of the key used to identify yourself to the KMIP server. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMIP server.
-   * ``certficate_revocation_list`` - The path to a PEM-encoded certificate revocation list (CRL) - a list of issued certificates that have been revoked before their expiration date.
+   * ``certficate_revocation_list`` - The path to a PEM-encoded certificate
+     revocation list (CRL) - a list of issued certificates that have been
+     revoked before their expiration date.
    * ``priority_string`` - The KMIP TLS priority string.
    * ``username`` - The KMIP server user name.
    * ``password`` - The KMIP server password.
@@ -285,9 +348,11 @@ If you are using :term:`KMIP <Key Management Interoperability Protocol (KMIP)>` 
 Set the KMS Host
 ----------------------
 
-If you are using AWS KMS to encrypt tables or system information, add the KMS information to the ``scylla.yaml`` configuration file.
+If you are using AWS KMS to encrypt tables or system information, add the KMS
+information to the ``scylla.yaml`` configuration file.
 
-#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the following in KMS host(s) section:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
+   following in KMS host(s) section:
 
    .. code-block:: yaml
 
@@ -313,7 +378,8 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
 
    Where:
 
-   * ``<name>`` - The name to identify the KMS host. You have to provide this name to encrypt a :ref:`new <ear-create-table>` or :ref:`existing <ear-alter-table>` table.
+   * ``<name>`` - The name to identify the KMS host. You have to provide this name to encrypt a :ref:`new <ear-create-table>` or :ref:`existing
+     <ear-alter-table>` table.
    * ``endpoint`` - The explicit KMS host endpoint. If not provided, ``aws_region`` is used for connection.
    * ``aws_region`` - An AWS region. If not provided, ``endpoint`` is used for connection.
    * ``aws_access_key_id`` - AWS access key used for authentication. If not specified, the provider reads it from your AWS credentials.
@@ -323,7 +389,8 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
    * ``aws_use_ec2_credentials`` - If true, KMS queries will use the credentials provided by ec2 instance role metadata as initial access key.
    * ``aws_use_ec2_region`` - If true, KMS queries will use the AWS region indicated by ec2 instance metadata.
    * ``aws_assume_role_arn`` - If set, any KMS query will first attempt to assume this role.
-   * ``master_key`` - The ID or alias of your AWS KMS key. The key must be generated with an appropriate access policy so that the AWS user has permissions to read the key and encrypt data using that key. This parameter is required.
+   * ``master_key`` - The ID or alias of your AWS KMS key. The key must be generated with an appropriate access policy so that the AWS user has permissions to
+     read the key and encrypt data using that key. This parameter is required.
    * ``certificate`` - The name of the certificate and the path used to identify yourself to the KMS server.
    * ``keyfile`` - The name of the key for the certificate. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMS server.
@@ -333,7 +400,8 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
 
    .. note::
 
-      Note that either ``endpoint``, ``aws_region`` or ``aws_use_ec2_region`` must be set (one of them is required for connection).
+      Note that either ``endpoint``, ``aws_region`` or ``aws_use_ec2_region``
+      must be set (one of them is required for connection).
 
    Example:
 
@@ -356,9 +424,11 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
 Set the GCP Host
 ----------------------
 
-If you are using Google GCP KMS to encrypt tables or system information, add the GCP information to the ``scylla.yaml`` configuration file.
+If you are using Google GCP KMS to encrypt tables or system information, add the
+GCP information to the ``scylla.yaml`` configuration file.
 
-#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the following in KMS host(s) section:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
+   following in KMS host(s) section:
 
    .. code-block:: yaml
 
@@ -379,12 +449,14 @@ If you are using Google GCP KMS to encrypt tables or system information, add the
 
    Where:
 
-   * ``<name>`` - The name to identify the GCP host. You have to provide this name to encrypt a :ref:`new <ear-create-table>` or :ref:`existing <ear-alter-table>` table.
+   * ``<name>`` - The name to identify the GCP host. You have to provide this name to encrypt a :ref:`new <ear-create-table>` or :ref:`existing
+     <ear-alter-table>` table.
    * ``gcp_project_id`` - The GCP project from which to retrieve key information.
    * ``gcp_location`` - A GCP project location.
    * ``gcp_credentials_file`` - GCP credentials file used for authentication. If not specified, the provider reads it from your GCP credentials.
    * ``gcp_impersonate_service_account`` - An optional service account to impersonate when issuing key query calls.
-   * ``master_key`` - The <keyring>/<keyname> of your GCP KMS key. The key must be generated with an appropriate access policy so that the AWS user has permissions to read the key and encrypt data using that key. This parameter is required.
+   * ``master_key`` - The <keyring>/<keyname> of your GCP KMS key. The key must be generated with an appropriate access policy so that the AWS user has
+     permissions to read the key and encrypt data using that key. This parameter is required.
    * ``certificate`` - The name of the certificate and the path used to identify yourself to the KMS server.
    * ``keyfile`` - The name of the key for the certificate. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMS server.
@@ -413,7 +485,8 @@ If you are using Google GCP KMS to encrypt tables or system information, add the
 Set the Azure Host
 ----------------------
 
-If you are using Azure Key Vault to encrypt tables or system information, you need to add the Azure information to the ``scylla.yaml`` configuration file.
+If you are using Azure Key Vault to encrypt tables or system information, you
+need to add the Azure information to the ``scylla.yaml`` configuration file.
 
 What You'll Need
 ================
@@ -427,16 +500,19 @@ Before configuring Azure Key Vault integration, ensure you have:
   * **Managed Identity** (recommended for production) - No credentials are needed. ScyllaDB will automatically detect and use the default managed identity of the Azure VM.
   * **Service Principal** - Requires providing a tenant ID, client ID, and a secret or certificate.
 
-* Sufficient permissions to perform the ``wrapkey`` and ``unwrapkey`` operations on the key.
-  If you are using RBAC, you can assign the "Key Vault Crypto User" role to your identity.
+* Sufficient permissions to perform the ``wrapkey`` and ``unwrapkey`` operations
+  on the key. If you are using RBAC, you can assign the "Key Vault Crypto User"
+  role to your identity.
 
 .. note::
-   ScyllaDB can also authenticate indirectly through a preconfigured Azure CLI, but this is offered only for testing purposes.
+   ScyllaDB can also authenticate indirectly through a preconfigured Azure CLI,
+   but this is offered only for testing purposes.
 
 Procedure
 =========
 
-#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add a new host in the Azure host(s) section:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add a new host
+   in the Azure host(s) section:
 
    .. code-block:: yaml
 
@@ -517,13 +593,13 @@ Procedure
 Encrypt Tables
 -----------------------------
 
-ScyllaDB allows you to enable or disable default encryption of tables.
-When enabled, tables will be encrypted by default using the configuration
-provided for the ``user_info_encryption`` option in the ``scylla.yaml`` file.
+ScyllaDB allows you to enable or disable default encryption of tables. When
+enabled, tables will be encrypted by default using the configuration provided
+for the ``user_info_encryption`` option in the ``scylla.yaml`` file.
 
 You can override the default configuration when you CREATE TABLE or ALTER TABLE
-with ``scylla_encryption_options``. See :ref:`Encrypt a Single Table <ear-create-table>`
-for details.
+with ``scylla_encryption_options``. See :ref:`Encrypt a Single Table
+<ear-create-table>` for details.
 
 **Before you Begin**
 
@@ -534,9 +610,8 @@ Ensure you have an encryption key available:
 * If you are using Google GCP KMS, :ref:`set the GCP Host <encryption-at-rest-set-gcp>`.
 * If you are using Azure Key Vault, :ref:`set the Azure Host <encryption-at-rest-set-azure>`.
 * If you want to create your own key, follow the procedure in :ref:`Create Encryption Keys <ear-create-encryption-key>`.
-* If you do not create your own key, use the following procedure for ScyllaDB
-  to create a key for you (the default location ``/etc/scylla/data_encryption_keys`` may cause
-  permission issues; the following example creates a key in the directory ``/etc/scylla/encryption_keys``):
+* If you do not create your own key, use the following procedure for ScyllaDB to create a key for you (the default location ``/etc/scylla/data_encryption_keys``
+  may cause permission issues; the following example creates a key in the directory ``/etc/scylla/encryption_keys``):
 
    .. code-block:: none
 
@@ -546,8 +621,8 @@ Ensure you have an encryption key available:
 
 **Procedure**
 
-Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and configure
-the ``user_info_encryption`` option:
+Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and configure the
+``user_info_encryption`` option:
 
 .. code-block:: yaml
 
@@ -565,23 +640,16 @@ the ``user_info_encryption`` option:
 Where:
 
 * ``enabled`` - Enables or disables default table encryption. Required.
-* ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`.
-  If not provided, the default will be used.
-* ``secret_key_strength`` - The length of the key in bytes ( determined by
-  the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose).
-  If not provided, the default will be used.
-* ``key_provider`` - The name of the key provider. See :ref:`Key Providers <ear-key-providers>`.
-  Required.
-* ``secret_key_file`` - The location of the key created by ScyllaDB (by default ``/etc/scylla/data_encryption_keys``).
-  Required if you use a ScyllaDB-generated key.
-* ``kmip_host`` - The name of your :ref:`kmip_host <encryption-at-rest-set-kmip>` group.
-  Required if you use KMIP.
-* ``kms_host`` - The name of your :ref:`kms_host <encryption-at-rest-set-kms>` group.
-  Required if you use KMS.
-* ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group.
-  Required if you use GCP.
-* ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group.
-  Required if you use Azure.
+* ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+* ``secret_key_strength`` - The length of the key in bytes ( determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not provided,
+  the default will be used.
+* ``key_provider`` - The name of the key provider. See :ref:`Key Providers <ear-key-providers>`. Required.
+* ``secret_key_file`` - The location of the key created by ScyllaDB (by default ``/etc/scylla/data_encryption_keys``). Required if you use a ScyllaDB-generated
+  key.
+* ``kmip_host`` - The name of your :ref:`kmip_host <encryption-at-rest-set-kmip>` group. Required if you use KMIP.
+* ``kms_host`` - The name of your :ref:`kms_host <encryption-at-rest-set-kms>` group. Required if you use KMS.
+* ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group. Required if you use GCP.
+* ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group. Required if you use Azure.
 
 **Example**
 
@@ -596,7 +664,8 @@ Where:
 
 **Examples for KMS:**
 
-In the following example, the ``master_key`` configured for :ref:`kms_host <encryption-at-rest-set-kms>` will be used.
+In the following example, the ``master_key`` configured for :ref:`kms_host
+<encryption-at-rest-set-kms>` will be used.
 
 .. code-block:: yaml
 
@@ -606,7 +675,8 @@ In the following example, the ``master_key`` configured for :ref:`kms_host <encr
     kms_host: my-kms1
 
 
-You can specify a different ``master_key`` than the one configured for :ref:`kms_host <encryption-at-rest-set-kms>`:
+You can specify a different ``master_key`` than the one configured for :ref:`kms_host
+<encryption-at-rest-set-kms>`:
 
  .. code-block:: yaml
 
@@ -625,15 +695,26 @@ This procedure demonstrates how to encrypt a new table.
 
 **Before you Begin**
 
-* Make sure to `Set the KMIP Host`_ if you are using KMIP, or the the :ref:`KMS Host <encryption-at-rest-set-kms>` if you are using AWS KMS.
+* Make sure to `Set the KMIP Host`_ if you are using KMIP, or the the :ref:`KMS Host
+  <encryption-at-rest-set-kms>` if you are using AWS KMS.
 
-* If you want to make your own key, use the procedure in `Create Encryption Keys`_ and skip to step 3. If you do not create your own key, ScyllaDB will create one for you in the ``secret_key_file`` path. If you are not creating your own key, start with step 1.
+* If you want to make your own key, use the procedure in `Create Encryption Keys`_
+  and skip to step 3. If you do not create your own key, ScyllaDB will create
+  one for you in the ``secret_key_file`` path. If you are not creating your own
+  key, start with step 1.
 
 **Procedure**
 
-#. By default, the encryption key is located in the ``/etc/scylla/`` directory, and the file is named ``data_encryption_keys``. If you want to save the key in a different directory, create one. This example will create encryption keys in a different directory (``/etc/scylla/encryption_keys``, for example), which ensures that the owner of this directory is ``scylla`` and not another user.
+#. By default, the encryption key is located in the ``/etc/scylla/`` directory,
+   and the file is named ``data_encryption_keys``. If you want to save the key
+   in a different directory, create one. This example will create encryption
+   keys in a different directory (``/etc/scylla/encryption_keys``, for example),
+   which ensures that the owner of this directory is ``scylla`` and not another
+   user.
 
-   .. note:: Using the default location results in a known permission issue (scylladb/scylla-tools-java#94), so it is recommended to use another location as described in the example.
+   .. note:: Using the default location results in a known permission issue
+      (scylladb/scylla-tools-java#94), so it is recommended to use another
+      location as described in the example.
 
    .. code-block:: none
 
@@ -643,7 +724,10 @@ This procedure demonstrates how to encrypt a new table.
 
 #. Create the keyspace if it doesn’t exist.
 
-#. Create the table using the ``CREATE TABLE`` CQL statement, adding any :ref:`additional options <create-table-statement>`. To encrypt the table, use the options for encryption below, remembering to set the ``secret_key_file <path>`` to the same directory you created in step 1.
+#. Create the table using the ``CREATE TABLE`` CQL statement, adding any
+   :ref:`additional options <create-table-statement>`. To encrypt the table, use
+   the options for encryption below, remembering to set the ``secret_key_file <path>``
+   to the same directory you created in step 1.
 
    .. code-block:: cql
 
@@ -661,11 +745,13 @@ This procedure demonstrates how to encrypt a new table.
    * ``cipher_algorithm`` -  The hashing algorithm which is to be used to create the key. See `Cipher Algorithms`_ for more information.
    * ``secret_key_strength`` - The length of the key in bytes. This is determined by the cipher you choose. See `Cipher Algorithms`_ for more information.
    * ``key_provider`` is the name or type of key provider. Refer to `Key Providers`_ for more information.
-   * ``secret_key_file`` - the location that ScyllaDB will store the key it creates (if one does not exist in this location) or the location of the key. By default the location is ``/etc/scylla/data_encryption_keys``.
+   * ``secret_key_file`` - the location that ScyllaDB will store the key it creates (if one does not exist in this location) or the location of the key. By
+     default the location is ``/etc/scylla/data_encryption_keys``.
 
    **Example:**
 
-   Continuing the example from above, this command will instruct ScyllaDB to encrypt the table and will save the key in the location created in step 1.
+   Continuing the example from above, this command will instruct ScyllaDB to
+   encrypt the table and will save the key in the location created in step 1.
 
    .. code-block:: cql
 
@@ -691,7 +777,8 @@ This procedure demonstrates how to encrypt a new table.
         }
       ;
 
-   You can skip ``cipher_algorithm`` and ``secret_key_strength`` (the :ref:`defaults <ear-cipher-algorithms>` will be used):
+   You can skip ``cipher_algorithm`` and ``secret_key_strength`` (the
+   :ref:`defaults <ear-cipher-algorithms>` will be used):
 
    .. code-block:: cql
 
@@ -704,7 +791,8 @@ This procedure demonstrates how to encrypt a new table.
 
 .. _ear-create-table-master-key-override:
 
-   You can specify a different master key than the one configured for ``kms_host`` in the ``scylla.yaml`` file:
+   You can specify a different master key than the one configured for ``kms_host``
+   in the ``scylla.yaml`` file:
 
    .. code-block:: cql
 
@@ -717,9 +805,17 @@ This procedure demonstrates how to encrypt a new table.
       ;
 
 
-#. From this point, every new SSTable created for the ``atrest`` table is encrypted, using the ``data_encryption_keys`` key located in ``/etc/scylla/encryption_keys/``. This table will remain encrypted with this key until you either change the key, change the key properties, or disable encryption.
+#. From this point, every new SSTable created for the ``atrest`` table is
+   encrypted, using the ``data_encryption_keys`` key located in
+   ``/etc/scylla/encryption_keys/``. This table will remain encrypted with this
+   key until you either change the key, change the key properties, or disable
+   encryption.
 
-#. To ensure all SSTables for this table on every node are encrypted, run the :doc:`Nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` command. If not, the SSTables remain unencrypted until they are compacted or flushed from MemTables.
+#. To ensure all SSTables for this table on every node are encrypted, run the
+   :doc:`Nodetool upgradesstables
+   </operating-scylla/nodetool-commands/upgradesstables>` command. If not, the
+   SSTables remain unencrypted until they are compacted or flushed from
+   MemTables.
 
    For Example:
 
@@ -727,18 +823,22 @@ This procedure demonstrates how to encrypt a new table.
 
       nodetool upgradesstables data atrest
 
-#. Your SSTables are encrypted. If you want to change the key at any point, use the `Update Encryption Properties of Existing Tables`_ procedure. Always keep your key in a safe location known to you. Do not lose it. See `When a Key is Lost`_.
+#. Your SSTables are encrypted. If you want to change the key at any point, use
+   the `Update Encryption Properties of Existing Tables`_ procedure. Always keep
+   your key in a safe location known to you. Do not lose it. See `When a Key is Lost`_.
 
 .. _ear-alter-table:
 
 Update Encryption Properties of Existing Tables
 ==================================================
 
-You can encrypt any existing table or use this procedure to change the cipher algorithm, key location or key strength or even disable encryption on a table.
+You can encrypt any existing table or use this procedure to change the cipher
+algorithm, key location or key strength or even disable encryption on a table.
 
 **Procedure**
 
-#. Edit the table properties to enable encryption of one table of your choosing. Use the properties explained in `Encrypt a Single Table`_ if needed.
+#. Edit the table properties to enable encryption of one table of your choosing.
+   Use the properties explained in `Encrypt a Single Table`_ if needed.
 
    .. code-block:: cql
 
@@ -754,7 +854,8 @@ You can encrypt any existing table or use this procedure to change the cipher al
 
    **Example:**
 
-   Continuing the example from above, this command will instruct ScyllaDB to encrypt the table and will save the key in the location created in step 1.
+   Continuing the example from above, this command will instruct ScyllaDB to
+   encrypt the table and will save the key in the location created in step 1.
 
    .. code-block:: cql
 
@@ -780,9 +881,16 @@ You can encrypt any existing table or use this procedure to change the cipher al
         }
       ;
 
-#. If you want to make sure that SSTables that existed before this change are also encrypted, you can either upgrade them using the ``nodetool upgradesstables`` command or wait until the next compaction. If you decide to wait, ScyllaDB will still be able to read the old unencrypted tables. If you change the key or remove encryption, ScyllaDB will still continue to read the old tables as long as you still have the key. If your data is encrypted and you do not have the key, your data is unreadable.
+#. If you want to make sure that SSTables that existed before this change are
+   also encrypted, you can either upgrade them using the ``nodetool upgradesstables``
+   command or wait until the next compaction. If you decide to wait, ScyllaDB
+   will still be able to read the old unencrypted tables. If you change the key
+   or remove encryption, ScyllaDB will still continue to read the old tables as
+   long as you still have the key. If your data is encrypted and you do not have
+   the key, your data is unreadable.
 
-   * If you decide to upgrade all of your old SSTables run the :doc:`nodetool upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` command.
+   * If you decide to upgrade all of your old SSTables run the :doc:`nodetool upgradesstables
+     </operating-scylla/nodetool-commands/upgradesstables>` command.
 
      .. code-block:: none
 
@@ -796,7 +904,9 @@ You can encrypt any existing table or use this procedure to change the cipher al
 
    * Repeat this command on all nodes as nodetool runs locally.
 
-#. If you want to change the key or disable encryption, repeat the `Update Encryption Properties of Existing Tables`_ procedure using the examples below as reference.
+#. If you want to change the key or disable encryption, repeat the `Update
+   Encryption Properties of Existing Tables`_ procedure using the examples below
+   as reference.
 
 **Examples**
 
@@ -814,7 +924,8 @@ To encrypt an existing table named test in keyspace ks:
    ;
 
 
-To change the cipher algorithm from AES/ECB/PKCS5Padding to AES/ECB/PKCS5Padding and to change the key strength from 128 to 192 on an existing table:
+To change the cipher algorithm from AES/ECB/PKCS5Padding to AES/ECB/PKCS5Padding
+and to change the key strength from 128 to 192 on an existing table:
 
 .. code-block:: cql
 
@@ -838,14 +949,16 @@ To disable encryption on an encrypted table named test in keyspace ks:
 Encrypt System Resources
 ---------------------------
 
-System encryption is applied to semi-transient on-disk data, such as commit logs, batch logs, and hinted handoff data.
-This ensures that all temporarily stored data is encrypted until fully persisted to final SSTable on disk.
-Once this encryption is enabled, it is used for all system data.
+System encryption is applied to semi-transient on-disk data, such as commit
+logs, batch logs, and hinted handoff data. This ensures that all temporarily
+stored data is encrypted until fully persisted to final SSTable on disk. Once
+this encryption is enabled, it is used for all system data.
 
 
 **Procedure**
 
-#. Edit the scylla.yaml file - located in /etc/scylla/scylla.yaml and add the following:
+#. Edit the scylla.yaml file - located in /etc/scylla/scylla.yaml and add the
+   following:
 
    .. code-block:: none
 
@@ -912,7 +1025,8 @@ Once this encryption is enabled, it is used for all system data.
          key_provider: GcpKeyProviderFactory
          gcp_host: myScylla
 
-   Where ``gcp_host`` is the unique name of the GCP host specified in the scylla.yaml file.
+   Where ``gcp_host`` is the unique name of the GCP host specified in the
+   scylla.yaml file.
 
    Example for Azure:
 
@@ -927,7 +1041,8 @@ Once this encryption is enabled, it is used for all system data.
 
    Where ``azure_host`` is the unique name of the Azure host specified in the scylla.yaml file.
 
-#. Do not close the yaml file. Change the system key directory location according to your settings.
+#. Do not close the yaml file. Change the system key directory location
+   according to your settings.
 
    * ``system_key_directory`` is the location of the system key you created in `Create Encryption Keys`_.
 
@@ -947,7 +1062,9 @@ Once this encryption is enabled, it is used for all system data.
 When a Key is Lost
 ----------------------
 
-It is crucial to back up all of your encryption keys in a secure way. Keep a copy of all keys in a secure location. In the event that you do lose a key, your data encrypted with that key will be unreadable.
+It is crucial to back up all of your encryption keys in a secure way. Keep a
+copy of all keys in a secure location. In the event that you do lose a key, your
+data encrypted with that key will be unreadable.
 
 Additional Resources
 ----------------------
