@@ -234,6 +234,7 @@ class TestSuite(ABC):
 
     async def run(self, test: 'Test', options: argparse.Namespace):
         try:
+            test.started = True
             for i in range(1, self.FLAKY_RETRIES):
                 if i > 1:
                     test.is_flaky_failure = True
@@ -244,7 +245,7 @@ class TestSuite(ABC):
                     break
         finally:
             self.pending_test_count -= 1
-            self.n_failed += int(not test.success)
+            self.n_failed += int(test.failed)
             if self.pending_test_count == 0:
                 await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
         return test
@@ -638,6 +639,7 @@ class Test:
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         self.env = dict(self.suite.base_env)
+        self.started = False
         self.success = False
         self.time_start: float = 0
         self.time_end: float = 0
@@ -647,6 +649,16 @@ class Test:
         self.success = False
         self.time_start = 0
         self.time_end = 0
+
+    @property
+    def failed(self):
+        """Returns True, if this test Failed"""
+        return self.started and not self.success and not self.is_cancelled
+
+    @property
+    def did_not_run(self):
+        """Returns True, if this test did not run correctly, i.e. was canceled either during or before execution"""
+        return not self.started or self.is_cancelled
 
     @abstractmethod
     async def run(self, options: argparse.Namespace) -> 'Test':
@@ -1627,10 +1639,9 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
             xml_res = ET.SubElement(xml_results, 'testcase',
                                     name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id),
                                     time=test_time)
-            if test.success is True:
-                continue
-            failed += 1
-            test.write_junit_failure_report(xml_res)
+            if test.failed:
+                failed += 1
+                test.write_junit_failure_report(xml_res)
     if total == 0:
         return
     xml_results.set("tests", str(total))
