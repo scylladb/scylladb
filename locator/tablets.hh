@@ -448,6 +448,11 @@ public:
         return tablet_id(size_t(t) + 1);
     }
 
+    // Returns the pair of sibling tablets for a given tablet id.
+    // For example, if id 1 is provided, a pair of 0 and 1 is returned.
+    // Returns disengaged optional when sibling pair cannot be found.
+    std::optional<std::pair<tablet_id, tablet_id>> sibling_tablets(tablet_id t) const;
+
     /// Returns true iff tablet has a given replica.
     /// If tablet is in transition, considers both previous and next replica set.
     bool has_replica(tablet_id, tablet_replica) const;

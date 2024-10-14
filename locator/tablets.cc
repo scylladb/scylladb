@@ -30,6 +30,14 @@ namespace locator {
 
 seastar::logger tablet_logger("tablets");
 
+std::optional<std::pair<tablet_id, tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
+    if (tablet_count() == 1) {
+        return std::nullopt;
+    }
+    auto first_sibling = tablet_id(t.value() & ~0x1);
+    return std::make_pair(first_sibling, *next_tablet(first_sibling));
+}
+
 
 static
 write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage) {
