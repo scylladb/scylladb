@@ -347,6 +347,7 @@ void schema::rebuild() {
 
     _v3_columns = v3_columns::from_v2_schema(*this);
     _full_slice = make_shared<query::partition_slice>(partition_slice_builder(*this).build());
+    compute_all_columns_in_select_order();
 }
 
 const column_mapping& schema::get_column_mapping() const {
@@ -1772,7 +1773,7 @@ schema::columns(column_kind kind) const {
     throw std::invalid_argument(std::to_string(int(kind)));
 }
 
-schema::select_order_range schema::all_columns_in_select_order() const {
+void schema::compute_all_columns_in_select_order() {
     auto is_static_compact_table = this->is_static_compact_table();
     auto no_non_pk_columns = is_compact_table()
                     // Origin: && CompactTables.hasEmptyCompactValue(this);
@@ -1788,7 +1789,9 @@ schema::select_order_range schema::all_columns_in_select_order() const {
                                     column_offset(column_kind::static_column)));
     auto ck_v_range = no_non_pk_columns ? static_columns()
                                         : const_iterator_range_type(static_columns().begin(), all_columns().end());
-    return boost::range::join(pk_range, ck_v_range);
+    auto to_addr = std::views::transform([] (const column_definition& x) { return &x; });
+    std::ranges::copy(pk_range | to_addr, std::back_inserter(_all_columns_in_select_order));
+    std::ranges::copy(ck_v_range | to_addr, std::back_inserter(_all_columns_in_select_order));
 }
 
 uint32_t
