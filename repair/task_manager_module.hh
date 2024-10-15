@@ -158,6 +158,7 @@ public:
     bool _hints_batchlog_flushed = false;
     std::unordered_set<gms::inet_address> nodes_down;
     bool _small_table_optimization = false;
+    size_t small_table_optimization_ranges_reduced_factor = 1;
 private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;

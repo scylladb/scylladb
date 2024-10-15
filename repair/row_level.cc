@@ -727,6 +727,9 @@ private:
     gc_clock::time_point _compaction_time;
     bool _is_tablet;
     reader_concurrency_semaphore::inactive_read_handle _fake_inactive_read_handle;
+    std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
+    seastar::semaphore _small_table_optimization_tm_sem{1};
+    bool _small_table_optimization_tm_calculated = false;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -1334,6 +1337,44 @@ private:
         utils::clear_gently(row_diff).get();
     }
 public:
+    future<const locator::token_metadata*> get_tm_for_small_table_optimization_check(const locator::token_metadata* tm) {
+        auto sem_units = co_await get_units(_small_table_optimization_tm_sem, 1);
+        if (!tm) {
+            throw std::runtime_error("The token_metadata pointer is nullptr");
+        }
+        if (_small_table_optimization_tm_calculated) {
+            co_return _small_table_optimization_tm.get();
+        }
+        std::unique_ptr<locator::token_metadata> tmptr;
+        if (_reason == streaming::stream_reason::bootstrap) {
+            auto myid = tm->get_my_id();
+            std::unordered_set<dht::token> bootstrap_tokens;
+            for (auto [token, host_id] : tm->get_bootstrap_tokens()) {
+                if (myid == host_id) {
+                    bootstrap_tokens.insert(token);
+                }
+            }
+            if (!bootstrap_tokens.empty()) {
+                // The node is a bootstrapping node
+                tmptr = std::make_unique<locator::token_metadata>(co_await tm->clone_only_token_map());
+                co_await tmptr->update_normal_tokens(bootstrap_tokens, myid);
+                rlogger.debug("small_table_optimization: Got bootstrap tokens={}", bootstrap_tokens);
+            }
+        } else if (_reason == streaming::stream_reason::decommission) {
+            auto myid = tm->get_my_id();
+            auto& leaving = tm->get_leaving_endpoints();
+            if (!leaving.empty() && leaving.contains(myid)) {
+                // This node is leaving
+                tmptr = std::make_unique<locator::token_metadata>(co_await tm->clone_after_all_left());
+                rlogger.debug("small_table_optimization: Got leaving node={}", leaving);
+            }
+        }
+        _small_table_optimization_tm = std::move(tmptr);
+        _small_table_optimization_tm_calculated = true;
+        co_return _small_table_optimization_tm.get();
+    }
+
+public:
     // Must run inside a seastar thread
     void flush_rows_in_working_row_buf(locator::effective_replication_map_ptr erm, bool small_table_optimization) {
         if (_dirty_on_master) {
@@ -1341,7 +1382,7 @@ public:
         } else {
             return;
         }
-        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization);
+        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
     }
 
 private:
@@ -1831,12 +1872,16 @@ public:
         }
         if (small_table_optimization) {
             auto& strat = erm.get_replication_strategy();
-            const auto& tm = erm.get_token_metadata();
+            const auto* tm = &erm.get_token_metadata();
+            const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm);
+            if (tmptr) {
+                tm = tmptr;
+            }
             std::list<repair_row> tmp;
             for (auto& row : row_diff) {
                 repair_row r = std::move(row);
                 const auto& dk = r.get_dk_with_hash()->dk;
-                auto eps = co_await strat.calculate_natural_ips(dk.token(), tm);
+                auto eps = co_await strat.calculate_natural_ips(dk.token(), *tm);
                 if (eps.contains(remote_node)) {
                     tmp.push_back(std::move(r));
                 } else {
@@ -1874,14 +1919,22 @@ public:
     }
 };
 
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization) {
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization, repair_meta* rm) {
     auto cmp = position_in_partition::tri_compare(*s);
     lw_shared_ptr<mutation_fragment> last_mf;
     lw_shared_ptr<const decorated_key_with_hash> last_dk;
     bool do_small_table_optimization = erm && small_table_optimization;
     auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
-    auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
+    const auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
     auto myip = do_small_table_optimization ? erm->get_topology().my_address() : gms::inet_address();
+
+    if (do_small_table_optimization && rm) {
+        const auto* tmptr = rm->get_tm_for_small_table_optimization_check(tm).get();
+        if (tmptr) {
+            tm = tmptr;
+        }
+    }
+
     for (auto& r : rows) {
         thread::maybe_yield();
         if (!r.dirty_on_master()) {

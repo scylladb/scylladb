@@ -1058,17 +1058,17 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             }
             ++_ranges_complete;
             if (_reason == streaming::stream_reason::bootstrap) {
-                rs.get_metrics().bootstrap_finished_ranges++;
+                rs.get_metrics().bootstrap_finished_ranges += small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::replace) {
-                rs.get_metrics().replace_finished_ranges++;
+                rs.get_metrics().replace_finished_ranges += small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::rebuild) {
-                rs.get_metrics().rebuild_finished_ranges++;
+                rs.get_metrics().rebuild_finished_ranges += small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::decommission) {
-                rs.get_metrics().decommission_finished_ranges++;
+                rs.get_metrics().decommission_finished_ranges += small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::removenode) {
-                rs.get_metrics().removenode_finished_ranges++;
+                rs.get_metrics().removenode_finished_ranges += small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::repair) {
-                rs.get_metrics().repair_finished_ranges_sum++;
+                rs.get_metrics().repair_finished_ranges_sum += small_table_optimization_ranges_reduced_factor;
                 nr_ranges_finished++;
             }
             rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
@@ -1503,8 +1503,39 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
 
     auto id = get_repair_uniq_id();
-    rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as] () mutable {
+
+    auto enable_small_table_optimization_for_rbno = db.get_config().enable_small_table_optimization_for_rbno();
+    bool small_table_optimization = false;
+    size_t ranges_reduced_factor = 1;
+    if (enable_small_table_optimization_for_rbno) {
+        static const std::unordered_set<sstring> small_table_optimization_enabled_ks = {
+            "system_distributed",
+            "system_distributed_everywhere",
+            "system_auth",
+            "system_traces"
+        };
+        if (_reason == streaming::stream_reason::bootstrap ||
+            _reason == streaming::stream_reason::decommission) {
+            small_table_optimization = small_table_optimization_enabled_ks.contains(keyspace);
+        }
+        if (small_table_optimization) {
+            auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
+            ranges_reduced_factor = _ranges.size();
+            _ranges = {range};
+            std::unordered_set<gms::inet_address> nodes;
+            for (auto& [_, neighbor] : _neighbors) {
+                for (auto& n : neighbor.all) {
+                    nodes.insert(n);
+                }
+            }
+            auto nodes_vec = std::vector<gms::inet_address>(nodes.begin(), nodes.end());
+            _neighbors = {{range, repair_neighbors(nodes_vec, nodes_vec)}};
+        }
+    }
+
+    auto start_time = std::chrono::steady_clock::now();
+    rlogger.info("repair[{}]: sync data for keyspace={}, status=started, reason={}, small_table_optimization={}", id.uuid(), keyspace, _reason, small_table_optimization);
+    co_await module->run(id, [this, &rs, id, &db, keyspace, ranges_reduced_factor, small_table_optimization, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as] () mutable {
         auto cfs = list_column_families(db, keyspace);
         _cfs_size = cfs.size();
         if (cfs.empty()) {
@@ -1516,18 +1547,18 @@ future<> repair::data_sync_repair_task_impl::run() {
         repair_results.reserve(smp::count);
         task_as.check();
         for (auto shard : std::views::iota(0u, smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
-                bool small_table_optimization = false;
                 auto ranges_parallelism = std::nullopt;
                 auto flush_time = gc_clock::time_point();
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time);
                 task_impl_ptr->neighbors = std::move(neighbors);
+                task_impl_ptr->small_table_optimization_ranges_reduced_factor = ranges_reduced_factor;
                 auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
                 task->start();
                 co_await task->done();
@@ -1548,8 +1579,6 @@ future<> repair::data_sync_repair_task_impl::run() {
             }
             return make_ready_future<>();
         }).get();
-    }).then([id, keyspace] {
-        rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded", id.uuid(), keyspace);
     }).handle_exception([&db, id, keyspace, &rs] (std::exception_ptr ep) {
         if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
@@ -1561,6 +1590,9 @@ future<> repair::data_sync_repair_task_impl::run() {
         rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
+    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+    rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded, reason={}, small_table_optimization={}, duration={}",
+            id.uuid(), keyspace, _reason, small_table_optimization, duration);
 }
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
