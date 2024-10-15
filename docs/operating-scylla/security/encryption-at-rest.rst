@@ -72,46 +72,37 @@ segment's metadata file. ScyllaDB extracts the key from the key provider, and
 then decrypts the system artifact with the key.
 
 
-Encryption Key Types
-----------------------
+Data Classes for Encryption
+---------------------------
 
-Two types of encryption keys are available: System Keys and Table Keys.
+ScyllaDB supports encryption for both system and user data. Encryption behaves
+similarly for both data classes, but it is configured differently for each
+class:
 
-System Keys
-====================
+* Encryption for system and user data must be configured separately in
+  ``scylla.yaml``, through the ``system_info_encryption`` and
+  ``user_info_encryption`` sections, respectively. This separation allows to
+  select different configuration properties for each data class.
 
-System keys are used for encrypting system data, such as commit logs, hints,
-and/or other user table keys. When a Replicated Key Provider is used for
-encrypting SSTables, the table keys are stored in the encrypted_keys table, and
-the system key is used to encrypt the encrypted_keys table. The system key is
-stored as the contents of a local file and is encrypted with a single key that
-you provide. The default location of system keys is
-``/etc/scylla/resources/system_keys/`` and can be changed with the
-``system_key_directory`` option in scylla.yaml file. When a Local Key Provider
-is used for encrypting system info, you can provide your own key, or ScyllaDB
-can make one for you.
+* Encryption for user data can be configured at two levels:
 
-.. _Replicated:
+  - Node-level configuration: Using the ``user_info_encryption`` section in
+    ``scylla.yaml``.
 
-Table Keys
-===================
-Table keys are used for encrypting SSTables. Depending on your key provider,
-this key is stored in different locations:
+  - Table-level configuration: Using the ``scylla_encryption_options`` in the
+    table schema.
 
-* Replicated Key Provider - encrypted_keys table
-* KMIP Key Provider - KMIP server
-* KMS Key Provider - AWS
-* GCP Key Provider - GCP
-* Azure Key Provider - Azure
-* Local Key Provider - in a local file with multiple keys. You can provide your
-  own key or ScyllaDB can make one for you.
+  The table-level options are both finer-grained and coarser-grained than the
+  SSTable encryption defaults in ``scylla.yaml``:
+
+  - They are finer-grained because they override any possible defaults in
+    ``scylla.yaml`` for a particular table.
+
+  - They are coarser-grained because they apply to all nodes in the cluster that
+    write out new SSTables for the table, while the options configured in
+    ``scylla.yaml`` apply only to a particular node.
 
 .. _ear-key-providers:
-
-.. note::
-
-   Encrypted SStables undergo a regular backup procedure. Ensure you keep your
-   encryption key available in case you need to restore from backup.
 
 Key Providers
 ----------------------
