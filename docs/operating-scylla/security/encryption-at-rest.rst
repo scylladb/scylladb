@@ -20,22 +20,24 @@ About Encryption at Rest
 
 The following can be encrypted:
 
-* ScyllaDB persistent tables (SSTables)
-* System level data, such as:
+* ScyllaDB persistent tables (SSTables):
+
+  - User tables
+  - System tables: ``system.batchlog``, ``system.paxos``, ``system.dicts``
+
+* System level data:
 
   - Commit logs
-  - Batches
-  - hints logs
-  - KMIP Password (part of scylla.yaml)
+  - Hints
 
-Encryption at Rest works at table level granularity, so you can choose to
+Encryption at Rest can be configured at table granularity, so you can choose to
 encrypt only sensitive tables. For both system and table data, you can use
-different algorithms that are supported by `OpenSSL <https://www.openssl.org/>`_
-in a file block encryption scheme.
+different block cipher algorithms that are supported by `OpenSSL
+<https://www.openssl.org/>`_, in different modes of operation.
 
-.. note:: SSTables of a particular table can have different encryption keys, use
-   different encryption algorithms, or not be encrypted at all - at the same
-   time.
+.. note:: SSTables of a particular table may be encrypted with different block
+   ciphers, modes of operation, and keys; or not be encrypted at all - at the
+   same time.
 
 When is Data Encrypted?
 ========================
