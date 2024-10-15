@@ -149,6 +149,11 @@ void group0_state_id_handler::stop() {
 }
 
 future<> group0_state_id_handler::advertise_state_id(utils::UUID state_id) {
+    if (!_gossiper.is_enabled()) {
+        slogger.debug("Skipping advertisement of state id {} because gossiper is not active", state_id);
+        return make_ready_future();
+    }
+
     if (_state_id_last_advertised && utils::timeuuid_tri_compare(_state_id_last_advertised, state_id) > 0) {
         slogger.debug("Skipping advertisement of stale state id {}", state_id);
         return make_ready_future();
