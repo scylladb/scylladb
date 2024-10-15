@@ -11,6 +11,7 @@
 #include <boost/range/algorithm.hpp>
 #include <fmt/format.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <stdexcept>
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
@@ -42,18 +43,16 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static bool validate_rf_difference(const std::string_view curr_rf, const std::string_view new_rf) {
-    auto to_number = [] (const std::string_view rf) {
-        int result;
-        // We assume the passed string view represents a valid decimal number,
-        // so we don't need the error code.
-        (void) std::from_chars(rf.begin(), rf.end(), result);
-        return result;
-    };
-
-    // We want to ensure that each DC's RF is going to change by at most 1
-    // because in that case the old and new quorums must overlap.
-    return std::abs(to_number(curr_rf) - to_number(new_rf)) <= 1;
+static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
+    try {
+        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
+    } catch (std::invalid_argument const& ex) {
+        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
+                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+    } catch (std::out_of_range const& ex) {
+        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
+                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+    }
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
@@ -83,11 +82,24 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rfs = ks.metadata()->strategy_options();
-                for (const auto& [new_dc, new_rf] : _attrs->get_replication_options()) {
-                    auto it = current_rfs.find(new_dc);
-                    if (it != current_rfs.end() && !validate_rf_difference(it->second, new_rf)) {
-                        throw exceptions::invalid_request_exception("Cannot modify replication factor of any DC by more than 1 at a time.");
+                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                auto new_rf_per_dc = _attrs->get_replication_options();
+                new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+                unsigned total_abs_rfs_diff = 0;
+                for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
+                    sstring old_rf = "0";
+                    if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
+                             new_dc_in_current_mapping != current_rf_per_dc.end()) {
+                        old_rf = new_dc_in_current_mapping->second;
+                    } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
+                        // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
+                        // during validation in abstract_replication_strategy::validate_replication_strategy.
+                        // We can't report this error now, because it'd change the order of errors reported:
+                        // first we need to report non-existing DCs, then if RFs aren't changed by too much.
+                        continue;
+                    }
+                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+                        throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
                 }
             }
@@ -112,6 +124,68 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
+bool cql3::statements::alter_keyspace_statement::changes_tablets(query_processor& qp) const {
+    auto ks = qp.db().find_keyspace(_name);
+    return ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty();
+}
+
+namespace {
+// These functions are used to flatten all the options in the keyspace definition into a single-level map<string, string>.
+// (Currently options are stored in a nested structure that looks more like a map<string, map<string, string>>).
+// Flattening is simply joining the keys of maps from both levels with a colon ':' character,
+// or in other words: prefixing the keys in the output map with the option type, e.g. 'replication', 'storage', etc.,
+// so that the output map contains entries like: "replication:dc1" -> "3".
+// This is done to avoid key conflicts and to be able to de-flatten the map back into the original structure.
+
+void add_prefixed_key(const sstring& prefix, const std::map<sstring, sstring>& in, std::map<sstring, sstring>& out) {
+    for (const auto& [in_key, in_value]: in) {
+        out[prefix + ":" + in_key] = in_value;
+    }
+};
+
+std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::statements::ks_prop_defs>& ks,
+                                                         bool include_tablet_options,
+                                                         const gms::feature_service& feat) {
+    std::map<sstring, sstring> all_options;
+
+    add_prefixed_key(ks->KW_REPLICATION, ks->get_replication_options(), all_options);
+    add_prefixed_key(ks->KW_STORAGE, ks->get_storage_options().to_map(), all_options);
+    // if no tablet options are specified in ATLER KS statement,
+    // we want to preserve the old ones and hence cannot overwrite them with defaults
+    if (include_tablet_options) {
+        auto initial_tablets = ks->get_initial_tablets(std::nullopt);
+        add_prefixed_key(ks->KW_TABLETS,
+                         {{"enabled", initial_tablets ? "true" : "false"},
+                         {"initial", std::to_string(initial_tablets.value_or(0))}},
+                         all_options);
+    }
+    add_prefixed_key(ks->KW_DURABLE_WRITES,
+                     {{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
+                     all_options);
+
+    return all_options;
+}
+
+std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keyspace& ks, bool include_tablet_options) {
+    std::map<sstring, sstring> all_options;
+
+    using namespace cql3::statements;
+    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
+    add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
+    if (include_tablet_options) {
+        add_prefixed_key(ks_prop_defs::KW_TABLETS,
+                         {{"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
+                          {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
+                         all_options);
+    }
+    add_prefixed_key(ks_prop_defs::KW_DURABLE_WRITES,
+                     {{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
+                     all_options);
+
+    return all_options;
+}
+} // <anonymous> namespace
+
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
@@ -124,10 +198,16 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, tm, feat);
         std::vector<mutation> muts;
         std::vector<sstring> warnings;
-        auto ks_options = _attrs->get_all_options_flattened(feat);
+        bool include_tablet_options = _attrs->get_map(_attrs->KW_TABLETS).has_value();
+        auto old_ks_options = get_old_options_flattened(ks, include_tablet_options);
+        auto ks_options = get_current_options_flattened(_attrs, include_tablet_options, feat);
+        ks_options.merge(old_ks_options);
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
-        if (ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty()) {
+        // TODO: the current `if (changes_tablets(qp))` is insufficient: someone may set the same RFs as before,
+        //       and we'll unnecessarily trigger the processing path for ALTER tablets KS,
+        //       when in reality nothing or only schema is being changed
+        if (changes_tablets(qp)) {
             if (!qp.topology_global_queue_empty()) {
                 return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
