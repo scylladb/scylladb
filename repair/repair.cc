@@ -1492,8 +1492,34 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
 
     auto id = get_repair_uniq_id();
-    rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason] () mutable {
+    bool small_table_optimization = false;
+
+    static const std::unordered_set<sstring> small_table_optimization_enabled_ks = {
+        "system_distributed",
+        "system_distributed_everywhere",
+        "system_auth",
+        "system_traces"
+    };
+    if (_reason == streaming::stream_reason::bootstrap ||
+        _reason == streaming::stream_reason::decommission) {
+        small_table_optimization = small_table_optimization_enabled_ks.contains(keyspace);
+    }
+    if (small_table_optimization) {
+        auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
+        _ranges = {range};
+        std::unordered_set<gms::inet_address> nodes;
+        for (auto& [_, neighbor] : _neighbors) {
+            for (auto& n : neighbor.all) {
+                nodes.insert(n);
+            }
+        }
+        auto nodes_vec = std::vector<gms::inet_address>(nodes.begin(), nodes.end());
+        _neighbors = {{range, repair_neighbors(nodes_vec, nodes_vec)}};
+    }
+
+    auto start_time = std::chrono::steady_clock::now();
+    rlogger.info("repair[{}]: sync data for keyspace={} reason={} small_table_optimization={} status=started", id.uuid(), keyspace, _reason, small_table_optimization);
+    co_await module->run(id, [this, &rs, id, &db, keyspace, small_table_optimization, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason] () mutable {
         auto cfs = list_column_families(db, keyspace);
         _cfs_size = cfs.size();
         if (cfs.empty()) {
@@ -1507,12 +1533,11 @@ future<> repair::data_sync_repair_task_impl::run() {
             throw abort_requested_exception();
         }
         for (auto shard : std::views::iota(0u, smp::count)) {
-            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
+            auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
-                bool small_table_optimization = false;
                 auto ranges_parallelism = std::nullopt;
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
@@ -1538,8 +1563,6 @@ future<> repair::data_sync_repair_task_impl::run() {
             }
             return make_ready_future<>();
         }).get();
-    }).then([id, keyspace] {
-        rlogger.info("repair[{}]: sync data for keyspace={}, status=succeeded", id.uuid(), keyspace);
     }).handle_exception([&db, id, keyspace, &rs] (std::exception_ptr ep) {
         if (!db.has_keyspace(keyspace)) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id.uuid(), keyspace, ep);
@@ -1551,6 +1574,9 @@ future<> repair::data_sync_repair_task_impl::run() {
         rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
+    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+    rlogger.info("repair[{}]: sync data for keyspace={} reason={} small_table_optimization={} duration={} status=succeeded",
+            id.uuid(), keyspace, _reason, small_table_optimization, duration);
 }
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
