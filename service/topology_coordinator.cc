@@ -842,6 +842,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.trace("do update {} reason {}", updates, reason);
             mixed_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
+            co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", [] (auto& handler) -> future<> {
+                rtlogger.info("wait-before-committing-rf-change-event injection hit");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{30});
+                rtlogger.info("wait-before-committing-rf-change-event injection done");
+            });
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
