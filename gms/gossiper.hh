@@ -512,7 +512,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id);
+    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
 
 public:
     bool is_alive(inet_address ep) const;
@@ -537,7 +537,7 @@ private:
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
-    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
+    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
