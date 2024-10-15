@@ -2124,7 +2124,6 @@ future<> gossiper::advertise_to_nodes(generation_for_nodes advertise_to_nodes) {
 }
 
 future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, mandatory is_mandatory) {
-    return seastar::async([this, g = shared_from_this(), nodes = std::move(nodes), is_mandatory] () mutable {
         nodes.erase(get_broadcast_address());
         gossip_get_endpoint_states_request request{{
             gms::application_state::STATUS,
@@ -2141,30 +2140,31 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
 
         for (;;) {
             size_t nodes_down = 0;
-            parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) {
+            co_await coroutine::parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) -> future<> {
                 logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
-                return ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(&_messaging, msg_addr(node), netw::messaging_service::clock_type::now() + std::chrono::milliseconds(5000), request).then(
-                        [node, &nodes_talked, &responses] (gms::gossip_get_endpoint_states_response response) {
-                    logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
-                    responses.push_back(std::move(response));
-                    nodes_talked.insert(node);
+                try {
+                auto response = co_await ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(&_messaging, msg_addr(node), netw::messaging_service::clock_type::now() + std::chrono::milliseconds(5000), request);
 
-                    utils::get_local_injector().inject("stop_during_gossip_shadow_round",
-                        [] { std::raise(SIGSTOP); });
-                }).handle_exception_type([node] (seastar::rpc::unknown_verb_error&) {
+                logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
+                responses.push_back(std::move(response));
+                nodes_talked.insert(node);
+
+                utils::get_local_injector().inject("stop_during_gossip_shadow_round", [] { std::raise(SIGSTOP); });
+                } catch (seastar::rpc::unknown_verb_error&) {
                     auto err = format("Node {} does not support get_endpoint_states verb", node);
                     logger.error("{}", err);
                     throw std::runtime_error{err};
-                }).handle_exception_type([node, &nodes_down] (seastar::rpc::timeout_error&) {
+                } catch (seastar::rpc::timeout_error&) {
                     nodes_down++;
                     logger.warn("The get_endpoint_states verb to node {} timed out", node);
-                }).handle_exception_type([node, &nodes_down] (seastar::rpc::closed_error&) {
+                } catch (seastar::rpc::closed_error&) {
                     nodes_down++;
                     logger.warn("Node {} is down for get_endpoint_states verb", node);
-                });
-            }).get();
+                }
+            });
+
             for (auto& response : responses) {
-                apply_state_locally_without_listener_notification(std::move(response.endpoint_state_map)).get();
+                co_await apply_state_locally_without_listener_notification(std::move(response.endpoint_state_map));
             }
             if (!nodes_talked.empty()) {
                 break;
@@ -2181,7 +2181,6 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                     nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
         }
         logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
-    });
 }
 
 void gossiper::build_seeds_list() {
