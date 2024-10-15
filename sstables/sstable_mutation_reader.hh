@@ -149,9 +149,10 @@ inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
 }
 
 template <typename DataConsumeRowsContext>
-inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
+inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer,
+        sstable::disk_read_range toread, integrity_check integrity) {
     auto input = sst->data_stream(toread.start, toread.end - toread.start,
-            consumer.permit(), consumer.trace_state(), sst->_single_partition_history);
+            consumer.permit(), consumer.trace_state(), sst->_single_partition_history, sstable::raw_stream::no, integrity);
     return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
 }
 

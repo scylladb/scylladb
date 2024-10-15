@@ -1551,7 +1551,7 @@ private:
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
             }
         } else {
             sstable::disk_read_range drr{begin, *end};
