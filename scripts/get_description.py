@@ -62,7 +62,7 @@ def split_paterns(str):
         res.append(cur_str)
     return res
 
-def validate_parameter(txt, err=""):
+def validate_parameter(txt, param_mapping, err=""):
     if isinstance(txt, str):
         txt = [txt]
     for t in txt:
@@ -76,7 +76,7 @@ def validate_parameter(txt, err=""):
 def sort_by_index(arr,ind):
     return [arr[i] for i in ind]
 
-def make_name_list(names, err, verb=None):
+def make_name_list(names, err, param_mapping, verb=None):
     param = []
     format_string = ""
     for txt in names:
@@ -87,7 +87,7 @@ def make_name_list(names, err, verb=None):
             if txt[0] == '"':
                 format_string += txt[1:-1]
             else:
-                param = param + validate_parameter(txt, "(make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno) +")"+err)
+                param = param + validate_parameter(txt, param_mapping, "(make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno) +")"+err)
                 format_string += "{}"
                 if not param:
                     print("make_name_list:"+ str(inspect.getframeinfo(inspect.currentframe()).lineno), names)
@@ -226,11 +226,11 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                     else:
                         print("description not found", file_name, line_number, line, current_metric)
                         exit(-1)
-                    name_list = make_name_list(names, file_name+" "+str(line_number), verb)
+                    name_list = make_name_list(names, file_name+" "+str(line_number), param_mapping, verb)
                     if not name_list:
                         print("no name list", current_metric)
                         exit(-1)
-                    description_list = make_name_list(descrs, file_name+" "+str(line_number), verb)
+                    description_list = make_name_list(descrs, file_name+" "+str(line_number), param_mapping, verb)
                     current_groups = current_group if isinstance(current_group, list) else [current_group]
                     for cg in current_groups:
                         for idx, base_name in enumerate(name_list):
