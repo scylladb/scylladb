@@ -764,7 +764,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
-            while (true) {
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
                 cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
@@ -838,15 +837,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtlogger.trace("do update {} reason {}", updates, reason);
                 mixed_change change{std::move(updates)};
                 group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-                try {
-                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
-                    break;
-                } catch (group0_concurrent_modification&) {
-                    rtlogger.info("handle_global_request(): concurrent modification, retrying");
-                }
-            }
-            break;
+                co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
+        break;
         }
     }
 
@@ -2841,6 +2834,7 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
     } catch (raft::commit_status_unknown&) {
         rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
     } catch (group0_concurrent_modification&) {
+        rtlogger.info("topology change coordinator fiber got group0_concurrent_modification");
     } catch (topology_coordinator::term_changed_error&) {
         // Term changed. We may no longer be a leader
         rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
