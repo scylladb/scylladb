@@ -769,7 +769,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
-            while (true) {
                 sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
                 cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
@@ -848,8 +847,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 } catch (group0_concurrent_modification&) {
                     rtlogger.info("handle_global_request(): concurrent modification, retrying");
+                    throw;
                 }
-            }
             break;
         }
         }
