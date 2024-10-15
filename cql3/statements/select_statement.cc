@@ -2161,9 +2161,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(prepared_attrs));
     }
 
-    auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
+    ctx.set_schema(schema);
+    auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes();
     stmt->_may_use_token_aware_routing = partition_key_bind_indices.size() != 0;
-    return make_unique<prepared_statement>(std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    return make_unique<prepared_statement>(std::move(stmt), ctx, std::move(warnings));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>
