@@ -467,8 +467,17 @@ future<> compaction_task_executor::update_history(table_state& t, sstables::comp
             }
             rows_merged[id] = res.stats.reader_statistics.rows_merged_histogram[id];
         }
-        co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
-                ended_at.count(), res.stats.start_size, res.stats.end_size, std::move(rows_merged));
+
+        db::compaction_history_entry entry {
+            .id = cdata.compaction_uuid,
+            .ks = t.schema()->ks_name(),
+            .cf = t.schema()->cf_name(),
+            .compacted_at = ended_at.count(),
+            .bytes_in = res.stats.start_size,
+            .bytes_out = res.stats.end_size,
+            .rows_merged = std::move(rows_merged)
+        };
+        co_await sys_ks->update_compaction_history(std::move(entry));
     }
 }
 
