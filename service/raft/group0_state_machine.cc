@@ -76,7 +76,7 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         // node doesn't support it yet.
         _topology_change_enabled = true;
     })) {
-    _state_id_handler.start();
+    _state_id_handler.run();
 }
 
 static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -400,7 +400,6 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 }
 
 future<> group0_state_machine::abort() {
-    _state_id_handler.stop();
     _abort_source.request_abort();
     return _gate.close();
 }
