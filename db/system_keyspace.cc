@@ -2418,11 +2418,10 @@ static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t
     return tmp;
 }
 
-future<> system_keyspace::update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
-                                   std::unordered_map<int32_t, int64_t> rows_merged)
+future<> system_keyspace::update_compaction_history(compaction_history_entry entry)
 {
     // don't write anything when the history table itself is compacted, since that would in turn cause new compactions
-    if (ksname == "system" && cfname == COMPACTION_HISTORY) {
+    if (entry.ks == "system" && entry.cf == COMPACTION_HISTORY) {
         return make_ready_future<>();
     }
 
@@ -2431,9 +2430,9 @@ future<> system_keyspace::update_compaction_history(utils::UUID uuid, sstring ks
     sstring req = format("INSERT INTO system.{} (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)"
                     , COMPACTION_HISTORY);
 
-    db_clock::time_point tp{db_clock::duration{compacted_at}};
-    return execute_cql(req, uuid, ksname, cfname, tp, bytes_in, bytes_out,
-                       make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result().handle_exception([] (auto ep) {
+    db_clock::time_point tp{db_clock::duration{entry.compacted_at}};
+    return execute_cql(req, entry.id, entry.ks, entry.cf, tp, entry.bytes_in, entry.bytes_out,
+                       make_map_value(map_type, prepare_rows_merged(entry.rows_merged))).discard_result().handle_exception([] (auto ep) {
         slogger.error("update compaction history failed: {}: ignored", ep);
     });
 }
