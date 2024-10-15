@@ -1,6 +1,6 @@
 # Global variables
 # You can set these variables from the command line.
-POETRY        := poetry
+POETRY        := PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring poetry
 SPHINXOPTS    := -j auto
 SPHINXBUILD   := $(POETRY) run sphinx-build
 PAPER         :=
