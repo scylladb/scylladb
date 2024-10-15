@@ -17,13 +17,8 @@
 #include "cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include "db/marshal/type_parser.hh"
 #include "schema_registry.hh"
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <type_traits>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
@@ -325,14 +320,14 @@ void schema::rebuild() {
 
     {
         std::vector<column_mapping_entry> cm_columns;
-        for (const column_definition& def : boost::range::join(static_columns(), regular_columns())) {
+        for (const column_definition& def : std::views::join(std::array{static_columns(), regular_columns()})) {
             cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
         }
         _column_mapping = column_mapping(std::move(cm_columns), static_columns_count());
     }
 
     if (is_counter()) {
-        for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
+        for (auto&& cdef : std::views::join(std::array{static_columns(), regular_columns()})) {
             if (!cdef.type->is_counter()) {
                 throw exceptions::configuration_exception(format("Cannot add a non counter column ({}) in a counter column family", cdef.name_as_text()));
             }
@@ -498,7 +493,7 @@ schema::registry_entry() const noexcept {
 
 bool
 schema::has_multi_cell_collections() const {
-    return boost::algorithm::any_of(all_columns(), [] (const column_definition& cdef) {
+    return std::ranges::any_of(all_columns(), [] (const column_definition& cdef) {
         return cdef.type->is_collection() && cdef.type->is_multi_cell();
     });
 }
@@ -1117,7 +1112,7 @@ schema_builder::schema_builder(const schema::raw_schema& raw)
     static_assert(schema::row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
     // Schema builder may add or remove columns and their ids need to be
     // recomputed in build().
-    for (auto& def : _raw._columns | boost::adaptors::filtered([] (auto& def) { return !def.is_primary_key(); })) {
+    for (auto& def : _raw._columns | std::views::filter([] (auto& def) { return !def.is_primary_key(); })) {
             def.id = 0;
             def.ordinal_id = static_cast<ordinal_column_id>(0);
     }
@@ -1191,7 +1186,7 @@ schema_builder& schema_builder::with_computed_column(bytes name, data_type type,
 
 schema_builder& schema_builder::remove_column(bytes name, std::optional<api::timestamp_type> timestamp)
 {
-    auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
+    auto it = std::ranges::find_if(_raw._columns, [&] (auto& column) {
         return column.name() == name;
     });
     if(it == _raw._columns.end()) {
@@ -1231,7 +1226,7 @@ schema_builder& schema_builder::rename_column(bytes from, bytes to)
 
 schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type)
 {
-    auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
+    auto it = std::ranges::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
     SCYLLA_ASSERT(it != _raw._columns.end());
     it->type = new_type;
 
@@ -1244,7 +1239,7 @@ schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type
 }
 
 schema_builder& schema_builder::mark_column_computed(bytes name, column_computation_ptr computation) {
-    auto it = boost::find_if(_raw._columns, [&name] (const column_definition& c) { return c.name() == name; });
+    auto it = std::ranges::find_if(_raw._columns, [&name] (const column_definition& c) { return c.name() == name; });
     SCYLLA_ASSERT(it != _raw._columns.end());
     it->set_computed(std::move(computation));
 
@@ -1626,23 +1621,14 @@ schema::regular_end() const {
     return regular_columns().end();
 }
 
-struct column_less_comparator {
-    bool operator()(const column_definition& def, const bytes& name) {
-        return def.name() < name;
-    }
-    bool operator()(const bytes& name, const column_definition& def) {
-        return name < def.name();
-    }
-};
-
 schema::const_iterator
 schema::regular_lower_bound(const bytes& name) const {
-    return boost::lower_bound(regular_columns(), name, column_less_comparator());
+    return std::ranges::lower_bound(regular_columns(), name, std::ranges::less(), std::mem_fn(&column_definition::name));
 }
 
 schema::const_iterator
 schema::regular_upper_bound(const bytes& name) const {
-    return boost::upper_bound(regular_columns(), name, column_less_comparator());
+    return std::ranges::upper_bound(regular_columns(), name, std::ranges::less(), std::mem_fn(&column_definition::name));
 }
 
 schema::const_iterator
@@ -1657,12 +1643,12 @@ schema::static_end() const {
 
 schema::const_iterator
 schema::static_lower_bound(const bytes& name) const {
-    return boost::lower_bound(static_columns(), name, column_less_comparator());
+    return std::ranges::lower_bound(static_columns(), name, std::ranges::less(), std::mem_fn(&column_definition::name));
 }
 
 schema::const_iterator
 schema::static_upper_bound(const bytes& name) const {
-    return boost::upper_bound(static_columns(), name, column_less_comparator());
+    return std::ranges::upper_bound(static_columns(), name, std::ranges::less(), std::mem_fn(&column_definition::name));
 }
 data_type
 schema::column_name_type(const column_definition& def, const data_type& regular_column_name_type) {
@@ -1736,25 +1722,25 @@ schema::partition_key_size() const {
 
 schema::const_iterator_range_type
 schema::partition_key_columns() const {
-    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::partition_key)
+    return std::ranges::subrange(_raw._columns.begin() + column_offset(column_kind::partition_key)
             , _raw._columns.begin() + column_offset(column_kind::clustering_key));
 }
 
 schema::const_iterator_range_type
 schema::clustering_key_columns() const {
-    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::clustering_key)
+    return std::ranges::subrange(_raw._columns.begin() + column_offset(column_kind::clustering_key)
             , _raw._columns.begin() + column_offset(column_kind::static_column));
 }
 
 schema::const_iterator_range_type
 schema::static_columns() const {
-    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::static_column)
+    return std::ranges::subrange(_raw._columns.begin() + column_offset(column_kind::static_column)
             , _raw._columns.begin() + column_offset(column_kind::regular_column));
 }
 
 schema::const_iterator_range_type
 schema::regular_columns() const {
-    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::regular_column)
+    return std::ranges::subrange(_raw._columns.begin() + column_offset(column_kind::regular_column)
             , _raw._columns.end());
 }
 
@@ -1803,7 +1789,7 @@ schema::position(const column_definition& column) const {
 }
 
 std::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
-    const auto& it = boost::find_if(_raw._indices_by_name, [&] (auto&& e) {
+    const auto& it = std::ranges::find_if(_raw._indices_by_name, [&] (auto&& e) {
         return e.second.equals_noname(target);
     });
     if (it != _raw._indices_by_name.end()) {
@@ -1813,7 +1799,7 @@ std::optional<index_metadata> schema::find_index_noname(const index_metadata& ta
 }
 
 std::vector<index_metadata> schema::indices() const {
-    return boost::copy_range<std::vector<index_metadata>>(_raw._indices_by_name | boost::adaptors::map_values);
+    return _raw._indices_by_name | std::views::values | std::ranges::to<std::vector>();
 }
 
 const std::unordered_map<sstring, index_metadata>& schema::all_indices() const {
@@ -1825,7 +1811,7 @@ bool schema::has_index(const sstring& index_name) const {
 }
 
 std::vector<sstring> schema::index_names() const {
-    return boost::copy_range<std::vector<sstring>>(_raw._indices_by_name | boost::adaptors::map_keys);
+    return _raw._indices_by_name | std::views::keys | std::ranges::to<std::vector>();
 }
 
 data_type schema::make_legacy_default_validator() const {
@@ -1837,7 +1823,7 @@ bool schema::is_synced() const {
 }
 
 bool schema::equal_columns(const schema& other) const {
-    return boost::equal(all_columns(), other.all_columns());
+    return std::ranges::equal(all_columns(), other.all_columns());
 }
 
 schema_ptr schema::make_reversed() const {

@@ -3548,10 +3548,10 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     query::column_id_vector static_columns;
     query::column_id_vector regular_columns;
     if (need_regular) {
-        boost::copy(base->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)), std::back_inserter(regular_columns));
+        std::ranges::copy(base->regular_columns() | std::views::transform(std::mem_fn(&column_definition::id)), std::back_inserter(regular_columns));
     }
     if (need_static) {
-        boost::copy(base->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)), std::back_inserter(static_columns));
+        std::ranges::copy(base->static_columns() | std::views::transform(std::mem_fn(&column_definition::id)), std::back_inserter(static_columns));
     }
     query::partition_slice::option_set opts;
     opts.set(query::partition_slice::option::send_partition_key);

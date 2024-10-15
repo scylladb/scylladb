@@ -14,8 +14,6 @@
 #include <optional>
 #include <unordered_map>
 #include <ranges>
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/join.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/dynamic_bitset.hpp>
 
@@ -644,8 +642,8 @@ public:
     typedef std::vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;
     typedef typename columns_type::const_iterator const_iterator;
-    typedef boost::iterator_range<iterator> iterator_range_type;
-    typedef boost::iterator_range<const_iterator> const_iterator_range_type;
+    typedef std::ranges::subrange<iterator> iterator_range_type;
+    typedef std::ranges::subrange<const_iterator> const_iterator_range_type;
 
     static constexpr int32_t NAME_LENGTH = 48;
 
