@@ -6,7 +6,7 @@ Introduction
 ----------------------
 
 ScyllaDB protects your sensitive data with data-at-rest encryption. It protects
-the privacy of your user's data, reduces the risk of data breaches, and helps
+the privacy of your users' data, reduces the risk of data breaches, and helps
 meet regulatory requirements. In particular, it provides an additional level of
 protection for your data persisted in storage or its backups.
 
