@@ -42,24 +42,34 @@ different block cipher algorithms that are supported by `OpenSSL
 When is Data Encrypted?
 ========================
 
-As SSTables are immutable, tables are encrypted only once, as a result of
-memtable flush, compaction, or upgrade (with :doc:`Nodetool upgradesstables
-</operating-scylla/nodetool-commands/upgradesstables>`).
+As SSTables are immutable, they are encrypted only once, as a result of memtable
+flush, compaction, or upgrade (with :doc:`Nodetool upgradesstables
+</operating-scylla/nodetool-commands/upgradesstables>`). Similarly, system
+artifacts are encrypted when they are written. Encryption configuration takes
+effect at the time of write, and is persisted in the given SSTable's metadata
+file (``Scylla.db``), or the given system artifact's (e.g. commit log's)
+metadata file, respectively.
 
-Once a table is encrypted, all resulting SSTables are encrypted using the most
-current key and algorithm. When you encrypt an existing table, the new SSTables
-are encrypted. The old SSTables which existed before the encryption are not
-updated. These tables are encrypted according to the same actions as described
-previously.
+SSTables of a table, on a particular node, are encrypted using the most recently
+configured algorithm and key that apply to that table and node. When you enable
+encryption for an existing table, only subsequently written SSTables are
+encrypted accordingly. Old SSTables that existed before (re)configuring
+encryption are not updated. Those SSTables remain encrypted (or not encrypted at
+all) according to the configuration that was in effect when they were written.
 
 When is Data Decrypted?
 ========================
 
-When ScyllaDB reads an encrypted SSTable from disk, it fetches the encryption
-key's ID from the SSTable and uses it to extract the key and decrypt the data.
-When ScyllaDB reads an encrypted system table, it fetches the system table
-encryption key location from the scylla.yaml file. It locates the key and uses
-it to extract the key and decrypt the data.
+When ScyllaDB reads an encrypted SSTable from disk, it fetches the algorithm
+descriptor (identifying block cipher, key size, and mode of operation) from the
+SSTable's metadata file (``Scylla.db``). ScyllaDB extracts the key from the key
+provider (which is recorded in the same SSTable metadata file), and then
+decrypts the other SSTable components with the key.
+
+When ScyllaDB reads an encrypted system artifact, such as a commit log, it
+fetches the algorithm descriptor and the key provider from the commit log
+segment's metadata file. ScyllaDB extracts the key from the key provider, and
+then decrypts the system artifact with the key.
 
 
 Encryption Key Types
