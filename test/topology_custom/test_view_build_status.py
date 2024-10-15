@@ -235,7 +235,7 @@ async def test_view_build_status_migration_to_v2(request, manager: ManagerClient
 
     # Check that new writes are written to the v2 table
     await create_mv(cql, "vt2")
-    await wait_for_view_v2(cql, "ks", "vt2", 3)
+    await asyncio.gather(*(wait_for_view_v2(cql, "ks", "vt2", 3, host=h) for h in hosts))
 
     result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
     assert len(result) == 6
