@@ -2095,7 +2095,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
     });
-    co_await container().invoke_on_all([] (gms::gossiper& g) {
+    co_await container().invoke_on(0, [] (gms::gossiper& g) {
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
 }
@@ -2348,7 +2348,7 @@ future<> gossiper::do_stop_gossiping() {
     _scheduled_gossip_task.cancel();
     // Take the semaphore makes sure existing gossip loop is finished
     auto units = co_await get_units(_callback_running, 1);
-    co_await container().invoke_on_all([] (auto& g) {
+    co_await container().invoke_on(0, [] (auto& g) {
         // #21159
         // gossiper::shutdown can be called from more than once place - both 
         // storage_service::isolate and normal gossip service stop. The former is
