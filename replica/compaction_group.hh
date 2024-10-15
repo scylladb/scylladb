@@ -158,6 +158,9 @@ public:
     // invalidated and statistics are updated.
     future<> update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc);
 
+    // Merges all sstables from another group into this one.
+    future<> merge_sstables_from(compaction_group& group);
+
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 
@@ -166,6 +169,7 @@ public:
 
     // Makes a sstable set, which includes all sstables managed by this group
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const;
+    std::vector<sstables::shared_sstable> all_sstables() const;
 
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
@@ -241,6 +245,8 @@ public:
     bool split_unready_groups_are_empty() const;
 
     void add_merging_group(compaction_group_ptr);
+    const std::vector<compaction_group_ptr>& merging_groups() const;
+    future<> remove_empty_merging_groups();
 
     // Puts the storage group in split mode, in which it internally segregates data
     // into two sstable sets and two memtable sets corresponding to the two adjacent
@@ -282,6 +288,8 @@ using storage_group_map = absl::flat_hash_map<size_t, storage_group_ptr, absl::H
 class storage_group_manager {
 protected:
     storage_group_map _storage_groups;
+protected:
+    virtual future<> stop() = 0;
 public:
     virtual ~storage_group_manager();
 
