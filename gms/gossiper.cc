@@ -1024,7 +1024,7 @@ future<> gossiper::failure_detector_loop() {
         try {
             while (_live_endpoints.empty() && is_enabled()) {
                 logger.debug("failure_detector_loop: Wait until live_nodes={} is not empty", _live_endpoints);
-                co_await sleep_abortable(std::chrono::milliseconds(1000), _abort_source);
+                co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
             }
             if (!is_enabled()) {
                 co_return;
