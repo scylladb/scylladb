@@ -287,7 +287,7 @@ static bool should_count_as_msg_processing(const std::map<inet_address, endpoint
 future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
-    if (!is_enabled() && !is_in_shadow_round()) {
+    if (!is_enabled()) {
         co_return;
     }
 
@@ -311,11 +311,6 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
     auto from = id;
     auto ack_msg_digest = std::move(g_digest_list);
-    if (is_in_shadow_round()) {
-        finish_shadow_round();
-        // don't bother doing anything else, we have what we came for
-        co_return;
-    }
     ack_msg_pending& p = _ack_handlers[from.addr];
     if (p.pending) {
         // The latest ack message digests from peer has the latest information, so
@@ -680,7 +675,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     logger.debug("apply_state_locally_endpoints={}", endpoints);
 
     co_await coroutine::parallel_for_each(endpoints, [this, &map] (auto&& ep) -> future<> {
-        if (ep == get_broadcast_address() && !is_in_shadow_round()) {
+        if (ep == get_broadcast_address()) {
             return make_ready_future<>();
         }
         if (_topo_sm) {
@@ -1793,9 +1788,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
         _endpoints_to_talk_with.front().push_back(addr);
     }
 
-    if (!is_in_shadow_round()) {
-        logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
-    }
+    logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
 
     co_await _subscribers.for_each([addr, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
         co_await subscriber->on_alive(addr, es, pid);
@@ -1819,7 +1812,7 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
 
     endpoint_state_ptr eps_old = get_endpoint_state_ptr(ep);
 
-    if (!is_dead_state(eps) && !is_in_shadow_round()) {
+    if (!is_dead_state(eps)) {
         if (_endpoint_state_map.contains(ep))  {
             logger.info("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
@@ -1828,16 +1821,6 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     co_await replicate(ep, eps, pid);
-
-    if (is_in_shadow_round()) {
-        // In shadow round, we only interested in the peer's endpoint_state,
-        // e.g., gossip features, host_id, tokens. No need to call the
-        // on_restart or on_join callbacks or to go through the mark alive
-        // procedure with EchoMessage gossip message. We will do them during
-        // normal gossip runs anyway.
-        logger.debug("In shadow round addr={}, eps={}", ep, eps);
-        co_return;
-    }
 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
@@ -2395,18 +2378,6 @@ future<> gossiper::stop() {
 
 bool gossiper::is_enabled() const {
     return _enabled && !_abort_source.abort_requested();
-}
-
-void gossiper::goto_shadow_round() {
-    _in_shadow_round = true;
-}
-
-void gossiper::finish_shadow_round() {
-    _in_shadow_round = false;
-}
-
-bool gossiper::is_in_shadow_round() const {
-    return _in_shadow_round;
 }
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {

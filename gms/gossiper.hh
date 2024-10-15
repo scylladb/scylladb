@@ -641,12 +641,6 @@ public:
 public:
     bool is_enabled() const;
 
-    void finish_shadow_round();
-
-    bool is_in_shadow_round() const;
-
-    void goto_shadow_round();
-
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
 
