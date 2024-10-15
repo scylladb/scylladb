@@ -660,49 +660,6 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
     co_return std::move(row_list);
 }
 
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization) {
-    auto cmp = position_in_partition::tri_compare(*s);
-    lw_shared_ptr<mutation_fragment> last_mf;
-    lw_shared_ptr<const decorated_key_with_hash> last_dk;
-    bool do_small_table_optimization = erm && small_table_optimization;
-    auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
-    auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
-    auto myip = do_small_table_optimization ? erm->get_topology().my_address() : gms::inet_address();
-    for (auto& r : rows) {
-        thread::maybe_yield();
-        if (!r.dirty_on_master()) {
-            continue;
-        }
-        const auto& dk = r.get_dk_with_hash()->dk;
-        if (do_small_table_optimization) {
-            // Check if the token is owned by the node
-            auto eps = strat->calculate_natural_ips(dk.token(), *tm).get();
-            if (!eps.contains(myip)) {
-                rlogger.trace("master: ignore row, token={}", dk.token());
-                continue;
-            }
-        }
-        writer->create_writer();
-        auto mf = r.get_mutation_fragment_ptr();
-        if (last_mf && last_dk &&
-                cmp(last_mf->position(), mf->position()) == 0 &&
-                dk.tri_compare(*s, last_dk->dk) == 0 &&
-                last_mf->mergeable_with(*mf)) {
-            last_mf->apply(*s, std::move(*mf));
-        } else {
-            if (last_mf && last_dk) {
-                writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
-            }
-            last_mf = mf;
-            last_dk = r.get_dk_with_hash();
-        }
-        r.reset_mutation_fragment();
-    }
-    if (last_mf && last_dk) {
-        writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
-    }
-}
-
 class repair_meta {
     friend repair_meta_tracker;
 public:
@@ -1916,6 +1873,49 @@ public:
         co_await apply_rows_on_follower(std::move(rows));
     }
 };
+
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization) {
+    auto cmp = position_in_partition::tri_compare(*s);
+    lw_shared_ptr<mutation_fragment> last_mf;
+    lw_shared_ptr<const decorated_key_with_hash> last_dk;
+    bool do_small_table_optimization = erm && small_table_optimization;
+    auto* strat = do_small_table_optimization ? &erm->get_replication_strategy() : nullptr;
+    auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
+    auto myip = do_small_table_optimization ? erm->get_topology().my_address() : gms::inet_address();
+    for (auto& r : rows) {
+        thread::maybe_yield();
+        if (!r.dirty_on_master()) {
+            continue;
+        }
+        const auto& dk = r.get_dk_with_hash()->dk;
+        if (do_small_table_optimization) {
+            // Check if the token is owned by the node
+            auto eps = strat->calculate_natural_ips(dk.token(), *tm).get();
+            if (!eps.contains(myip)) {
+                rlogger.trace("master: ignore row, token={}", dk.token());
+                continue;
+            }
+        }
+        writer->create_writer();
+        auto mf = r.get_mutation_fragment_ptr();
+        if (last_mf && last_dk &&
+                cmp(last_mf->position(), mf->position()) == 0 &&
+                dk.tri_compare(*s, last_dk->dk) == 0 &&
+                last_mf->mergeable_with(*mf)) {
+            last_mf->apply(*s, std::move(*mf));
+        } else {
+            if (last_mf && last_dk) {
+                writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+            }
+            last_mf = mf;
+            last_dk = r.get_dk_with_hash();
+        }
+        r.reset_mutation_fragment();
+    }
+    if (last_mf && last_dk) {
+        writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+    }
+}
 
 // Must run inside a seastar thread
 static repair_hash_set
