@@ -36,7 +36,7 @@ To create a new knowledge base article (KB):
 ### Prerequisites
 
 * Python 3. Check your version with `$ python --version`.
-* [poetry](https://python-poetry.org/) 1.12 or later
+* [poetry](https://python-poetry.org/) 1.8.1 or later
 * make
 
 #### Mac OS X
