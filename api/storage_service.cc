@@ -1068,18 +1068,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        int value = ctx.db.local().get_compaction_manager().throughput_mbs();
-        return make_ready_future<json::json_return_type>(value);
-    });
-
-    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto value = req->get_query_param("value");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
     ss::is_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<http::request> req) {
         // If this is issued in parallel with an ongoing change, we may see values not agreeing.
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
@@ -1621,8 +1609,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::is_joined.unset(r);
     ss::set_stream_throughput_mb_per_sec.unset(r);
     ss::get_stream_throughput_mb_per_sec.unset(r);
-    ss::get_compaction_throughput_mb_per_sec.unset(r);
-    ss::set_compaction_throughput_mb_per_sec.unset(r);
     ss::is_incremental_backups_enabled.unset(r);
     ss::set_incremental_backups_enabled.unset(r);
     ss::rebuild.unset(r);
