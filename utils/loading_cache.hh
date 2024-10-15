@@ -751,7 +751,7 @@ public:
         , _touch_count(0)
     {
         // We don't want to allow SectionHitThreshold to be greater than half the max value of _touch_count to avoid a wrap around
-        static_assert(SectionHitThreshold <= std::numeric_limits<typeof(_touch_count)>::max() / 2, "SectionHitThreshold value is too big");
+        static_assert(SectionHitThreshold <= std::numeric_limits<decltype(_touch_count)>::max() / 2, "SectionHitThreshold value is too big");
 
         _ts_val_ptr->set_anchor_back_reference(this);
         owning_section_size() += _ts_val_ptr->size();
