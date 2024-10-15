@@ -53,7 +53,6 @@ class group0_state_id_handler {
     lowres_clock::duration _refresh_interval;
 
     timer<> _timer;
-    bool _stopped = false;
 
     utils::UUID _state_id_last_advertised;
     utils::UUID _state_id_last_reconcile;
@@ -65,10 +64,7 @@ class group0_state_id_handler {
 public:
     group0_state_id_handler(replica::database& local_db, gms::gossiper& gossiper, const raft_address_map& address_map, group0_server_accessor server_accessor);
 
-    ~group0_state_id_handler();
-
-    void start();
-    void stop();
+    void run();
 
     future<> advertise_state_id(utils::UUID state_id);
 };

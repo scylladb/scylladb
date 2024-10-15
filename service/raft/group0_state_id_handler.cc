@@ -116,19 +116,9 @@ group0_state_id_handler::group0_state_id_handler(
     , _refresh_interval(get_refresh_interval(local_db)) {
 }
 
-group0_state_id_handler::~group0_state_id_handler() {
-    if (!_stopped) {
-        on_fatal_internal_error(slogger, "group0_state_id_handler is being destroyed without being stopped");
-    }
-}
-
-void group0_state_id_handler::start() {
+void group0_state_id_handler::run() {
     if (this_shard_id() != 0) {
         on_fatal_internal_error(slogger, "group0_state_id_handler must be started on shard 0");
-    }
-
-    if (_stopped) {
-        return;
     }
 
     _timer.set_callback([this] {
@@ -141,11 +131,6 @@ void group0_state_id_handler::start() {
     // after that send every _refresh_interval.
 
     _timer.arm(2 * gms::gossiper::INTERVAL);
-}
-
-void group0_state_id_handler::stop() {
-    _timer.cancel();
-    _stopped = true;
 }
 
 future<> group0_state_id_handler::advertise_state_id(utils::UUID state_id) {
