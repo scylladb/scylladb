@@ -60,6 +60,7 @@ struct ack_msg_pending {
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
+    locator::host_id host_id;
     utils::UUID group0_id;
     std::set<inet_address> seeds;
     sstring partitioner;
