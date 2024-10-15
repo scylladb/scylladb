@@ -92,4 +92,7 @@ future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<d
 /// Reads tablet transition stage (if any)
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
 
+/// Validates changes to system.tablets represented by mutations
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations);
+
 } // namespace replica
