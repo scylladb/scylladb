@@ -268,9 +268,7 @@ private:
     // which is then copied to temporary copies for all shards
     // and then applied atomcically on all shards.
     //
-    // Finally, the `on_success` callback is called on shard 0 iff replication was successful.
-    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func,
-            std::function<void(gossiper&)> on_success = [] (gossiper&) {});
+    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func);
 
     // replicate shard 0 live and unreachable endpoints sets across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration

@@ -903,8 +903,7 @@ future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
     return get_units(_endpoint_update_semaphore, 1, _abort_source);
 }
 
-future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func,
-        std::function<void(gossiper&)> on_success) {
+future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func) {
     auto lock = co_await lock_endpoint_update_semaphore();
     auto cloned = std::make_unique<live_and_unreachable_endpoints>(_live_endpoints, _unreachable_endpoints);
     func(*cloned);
@@ -915,8 +914,6 @@ future<> gossiper::mutate_live_and_unreachable_endpoints(std::function<void(live
     // but that's not too bad as changing _unreachable_endpoints
     // is rare enough.
     co_await replicate_live_endpoints_on_change(make_foreign(std::move(cloned)), _live_endpoints_version + 1);
-
-    on_success(*this);
 }
 
 future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
@@ -1744,9 +1741,8 @@ future<> gossiper::real_mark_alive(inet_address addr) {
         data.unreachable.erase(addr);
         auto [it_, inserted] = data.live.insert(addr);
         was_live = !inserted;
-    }, [addr] (gossiper& g) {
-        g._expire_time_endpoint_map.erase(addr);
     });
+    _expire_time_endpoint_map.erase(addr);
     if (was_live) {
         co_return;
     }
