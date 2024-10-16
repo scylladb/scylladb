@@ -2640,7 +2640,9 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     if (ep && *ep == endpoint && tm.is_normal_token_owner(host_id)) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-            co_await _sys_ks.local().update_peer_info(endpoint, host_id, get_peer_info_for_update(endpoint, states));
+            if (auto info = get_peer_info_for_update(endpoint, states)) {
+                co_await _sys_ks.local().update_peer_info(endpoint, host_id, *info);
+            }
         }
         if (states.contains(application_state::RPC_READY)) {
             slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
@@ -2707,11 +2709,23 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
     if (!ep_state) {
         return db::system_keyspace::peer_info{};
     }
-    return get_peer_info_for_update(endpoint, ep_state->get_application_state_map());
+    auto info = get_peer_info_for_update(endpoint, ep_state->get_application_state_map());
+    if (!info) {
+        on_internal_error_noexcept(slogger, seastar::format("get_peer_info_for_update({}): application state has no peer info: {}", endpoint, ep_state->get_application_state_map()));
+        return db::system_keyspace::peer_info{};
+    }
+    return *info;
 }
 
-db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
-    db::system_keyspace::peer_info ret;
+std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
+    std::optional<db::system_keyspace::peer_info> ret;
+
+    auto get_peer_info = [&] () -> db::system_keyspace::peer_info& {
+        if (!ret) {
+            ret.emplace();
+        }
+        return *ret;
+    };
 
     auto set_field = [&]<typename T> (std::optional<T>& field,
             const gms::versioned_value& value,
@@ -2732,28 +2746,28 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
     for (const auto& [state, value] : app_state_map) {
         switch (state) {
         case application_state::DC:
-            set_field(ret.data_center, value, "data_center", true);
+            set_field(get_peer_info().data_center, value, "data_center", true);
             break;
         case application_state::INTERNAL_IP:
-            set_field(ret.preferred_ip, value, "preferred_ip", false);
+            set_field(get_peer_info().preferred_ip, value, "preferred_ip", false);
             break;
         case application_state::RACK:
-            set_field(ret.rack, value, "rack", true);
+            set_field(get_peer_info().rack, value, "rack", true);
             break;
         case application_state::RELEASE_VERSION:
-            set_field(ret.release_version, value, "release_version", true);
+            set_field(get_peer_info().release_version, value, "release_version", true);
             break;
         case application_state::RPC_ADDRESS:
-            set_field(ret.rpc_address, value, "rpc_address", false);
+            set_field(get_peer_info().rpc_address, value, "rpc_address", false);
             break;
         case application_state::SCHEMA:
-            set_field(ret.schema_version, value, "schema_version", false);
+            set_field(get_peer_info().schema_version, value, "schema_version", false);
             break;
         case application_state::TOKENS:
             // tokens are updated separately
             break;
         case application_state::SUPPORTED_FEATURES:
-            set_field(ret.supported_features, value, "supported_features", true);
+            set_field(get_peer_info().supported_features, value, "supported_features", true);
             break;
         default:
             break;
