@@ -10,9 +10,8 @@
 #pragma once
 
 #include <filesystem>
+#include "utils/s3/client_fwd.hh"
 #include "tasks/task_manager.hh"
-
-namespace s3 { class client; }
 
 namespace db {
 class snapshot_ctl;

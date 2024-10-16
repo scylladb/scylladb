@@ -17,6 +17,7 @@
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
