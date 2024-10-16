@@ -25,6 +25,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
     std::exception_ptr _ex;
+    s3::upload_progress _progress = {};
     void do_backup();
 
 protected:
@@ -42,6 +43,7 @@ public:
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;
     virtual tasks::is_abortable is_abortable() const noexcept override;
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
 };
 
 } // snapshot namespace
