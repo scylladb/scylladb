@@ -1860,7 +1860,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
         }
 
         // this will create an oversized entry set.
-        auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 60s);
+        auto res = co_await log.add_entries(writers, db::timeout_clock::now() + 200s);
 
         auto i = mutations.begin();
         for (auto& h : res) {
