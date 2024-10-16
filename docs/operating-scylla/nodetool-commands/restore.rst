@@ -19,6 +19,7 @@ Syntax
                --keyspace <keyspace>
                --table <table>
                [--nowait]
+               [--scope <scope>]
                <sstables>...
 
 Example
@@ -43,7 +44,14 @@ Options
 * ``--keyspace`` - Name of the keyspace to load SSTables into
 * ``--table`` - Name of the table to load SSTables into
 * ``--nowait`` - Don't wait on the restore process
+* ``--scope`` - Use specified load-and-stream scope
 * ``<sstables>`` - Remainder of keys of the TOC (Table of Contents) components of SSTables to restore, relative to the specified prefix
+
+The `scope` parameter describes the list of nodes from the cluster to which restoring will
+put data. It can be one of `node`, `rack` or `dc`, so restoring the data will be done on,
+respectively, local node one, rack or dc the local node lives in. It's expected that the
+restore command is also called on all other nodes, racks or dcs to have the data restored
+on all the cluster.
 
 See also
 
