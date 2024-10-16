@@ -160,6 +160,8 @@ public:
 protected:
     virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, std::function<void(unsigned)> on_streamed);
+private:
+    inet_address_vector_replica_set get_all_endpoints(const dht::token& token) const;
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
@@ -191,6 +193,10 @@ private:
 };
 
 inet_address_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
+    return get_all_endpoints(token);
+}
+
+inet_address_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token& token) const {
     if (_primary_replica_only) {
         return get_primary_endpoints(token);
     }
