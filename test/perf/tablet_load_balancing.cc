@@ -31,6 +31,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/key_utils.hh"
 
 using namespace locator;
 using namespace replica;
@@ -241,9 +242,10 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             testlog.info("Added new node: {} ({})", hosts.back(), ips.back());
         };
 
-        auto add_host_to_topology = [&] (token_metadata& tm, int i) {
+        auto add_host_to_topology = [&] (token_metadata& tm, int i) -> future<> {
             tm.update_host_id(hosts[i], ips[i]);
             tm.update_topology(hosts[i], rack1, node::state::normal, shard_count);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(float(i) / hosts.size()))}, hosts[i]);
         };
 
         for (int i = 0; i < n_hosts; ++i) {
@@ -262,8 +264,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         auto bootstrap = [&] {
             stm.mutate_token_metadata([&] (token_metadata& tm) {
                 add_host();
-                add_host_to_topology(tm, hosts.size() - 1);
-                return make_ready_future<>();
+                return add_host_to_topology(tm, hosts.size() - 1);
             }).get();
             global_res.stats += rebalance_tablets(e.get_tablet_allocator().local(), stm);
         };
@@ -289,11 +290,10 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             ips.erase(ips.begin() + i);
         };
 
-        stm.mutate_token_metadata([&] (token_metadata& tm) {
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
             for (int i = 0; i < n_hosts; ++i) {
-                add_host_to_topology(tm, i);
+                co_await add_host_to_topology(tm, i);
             }
-            return make_ready_future<>();
         }).get();
 
         auto allocate = [&] (schema_ptr s, int rf, std::optional<int> initial_tablets) {
