@@ -69,6 +69,7 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
     print(f'Status: {status}, waiting to finish')
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
+    assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
 
     objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.all() ])
     for f in files:
