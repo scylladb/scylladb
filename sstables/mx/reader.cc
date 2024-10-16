@@ -1033,6 +1033,8 @@ private:
         column_label:
             if (_subcolumns_to_read == 0) {
                 if (no_more_columns()) {
+                    // Release buffer used to read column values.
+                    _column_value = fragmented_temporary_buffer();
                     _state = state::FLAGS;
                     if (_consumer.consume_row_end() == data_consumer::proceed::no) {
                         co_yield data_consumer::proceed::no;
