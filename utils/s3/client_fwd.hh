@@ -11,4 +11,9 @@
 
 namespace s3 {
 class client;
+
+struct upload_progress {
+    size_t total;
+    size_t uploaded;
+};
 }
