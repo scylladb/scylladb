@@ -17,7 +17,6 @@
 #include <stdexcept>
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/on_internal_error.hh>
-#include <boost/regex.hpp>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
@@ -58,33 +57,8 @@ public:
         }
         return _value.get_least_significant_bits();
     }
-    static generation_type from_string(const std::string& s) {
-        int64_t int_value;
-        if (auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), int_value);
-            ec == std::errc() && ptr == s.data() + s.size()) {
-            return generation_type(int_value);
-        } else {
-            static const boost::regex pattern("([0-9a-z]{4})_([0-9a-z]{4})_([0-9a-z]{5})([0-9a-z]{13})");
-            boost::smatch match;
-            if (!boost::regex_match(s, match, pattern)) {
-                throw std::invalid_argument(fmt::format("invalid UUID: {}", s));
-            }
-            utils::UUID_gen::decimicroseconds timestamp = {};
-            auto decode_base36 = [](const std::string& s) {
-                std::size_t pos{};
-                auto n = std::stoull(s, &pos, 36);
-                if (pos != s.size()) {
-                    throw std::invalid_argument(fmt::format("invalid part in UUID: {}", s));
-                }
-                return n;
-            };
-            timestamp += std::chrono::days{decode_base36(match[1])};
-            timestamp += std::chrono::seconds{decode_base36(match[2])};
-            timestamp += ::utils::UUID_gen::decimicroseconds{decode_base36(match[3])};
-            int64_t lsb = decode_base36(match[4]);
-            return generation_type{utils::UUID_gen::get_time_UUID_raw(timestamp, lsb)};
-        }
-    }
+    static generation_type from_string(const std::string& s);
+
     // return true if the generation holds a valid id
     explicit operator bool() const noexcept {
         return bool(_value);
