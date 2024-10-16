@@ -13,7 +13,7 @@ function(add_perf_test name)
     PRIVATE
       perf-lib
       test-lib
-      seastar_perf_testing
+      Seastar::seastar_perf_testing
       Seastar::seastar
       xxHash::xxhash)
   if(parsed_args_LIBRARIES)

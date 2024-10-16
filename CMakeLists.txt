@@ -274,7 +274,7 @@ target_link_libraries(scylla PRIVATE
     utils)
 
 target_link_libraries(scylla PRIVATE
-    seastar
+    Seastar::seastar
     absl::headers
     Boost::program_options)
 
