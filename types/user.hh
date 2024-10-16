@@ -12,6 +12,8 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 
+#include <ranges>
+
 class user_type_impl : public tuple_type_impl {
     using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>, bool>;
 public:
@@ -28,8 +30,10 @@ public:
             , _keyspace(std::move(keyspace))
             , _name(std::move(name))
             , _field_names(std::move(field_names))
-            , _string_field_names(boost::copy_range<std::vector<sstring>>(_field_names | boost::adaptors::transformed(
-                    [] (const bytes& field_name) { return utf8_type->to_string(field_name); })))
+            , _string_field_names(_field_names
+                | std::views::transform(
+                    [] (const bytes& field_name) { return utf8_type->to_string(field_name); })
+                | std::ranges::to<std::vector<sstring>>())
             , _is_multi_cell(is_multi_cell) {
     }
     static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name,
