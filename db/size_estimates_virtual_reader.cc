@@ -64,19 +64,20 @@ public:
     using pointer = const virtual_row*;
     using reference = const virtual_row&;
 private:
-    std::reference_wrapper<const std::vector<bytes>> _cf_names;
-    std::reference_wrapper<const std::vector<token_range>> _ranges;
+    const std::vector<bytes>* _cf_names = nullptr;
+    const std::vector<token_range>* _ranges = nullptr;
     size_t _cf_names_idx = 0;
     size_t _ranges_idx = 0;
 public:
     struct end_iterator_tag {};
+    virtual_row_iterator() = default;
     virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges)
-            : _cf_names(std::ref(cf_names))
-            , _ranges(std::ref(ranges))
+            : _cf_names(&cf_names)
+            , _ranges(&ranges)
     { }
     virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges, end_iterator_tag)
-            : _cf_names(std::ref(cf_names))
-            , _ranges(std::ref(ranges))
+            : _cf_names(&cf_names)
+            , _ranges(&ranges)
             , _cf_names_idx(cf_names.size())
             , _ranges_idx(ranges.size())
     {
@@ -88,7 +89,7 @@ public:
         }
     }
     virtual_row_iterator& operator++() {
-        if (++_ranges_idx == _ranges.get().size() && ++_cf_names_idx < _cf_names.get().size()) {
+        if (++_ranges_idx == _ranges->size() && ++_cf_names_idx < _cf_names->size()) {
             _ranges_idx = 0;
         }
         return *this;
@@ -99,7 +100,7 @@ public:
         return i;
     }
     const value_type operator*() const {
-        return { _cf_names.get()[_cf_names_idx], _ranges.get()[_ranges_idx] };
+        return { (*_cf_names)[_cf_names_idx], (*_ranges)[_ranges_idx] };
     }
     bool operator==(const virtual_row_iterator& i) const {
         return _cf_names_idx == i._cf_names_idx
