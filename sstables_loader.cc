@@ -169,6 +169,10 @@ public:
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
+    virtual future<> stream() override;
+    virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const override;
+
+private:
     inet_address_vector_replica_set to_replica_set(const locator::tablet_replica_set& replicas) const {
         auto& tm = _erm->get_token_metadata();
         inet_address_vector_replica_set result;
@@ -179,9 +183,6 @@ public:
         return result;
     }
 
-    virtual future<> stream() override;
-    virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const override;
-private:
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables) {
         // FIXME: fully contained sstables can be optimized.
         return stream_sstables(pr, std::move(sstables));
