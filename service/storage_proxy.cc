@@ -6091,14 +6091,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 }
 
 future<result<storage_proxy::coordinator_query_result>>
-storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+storage_proxy::query_partition_key_range_vnodes(
+        schema_ptr schema,
+        locator::effective_replication_map_ptr erm,
+        lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    replica::table& table = _db.local().find_column_family(schema->id());
-    auto erm = table.get_effective_replication_map();
-
     // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
     // (which can be expensive in clusters with vnodes)
     auto merge_tokens = !erm->get_replication_strategy().natural_endpoints_depend_on_token();
@@ -6152,6 +6151,97 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     }
 
     co_return coordinator_query_result(merger.get(), std::move(used_replicas));
+}
+
+future<result<storage_proxy::coordinator_query_result>>
+storage_proxy::query_partition_key_range_tablets(
+        schema_ptr schema,
+        locator::effective_replication_map_ptr erm,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector partition_ranges,
+        db::consistency_level cl,
+        storage_proxy::coordinator_query_options query_options) {
+    query_ranges_to_vnodes_generator ranges_to_vnodes(erm->make_splitter(), schema, std::move(partition_ranges), false);
+
+    auto trace_state = query_options.trace_state;
+    auto permit = query_options.permit;
+    auto timeout = query_options.timeout(*this);
+
+    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
+    auto p = shared_from_this();
+    auto& cf = _db.local().find_column_family(schema);
+    auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
+    const auto& tm = erm->get_token_metadata();
+
+    if (_features.range_scan_data_variant) {
+        cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
+    }
+
+    auto& preferred_replicas = query_options.preferred_replicas;
+
+    const auto preferred_replicas_for_range = [&preferred_replicas, &tm] (const dht::partition_range& r) {
+        auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
+        return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
+    };
+    const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
+
+    dht::partition_range_vector ranges = ranges_to_vnodes(1);
+    dht::partition_range_vector::iterator i = ranges.begin();
+
+    if (i != ranges.end()) {
+        dht::partition_range& range = *i;
+        inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
+        inet_address_vector_replica_set preferred_replicas = preferred_replicas_for_range(*i);
+        inet_address_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, preferred_replicas, pcf);
+        auto token_range = to_token_range(range);
+
+        slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
+                    range, schema->ks_name(), schema->cf_name(), filtered_endpoints);
+        try {
+            db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
+        } catch (exceptions::unavailable_exception& ex) {
+            slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+            get_stats().range_slice_unavailables.mark();
+            throw;
+        }
+
+        auto exec = ::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate());
+        auto wrapped_result = co_await exec->execute(timeout);
+
+        if (!wrapped_result) {
+            auto error = std::move(wrapped_result).assume_error();
+            handle_read_error(error.clone(), true);
+            co_return error;
+        }
+
+        foreign_ptr<lw_shared_ptr<query::result>> result = std::move(wrapped_result).value();
+        result->ensure_counts();
+
+        auto used_replicas = replicas_per_token_range();
+        auto replica_ids = endpoints_to_replica_ids(tm, exec->used_targets());
+        used_replicas.emplace(token_range, replica_ids);
+
+        co_return coordinator_query_result(std::move(result), std::move(used_replicas));
+    }
+
+    auto result = make_foreign(make_lw_shared<query::result>(bytes_ostream(), query::short_read::no, 0, 0, std::nullopt));
+
+    co_return coordinator_query_result(std::move(result), replicas_per_token_range());
+}
+
+future<result<storage_proxy::coordinator_query_result>>
+storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector partition_ranges,
+        db::consistency_level cl,
+        storage_proxy::coordinator_query_options query_options) {
+    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+    replica::table& table = _db.local().find_column_family(schema->id());
+    auto erm = table.get_effective_replication_map();
+    auto query_fn = table.uses_tablets()
+        ? &storage_proxy::query_partition_key_range_tablets
+        : &storage_proxy::query_partition_key_range_vnodes;
+
+    return (this->*query_fn)(std::move(schema), std::move(erm), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
 }
 
 future<storage_proxy::coordinator_query_result>

@@ -390,6 +390,20 @@ private:
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
+    future<result<coordinator_query_result>> query_partition_key_range_vnodes(
+            schema_ptr schema,
+            locator::effective_replication_map_ptr erm_ptr,
+            lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector partition_ranges,
+            db::consistency_level cl,
+            coordinator_query_options optional_params);
+    future<result<coordinator_query_result>> query_partition_key_range_tablets(
+            schema_ptr schema,
+            locator::effective_replication_map_ptr erm_ptr,
+            lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector partition_ranges,
+            db::consistency_level cl,
+            coordinator_query_options optional_params);
     static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
     future<result<query_partition_key_range_concurrent_result>> query_partition_key_range_concurrent(clock_type::time_point timeout,
             locator::effective_replication_map_ptr erm,
