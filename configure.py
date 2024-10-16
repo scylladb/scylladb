@@ -1722,7 +1722,7 @@ def configure_seastar(build_dir, mode, mode_config):
         seastar_cmake_args += ['-DSeastar_ALLOC_FAILURE_INJECTION=ON']
     if args.seastar_debug_allocations:
         seastar_cmake_args += ['-DSeastar_DEBUG_ALLOCATIONS=ON']
-    if modes[mode]['build_seastar_shared_libs']:
+    if mode_config['build_seastar_shared_libs']:
         seastar_cmake_args += ['-DBUILD_SHARED_LIBS=ON']
 
     seastar_cmd = ['cmake', '-G', 'Ninja', real_relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
