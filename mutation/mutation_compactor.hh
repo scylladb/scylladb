@@ -11,6 +11,7 @@
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_fragment.hh"
 #include "mutation_fragment_stream_validator.hh"
+#include "mutation_tombstone_stats.hh"
 #include "tombstone_gc.hh"
 #include "full_position.hh"
 #include <type_traits>
@@ -182,6 +183,7 @@ class compact_mutation_state {
     std::unique_ptr<mutation_compactor_garbage_collector> _collector;
 
     compaction_stats _stats;
+    tombstone_purge_stats* _tombstone_stats = nullptr;
 
     mutation_fragment_stream_validating_filter _validator;
 
@@ -250,14 +252,36 @@ private:
     }
 
     bool can_purge_tombstone(const tombstone& t, is_shadowable is_shadowable, const gc_clock::time_point deletion_time) {
+        bool purgeable = false;
+        std::optional<max_purgeable::timestamp_source> timestamp_source;
+
         if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
             // max purgeable timestamp.
-            return satisfy_grace_period(deletion_time) && can_gc(t, is_shadowable);
+            purgeable = satisfy_grace_period(deletion_time);
+            if (purgeable) {
+                purgeable = can_gc(t, is_shadowable, timestamp_source);
+            }
+        } else {
+            purgeable = can_gc(t, is_shadowable, timestamp_source) && satisfy_grace_period(deletion_time);
         }
-        return can_gc(t, is_shadowable) && satisfy_grace_period(deletion_time);
+
+        if constexpr (sstable_compaction()) {
+            if (_tombstone_stats && t) {
+                ++_tombstone_stats->attempts;
+                if (!purgeable && timestamp_source) {
+                    if (timestamp_source.value() == max_purgeable::timestamp_source::memtable_possibly_shadowing_data) {
+                        ++_tombstone_stats->failures_due_to_overlapping_with_memtable;
+                    } else if (timestamp_source.value() == max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data) {
+                        ++_tombstone_stats->failures_due_to_overlapping_with_uncompacting_sstable;
+                    }
+                }
+            }
+        }
+
+        return purgeable;
     }
 
     bool can_purge_tombstone(const tombstone& t) {
@@ -282,7 +306,7 @@ private:
         }
     }
 
-    bool can_gc(tombstone t, is_shadowable is_shadowable) {
+    bool can_gc(tombstone t, is_shadowable is_shadowable, std::optional<max_purgeable::timestamp_source>& timestamp_source) {
         if (!sstable_compaction()) {
             return true;
         }
@@ -293,6 +317,7 @@ private:
             _max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
         auto ret = t.timestamp < _max_purgeable.timestamp;
+        timestamp_source = _max_purgeable.source;
         mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, _max_purgeable.timestamp, ret);
         return ret;
     };
@@ -319,16 +344,18 @@ public:
 
     compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
             max_purgeable_fn get_max_purgeable,
-            const tombstone_gc_state& gc_state)
+            const tombstone_gc_state& gc_state,
+            tombstone_purge_stats* tombstone_stats = nullptr)
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
-        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable); })
+        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { std::optional<max_purgeable::timestamp_source> source; return can_gc(t, is_shadowable, source); })
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
+        , _tombstone_stats(tombstone_stats)
         // We already have a validator for compaction in the sstable writer, no need to validate twice
         , _validator("mutation_compactor for compaction", _schema, mutation_fragment_stream_validation_level::none)
     {
@@ -662,9 +689,10 @@ public:
     // Can only be used for compact_for_sstables::yes
     compact_mutation_v2(const schema& s, gc_clock::time_point compaction_time,
             max_purgeable_fn get_max_purgeable,
+
             const tombstone_gc_state& gc_state,
-            Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state))
+            Consumer consumer, GCConsumer gc_consumer = GCConsumer(), tombstone_purge_stats* tombstone_stats = nullptr)
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state, tombstone_stats))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
