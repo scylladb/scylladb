@@ -22,6 +22,7 @@
 #include "message/messaging_service.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
+#include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
@@ -2356,14 +2357,10 @@ bool gossiper::is_enabled() const {
 }
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
-    char expire_time_buf[100];
-    auto expire_time_tm = clk::to_time_t(expire_time);
     auto now_ = now();
-    ::tm t_buf;
-    strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", ::localtime_r(&expire_time_tm, &t_buf));
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
-    logger.info("Node {} will be removed from gossip at [{}]: (expire = {}, now = {}, diff = {} seconds)",
-            endpoint, expire_time_buf, expire_time.time_since_epoch().count(),
+    logger.info("Node {} will be removed from gossip at [{:%Y-%m-%d %T}]: (expire = {}, now = {}, diff = {} seconds)",
+            endpoint, fmt::localtime(clk::to_time_t(expire_time)), expire_time.time_since_epoch().count(),
             now_.time_since_epoch().count(), diff);
     _expire_time_endpoint_map[endpoint] = expire_time;
 }
