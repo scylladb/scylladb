@@ -881,6 +881,15 @@
                           "allowMultiple":false,
                           "type":"string",
                           "paramType":"query"
+                      },
+                      {
+                          "name":"scope",
+                          "description":"Stream phase scope",
+                          "required":false,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query",
+                          "enum": ["all", "dc", "rack", "node"]
                       }
                   ]
               }
