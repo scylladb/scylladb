@@ -35,6 +35,7 @@ class view_builder;
 // system. Built on top of the distributed_loader functionality.
 class sstables_loader : public seastar::peering_sharded_service<sstables_loader> {
 public:
+    enum class stream_scope { all, dc, rack, node };
     class task_manager_module : public tasks::task_manager::module {
         public:
             task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "sstables_loader") {}
