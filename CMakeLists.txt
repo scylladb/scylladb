@@ -101,6 +101,7 @@ find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(xxHash REQUIRED)
+find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -276,6 +277,7 @@ target_link_libraries(scylla PRIVATE
 target_link_libraries(scylla PRIVATE
     Seastar::seastar
     absl::headers
+    yaml-cpp::yaml-cpp
     Boost::program_options)
 
 target_include_directories(scylla PRIVATE
