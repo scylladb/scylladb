@@ -126,6 +126,7 @@ using unlink_sstables = bool_class<struct unlink_sstables_tag>;
 
 class sstable_streamer {
 protected:
+    using stream_scope = sstables_loader::stream_scope;
     netw::messaging_service& _ms;
     replica::database& _db;
     replica::table& _table;
@@ -133,6 +134,7 @@ protected:
     std::vector<sstables::shared_sstable> _sstables;
     const primary_replica_only _primary_replica_only;
     const unlink_sstables _unlink_sstables;
+    const stream_scope _stream_scope;
 public:
     sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink)
             : _ms(ms)
@@ -142,6 +144,7 @@ public:
             , _sstables(std::move(sstables))
             , _primary_replica_only(primary)
             , _unlink_sstables(unlink)
+            , _stream_scope(stream_scope::all)
     {
         // By sorting SSTables by their primary key, we allow SSTable runs to be
         // incrementally streamed.
@@ -194,7 +197,18 @@ private:
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
-    return get_all_endpoints(token);
+    return get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
+        switch (scope) {
+        case stream_scope::all:
+            return true;
+        case stream_scope::dc:
+            return topo.get_datacenter(ep) == topo.get_datacenter();
+        case stream_scope::rack:
+            return topo.get_location(ep) == topo.get_location();
+        case stream_scope::node:
+            return topo.is_me(ep);
+        }
+    }) | std::ranges::to<host_id_vector_replica_set>();
 }
 
 host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token& token) const {
