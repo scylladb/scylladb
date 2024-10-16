@@ -1,4 +1,29 @@
 # Generate C++ sources from Swagger definitions
+
+function(generate_swagger)
+  set(one_value_args TARGET VAR IN_FILE OUT_DIR)
+  cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
+  get_filename_component(in_file_name ${args_IN_FILE} NAME)
+  set(generator ${PROJECT_SOURCE_DIR}/seastar/scripts/seastar-json2code.py)
+  set(header_out ${args_OUT_DIR}/${in_file_name}.hh)
+  set(source_out ${args_OUT_DIR}/${in_file_name}.cc)
+
+  add_custom_command(
+    DEPENDS
+      ${args_IN_FILE}
+      ${generator}
+    OUTPUT ${header_out} ${source_out}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${args_OUT_DIR}
+    COMMAND ${generator} --create-cc -f ${args_IN_FILE} -o ${header_out})
+
+  add_custom_target(${args_TARGET}
+    DEPENDS
+      ${header_out}
+      ${source_out})
+
+  set(${args_VAR} ${header_out} ${source_out} PARENT_SCOPE)
+endfunction()
+
 set(swagger_files
   api-doc/authorization_cache.json
   api-doc/cache_service.json
@@ -29,7 +54,7 @@ set(swagger_files
 foreach(f ${swagger_files})
   get_filename_component(fname "${f}" NAME_WE)
   get_filename_component(dir "${f}" DIRECTORY)
-  seastar_generate_swagger(
+  generate_swagger(
     TARGET scylla_swagger_gen_${fname}
     VAR scylla_swagger_gen_${fname}_files
     IN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${f}"
