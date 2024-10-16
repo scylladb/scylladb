@@ -945,6 +945,7 @@ class client::do_upload_file : private multipart_upload {
                     break;
                 }
                 co_await output.write(buf.get(), buf.size());
+                progress.uploaded += buf.size();
             }
             co_await output.flush();
         } catch (...) {
@@ -1070,6 +1071,7 @@ public:
         auto f = co_await open_file_dma(_path.native(), open_flags::ro);
         const auto stat = co_await f.stat();
         const uint64_t file_size = stat.st_size;
+        _progress.total += file_size;
         // use multipart upload when possible in order to transmit parts in
         // parallel to improve throughput
         if (file_size > aws_minimum_part_size) {
