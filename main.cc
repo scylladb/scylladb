@@ -1881,6 +1881,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_cache(ctx).get();
             });
 
+            api::set_server_commitlog(ctx, db).get();
+            auto stop_commitlog_api = defer_verbose_shutdown("commitlog API", [&ctx] {
+                api::unset_server_commitlog(ctx).get();
+            });
+
             if (cfg->maintenance_mode()) {
                 startlog.info("entering maintenance mode.");
 
