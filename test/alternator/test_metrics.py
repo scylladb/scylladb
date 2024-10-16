@@ -104,6 +104,14 @@ def check_increases_metric(metrics, metric_names):
         assert saved_metrics[n] < get_metric(metrics, n, None, the_metrics), f'metric {n} did not increase'
 
 @contextmanager
+def check_increases_table_metric(metrics, metric_name, table, increase_value):
+    the_metrics = get_metrics(metrics)
+    saved_metric = get_metric(metrics, metric_name, {'cf': table}, the_metrics)
+    yield
+    the_metrics = get_metrics(metrics)
+    assert get_metric(metrics, metric_name, {'cf': table}, the_metrics) - saved_metric == increase_value, f'metric {metric_name} did not increase at expected value {increase_value}'
+
+@contextmanager
 def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
     the_metrics = get_metrics(metrics)
     saved_metrics = { x: get_metric(metrics, metric_name, {'op': x}, the_metrics) for x in operation_names }
@@ -137,6 +145,25 @@ def test_batch_get_item_count(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchGetItem'], metric_name='scylla_alternator_batch_item_count', expected_value=2):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+
+KB = 1024
+def test_rcu(test_table_s, metrics):
+    with check_increases_table_metric(metrics, 'scylla_column_family_cru_total', test_table_s.name, 4):
+        p = random_string()
+        val = random_string()
+        total_length = len(p) + len(val) + len("pattanother")
+        val2 = 'a' * (4 * KB - total_length + 1) # message length 4KB +1
+
+        test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+def test_wcu(test_table_s, metrics):
+    with check_increases_table_metric(metrics, 'scylla_column_family_cwu_total', test_table_s.name, 6):
+        p = random_string()
+        val = random_string()
+        total_length = len(p) + len(val) + len("pattanother")
+        val2 = 'a' * (2 * KB - total_length + 1) # message length 2K + 1
+        test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
 
 # Test counters for CreateTable, DescribeTable, UpdateTable and DeleteTable
 def test_table_operations(dynamodb, metrics):
