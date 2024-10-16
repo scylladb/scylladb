@@ -1011,11 +1011,11 @@ class client::do_upload_file : private multipart_upload {
 
         std::exception_ptr ex;
         try {
-        for (size_t offset = 0; offset < total_size; offset += part_size) {
-            part_size = std::min(total_size - offset, part_size);
-            s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
-            co_await upload_part(file{f}, offset, part_size);
-        }
+            for (size_t offset = 0; offset < total_size; offset += part_size) {
+                part_size = std::min(total_size - offset, part_size);
+                s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
+                co_await upload_part(file{f}, offset, part_size);
+            }
 
             co_await finalize_upload();
         } catch (...) {
