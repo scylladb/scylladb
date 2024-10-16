@@ -2528,6 +2528,10 @@ def configure_using_cmake(args):
     source_dir = os.path.realpath(os.path.dirname(__file__))
     build_dir = os.path.join(source_dir, 'build')
 
+    if not args.dist_only:
+        for mode in selected_modes:
+            configure_seastar(build_dir, build_modes[mode].cmake_build_type, modes[mode])
+
     cmake_command = ['cmake']
     cmake_command += [f'-D{var}={value}' for var, value in settings.items()]
     cmake_command += ['-G', 'Ninja Multi-Config',
