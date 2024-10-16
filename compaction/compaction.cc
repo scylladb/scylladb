@@ -511,6 +511,7 @@ protected:
     double _estimated_droppable_tombstone_ratio = 0;
     uint64_t _bloom_filter_checks = 0;
     combined_reader_statistics _reader_statistics;
+    tombstone_purge_stats _tombstone_purge_stats;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     const bool _can_split_large_partition = false;
@@ -855,7 +856,8 @@ private:
             });
         });
         const auto& gc_state = get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state,
+                                               streamed_mutation::forwarding::no, &_tombstone_purge_stats));
     }
 
     future<> consume() {
@@ -877,7 +879,8 @@ private:
                         max_purgeable_func(),
                         get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
-                        get_gc_compacted_fragments_writer());
+                        get_gc_compacted_fragments_writer(),
+                        &_tombstone_purge_stats);
 
                     reader.consume_in_thread(std::move(cfc));
                     return;
@@ -887,7 +890,8 @@ private:
                     max_purgeable_func(),
                     get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
-                    noop_compacted_fragments_consumer());
+                    noop_compacted_fragments_consumer(),
+                    &_tombstone_purge_stats);
                 reader.consume_in_thread(std::move(cfc));
             });
         });
@@ -932,6 +936,7 @@ protected:
                 .end_size = _end_size,
                 .bloom_filter_checks = _bloom_filter_checks,
                 .reader_statistics = std::move(_reader_statistics),
+                .tombstone_purge_stats = std::move(_tombstone_purge_stats),
             },
         };
 
