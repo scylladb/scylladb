@@ -117,6 +117,9 @@ public:
                          sstring object_name,
                          std::optional<tag> tag = {},
                          std::optional<size_t> max_part_size = {});
+    future<> upload_file(std::filesystem::path path,
+                         sstring object_name,
+                         upload_progress& up);
 
     void update_config(endpoint_config_ptr);
 
