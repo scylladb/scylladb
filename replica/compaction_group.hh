@@ -78,6 +78,9 @@ private:
     // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
     future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
+    // Track the maximum timestamp across all SSTables in this group
+    api::timestamp_type _max_sstable_timestamp = api::missing_timestamp;
+    void update_max_sstable_timestamp();
 public:
     compaction_group(table& t, size_t gid, dht::token_range token_range);
     ~compaction_group();
@@ -139,6 +142,7 @@ public:
     void add_sstable(sstables::shared_sstable sstable);
     // Add sstable to maintenance set
     void add_maintenance_sstable(sstables::shared_sstable sst);
+    api::timestamp_type max_sstable_timestamp() const { return _max_sstable_timestamp; }
 
     // Update main sstable set based on info in completion descriptor, where input sstables
     // will be replaced by output ones, row cache ranges are possibly invalidated and

@@ -530,6 +530,16 @@ void compaction_group::backlog_tracker_adjust_charges(const std::vector<sstables
     tracker.replace_sstables(old_sstables, new_sstables);
 }
 
+void compaction_group::update_max_sstable_timestamp() {
+    _max_sstable_timestamp = api::missing_timestamp;
+    _main_sstables->for_each_sstable([this] (const sstables::shared_sstable& sst) {
+        _max_sstable_timestamp = std::max(_max_sstable_timestamp, sst->get_stats_metadata().max_timestamp);
+    });
+    _maintenance_sstables->for_each_sstable([this] (const sstables::shared_sstable& sst) {
+        _max_sstable_timestamp = std::max(_max_sstable_timestamp, sst->get_stats_metadata().max_timestamp);
+    });
+}
+
 lw_shared_ptr<sstables::sstable_set>
 compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
@@ -542,6 +552,7 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
     if (backlog_tracker) {
         table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
+    _max_sstable_timestamp = std::max(_max_sstable_timestamp, sstable->get_stats_metadata().max_timestamp);
     return new_sstables;
 }
 
@@ -555,6 +566,7 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
     _main_sstables = std::move(new_main_sstables);
+    update_max_sstable_timestamp();
 }
 
 void compaction_group::add_maintenance_sstable(sstables::shared_sstable sst) {
@@ -567,6 +579,7 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::maintenance_sstabl
 
 void compaction_group::set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables) {
     _maintenance_sstables = std::move(new_maintenance_sstables);
+    update_max_sstable_timestamp();
 }
 
 void table::add_sstable(compaction_group& cg, sstables::shared_sstable sstable) {
@@ -2310,6 +2323,7 @@ bool compaction_group::empty() const noexcept {
 void compaction_group::clear_sstables() {
     _main_sstables = make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
     _maintenance_sstables = _t.make_maintenance_sstable_set();
+    _max_sstable_timestamp = api::missing_timestamp;
 }
 
 void storage_group::clear_sstables() {
