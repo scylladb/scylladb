@@ -34,6 +34,7 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir)) {
+    _status.progress_units = "bytes ('total' may grow along the way)";
 }
 
 std::string backup_task_impl::type() const {
@@ -46,6 +47,13 @@ tasks::is_internal backup_task_impl::is_internal() const noexcept {
 
 tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
     return tasks::is_abortable::yes;
+}
+
+future<tasks::task_manager::task::progress> backup_task_impl::get_progress() const {
+    co_return tasks::task_manager::task::progress {
+        .completed = _progress.uploaded,
+        .total = _progress.total,
+    };
 }
 
 future<> backup_task_impl::do_backup() {
@@ -81,7 +89,7 @@ future<> backup_task_impl::do_backup() {
         //  - http::client::max_connections limitation
         // FIXME -- s3::client is not abortable yet, but when it will be, need to
         // propagate impl::_as abort requests into upload_file's fibers
-        std::ignore = _client->upload_file(component_name, destination).handle_exception([comp = component_name, &ex] (std::exception_ptr e) {
+        std::ignore = _client->upload_file(component_name, destination, _progress).handle_exception([comp = component_name, &ex] (std::exception_ptr e) {
             snap_log.error("Error uploading {}: {}", comp.native(), e);
             // keep the first exception
             if (!ex) {
