@@ -10,6 +10,8 @@ import pytest
 
 from util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
+from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 
 import nodetool
 
@@ -20,6 +22,22 @@ def get_id_of_cf(cql, cf_name):
 def get_id_of_mv(cql, mv_name):
     ks, mv = mv_name.split(".")
     return cql.execute(f"SELECT id FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{mv}'").one().id
+
+# Utility function for waiting for given view (given as ksname.viewname)
+# to finish its "view building" phase.
+def wait_for_view_built(cql, mv_name, timeout=60):
+    ks, mv = mv_name.split('.')
+    start_time = time.time()
+    while time.time() < start_time + timeout:
+        # In Scylla, system_distributed has RF>1 even on a single-node cluster,
+        # so the default CL=QUORUM doesn't work and we need to choose CL=ONE.
+        query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{mv}'",
+                    consistency_level=ConsistencyLevel.ONE)
+        res = list(cql.execute(query))
+        if res and res[0].status == 'SUCCESS':
+            return
+        time.sleep(0.1)
+    pytest.fail(f'Timed out ({timeout} seconds) waiting for view {mv_name} to get built.')
 
 # Test that building a view with a large value succeeds. Regression test
 # for a bug where values larger than 10MB were rejected during building (#9047)
@@ -1407,3 +1425,117 @@ def test_view_forbids_view_or_index(cql, mv1):
     with pytest.raises(InvalidRequest, match='materialized views'):
         with new_secondary_index(cql, mv1, 'x'):
             pass
+# Test that TRUNCATE on a base table also truncates its views. This test
+# doesn't try to exercise the inconsistency created by non-atomic deletion of a
+# base and views (see #17635) - it just tries to check the basic functionality,
+# that TRUNCATE on a base actually performs a TRUNCATE also on the views.
+def test_truncate_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv1:
+            with new_materialized_view(cql, table, '*', 'b,p', 'b is not null and p is not null') as mv2:
+                # Wait for the view building to end on both views - so we
+                # won't run into issue #17635 in this test (where a view
+                # building in parallel with TRUNCATE results in untruncated
+                # data in the view).
+                for mv in [mv1, mv2]:
+                    wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p,a,b) VALUES (0,1,2)')
+                # Check the data reached the base and both views. On a single-
+                # node cluster, this insertion is synchronous so no need to
+                # retry the reads.
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+                # Check that after a TRUNCATE, the data is gone from the base
+                # table, but also from both views:
+                cql.execute(f'TRUNCATE {table}')
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+
+# Test that DROP TABLE on a base table which has a view is *not* allowed
+# (it's necessary to explicitly DROP MATERIALIZED VIEW the view first):
+def test_drop_table_with_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Interestingly, the error message in Scylla and Cassandra have
+            # the same text ("Cannot drop a table when materialized views
+            # still depend on it") but Cassandra adds in parentheses the name
+            # of the table - while Scylla adds the name of the view that
+            # prevented the deletion. I think Scylla's message is better,
+            # but let's not insist and just look for a phrase that will
+            # probably appear in the error message even if it's changed:
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'DROP TABLE {table}')
+
+# Although the previous test checked that DROP TABLE is not allowed on a
+# table that still has views, a DROP KEYSPACE is allowed and deletes all
+# the tables and views in that keyspace.
+def test_drop_keyspace_with_view(cql, this_dc):
+    ks = unique_name()
+    cql.execute("CREATE KEYSPACE " + ks + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+    try:
+        table = ks + '.' + unique_name()
+        cql.execute(f'CREATE TABLE {table} (p int PRIMARY KEY, a int)')
+        mv = ks + '.' + unique_name()
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE a IS NOT NULL AND p IS NOT NULL PRIMARY KEY (a, p)')
+        # Check that DROP KEYSPACE is allowed, despite the existance of a view
+        cql.execute(f'DROP KEYSPACE {ks}')
+        # It's obvious that if the keyspace no longer exists a view in it
+        # can't possibly exist, but let's verify anyway:
+        with pytest.raises(InvalidRequest, match='does not exist'):
+            cql.execute(f'SELECT * FROM {mv}')
+    finally:
+        cql.execute(f'DROP KEYSPACE IF EXISTS {ks}')
+
+# Test that in many cases, the existance of a materialized view prevents
+# dropping columns from a base table. Scylla does allow dropping *some*
+# columns, the next test will be devoted to those cases.
+# See also C++ test view_schema_test.cc::test_mv_allow_some_column_drops()
+# which checks the same scenarios, but as a C++ test cannot be compared to
+# Cassandra.
+def test_alter_table_drop_forbidden(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Base column base column b is selected, and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+            # A view key column is also selected and can't be dropped
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP a')
+        with new_materialized_view(cql, base, 'p,a', 'p', 'p is not null') as mv:
+            # Base column base column b is unselected but this view has
+            # virtual columns, so b is a virtual column and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+
+# Cassandra starting in version 3.11 (see Cassandra commit
+# e6fb8302848bc43888b0a742a9b0abce09872c45doesn't) doesn't allow dropping
+# base-table columns as soon as it has any views. In Scylla (starting
+# in #4448) we do allow removing *some* columns, as long as no view "needs"
+# them. This test demonstrates this Scylla-only extension, where dropping a
+# column is allowed in some cases (the previous test the checks cases that
+# aren't allowed in both Scylla or Cassandra).
+# The test is marked scylla_only because only Scylla allows these column drops.
+def test_alter_table_drop_allowed(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, 'p,a,b', 'a,p', 'a is not null and p is not null') as mv:
+            # base column c is not selected, and because the view's key has
+            # a column not in the base's (a) there are no virtual columns, so
+            # Scylla allows to drop column c.
+            cql.execute(f'ALTER TABLE {base} DROP c')
+
+# Test that if a view uses "SELECT *" and a new column is added to the base
+# table, it is also added to the view and selected.
+# See also test_mv_prepared_statement_with_altered_base() above
+def test_alter_table_add_select_star(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # We can add a new column "c" to the base table, and it will be
+            # automatically selected in the view because "SELECT *" expands
+            # to contain it.
+            cql.execute(f'INSERT INTO {base} (p,a,b) VALUES (1,2,3)')
+            cql.execute(f'ALTER TABLE {base} ADD c int')
+            cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
