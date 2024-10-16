@@ -1521,6 +1521,9 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         params[required_param] = vm[required_param].as<sstring>();
     }
+    if (!vm.contains("sstables")) {
+      throw std::invalid_argument("missing required possitional argument: sstables");
+    }
     sstring sstables_body = std::invoke([&vm] {
         std::stringstream output;
         rjson::streaming_writer writer(output);
