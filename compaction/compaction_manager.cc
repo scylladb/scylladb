@@ -457,6 +457,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
     co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
 }
 future<> compaction_task_executor::update_history(table_state& t, sstables::compaction_result&& res, const sstables::compaction_data& cdata) {
+    auto started_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.started_at.time_since_epoch());
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
     if (auto sys_ks = _cm._sys_ks.get_permit()) {
@@ -471,12 +472,20 @@ future<> compaction_task_executor::update_history(table_state& t, sstables::comp
 
         db::compaction_history_entry entry {
             .id = cdata.compaction_uuid,
+            .shard_id = res.shard_id,
             .ks = t.schema()->ks_name(),
             .cf = t.schema()->cf_name(),
+            .compaction_type = fmt::to_string(res.type),
+            .started_at = started_at.count(),
             .compacted_at = ended_at.count(),
             .bytes_in = res.stats.start_size,
             .bytes_out = res.stats.end_size,
-            .rows_merged = std::move(rows_merged)
+            .rows_merged = std::move(rows_merged),
+            .sstables_in = std::move(res.sstables_in),
+            .sstables_out = std::move(res.sstables_out),
+            .total_tombstone_purge_attempt = res.stats.tombstone_purge_stats.attempts,
+            .total_tombstone_purge_failure_due_to_overlapping_with_memtable = res.stats.tombstone_purge_stats.failures_due_to_overlapping_with_memtable,
+            .total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable = res.stats.tombstone_purge_stats.failures_due_to_overlapping_with_uncompacting_sstable,
         };
         co_await sys_ks->update_compaction_history(std::move(entry));
     }
