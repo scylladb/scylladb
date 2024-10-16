@@ -23,7 +23,8 @@ if(DEFINED CMAKE_BUILD_TYPE)
 endif(DEFINED CMAKE_BUILD_TYPE)
 
 include(mode.common)
-if(CMAKE_CONFIGURATION_TYPES)
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(is_multi_config)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         include(mode.${config})
         list(APPEND scylla_build_modes ${scylla_build_mode_${config}})
@@ -47,7 +48,6 @@ set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE INTERNAL "")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(is_multi_config)
     find_package(Seastar)
     # this is atypical compared to standard ExternalProject usage:
