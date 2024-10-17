@@ -192,7 +192,7 @@ async def test_view_build_status_snapshot(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_view_build_status_migration_to_v2(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
@@ -246,7 +246,7 @@ async def test_view_build_status_migration_to_v2(request, manager: ManagerClient
 @pytest.mark.asyncio
 async def test_view_build_status_migration_to_v2_with_write_during_migration(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
@@ -304,7 +304,7 @@ async def test_view_build_status_migration_to_v2_with_write_during_migration(req
 @pytest.mark.asyncio
 async def test_view_build_status_migration_to_v2_barrier(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
@@ -429,7 +429,7 @@ async def test_view_build_status_with_replace_node(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_view_build_status_migration_to_v2_with_cleanup(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
