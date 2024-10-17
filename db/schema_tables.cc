@@ -1285,7 +1285,7 @@ std::vector<mutation> make_drop_keyspace_mutations(schema_features features, lw_
  *
  * @param partition Keyspace attributes in serialized form
  */
-future<lw_shared_ptr<keyspace_metadata>> create_keyspace_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result_value_type& result)
+future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(distributed<service::storage_proxy>& proxy, const schema_result_value_type& result)
 {
     auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, result);
 

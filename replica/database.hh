@@ -1257,6 +1257,17 @@ using user_types_metadata = data_dictionary::user_types_metadata;
 
 using keyspace_metadata = data_dictionary::keyspace_metadata;
 
+// Encapsulates objects needed to update keyspace schema
+struct keyspace_change {
+    lw_shared_ptr<keyspace_metadata> metadata;
+    locator::replication_strategy_ptr strategy;
+    locator::vnode_effective_replication_map_ptr erm;
+
+    const sstring& keyspace_name() const {
+        return metadata->name();
+    }
+};
+
 class keyspace {
 public:
     struct config {
@@ -1288,14 +1299,14 @@ private:
     locator::effective_replication_map_factory& _erm_factory;
 
 public:
-    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
+    explicit keyspace(config cfg, locator::effective_replication_map_factory& erm_factory);
     keyspace(const keyspace&) = delete;
     void operator=(const keyspace&) = delete;
     keyspace(keyspace&&) = default;
 
     future<> shutdown() noexcept;
 
-    future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
+    void apply(keyspace_change kc);
 
     future<> init_storage();
 
@@ -1304,7 +1315,12 @@ public:
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    future<> create_replication_strategy(const locator::shared_token_metadata& stm);
+
+    static locator::replication_strategy_ptr create_replication_strategy(
+            lw_shared_ptr<keyspace_metadata> metadata);
+    future<locator::vnode_effective_replication_map_ptr> create_effective_replication_map(
+            locator::replication_strategy_ptr strategy,
+            const locator::shared_token_metadata& stm) const;
     void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
 
     /**
@@ -1557,7 +1573,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<keyspace> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1571,14 +1587,17 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     future<> remove(table&) noexcept;
-    void drop_keyspace(const sstring& name);
-    future<> update_keyspace(const keyspace_metadata& tmp_ksm);
-    static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
+    future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
+    static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
 public:
+    void insert_keyspace(std::unique_ptr<keyspace> ks);
+    void update_keyspace(keyspace_change change);
+    void drop_keyspace(const sstring& name);
+
     static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
@@ -1653,20 +1672,22 @@ public:
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
     table_id find_uuid(const schema_ptr&) const;
 
+    using created_keyspace_per_shard = std::vector<std::unique_ptr<keyspace>>;
+    using keyspace_change_per_shard = std::vector<keyspace_change>;
+
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
      *
      * @return ready future when the operation is complete
      */
-    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<created_keyspace_per_shard> prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
-    static future<> update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
-    static future<> drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name);
+    static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
