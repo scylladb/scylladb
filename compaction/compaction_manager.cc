@@ -387,11 +387,26 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables_a
 
     co_return res;
 }
+
+future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombstone_gc(table_state& t) {
+    auto compound_set = t.sstable_set_for_tombstone_gc();
+    // Compound set will be linearized into a single set, since compaction might add or remove sstables
+    // to it for incremental compaction to work.
+    auto new_set = sstables::make_partitioned_sstable_set(t.schema(), false);
+    co_await compound_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+        auto inserted = new_set.insert(sst);
+        if (!inserted) {
+            on_internal_error(cmlog, format("Unable to insert SSTable {} into set used for tombstone GC", sst->get_filename()));
+        }
+    });
+    co_return std::move(new_set);
+}
+
 future<sstables::compaction_result> compaction_task_executor::compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     table_state& t = *_compacting_table;
     if (can_purge) {
-        descriptor.enable_garbage_collection(t.main_sstable_set());
+        descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
     descriptor.creator = [&t] (shard_id dummy) {
         auto sst = t.make_sstable();
@@ -1593,6 +1608,9 @@ public:
                 std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::yes)
             , _opt(options.as<sstables::compaction_type_options::split>())
     {
+        if (utils::get_local_injector().is_enabled("split_sstable_rewrite")) {
+            _do_throw_if_stopping = throw_if_stopping::yes;
+        }
     }
 
     static bool sstable_needs_split(const sstables::shared_sstable& sst, const sstables::compaction_type_options::split& opt) {
@@ -1608,13 +1626,12 @@ private:
     bool sstable_needs_split(const sstables::shared_sstable& sst) const {
         return sstable_needs_split(sst, _opt);
     }
-
 protected:
     sstables::compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) const override {
         return make_descriptor(sst, _opt);
     }
 
-    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
+    future<sstables::compaction_result> do_rewrite_sstable(const sstables::shared_sstable sst) {
         if (sstable_needs_split(sst)) {
             return rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
         }
@@ -1626,6 +1643,20 @@ protected:
             // It's fine to return empty results (zeroed stats) as compaction was bypassed.
             return sstables::compaction_result{};
         });
+    }
+
+    future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) override {
+        co_await utils::get_local_injector().inject("split_sstable_rewrite", [this] (auto& handler) -> future<> {
+            cmlog.info("split_sstable_rewrite: waiting");
+            while (!handler.poll_for_message() && !_compaction_data.is_stop_requested()) {
+                co_await sleep(std::chrono::milliseconds(5));
+            }
+            cmlog.info("split_sstable_rewrite: released");
+            if (_compaction_data.is_stop_requested()) {
+                throw make_compaction_stopped_exception();
+            }
+        }, false);
+        co_return co_await do_rewrite_sstable(std::move(sst));
     }
 };
 
