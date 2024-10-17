@@ -131,7 +131,6 @@ def test_group_by_clustering_prefix_with_limit_and_paging(cql, table1):
 
 # Adding a PER PARTITION LIMIT should be honored
 # Reproduces #5363 - fewer results than the limit were generated
-@pytest.mark.xfail(reason="issue #5363")
 def test_group_by_clustering_prefix_with_pplimit(cql, table1):
     # Without per-partition limit we get 4 results, 2 from each partition:
     assert {(0,0,0,1), (0,1,0,3), (1,0,0,5), (1,1,0,7)} == set(cql.execute(f'SELECT p,c1,c2,v FROM {table1} GROUP BY p,c1'))
@@ -189,7 +188,6 @@ def test_group_by_count_with_limit(cql, table1):
 
 # Adding a PER PARTITION LIMIT should be honored
 # Reproduces #5363 - more results than the limit were generated
-@pytest.mark.xfail(reason="issue #5363")
 def test_group_by_count_with_pplimit(cql, table1):
     # Without per-partition limit we get 4 results, 2 from each partition:
     assert {(0,0,2), (0,1,2), (1,0,2), (1,1,2)} == set(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1'))

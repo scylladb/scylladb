@@ -1787,7 +1787,6 @@ def testGroupByWithoutPagingWithDeletions(cql, test_keyspace):
                    row(1, 2, 2, 3, 12),
                    row(1, 2, 3, 4, 12))
 
-@pytest.mark.xfail(reason="issue #5361, #5363")
 def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b, c)) WITH COMPACT STORAGE") as table:
         for i in range(1, 5):
