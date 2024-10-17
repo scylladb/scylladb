@@ -59,7 +59,8 @@ target_link_libraries(utils
   PRIVATE
     Boost::regex
     cryptopp::cryptopp
-    rapidxml::rapidxml)
+    rapidxml::rapidxml
+    yaml-cpp::yaml-cpp)
 
 check_headers(check-headers utils
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
