@@ -521,8 +521,9 @@ struct scan_ranges_context {
         // be good if we can read only the single item of the map - it
         // should be possible (and a must for issue #7751!).
         lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
-        auto regular_columns = boost::copy_range<query::column_id_vector>(
-            s->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+        auto regular_columns =
+            s->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            | std::ranges::to<query::column_id_vector>();
         selection = cql3::selection::selection::wildcard(s);
         query::partition_slice::option_set opts = selection->get_query_options();
         opts.set<query::partition_slice::option::allow_short_read>();

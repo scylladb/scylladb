@@ -194,9 +194,10 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     auto prepared = raw_select.prepare(db, ignored, true);
     auto restrictions = static_pointer_cast<statements::select_statement>(prepared->statement)->get_restrictions();
 
-    auto base_primary_key_cols = boost::copy_range<std::unordered_set<const column_definition*>>(
-            boost::range::join(schema->partition_key_columns(), schema->clustering_key_columns())
-            | boost::adaptors::transformed([](auto&& def) { return &def; }));
+    auto base_primary_key_cols =
+            std::views::join(std::array{schema->partition_key_columns(), schema->clustering_key_columns()})
+            | std::views::transform([](auto&& def) { return &def; })
+            | std::ranges::to<std::unordered_set<const column_definition*>>();
 
     // Validate the primary key clause, ensuring only one non-PK base column is used in the view's PK.
     bool has_non_pk_column = false;

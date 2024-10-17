@@ -24,6 +24,8 @@
 #include "cql3/functions/first_function.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 
+#include <ranges>
+
 namespace cql3 {
 
 logger cql_logger("cql_logger");
@@ -443,14 +445,15 @@ std::vector<const column_definition*> selection::wildcard_columns(schema_ptr sch
     // filter out hidden columns, which should not be seen by the
     // user when doing "SELECT *". We also disallow selecting them
     // individually (see column_identifier::new_selector_factory()).
-    return boost::copy_range<std::vector<const column_definition*>>(
+    return
         columns |
-        boost::adaptors::filtered([](const column_definition& c) {
+        std::views::filter([](const column_definition& c) {
             return !c.is_hidden_from_cql();
         }) |
-        boost::adaptors::transformed([](const column_definition& c) {
+        std::views::transform([](const column_definition& c) {
             return &c;
-        }));
+        }) |
+        std::ranges::to<std::vector>();
 }
 
 ::shared_ptr<selection> selection::wildcard(schema_ptr schema) {

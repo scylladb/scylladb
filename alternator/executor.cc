@@ -1667,8 +1667,9 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     // FIXME: We pretend to take a selection (all callers currently give us a
     // wildcard selection...) but here we read the entire item anyway. We
     // should take the column list from selection instead of building it here.
-    auto regular_columns = boost::copy_range<query::column_id_vector>(
-            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto regular_columns =
+            schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            |  std::ranges::to<query::column_id_vector>();
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
             query::tombstone_limit(proxy.get_tombstone_limit()));
@@ -3434,8 +3435,9 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     check_key(query_key, schema);
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    auto regular_columns = boost::copy_range<query::column_id_vector>(
-            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto regular_columns =
+            schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            | std::ranges::to<query::column_id_vector>();
 
     auto selection = cql3::selection::selection::wildcard(schema);
 
@@ -3589,8 +3591,9 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     bounds.push_back(query::clustering_range::make_singular(ck.first));
                 }
             }
-            auto regular_columns = boost::copy_range<query::column_id_vector>(
-                    rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+            auto regular_columns =
+                    rs.schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+                    | std::ranges::to<query::column_id_vector>();
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
@@ -4014,10 +4017,12 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 
     co_await verify_permission(enforce_authorization, client_state, table_schema, auth::permission::SELECT);
 
-    auto regular_columns = boost::copy_range<query::column_id_vector>(
-            table_schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
-    auto static_columns = boost::copy_range<query::column_id_vector>(
-            table_schema->static_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto regular_columns =
+            table_schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            | std::ranges::to<query::column_id_vector>();
+    auto static_columns =
+            table_schema->static_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            | std::ranges::to<query::column_id_vector>();
     auto selection = cql3::selection::selection::wildcard(table_schema);
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);

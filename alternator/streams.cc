@@ -844,19 +844,21 @@ future<executor::request_return_type> executor::get_records(client_state& client
     static const bytes op_column_name = cdc::log_meta_column_name_bytes("operation");
     static const bytes eor_column_name = cdc::log_meta_column_name_bytes("end_of_batch");
 
-    std::optional<attrs_to_get> key_names = boost::copy_range<attrs_to_get>(
-        boost::range::join(std::move(base->partition_key_columns()), std::move(base->clustering_key_columns()))
-        | boost::adaptors::transformed([&] (const column_definition& cdef) {
+    std::optional<attrs_to_get> key_names =
+        std::views::join(std::array{base->partition_key_columns(), base->clustering_key_columns()})
+        | std::views::transform([&] (const column_definition& cdef) {
             return std::make_pair<std::string, attrs_to_get_node>(cdef.name_as_text(), {}); })
-    );
+        | std::ranges::to<attrs_to_get>()
+    ;
     // Include all base table columns as values (in case pre or post is enabled).
     // This will include attributes not stored in the frozen map column
-    std::optional<attrs_to_get> attr_names = boost::copy_range<attrs_to_get>(base->regular_columns()
+    std::optional<attrs_to_get> attr_names = base->regular_columns()
         // this will include the :attrs column, which we will also force evaluating. 
         // But not having this set empty forces out any cdc columns from actual result 
-        | boost::adaptors::transformed([] (const column_definition& cdef) {
+        | std::views::transform([] (const column_definition& cdef) {
             return std::make_pair<std::string, attrs_to_get_node>(cdef.name_as_text(), {}); })
-    );
+        | std::ranges::to<attrs_to_get>()
+    ;
 
     std::vector<const column_definition*> columns;
     columns.reserve(schema->all_columns().size());
@@ -867,10 +869,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
     std::transform(pks.begin(), pks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
     std::transform(cks.begin(), cks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
 
-    auto regular_columns = boost::copy_range<query::column_id_vector>(schema->regular_columns() 
-        | boost::adaptors::filtered([](const column_definition& cdef) { return cdef.name() == op_column_name || cdef.name() == eor_column_name || !cdc::is_cdc_metacolumn_name(cdef.name_as_text()); })
-        | boost::adaptors::transformed([&] (const column_definition& cdef) { columns.emplace_back(&cdef); return cdef.id; })
-    );
+    auto regular_columns = schema->regular_columns()
+        | std::views::filter([](const column_definition& cdef) { return cdef.name() == op_column_name || cdef.name() == eor_column_name || !cdc::is_cdc_metacolumn_name(cdef.name_as_text()); })
+        | std::views::transform([&] (const column_definition& cdef) { columns.emplace_back(&cdef); return cdef.id; })
+        | std::ranges::to<query::column_id_vector>()
+    ;
 
     stream_view_type type = cdc_options_to_steam_view_type(base->cdc_options());
 

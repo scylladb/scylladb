@@ -1476,12 +1476,12 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
         }
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
-            auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
+            auto pk_columns = _schema->partition_key_columns() | std::views::transform([&] (auto& cdef) {
                 return row.get_blob(cdef.name_as_text());
             });
             auto pk = partition_key::from_range(pk_columns);
             auto dk = dht::decorate_key(*_schema, pk);
-            auto ck_columns = _schema->clustering_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
+            auto ck_columns = _schema->clustering_key_columns() | std::views::transform([&] (auto& cdef) {
                 return row.get_blob(cdef.name_as_text());
             });
             auto ck = clustering_key::from_range(ck_columns);

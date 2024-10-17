@@ -367,8 +367,8 @@ static sstring pk_type_to_string(const schema& s) {
     } else {
         return seastar::format("org.apache.cassandra.db.marshal.CompositeType({})",
                                fmt::join(s.partition_key_columns()
-                                          | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
-                                          | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)),
+                                          | std::views::transform(std::mem_fn(&column_definition::type))
+                                          | std::views::transform(std::mem_fn(&abstract_type::name)),
                                         ","));
     }
 }
