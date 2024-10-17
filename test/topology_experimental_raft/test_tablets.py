@@ -34,6 +34,10 @@ async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
+async def disable_injection_on(manager, error_name, servers):
+    errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
+    await asyncio.gather(*errs)
+
 async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo], ranges: str = ''):
     node = server.ip_addr
     await manager.servers_see_each_other(servers)
@@ -921,6 +925,114 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
     tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
     assert tablet_count > 2
 
+    await check()
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_merge(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--logger-log-level', 'load_balancer=debug',
+        '--target-tablet-size-in-bytes', '30000',
+    ]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }, cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0;")
+
+    # Initial average table size of 400k (1 tablet), so triggers some splits.
+    total_keys = 200
+    keys = range(total_keys)
+    insert = cql.prepare(f"INSERT INTO test.test(pk, c) VALUES(?, ?)")
+    for pk in keys:
+        value = random.randbytes(2000)
+        cql.execute(insert, [pk, value])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
+        assert len(rows) == len(keys)
+
+    await check()
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count == 1
+
+    logger.info("Adding new server")
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    # Increases the chance of tablet migration concurrent with split
+    await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
+    await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    # Now there's a split and migration need, so they'll potentially run concurrently.
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await check()
+    time.sleep(5) # Give load balancer some time to do work
+
+    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+    await check()
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count > 1
+
+    # Allow shuffling of tablet replicas to make co-location work harder
+    async def shuffle():
+        await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+        time.sleep(5)
+        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+
+    await shuffle()
+
+    # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
+    # balancer won't break co-location.
+    await inject_error_on(manager, "tablet_merge_completion_bypass", servers)
+
+    # Shrinks table significantly, forcing merge.
+    delete_keys = range(total_keys - 10)
+    await asyncio.gather(*[cql.run_async(f"DELETE FROM test.test WHERE pk={k};") for k in delete_keys])
+    keys = range(total_keys - 10, total_keys)
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, "test")
+        await manager.api.keyspace_compaction(server.ip_addr, "test")
+
+    await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
+    # Waits for balancer to co-locate sibling tablets
+    time.sleep(5)
+    # Do some shuffling to make sure balancer works with co-located tablets
+    await shuffle()
+
+    old_tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+
+    await inject_error_on(manager, "replica_merge_completion_wait", servers)
+    await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
+
+    await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+    await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count < old_tablet_count
+    await check()
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, "test")
+        await manager.api.keyspace_compaction(server.ip_addr, "test")
     await check()
 
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
