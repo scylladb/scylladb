@@ -42,7 +42,7 @@ tm::task_status make_status(tasks::task_status status) {
     });
 
     tm::task_status res{};
-    res.id = status.task_id.to_sstring();
+    res.task_id = status.task_id.to_sstring();
     res.type = status.type;
     res.kind = status.kind;
     res.scope = status.scope;

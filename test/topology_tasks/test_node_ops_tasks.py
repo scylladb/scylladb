@@ -36,7 +36,7 @@ async def compare_status_on_all_servers(task_id: TaskID, tm: TaskManagerClient, 
     statuses = [await get_status_allow_peer_connection_failure(tm, server.ip_addr, task_id) for server in servers]
     statuses = [s for s in statuses if s is not None]
     assert statuses, "No statuses to compare"
-    assert all(status.id == statuses[0].id and status.start_time == statuses[0].start_time for status in statuses)
+    assert all(status.task_id == statuses[0].task_id and status.start_time == statuses[0].start_time for status in statuses)
     return statuses[0]
 
 async def get_new_virtual_tasks_list(tm: TaskManagerClient, module_name: str, server: ServerInfo,
@@ -75,19 +75,19 @@ async def check_bootstrap_tasks_tree(tm: TaskManagerClient, module_name: str, se
     virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, len(servers))
 
     # No streaming task for first node bootstrap.
-    bootstrap_with_streaming = [status.id for status in virtual_tasks if status.children_ids]
+    bootstrap_with_streaming = [status.task_id for status in virtual_tasks if status.children_ids]
     assert len(bootstrap_with_streaming) == len(virtual_tasks) - 1, "All but one tasks should have children"
 
     for virtual_task in virtual_tasks:
-        if virtual_task.id in bootstrap_with_streaming:
+        if virtual_task.task_id in bootstrap_with_streaming:
             check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
 
             child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-            check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
+            check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.task_id, 0)
         else:
             check_virtual_task_status(virtual_task, "done", "bootstrap", 0)
 
-    return (servers, [vt.id for vt in virtual_tasks])
+    return (servers, [vt.task_id for vt in virtual_tasks])
 
 async def check_replace_tasks_tree(manager: ManagerClient, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
@@ -107,9 +107,9 @@ async def check_replace_tasks_tree(manager: ManagerClient, tm: TaskManagerClient
     check_virtual_task_status(virtual_task, "done", "replace", 1)
 
     child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-    check_regular_task_status(child, "done", "replace: streaming", "node", virtual_task.id, 0)
+    check_regular_task_status(child, "done", "replace: streaming", "node", virtual_task.task_id, 0)
 
-    return servers, previous_vts + [virtual_task.id]
+    return servers, previous_vts + [virtual_task.task_id]
 
 async def check_rebuild_tasks_tree(manager: ManagerClient, tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
@@ -128,9 +128,9 @@ async def check_rebuild_tasks_tree(manager: ManagerClient, tm: TaskManagerClient
     check_virtual_task_status(virtual_task, "done", "rebuild", 1)
 
     child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-    check_regular_task_status(child, "done", "rebuild: streaming", "node", virtual_task.id, 0)
+    check_regular_task_status(child, "done", "rebuild: streaming", "node", virtual_task.task_id, 0)
 
-    return servers, previous_vts + [virtual_task.id]
+    return servers, previous_vts + [virtual_task.task_id]
 
 async def check_remove_node_tasks_tree(manager: ManagerClient, tm: TaskManagerClient,module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID]) -> tuple[list[ServerInfo], list[TaskID]]:
@@ -151,9 +151,9 @@ async def check_remove_node_tasks_tree(manager: ManagerClient, tm: TaskManagerCl
     check_virtual_task_status(virtual_task, "done", "remove node", len(servers))
 
     child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-    check_regular_task_status(child, "done", "removenode: streaming", "node", virtual_task.id, 0)
+    check_regular_task_status(child, "done", "removenode: streaming", "node", virtual_task.task_id, 0)
 
-    return servers, previous_vts + [virtual_task.id]
+    return servers, previous_vts + [virtual_task.task_id]
 
 async def poll_for_task(tm: TaskManagerClient, module_name: str, server: ServerInfo, expected_kind: str, expected_type: str):
     async def _get_streaming_tasks(server: ServerInfo) -> list[TaskStats]:
@@ -183,7 +183,7 @@ async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerC
         check_virtual_task_status(virtual_task, "running", "decommission", 1)
 
         child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-        check_regular_task_status(child, "running", "decommission: streaming", "node", virtual_task.id, 0)
+        check_regular_task_status(child, "running", "decommission: streaming", "node", virtual_task.task_id, 0)
 
         await handler.message()
 
