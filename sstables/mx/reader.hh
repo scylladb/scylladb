@@ -11,7 +11,7 @@
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
-#include "sstables/sstables.hh"
+#include "sstables/types_fwd.hh"
 
 namespace sstables {
 namespace mx {
@@ -28,7 +28,8 @@ mutation_reader make_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor);
+        read_monitor& monitor,
+        integrity_check integrity);
 
 // Same as above but the slice is moved and stored inside the reader.
 mutation_reader make_reader(
@@ -40,7 +41,8 @@ mutation_reader make_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor);
+        read_monitor& monitor,
+        integrity_check integrity);
 
 // A reader which doesn't use the index at all. It reads everything from the
 // sstable and it doesn't support skipping.
@@ -50,7 +52,7 @@ mutation_reader make_full_scan_reader(
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
-        sstable::integrity_check integrity);
+        integrity_check integrity);
 
 // Validate the content of the sstable with the mutation_fragment_stream_valdiator,
 // additionally cross checking that the content is laid out as expected by the
