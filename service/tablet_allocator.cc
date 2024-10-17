@@ -613,7 +613,11 @@ public:
 
         cluster_resize_load resize_load;
 
+        const auto& fenced_tables = _tm->tablets().fenced_tables();
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            if (fenced_tables.contains(table)) {
+                continue;
+            }
             auto& tmap = *tmap_;
 
             const auto* table_stats = load_stats_for_table(table);
@@ -1712,7 +1716,7 @@ public:
         auto shuffle = in_shuffle_mode();
 
         _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
+        lblogger.info("Examining DC {} (shuffle={}, balancing={}, fenced_tables={})", dc, shuffle, _tm->tablets().balancing_enabled(), fmt::join(_tm->tablets().fenced_tables(), ","));
 
         const locator::topology& topo = _tm->get_topology();
 
@@ -1762,7 +1766,11 @@ public:
 
         // Compute tablet load on nodes.
 
+        const auto& fenced_tables = _tm->tablets().fenced_tables();
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            if (fenced_tables.contains(table)) {
+                continue;
+            }
             auto& tmap = *tmap_;
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
@@ -1872,6 +1880,9 @@ public:
         _tablet_count_per_table.clear();
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            if (fenced_tables.contains(table)) {
+                continue;
+            }
             auto& tmap = *tmap_;
             uint64_t total_load = 0;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
