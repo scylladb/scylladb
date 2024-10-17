@@ -26,6 +26,19 @@
 // It has to be a container that does not invalidate pointers
 static std::list<dummy_sharder> keep_alive_sharder;
 
+class evicting_semaphore_factory : public test_reader_lifecycle_policy::semaphore_factory {
+    bool _evict_paused_readers;
+public:
+    explicit evicting_semaphore_factory(bool evict_paused_readers) : _evict_paused_readers(evict_paused_readers) { }
+    virtual lw_shared_ptr<reader_concurrency_semaphore> create(sstring name) override {
+        if (!_evict_paused_readers) {
+            return test_reader_lifecycle_policy::semaphore_factory::create(std::move(name));
+        }
+        // Create with no memory, so all inactive reads are immediately evicted.
+        return make_lw_shared<reader_concurrency_semaphore>(reader_concurrency_semaphore::for_tests{}, std::move(name), 1, 0);
+    }
+};
+
 static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
     return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
         // We need to group mutations that have the same token so they land on the same shard.
@@ -79,7 +92,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                     return reader;
             };
 
-            auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
+            auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), std::make_unique<evicting_semaphore_factory>(evict_paused_readers));
             auto mr = make_multishard_combining_reader_v2_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
                     std::move(permit), range, slice, trace_state, fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
