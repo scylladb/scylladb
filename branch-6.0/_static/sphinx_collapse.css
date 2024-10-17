@@ -1,0 +1,31 @@
+.sphinx_collapse {
+  margin: 5px 0;
+}
+
+.sphinx_collapse__label {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+}
+
+.sphinx_collapse__icon {
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid #000;
+  margin-right: 5px;
+  width: 0;
+  height: 0;
+}
+
+.sphinx_collapse__input {
+  display: none;
+}
+
+.sphinx_collapse__content {
+    margin-top: 5px;
+    display: none;
+}
+
+.sphinx_collapse__input:checked ~ .sphinx_collapse__content {
+  display: block;
+}
