@@ -533,7 +533,6 @@ def testGroupByWithoutPagingWithDeletions(cql, test_keyspace):
                    row(1, 2, 2, 3, 12),
                    row(1, 2, 3, 4, 12))
 
-@pytest.mark.xfail(reason="Issue #5361, #5363")
 def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c))") as table:
         for i in range(1,5):
@@ -1081,7 +1080,6 @@ def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
                    row(4, 8, None, 1, 0),
                    row(1, 4, 1, 2, 2))
 
-@pytest.mark.xfail(reason="Issue #5361, #5362, #5363")
 def testGroupByWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, 1, 3, 6)")
@@ -1499,7 +1497,6 @@ def testGroupByWithPaging(cql, test_keyspace):
                                                pageSize),
                           row(1, 3))
 
-@pytest.mark.xfail(reason="Issue #5361, #5363")
 def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c))") as table:
         for i in range(1,5):
