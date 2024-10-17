@@ -13,6 +13,7 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.topology.conftest import skip_mode
 from test.topology.util import disable_schema_agreement_wait, new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
@@ -198,3 +199,36 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
 
             # test #3: the tombstones are cleaned up after the node is started again
             await verify_tombstone_gc(tombstone_mark)
+
+
+@pytest.mark.asyncio
+@skip_mode('release', "test only needs to run once - allowing only the 'dev' mode")
+@skip_mode('debug', "test only needs to run once - allowing only the 'dev' mode")
+async def test_group0_state_id_failure(manager: ManagerClient):
+    """
+    Issue #21117 regression test.
+
+    Make sure that the "endpoint_state_map does not contain endpoint" warning is not triggered when the state_id is updated.
+
+    Arrange:
+        - start 1 node
+    Act:
+        - restart the node
+    Assert:
+        - the "endpoint_state_map does not contain endpoint" didn't appear in the log
+    """
+
+    # Start the node
+
+    srv = await manager.server_add()
+
+    # Restart the node
+
+    await manager.server_restart(srv.server_id)
+
+    # Check the log
+
+    log = await manager.server_open_log(srv.server_id)
+    matches = await log.grep(r"Fail to apply application_state.*endpoint_state_map does not contain endpoint .* application_states = {GROUP0_STATE_ID")
+
+    assert not matches, "The 'endpoint_state_map does not contain endpoint' warning appeared in the log"
