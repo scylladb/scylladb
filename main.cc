@@ -1381,6 +1381,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
             } else if (encrypt == "rack") {
                 mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
+            } else if (encrypt == "transitional") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::transitional;
             }
 
             if (!cfg->inter_dc_tcp_nodelay()) {
@@ -1400,9 +1402,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::the_messaging_service = &messaging;
 
             std::shared_ptr<seastar::tls::credentials_builder> creds;
-            if (mscfg.encrypt != netw::messaging_service::encrypt_what::none) {
+            if (mscfg.encrypt != netw::messaging_service::encrypt_what::none 
+                || (cfg->ssl_storage_port() != 0 && seo.contains("certificate"))
+            ) {
                 creds = std::make_shared<seastar::tls::credentials_builder>();
-                utils::configure_tls_creds_builder(*creds, cfg->server_encryption_options()).get();
+                utils::configure_tls_creds_builder(*creds, seo).get();
             }
 
             // Delay listening messaging_service until gossip message handlers are registered
