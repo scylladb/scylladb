@@ -137,6 +137,8 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
             'truststore': 'conf/scyllacadb.pem',
         },
 
+        # Required for cql/cdc_compact_storage_test
+        'enable_create_table_with_compact_storage': True,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
