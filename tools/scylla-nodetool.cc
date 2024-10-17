@@ -886,7 +886,7 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void getendpoints_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.contains("keyspace") || !vm.count("table") || !vm.count("key")) {
+    if (!vm.contains("keyspace") || !vm.contains("table") || !vm.contains("key")) {
         throw std::invalid_argument("getendpoint requires keyspace, table and partition key arguments");
     }
     auto res = client.get(seastar::format("/storage_service/natural_endpoints/{}",
@@ -914,7 +914,7 @@ void getlogginglevels_operation(scylla_rest_client& client, const bpo::variables
 }
 
 void getsstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.contains("keyspace") || !vm.count("table") || !vm.count("key")) {
+    if (!vm.contains("keyspace") || !vm.contains("table") || !vm.contains("key")) {
         throw std::invalid_argument("getsstables requires keyspace, table and partition key arguments");
     }
 
@@ -1516,7 +1516,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
 void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
     for (auto required_param : {"endpoint", "bucket", "prefix", "keyspace", "table"}) {
-        if (!vm.count(required_param)) {
+        if (!vm.contains(required_param)) {
             throw std::invalid_argument(fmt::format("missing required parameter: {}", required_param));
         }
         params[required_param] = vm[required_param].as<sstring>();
@@ -1534,7 +1534,7 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     const auto restore_res = client.post("/storage_service/restore", std::move(params),
                                          request_body{"application/json", std::move(sstables_body)});
     const auto task_id = rjson::to_string_view(restore_res);
-    if (vm.count("nowait")) {
+    if (vm.contains("nowait")) {
         fmt::print(R"(The task id of this operation is {}
 Please use the 'task' subcommands to manage the task.
 )",
@@ -1855,7 +1855,7 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     } else {
         keyspaces.push_back(std::move(keyspace));
     }
-    if (vm.contains("skip-corrupted") && vm.count("mode")) {
+    if (vm.contains("skip-corrupted") && vm.contains("mode")) {
         throw std::invalid_argument("cannot use --skip-corrupted when --mode is used");
     }
 
@@ -1898,7 +1898,7 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void setlogginglevel_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.contains("logger") || !vm.count("level")) {
+    if (!vm.contains("logger") || !vm.contains("level")) {
         throw std::invalid_argument("resetting logger(s) is not supported yet, the logger and level parameters are required");
     }
     client.post(format("/system/logger/{}", vm["logger"].as<sstring>()), {{"level", vm["level"].as<sstring>()}});
@@ -2986,13 +2986,13 @@ enum class tasks_exit_code {
 };
 
 void tasks_wait_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.count("id")) {
+    if (!vm.contains("id")) {
         throw std::invalid_argument("required parameter is missing: id");
     }
     std::unordered_map<sstring, sstring> params;
     auto id = vm["id"].as<sstring>();
-    bool quiet = vm.count("quiet");
-    if (vm.count("timeout")) {
+    bool quiet = vm.contains("quiet");
+    if (vm.contains("timeout")) {
         params["timeout"] = fmt::format("{}", vm["timeout"].as<uint32_t>());
     }
 
