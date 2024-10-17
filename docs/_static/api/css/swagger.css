@@ -1,6 +1,7 @@
 /* Overrides */
 .swagger-section {
     margin-bottom: 20px;
+    color: var(--text-color);
 }
 
 .swagger-section ul li:before {
@@ -45,12 +46,12 @@
 }
 
 .swagger-section .toggleOperation {
-    color: #0a0a0a;
+    color: var(--text-color);
     pointer-events: none;
 }
 
 .swagger-section .toggleOperation:hover {
-    color: #0a0a0a;
+    color: var(--text-color);
     font-weight: inherit;
 }
 
@@ -80,20 +81,20 @@
 }
 
 .swagger-sectionli.operation.head .http_method a {
-    background-color: #ffd20f;
+    background-color: var(--warning);
 }
 
 .swagger-section li.operation.delete .http_method a {
-	background-color: #a41e22;
+	background-color: var(--danger);
 }
 
 .swagger-section li.operation.post .http_method a {
-	background-color: #10a54a;
+	background-color: var(--success);
 }
 
 
 .swagger-section li.operation.get .http_method a {
-	background-color: #0f6ab4;
+	background-color: var(--info);
 }
 
 
@@ -117,19 +118,34 @@
     height: auto;
     padding: 8px;
     min-height: 0;
+    background-color: transparent;
+    color: var(--text-color)
 }
+
+.swagger-section select:focus,
+.swagger-section input:focus,
+.swagger-section textarea:focus {
+    background: transparent;
+    color: var(--text-color);
+}
+
 
 .swagger-section label {
     line-height: 28px;
     font-size: 14px;
+    color: var(--text-color);
 }
 
 /* Code */
 .swagger-section pre {
     margin-top: 10px;
-    background-color: #f7f8f9;
     border-radius: 4px;
     padding: 5px;
+    background-color: var(--well-bg);
+}
+
+.swagger-section pre code {
+    background: transparent;
 }
 
 
@@ -162,21 +178,21 @@
 
 .swagger-section .swagger-ui-wrap .model-signature .signature-nav a {
 	text-decoration: none;
-	color: #aaa;
+	color: var(--gray-400);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .signature-nav a:hover {
 	text-decoration: underline;
-	color: #000;
+	color: var(--text-color);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .signature-nav .selected {
-	color: #000;
+	color: var(--text-color);
 	text-decoration: none;
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .propType {
-	color: #55a
+	color: var(--link-color);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature ul.signature-nav {
@@ -194,11 +210,11 @@
 .swagger-section .swagger-ui-wrap .model-signature ul.signature-nav li {
 	margin: 0 5px 5px 0;
 	padding: 2px 5px 2px 0;
-	border-right: 1px solid #ddd;
+	border-right: 1px solid var(--gray-400);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .propOpt {
-	color: #555;
+	color: var(--gray-600);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .propOptKey {
@@ -207,7 +223,7 @@
 
 .swagger-section .swagger-ui-wrap .model-signature .description .strong {
 	font-weight: 700;
-	color: #000;
+	color: var(--text-color);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .description div {
@@ -216,7 +232,7 @@
 
 .swagger-section .swagger-ui-wrap .model-signature .description .stronger {
 	font-weight: 700;
-	color: #000;
+	color: var(--text-color);
 }
 
 .swagger-section .swagger-ui-wrap .model-signature .description .propWrap .optionsWrapper {
