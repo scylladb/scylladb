@@ -209,6 +209,18 @@ class evictable_reader_v2 : public mutation_reader::impl {
 public:
     using auto_pause = bool_class<class auto_pause_tag>;
 
+    class auto_pause_disable_guard {
+        evictable_reader_v2& _reader;
+    public:
+        auto_pause_disable_guard(evictable_reader_v2& reader) : _reader(reader) {
+            _reader._auto_pause = auto_pause::no;
+        }
+        ~auto_pause_disable_guard() {
+            _reader._auto_pause = auto_pause::yes;
+            _reader.pause();
+        }
+    };
+
 private:
     auto_pause _auto_pause;
     mutation_source _ms;
@@ -686,6 +698,11 @@ std::pair<mutation_reader, evictable_reader_handle_v2> make_manually_paused_evic
 
 namespace {
 
+struct buffer_fill_hint {
+    size_t size;
+    dht::token stop_token;
+};
+
 // A special-purpose shard reader.
 //
 // Shard reader manages a reader located on a remote shard. It transparently
@@ -707,7 +724,8 @@ private:
     foreign_ptr<std::unique_ptr<evictable_reader_v2>> _reader;
 
 private:
-    future<> do_fill_buffer();
+    future<remote_fill_buffer_result_v2> fill_reader_buffer(evictable_reader_v2& reader, std::optional<buffer_fill_hint> hint);
+    future<> do_fill_buffer(std::optional<buffer_fill_hint> hint);
 
 public:
     shard_reader_v2(
@@ -737,7 +755,10 @@ public:
     const mutation_fragment_v2& peek_buffer() const {
         return buffer().front();
     }
-    virtual future<> fill_buffer() override;
+    future<> fill_buffer(std::optional<buffer_fill_hint> hint);
+    virtual future<> fill_buffer() override {
+        return fill_buffer(std::nullopt);
+    }
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr) override;
     virtual future<> fast_forward_to(position_range) override;
@@ -791,7 +812,38 @@ future<> shard_reader_v2::close() noexcept {
     }
 }
 
-future<> shard_reader_v2::do_fill_buffer() {
+future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictable_reader_v2& reader, std::optional<buffer_fill_hint> hint) {
+    evictable_reader_v2::auto_pause_disable_guard auto_pause_guard{reader};
+    reader_permit::need_cpu_guard ncpu_guard{reader.permit()};
+
+    co_await reader.fill_buffer();
+
+    if (!hint) {
+        co_return remote_fill_buffer_result_v2(reader.detach_buffer(), reader.is_end_of_stream());
+    }
+
+    mutation_reader::tracked_buffer buffer(reader.permit());
+    size_t buffer_size = 0;
+
+    auto drain_buffer_and_check_hint = [&] {
+        bool reached_stop_token = false;
+        while (!reader.is_buffer_empty()) {
+            auto mf = reader.pop_mutation_fragment();
+            reached_stop_token |= mf.is_partition_start() && mf.as_partition_start().key().token() >= hint->stop_token;
+            buffer.push_back(std::move(mf));
+            buffer_size += buffer.back().memory_usage();
+        }
+        return reader.is_end_of_stream() || reached_stop_token || buffer_size >= hint->size;
+    };
+
+    while (!drain_buffer_and_check_hint()) {
+        co_await reader.fill_buffer();
+    }
+
+    co_return remote_fill_buffer_result_v2(std::move(buffer), reader.is_end_of_stream());
+}
+
+future<> shard_reader_v2::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader_v2>> reader;
         remote_fill_buffer_result_v2 result;
@@ -799,7 +851,7 @@ future<> shard_reader_v2::do_fill_buffer() {
 
     auto res = co_await std::invoke([&] () -> future<remote_fill_buffer_result_v2> {
         if (!_reader) {
-            reader_and_buffer_fill_result res = co_await smp::submit_to(_shard, coroutine::lambda([this, gs = global_schema_ptr(_schema)] () -> future<reader_and_buffer_fill_result> {
+            reader_and_buffer_fill_result res = co_await smp::submit_to(_shard, coroutine::lambda([this, gs = global_schema_ptr(_schema), hint] () -> future<reader_and_buffer_fill_result> {
                 auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                             schema_ptr s,
                             reader_permit permit,
@@ -842,9 +894,7 @@ future<> shard_reader_v2::do_fill_buffer() {
 
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                    reader_permit::need_cpu_guard ncpu_guard{rreader->permit()};
-                    co_await rreader->fill_buffer();
-                    auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
+                    auto res = co_await fill_reader_buffer(*rreader, hint);
                     co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
                 } catch (...) {
                     ex = std::current_exception();
@@ -855,10 +905,8 @@ future<> shard_reader_v2::do_fill_buffer() {
             _reader = std::move(res.reader);
             co_return std::move(res.result);
         } else {
-            co_return co_await smp::submit_to(_shard, coroutine::lambda([this] () -> future<remote_fill_buffer_result_v2>  {
-                reader_permit::need_cpu_guard ncpu_guard{_reader->permit()};
-                co_await _reader->fill_buffer();
-                co_return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
+            co_return co_await smp::submit_to(_shard, coroutine::lambda([this, hint] () -> future<remote_fill_buffer_result_v2>  {
+                return fill_reader_buffer(*_reader, hint);
             }));
         }
     });
@@ -871,7 +919,7 @@ future<> shard_reader_v2::do_fill_buffer() {
     _end_of_stream = res.end_of_stream;
 }
 
-future<> shard_reader_v2::fill_buffer() {
+future<> shard_reader_v2::fill_buffer(std::optional<buffer_fill_hint> hint) {
     // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
     reader_permit::awaits_guard guard(_permit);
     if (_read_ahead) {
@@ -881,7 +929,7 @@ future<> shard_reader_v2::fill_buffer() {
     if (!is_buffer_empty()) {
         co_return;
     }
-    co_await do_fill_buffer();
+    co_await do_fill_buffer(hint);
 }
 
 future<> shard_reader_v2::next_partition() {
@@ -937,7 +985,7 @@ void shard_reader_v2::read_ahead() {
         return;
     }
 
-    _read_ahead.emplace(do_fill_buffer());
+    _read_ahead.emplace(do_fill_buffer(std::nullopt));
 }
 
 } // anonymous namespace
@@ -1065,7 +1113,9 @@ future<> multishard_combining_reader_v2::handle_empty_reader_buffer() {
                 _shard_readers[next_shard]->read_ahead();
             }
         }
-        return reader.fill_buffer();
+        return reader.fill_buffer(buffer_fill_hint{
+                max_buffer_size_in_bytes - buffer_size(),
+                _shard_selection_min_heap.empty() ? dht::maximum_token() : _shard_selection_min_heap.front().token});
     }
 }
 
