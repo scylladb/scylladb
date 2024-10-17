@@ -214,7 +214,11 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
                 [] (const sstables::shared_sstable&) { return true; }).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
+<<<<<<< HEAD
         const bool use_view_update_path = db::view::check_needs_view_update_path(vb.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get();
+=======
+        const bool use_view_update_path = db::view::check_needs_view_update_path(vb.local(), erm->get_token_metadata_ptr(), *global_table, streaming::stream_reason::repair).get();
+>>>>>>> eaa3b774a6 (view: check_needs_view_update_path: get token_metadata_ptr)
 
         size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &vb] (sstables::sstable_directory& dir) {
             return make_sstables_available(dir, db, vb, use_view_update_path, ks, cf);
