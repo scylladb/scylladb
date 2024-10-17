@@ -1952,8 +1952,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                    "bootstrap: read fence completed");
                     }
                     break;
-                case node_state::removing:
+                case node_state::removing: {
+                    rtlogger.info("Waiting for node removal");
+                    co_await utils::get_local_injector().inject(
+                        "delay_node_removal", [](auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
                     node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
+                }
                     [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
