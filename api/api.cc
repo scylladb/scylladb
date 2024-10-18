@@ -291,13 +291,20 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "lsa", "Log-structured allocator API");
         set_lsa(ctx, r);
 
-        rb->register_function(r, "commitlog",
-                "The commit log API");
-        set_commitlog(ctx,r);
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);
     });
+}
+
+future<> set_server_commitlog(http_context& ctx, sharded<replica::database>& db) {
+    return register_api(ctx, "commitlog", "The commit log API", [&db] (http_context& ctx, routes& r) {
+        set_commitlog(ctx, r, db);
+    });
+}
+
+future<> unset_server_commitlog(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_commitlog(ctx, r); });
 }
 
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg) {
