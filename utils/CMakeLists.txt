@@ -42,6 +42,7 @@ target_sources(utils
     rjson.cc
     runtime.cc
     to_string.cc
+    trie_writer.cc
     updateable_value.cc
     utf8.cc
     uuid.cc
