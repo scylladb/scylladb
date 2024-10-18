@@ -227,7 +227,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
-        read_monitor_generator& rmg = default_read_monitor_generator()) const;
+        read_monitor_generator& rmg = default_read_monitor_generator(),
+        integrity_check integrity = integrity_check::no) const;
 
     // Filters out mutations that don't belong to the current shard.
     mutation_reader make_local_shard_sstable_reader(
@@ -239,13 +240,15 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         read_monitor_generator& rmg = default_read_monitor_generator(),
-        const sstable_predicate& p = default_sstable_predicate()) const;
+        const sstable_predicate& p = default_sstable_predicate(),
+        integrity_check integrity = integrity_check::no) const;
 
     mutation_reader make_full_scan_reader(
             schema_ptr,
             reader_permit,
             tracing::trace_state_ptr,
-            read_monitor_generator& rmg = default_read_monitor_generator()) const;
+            read_monitor_generator& rmg = default_read_monitor_generator(),
+            integrity_check integrity = integrity_check::no) const;
 
     friend class compound_sstable_set;
 };
