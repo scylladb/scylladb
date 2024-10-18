@@ -450,7 +450,7 @@ future<> sstable_directory::restore_components_lister::process(sstable_directory
         co_await directory.process_descriptor(
             std::move(desc), flags,
             [&directory, prefix=sst_path.parent_path().native()] {
-                return directory._storage_opts->append_to_s3_prefix(prefix);;
+                return directory._storage_opts->append_to_s3_prefix(prefix);
             });
     });
 }
