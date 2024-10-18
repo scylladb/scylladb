@@ -264,6 +264,8 @@ add_scylla_test(top_k_test
   KIND BOOST)
 add_scylla_test(transport_test
   KIND SEASTAR)
+add_scylla_test(trie_writer_test
+  KIND BOOST)
 add_scylla_test(types_test
   KIND SEASTAR)
 add_scylla_test(unique_view_test
