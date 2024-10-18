@@ -11,14 +11,16 @@ from test.object_store.conftest import format_tuples
 from test.object_store.conftest import get_s3_resource
 from test.topology.conftest import skip_mode
 from test.pylib.util import unique_name
+from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
 
 logger = logging.getLogger(__name__)
 
-def create_ks_and_cf(cql):
+def create_ks_and_cf(cql, rf=1):
     ks = 'test_ks'
     cf = 'test_cf'
 
-    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': '1'})
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': f'{rf}'})
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
 
@@ -184,3 +186,62 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     print(f'Check that backup files are still there') # regression test for #20938
     post_objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.filter(Prefix=prefix) ])
     assert objects == post_objects
+
+
+@pytest.mark.asyncio
+async def test_backup_and_one_to_one_restore(manager: ManagerClient, s3_server):
+    '''check that 1:1 restoring of a cluster works'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmd)
+
+    snap_name = unique_name('backup_')
+    logger.info(f'Create and backup keyspace (snapshot name is {snap_name})')
+
+    cql = manager.get_cql()
+    logger.info(f'Create keyspace')
+    ks, cf = create_ks_and_cf(cql, rf=3)
+
+    prefix = f'{cf}/{snap_name}'
+
+    async def do_backup(s):
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
+        tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
+        await manager.api.wait_task(s.ip_addr, tid)
+
+    await asyncio.gather(*(do_backup(s) for s in servers))
+
+    logger.info(f'Collect sstables lists')
+    sstables = []
+    for s in servers:
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        sstables.append(tocs)
+    logger.info(f'Sstables: {sstables}')
+
+    logger.info(f'Dropping keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+
+    logger.info(f'Creating ks and cf again')
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': '3'})
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+
+    logger.info(f'Restoring')
+    async def do_restore(s, toc_names):
+        logger.info(f'Restore {s.ip_addr} with {toc_names}')
+        tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, 'node')
+        await manager.api.wait_task(s.ip_addr, tid)
+
+    await asyncio.gather(*(do_restore(r[0], r[1]) for r in zip(servers, sstables)))
+
+    logger.info(f'Check the data is back')
+    res = cql.execute(SimpleStatement(f"SELECT * FROM {ks}.{cf}", consistency_level=ConsistencyLevel.ALL))
+    assert len(list(res)) == 3
