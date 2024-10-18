@@ -246,6 +246,24 @@
             }
          }
       },
+      "sstableinfo":{
+         "id":"sstableinfo",
+         "description":"Compacted sstable information",
+         "properties":{
+            "generation":{
+               "type": "string",
+               "description":"Generation of the sstable"
+            },
+            "origin":{
+               "type":"string",
+               "description":"Origin of the sstable"
+            },
+            "size":{
+               "type":"long",
+               "description":"Size of the sstable"
+            }
+         }
+      },
       "compaction_info" :{
           "id": "compaction_info",
           "description":"A key value mapping",
@@ -327,6 +345,10 @@
                "type":"string",
                "description":"The UUID"
             },
+            "shard_id":{
+               "type":"int",
+               "description":"The shard id the compaction was executed on"
+            },
             "cf":{
                "type":"string",
                "description":"The column family name"
@@ -335,9 +357,17 @@
                "type":"string",
                "description":"The keyspace name"
             },
+            "compaction_type":{
+               "type":"string",
+               "description":"Type of compaction"
+            },
+            "started_at":{
+               "type":"long",
+               "description":"The time compaction started"
+            },
             "compacted_at":{
                "type":"long",
-               "description":"The time of compaction"
+               "description":"The time compaction completed"
             },
             "bytes_in":{
                "type":"long",
@@ -353,6 +383,32 @@
                   "type":"row_merged"
                },
                "description":"The merged rows"
+            },
+            "sstables_in": {
+               "type":"array",
+               "items":{
+                  "type":"sstableinfo"
+               },
+               "description":"List of input sstables for compaction"
+            },
+            "sstables_out": {
+               "type":"array",
+               "items":{
+                  "type":"sstableinfo"
+               },
+               "description":"List of output sstables from compaction"
+            },
+            "total_tombstone_purge_attempt":{
+               "type":"long",
+               "description":"Total number of tombstone purge attempts"
+            },
+            "total_tombstone_purge_failure_due_to_overlapping_with_memtable":{
+               "type":"long",
+               "description":"Number of tombstone purge failures due to data overlapping with memtables"
+            },
+            "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable":{
+               "type":"long",
+               "description":"Number of tombstone purge failures due to data overlapping with non-compacting sstables"
             }
         }
       }
