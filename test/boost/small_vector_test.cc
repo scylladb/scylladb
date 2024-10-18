@@ -10,6 +10,9 @@
 
 #include <boost/test/included/unit_test.hpp>
 #include <fmt/ranges.h>
+#include <algorithm>
+#include <functional>
+#include <sstream>
 
 #include "utils/small_vector.hh"
 
@@ -435,4 +438,57 @@ BOOST_AUTO_TEST_CASE(resize) {
         (void)v;
         BOOST_FAIL("should not reach");
     }
+}
+
+class ctor_assn_measuring {
+    static inline size_t _counter = 0;
+    int _x;
+public:
+    ctor_assn_measuring(int x) : _x(x) {
+        ++_counter;
+    }
+    ctor_assn_measuring(const ctor_assn_measuring& other) : _x(other._x) {
+        _counter++;
+    }
+    ctor_assn_measuring(ctor_assn_measuring&& other) noexcept : _x(other._x) {
+        _counter++;
+    }
+    ctor_assn_measuring& operator=(const ctor_assn_measuring& other) {
+        _x = other._x;
+        _counter++;
+        return *this;
+    }
+    ctor_assn_measuring& operator=(ctor_assn_measuring&& other) noexcept {
+        _x = other._x;
+        _counter++;
+        return *this;
+    }
+    static size_t counter() {
+        return _counter;
+    }
+    bool operator==(const ctor_assn_measuring& other) const = default;
+};
+
+static
+size_t
+do_test_from_range(std::ranges::range auto src, std::ranges::range auto src_copy) {
+    auto plus1 = std::views::transform(std::bind_front(std::plus(), 1));
+    auto before_start = ctor_assn_measuring::counter();
+    auto dst = src | plus1 | std::ranges::to<utils::small_vector<ctor_assn_measuring, 4>>();
+    auto after_end = ctor_assn_measuring::counter();
+    // We cannot compare against src if it's an input_range, since it can only be
+    // iterated once. Compare against src_copy.
+    BOOST_REQUIRE(std::ranges::equal(dst, src_copy | plus1));
+    return after_end - before_start;
+}
+
+BOOST_AUTO_TEST_CASE(from_range) {
+    auto iota_view = std::views::iota(0, 10);
+    // Verify that no copies are needed if the range is sized.
+    BOOST_REQUIRE_EQUAL(do_test_from_range(iota_view, iota_view), 10);
+    auto iota_str = "0 1 2 3 4 5 6 7 8 9";
+    auto stream = std::stringstream(iota_str);
+    auto stream_view = std::ranges::istream_view<int>(stream);
+    // Verify that copies are needed if the range is (only) an input_range.
+    BOOST_REQUIRE_GT(do_test_from_range(stream_view, iota_view), 10);
 }
