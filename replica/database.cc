@@ -229,6 +229,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
                 {"streaming", _streaming_concurrency_sem},
                 {"system", _system_read_concurrency_sem},
                 {"compaction", _compaction_concurrency_sem},
+                {"view update", _view_update_read_concurrency_sem},
         };
         for (const auto& [name, sem] : semaphores) {
             const auto initial_res = sem.initial_resources();
@@ -362,6 +363,15 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            reader_concurrency_semaphore::register_metrics::yes)
+    , _view_update_read_concurrency_sem(
+            utils::updateable_value<int>(max_count_concurrent_view_update_reads),
+            max_memory_concurrent_view_update_reads(),
+            "view_update",
+            max_inactive_view_update_queue_length(),
+            _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
+            _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
+            _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
             reader_concurrency_semaphore::register_metrics::yes)
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
@@ -1631,7 +1641,7 @@ future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_ra
 }
 
 future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
-    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem, &_view_update_read_concurrency_sem}) {
         co_await func(*sem);
     }
 }
@@ -1932,7 +1942,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), _view_update_read_concurrency_sem));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2251,6 +2261,7 @@ future<> database::stop() {
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();
+    co_await _view_update_read_concurrency_sem.stop();
     dblog.info("Joining memtable update action");
     co_await _update_memtable_flush_static_shares_action.join();
 }
