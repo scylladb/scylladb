@@ -46,7 +46,7 @@ add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/scylla")
 
 # app_iotune is located in seastar/apps/iotune
 if(TARGET Seastar::iotune)
-  set(iotune_src "$<TARGET_PROPERTY:Seastar::iotune,IMPORTED_LOCATION>")
+  set(iotune_src "$<TARGET_FILE:Seastar::iotune>")
 else()
   set(iotune_src "$<TARGET_FILE:app_iotune>")
 endif()
