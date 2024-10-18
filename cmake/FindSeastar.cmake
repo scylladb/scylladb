@@ -101,14 +101,14 @@ foreach(component "seastar" "seastar_testing" "seastar_perf_testing")
   endif()
 endforeach()
 
-if(NOT TARGET Seastar::iotune)
-  add_executable(Seastar::iotune IMPORTED)
+if(NOT TARGET app_iotune)
+  add_executable(app_iotune IMPORTED)
   foreach(config ${CMAKE_CONFIGURATION_TYPES})
-    set_property(TARGET Seastar::iotune APPEND
+    set_property(TARGET app_iotune APPEND
       PROPERTY
         IMPORTED_CONFIGURATIONS ${config})
     string (TOUPPER ${config} CONFIG)
-    set_property(TARGET Seastar::iotune
+    set_property(TARGET app_iotune
       PROPERTY
         IMPORTED_LOCATION_${CONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/seastar/apps/iotune/iotune)
   endforeach()
