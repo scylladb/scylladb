@@ -30,7 +30,8 @@ async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     remaining nodes will restart the procedure, establish a new group 0 and finish upgrade.
     """
     cfg = {'enable_user_defined_functions': False,
-           'force_gossip_topology_changes': True}
+           'force_gossip_topology_changes': True,
+           'enable_tablets': False}
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
     srv1, *others = servers
 
