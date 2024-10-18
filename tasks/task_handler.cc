@@ -41,6 +41,7 @@ static future<task_status> get_task_status(task_manager::task_ptr task) {
         .progress = co_await task->get_progress(),
         .children = co_await task->get_children().map_each_task<task_identity>(
             [broadcast_address] (const task_manager::foreign_task_ptr& task) {
+                // There is no race because id does not change for the whole task lifetime.
                 return task_identity{
                     .node = broadcast_address,
                     .task_id = task->id()
