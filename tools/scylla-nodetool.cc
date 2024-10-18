@@ -744,14 +744,15 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
 
     if (format == "text") {
-        constexpr size_t column_count = 15;
-        std::array<std::string, column_count> header_row{"id", "shard_id", "keyspace_name", "columnfamily_name", "compaction_type", "started_at",
-                        "compacted_at", "bytes_in", "bytes_out", "rows_merged", "sstables_in", "sstables_out", "total_tombstone_purge_attempt",
+        static constexpr std::array header_row{"id", "shard_id", "keyspace_name", "columnfamily_name", "compaction_type", "started_at", "compacted_at",
+                        "bytes_in", "bytes_out", "rows_merged", "sstables_in", "sstables_out", "total_tombstone_purge_attempt",
                         "total_tombstone_purge_failure_due_to_overlapping_with_memtable",
                         "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable"};
+        static constexpr size_t column_count = header_row.size();
+
         std::array<size_t, column_count> max_column_length{};
         for (size_t c = 0; c < header_row.size(); ++c) {
-            max_column_length[c] = header_row[c].size();
+            max_column_length[c] = strlen(header_row[c]);
         }
 
         std::vector<std::array<std::string, column_count>> rows;
@@ -778,10 +779,16 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         const auto regular_row_format = std::apply(regular_row_formatter, max_column_length);
 
         fmt::print(std::cout, "Compaction History:\n");
-        fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4], header_row[5],
-                header_row[6], header_row[7], header_row[8], header_row[9], header_row[10], header_row[11], header_row[12], header_row[13], header_row[14]);
+        auto header_row_printer = [format=header_row_format.c_str()] <typename... Args> (Args&&... args) {
+            fmt::print(std::cout, fmt::runtime(format), std::forward<Args>(args)...);
+        };
+        std::apply(header_row_printer, header_row);
+
+        auto regular_row_printer = [format=regular_row_format.c_str()] <typename... Args> (Args&&... args) {
+            fmt::print(std::cout, fmt::runtime(format), std::forward<Args>(args)...);
+        };
         for (const auto& r : rows) {
-            fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14]);
+            std::apply(regular_row_printer, r);
         }
     } else if (format == "json") {
         print_compactionhistory<json_writer>(history);
