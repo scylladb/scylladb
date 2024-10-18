@@ -168,7 +168,9 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
                         h.compacted_at = entry.compacted_at;
                         h.bytes_in = entry.bytes_in;
                         h.bytes_out =  entry.bytes_out;
-                        for (auto it : entry.rows_merged) {
+
+                        std::map<int32_t, int64_t> items(entry.rows_merged.begin(), entry.rows_merged.end());
+                        for (auto it : items) {
                             httpd::compaction_manager_json::row_merged e;
                             e.key = it.first;
                             e.value = it.second;

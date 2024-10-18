@@ -23,6 +23,8 @@ namespace utils {
 class estimated_histogram;
 }
 
+struct combined_reader_statistics;
+
 namespace sstables {
 
 struct sstable_first_key_less_comparator {
@@ -239,7 +241,8 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         read_monitor_generator& rmg = default_read_monitor_generator(),
-        const sstable_predicate& p = default_sstable_predicate()) const;
+        const sstable_predicate& p = default_sstable_predicate(),
+        combined_reader_statistics* statistics = nullptr) const;
 
     mutation_reader make_full_scan_reader(
             schema_ptr,
