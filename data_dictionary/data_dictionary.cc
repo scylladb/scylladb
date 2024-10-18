@@ -362,10 +362,16 @@ storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
     //     desc: me-3gdq_0bki_2cvk02wubgncy8qd41-big
     SCYLLA_ASSERT(!is_local_type());
     storage_options ret = *this;
+    if (s.empty()) {
+        // scylla-manager should always pass sstables with non-empty dirname,
+        // but still..
+        return ret;
+    }
+
     s3 s3_options = std::get<s3>(value);
     SCYLLA_ASSERT(std::holds_alternative<sstring>(s3_options.location));
     sstring prefix = std::get<sstring>(s3_options.location);
-    s3_options.location = prefix + s;
+    s3_options.location = seastar::format("{}/{}", prefix, s);
     ret.value = std::move(s3_options);
     return ret;
 }
