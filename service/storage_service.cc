@@ -4732,6 +4732,41 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+future<locator::effective_replication_map_ptr> storage_service::get_erm_when_table_has_no_migrations(sstring ks_name, sstring table_name) {
+    lw_shared_ptr<replica::table> t;
+    try {
+        t = _db.local().find_column_family(ks_name, table_name).shared_from_this();
+    } catch (replica::no_such_column_family& e) {
+        throw std::runtime_error(format("Table {}.{} does not exist", ks_name, table_name));
+    }
+    // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
+    auto& local_mm = _migration_manager.local();
+    if (local_mm.use_raft()) {
+        // Trigger read barrier to synchronize schema.
+        co_await local_mm.get_group0_barrier().trigger(local_mm.get_abort_source());
+    }
+
+    locator::effective_replication_map_ptr erm = t->get_effective_replication_map();
+    if (t->uses_tablets()) {
+        const table_id tid = t->schema()->id();
+        while (true) {
+            const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+            if (!tmap.has_transitions()) {
+                break;
+            }
+            rtlogger.info("Table {}.{} has tablet transitions, waiting for topology to quiesce", ks_name, table_name);
+            erm = nullptr;
+            co_await container().invoke_on(0, [] (service::storage_service& ss) {
+                return ss._topology_state_machine.await_not_busy();
+            });
+            rtlogger.info("Topology quiesced");
+            erm = t->get_effective_replication_map();
+        }
+    }
+
+    co_return erm;
+}
+
 future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
