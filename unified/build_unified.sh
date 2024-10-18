@@ -63,7 +63,7 @@ if [ -z "$UNIFIED_PKG" ]; then
 fi
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
 if [ -z "$PKGS" ]; then
-    PKGS="$BUILD_DIR/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-tools-$VERSION-$RELEASE.noarch.tar.gz $BUILD_DIR/dist/tar/$PRODUCT-cqlsh-$VERSION-$RELEASE.$(arch).tar.gz"
+    PKGS="$BUILD_DIR/dist/tar/$PRODUCT-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-python3-$VERSION-$RELEASE.$(arch).tar.gz $BUILD_DIR/dist/tar/$PRODUCT-cqlsh-$VERSION-$RELEASE.$(arch).tar.gz"
 fi
 BASEDIR="$BUILD_DIR/unified/$PRODUCT-$VERSION"
 
