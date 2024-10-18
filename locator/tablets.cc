@@ -200,9 +200,6 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
 }
 
 future<tablet_metadata> tablet_metadata::copy() const {
-    if (_tablets.empty()) {
-        co_return tablet_metadata{};
-    }
     tablet_metadata copy;
     for (const auto& e : _tablets) {
         copy._tablets.emplace(e.first, co_await e.second.copy());
