@@ -1159,18 +1159,15 @@ class TabularConsoleOutput:
     def __init__(self, verbose: bool, test_count: int) -> None:
         self.verbose = verbose
         self.test_count = test_count
-        self.print_newline = False
         self.last_test_no = 0
-        self.last_line_len = 1
 
     def print_start_blurb(self) -> None:
         print("="*80)
         print("{:10s} {:^8s} {:^7s} {:8s} {}".format("[N/TOTAL]", "SUITE", "MODE", "RESULT", "TEST"))
         print("-"*78)
+        print("")
 
     def print_end_blurb(self) -> None:
-        if self.print_newline:
-            print("")
         print("-"*78)
 
     def print_progress(self, test: Test) -> None:
@@ -1186,22 +1183,20 @@ class TabularConsoleOutput:
         else:
             status = palette.fail("[ FAIL ]")
         msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
-            "[{}/{}]".format(self.last_test_no, self.test_count),
+            f"[{self.last_test_no}/{self.test_count}]",
             test.suite.name, test.mode[:7],
             status,
             test.uname
         )
         if not self.verbose:
             if test.success:
-                print("\r" + " " * self.last_line_len, end="")
-                self.last_line_len = len(msg)
-                print("\r" + msg, end="")
-                self.print_newline = True
-            else:
-                if self.print_newline:
-                    print("")
+                print("\033[A", end="\r")
+                print("\033[K", end="\r")
                 print(msg)
-                self.print_newline = False
+            else:
+                print("\033[A", end="\r")
+                print("\033[K", end="\r")
+                print(f"{msg}\n")
         else:
             msg += " {:.2f}s".format(test.time_end - test.time_start)
             print(msg)
