@@ -26,6 +26,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <unordered_set>
 
 namespace locator {
 
@@ -466,8 +467,10 @@ private:
 
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
+    std::unordered_set<table_id> _fenced_tables;
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
+    const std::unordered_set<table_id>& fenced_tables() const { return _fenced_tables; }
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
@@ -482,7 +485,10 @@ public:
     tablet_metadata(tablet_metadata&&) = default;
     tablet_metadata& operator=(tablet_metadata&&) = default;
 
-    void set_balancing_enabled(bool value) { _balancing_enabled = value; }
+    void set_balancing_enabled(bool value, std::unordered_set<table_id> fenced_tables = {}) {
+        _balancing_enabled = value;
+        _fenced_tables = std::move(fenced_tables);
+    }
     void set_tablet_map(table_id, tablet_map);
     void drop_tablet_map(table_id);
 
