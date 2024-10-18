@@ -2,18 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-from util import new_materialized_view, new_test_table
+from util import new_materialized_view, new_test_table, sleep_till_whole_second
 import nodetool
 import pytest
 import requests
-import time
 
-# sleep to let a ttl (of `seconds`) expire and
-# the commitlog minimum gc time, in seconds,
-# to be greater than the tombstone deletion time
-def sleep_till_whole_second(seconds=1):
-    t = time.time()
-    time.sleep(seconds - (t - int(t)))
 
 def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace):
     """
