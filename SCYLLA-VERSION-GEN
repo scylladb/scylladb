@@ -104,7 +104,7 @@ else
 fi
 
 if [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
-	GIT_COMMIT_FILE=$(cat "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" |cut -d . -f 3)
+	GIT_COMMIT_FILE=$(cat "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" | rev | cut -d . -f 1 | rev)
 	if [ "$GIT_COMMIT" = "$GIT_COMMIT_FILE" ]; then
 		exit 0
 	fi
