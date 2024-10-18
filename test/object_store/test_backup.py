@@ -5,12 +5,18 @@ import os
 import requests
 import pytest
 import logging
+import time
+import random
 
 from test.pylib.manager_client import ManagerClient
 from test.object_store.conftest import format_tuples
 from test.object_store.conftest import get_s3_resource
 from test.topology.conftest import skip_mode
+from test.topology.util import wait_for_cql_and_get_hosts
+from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
+from cassandra.cluster import ConsistencyLevel, Session
+from cassandra.query import SimpleStatement              # type: ignore # pylint: disable=no-name-in-module
 
 logger = logging.getLogger(__name__)
 
@@ -204,3 +210,129 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     print(f'Check that backup files are still there') # regression test for #20938
     post_objects = set([ o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.filter(Prefix=prefix) ])
     assert objects == post_objects
+
+
+# Helper class to parametrize the test below
+class topo:
+    def __init__(self, rf, nodes, racks, dcs):
+        self.rf = rf
+        self.nodes = nodes
+        self.racks = racks
+        self.dcs = dcs
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
+        topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 3, dcs = 1),
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+    ])
+async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, topology):
+    '''Check that restoring of a cluster with stream scopes works'''
+
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks')
+    cfg = { 'object_storage_config_file': str(s3_server.config_file), 'task_ttl_in_seconds': 300 }
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
+    servers = []
+    for s in range(topology.nodes):
+        dc = f'dc{s % topology.dcs}'
+        rack = f'rack{s % topology.racks}'
+        s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
+        logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
+        servers.append(s)
+
+    cql = manager.get_cql()
+
+    logger.info(f'Create keyspace, rf={topology.rf}')
+    keys = range(256)
+    ks = 'ks'
+    cf = 'cf'
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': f'{topology.rf}'})
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+
+    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text );"
+    cql.execute(schema)
+    for k in keys:
+        cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
+
+    logger.info(f'Collect sstables lists')
+    sstables = []
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        logger.info(f'Collected sstables from {s.ip_addr}: {tocs}')
+        sstables.append(tocs)
+
+    snap_name = unique_name('backup_')
+    logger.info(f'Backup to {snap_name}')
+    prefix = f'{cf}/{snap_name}'
+    async def do_backup(s):
+        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
+        tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
+        await manager.api.wait_task(s.ip_addr, tid)
+
+    await asyncio.gather(*(do_backup(s) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    logger.info(f'Restore')
+    async def do_restore(s, toc_names, scope):
+        logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
+        tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, scope)
+        await manager.api.wait_task(s.ip_addr, tid)
+
+    def merge_tocs(sstables, step):
+        merged = []
+        # Servers and corresponding sstable lists are collected like this
+        #   server0, dc0, rack0
+        #   server1, dc1, rack1
+        #   server2, dc0, rack2
+        #   server3, dc1, rack3
+        #   server4, dc0, rack0
+        #   server5, dc1, rack1
+        #   server6, dc0, rack2
+        #   server7, dc1, rack3
+        # So to collect tocs from e.g. each DC we need to get all even ones
+        # in [0] and all odd in [1]
+        # Similarly, collecting tocs from each rack means putting 0th, 4th, ...
+        # in [0], 1st, 5th, ... in [1] and so on
+        for i in range(step):
+            l = [ toc for l in sstables[i::step] for toc in l ]
+            merged.append(l)
+        return merged
+
+    if topology.dcs > 1:
+        scope = 'dc'
+        r_servers = servers[:topology.dcs]
+        r_tocs = merge_tocs(sstables, topology.dcs)
+    elif topology.racks > 1:
+        scope = 'rack'
+        r_servers = servers[:topology.racks]
+        r_tocs = merge_tocs(sstables, topology.racks)
+    else:
+        scope = 'node'
+        r_servers = servers
+        r_tocs = sstables
+
+    await asyncio.gather(*(do_restore(r[0], r[1], scope) for r in zip(r_servers, r_tocs)))
+
+    logger.info(f'Check the data is back')
+    async def check_mutations(server, key):
+        host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
+        await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
+        res = await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS({ks}.{cf}) WHERE pk={key}", host=host[0])
+        for fragment in res:
+            if fragment.partition_region == 0: # partition start
+                return True
+        return False
+
+    for k in random.sample(keys, 17):
+        res = await asyncio.gather(*(check_mutations(s, k) for s in servers))
+        assert res.count(True) == topology.rf * topology.dcs
