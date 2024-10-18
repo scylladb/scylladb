@@ -21,6 +21,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+keyspace_cql = "CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false }"
 
 async def wait_for_publishing_generations(cql: Session, servers: list[ServerInfo]) -> Optional[set[datetime]]:
     query_gen_timestamps = SimpleStatement(
@@ -71,7 +72,7 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Manag
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 
     logger.info("Creating a test table")
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async(keyspace_cql)
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH cdc = {'enabled': true}")
 
     async def do_write(timestamp: int):
@@ -121,7 +122,7 @@ async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerCl
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 
     logger.info("Creating a test table")
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async(keyspace_cql)
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH cdc = {'enabled': true}")
 
     ts2 = max(gen_timestamps)
