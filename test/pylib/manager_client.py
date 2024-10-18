@@ -189,7 +189,7 @@ class ManagerClient():
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
-        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
                 for info in server_info_list]
 
     async def all_servers(self) -> list[ServerInfo]:
@@ -199,7 +199,7 @@ class ManagerClient():
         except RuntimeError as exc:
             raise Exception("Failed to get list of servers") from exc
         assert isinstance(server_info_list, list), "all_servers got unknown data type"
-        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]))
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
                 for info in server_info_list]
 
     async def mark_dirty(self) -> None:
@@ -355,7 +355,9 @@ class ManagerClient():
         try:
             s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
                                 IPAddress(server_info["ip_addr"]),
-                                IPAddress(server_info["rpc_address"]))
+                                IPAddress(server_info["rpc_address"]),
+                                server_info["datacenter"],
+                                server_info["rack"])
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
@@ -396,7 +398,9 @@ class ManagerClient():
             try:
                 s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
                                     IPAddress(server_info["ip_addr"]),
-                                    IPAddress(server_info["rpc_address"]))
+                                    IPAddress(server_info["rpc_address"]),
+                                    server_info["datacenter"],
+                                    server_info["rack"])
                 s_infos.append(s_info)
             except Exception as exc:
                 raise RuntimeError(f"servers_add got invalid server data {server_info}") from exc
