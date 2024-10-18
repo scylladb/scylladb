@@ -20,7 +20,8 @@ from test.topology.util import reconnect_driver, enter_recovery_state, \
 @log_run_time
 async def test_raft_recovery_basic(request, manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False,
-           'force_gossip_topology_changes': True}
+           'force_gossip_topology_changes': True,
+           'enable_tablets': False}
     cmd = ['--logger-log-level', 'raft=trace']
 
     servers = [await manager.server_add(config=cfg, cmdline=cmd) for _ in range(3)]
