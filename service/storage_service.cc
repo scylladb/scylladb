@@ -105,6 +105,7 @@
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
+#include "utils/labels.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -264,7 +265,7 @@ void storage_service::register_metrics() {
             sm::make_gauge("operation_mode", sm::description("The operation mode of the current node. UNKNOWN = 0, STARTING = 1, JOINING = 2, NORMAL = 3, "
                     "LEAVING = 4, DECOMMISSIONED = 5, DRAINING = 6, DRAINED = 7, MOVING = 8, MAINTENANCE = 9"), [this] {
                 return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
-            }),
+            })(basic_level),
     });
 }
 
@@ -1360,7 +1361,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
 
         auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, guard);
         insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
-        
+
         insert_join_request_mutations.emplace_back(
                 co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_keyspace::auth_version_t::v2));
 

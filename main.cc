@@ -113,8 +113,12 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "utils/labels.hh"
 
 #include <boost/algorithm/string/join.hpp>
+
+#include <seastar/core/metrics_api.hh>
+#include <seastar/core/relabel_config.hh>
 
 seastar::metrics::metric_groups app_metrics;
 
@@ -706,7 +710,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         namespace sm = seastar::metrics;
         app_metrics.add_group("scylladb", {
-            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
+            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label(""), basic_level}, [] { return 0; })
         });
 
         for (auto& opt: deprecated_options.options()) {
@@ -734,13 +738,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
                   // that's on purpose, it means the configuration is broken and needs to be fixed
                   utils::update_relabel_config_from_file(opts["relabel-config-file"].as<sstring>()).get();
+              } else {
+                  smp::invoke_on_all([] {
+                          std::vector<metrics::relabel_config> rl(1);
+                          rl[0].source_labels = {"__name__"};
+                          rl[0].target_label = "__level";
+                          rl[0].replacement = "basic";
+                          rl[0].expr = ".*reactor_utilization";
+                          return metrics::set_relabel_configs(rl).then([](metrics::metric_relabeling_result) {
+                              return;
+                          });
+                  }).get();
               }
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
             smp::invoke_on_all([] {
                 engine().update_blocked_reactor_notify_ms(10000h);
             }).get();
-
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION

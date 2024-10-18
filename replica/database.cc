@@ -77,6 +77,7 @@
 #include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
+#include "utils/labels.hh"
 
 #include <algorithm>
 
@@ -513,11 +514,11 @@ database::setup_metrics() {
         sm::make_gauge("requests_blocked_memory_current", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
                        sm::description(
                            seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
+                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
 
         sm::make_counter("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
                        sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
+                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
 
         sm::make_counter("clustering_filter_count", _cf_stats.clustering_filter_count,
                        sm::description("Counts bloom filter invocations.")),
@@ -534,30 +535,29 @@ database::setup_metrics() {
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
         sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
-                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. ")),
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
 
        sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
                       sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
 
         sm::make_counter("total_writes", _stats->total_writes,
-                       sm::description("Counts the total number of successful write operations performed by this shard.")),
+                       sm::description("Counts the total number of successful write operations performed by this shard."))(basic_level),
 
         sm::make_counter("total_writes_failed", _stats->total_writes_failed,
                        sm::description("Counts the total number of failed write operations. "
-                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
+                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard."))(basic_level),
 
         sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
-                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
+                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded."))(basic_level),
 
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
-                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached.")),
-
+                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().get_current_bytes(); },
-                       sm::description("Holds the current size in bytes of the pending view updates for all tables")),
+                       sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
 
         sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
@@ -617,10 +617,10 @@ database::setup_metrics() {
                 "Large partitions have performance impact and should be avoided, check the documentation for details.")),
 
         sm::make_total_operations("total_view_updates_pushed_local", _cf_stats.total_view_updates_pushed_local,
-                sm::description("Total number of view updates generated for tables and applied locally.")),
+                sm::description("Total number of view updates generated for tables and applied locally."))(basic_level),
 
         sm::make_total_operations("total_view_updates_pushed_remote", _cf_stats.total_view_updates_pushed_remote,
-                sm::description("Total number of view updates generated for tables and sent to remote replicas.")),
+                sm::description("Total number of view updates generated for tables and sent to remote replicas."))(basic_level),
 
         sm::make_total_operations("total_view_updates_failed_local", _cf_stats.total_view_updates_failed_local,
                 sm::description("Total number of view updates generated for tables and failed to be applied locally.")),
@@ -634,7 +634,7 @@ database::setup_metrics() {
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
                 sm::make_counter("schema_changed", _schema_change_count,
-                        sm::description("The number of times the schema changed")),
+                        sm::description("The number of times the schema changed"))(basic_level),
         });
     }
 }
@@ -2291,11 +2291,11 @@ static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1
 
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names) {
     /**
-     * #14870 
+     * #14870
      * To ensure tests which use nodetool flush to force data
      * to sstables and do things post this get what they expect,
      * we do an extra call here and below, asking commitlog
-     * to discard the currently active segment, This ensures we get 
+     * to discard the currently active segment, This ensures we get
      * as sstable-ish a universe as we can, as soon as we can.
     */
     return sharded_db.invoke_on_all([] (replica::database& db) {
@@ -2504,9 +2504,9 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // TODO: indexes.
     // Note: since discard_sstables was changed to only count tables owned by this shard,
     // we can get zero rp back. Changed SCYLLA_ASSERT, and ensure we save at least low_mark.
-    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years. 
+    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years.
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
-    // the low_mark assertion does not hold, because we maybe/probably never got around to 
+    // the low_mark assertion does not hold, because we maybe/probably never got around to
     // creating the sstables that would create them.
     // If truncated_at is earlier than the time low_mark was taken
     // then the replay_position returned by discard_sstables may be
