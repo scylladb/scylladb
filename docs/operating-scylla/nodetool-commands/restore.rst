@@ -26,7 +26,8 @@ Options
 -------
 
 * ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
-* ``--endpoint`` - ID of the configured object storage endpoint to load SSTables from
+* ``--endpoint`` - Name of the configured object storage endpoint to load SSTables from.
+  This should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--bucket`` - Name of the bucket to load SSTables from
 * ``--snapshot`` - Name of a snapshot to load SSTables from
 * ``--keyspace`` - Name of a keyspace to load SSTables into

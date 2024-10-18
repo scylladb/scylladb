@@ -103,28 +103,8 @@ the ``keyspace-storage-options`` option:
      - keyspace-storage-options
 ```
 
-With support for object storage enabled, add your endpoint configuration
-to ``scylla.yaml``:
-
-1. Create an ``object-storage-config-file.yaml`` file with a description of 
-   allowed endpoints, for example:
-
-    ```
-      endpoints:
-        - name: $endpoint_address_or_domain_name
-          port: $port_number
-          https: optional True or False
-          aws_region: optional region name, e.g. us-east-1
-          aws_access_key_id: optional AWS access key ID
-          aws_secret_access_key: optional AWS secret access key
-          aws_session_token: optional AWS session token
-    ```
-1. Specify the ``object-storage-config-file`` option in your ``scylla.yaml``,
-   providing ``object-storage-config-file.yaml`` as the value:
-
-   ```
-   object-storage-config-file: object-storage-config-file.yaml
-   ```
+After enabling object storage support, configure your endpoints by 
+following these [instructions](../operating-scylla/admin.rst#object-storage-configuration).
 
 
 Now you can configure your object storage when creating a keyspace:
