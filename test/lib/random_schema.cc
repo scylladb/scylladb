@@ -894,8 +894,9 @@ std::vector<const user_type_impl*> dump_udts(const schema& schema) {
     udt_list udts;
 
     const auto cdefs_to_types = [] (const schema::const_iterator_range_type& cdefs) -> std::vector<data_type> {
-        return boost::copy_range<std::vector<data_type>>(cdefs |
-                boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.type; }));
+        return cdefs
+               | std::views::transform([] (const column_definition& cdef) { return cdef.type; })
+               | std::ranges::to<std::vector>();
     };
 
     udts.merge(dump_udts(cdefs_to_types(schema.partition_key_columns())));

@@ -399,7 +399,7 @@ void batch_statement::build_cas_result_set_metadata() {
             ::make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
     columns.push_back(applied);
 
-    for (const auto& def : boost::range::join(schema.partition_key_columns(), schema.clustering_key_columns())) {
+    for (const auto& def : std::views::join(std::array{schema.partition_key_columns(), schema.clustering_key_columns()})) {
         _columns_of_cas_result_set.set(def.ordinal_id);
     }
     for (const auto& s : _statements) {

@@ -195,13 +195,13 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
     std::vector<column_id> base_static_columns_in_view_pk;
 
     _is_partition_key_permutation_of_base_partition_key =
-        boost::algorithm::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
+        std::ranges::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
             const column_definition* base_col = base.get_column_definition(view_col.name());
             return base_col && base_col->is_partition_key();
             })
         && _schema.partition_key_size() == base.partition_key_size();
 
-    for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
+    for (auto&& view_col : std::views::join(std::array{_schema.partition_key_columns(), _schema.clustering_key_columns()})) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
             if (view_col.get_computation().depends_on_non_primary_key_column()) {
@@ -375,8 +375,8 @@ public:
         , _base(base)
         , _view(view)
         , _selection(cql3::selection::selection::for_columns(_base.shared_from_this(),
-            boost::copy_range<std::vector<const column_definition*>>(
-                _base.regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return &cdef; }))
+                _base.regular_columns() | std::views::transform([] (const column_definition& cdef) { return &cdef; })
+                | std::ranges::to<std::vector<const column_definition*>>()
             )
         )
     {}
@@ -433,10 +433,12 @@ static query::partition_slice make_partition_slice(const schema& s) {
     opts.set(query::partition_slice::option::always_return_static_content);
     return query::partition_slice(
             {query::full_clustering_range},
-            boost::copy_range<query::column_id_vector>(s.static_columns()
-                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
-            boost::copy_range<query::column_id_vector>(s.regular_columns()
-                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
+            s.static_columns()
+                    | std::views::transform(std::mem_fn(&column_definition::id))
+                    | std::ranges::to<query::column_id_vector>(),
+            s.regular_columns()
+                    | std::views::transform(std::mem_fn(&column_definition::id))
+                    | std::ranges::to<query::column_id_vector>(),
             std::move(opts));
 }
 
@@ -702,18 +704,18 @@ private:
 std::vector<view_updates::view_row_entry>
 view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, row_tombstone row_delete_tomb) {
     value_getter getter(*_base, base_key, update, existing);
-    auto get_value = boost::adaptors::transformed(std::ref(getter));
+    auto get_value = std::views::transform(std::ref(getter));
 
 
     std::vector<value_getter::vector_type> pk_elems, ck_elems;
-    boost::copy(_view->partition_key_columns() | get_value, std::back_inserter(pk_elems));
+    std::ranges::copy(_view->partition_key_columns() | get_value, std::back_inserter(pk_elems));
     // If no collection column was found, each of the actions will contain no_action,
     // in particular, it does not harm to use column 0.
     const bool had_multiple_values_in_pk = bool(getter.collection_column_position);
     const size_t action_column = getter.collection_column_position.value_or(0);
     // Allow for at most one collection computed column in pk and in ck.
     getter.collection_column_position.reset();
-    boost::copy(_view->clustering_key_columns() | get_value, std::back_inserter(ck_elems));
+    std::ranges::copy(_view->clustering_key_columns() | get_value, std::back_inserter(ck_elems));
     const bool had_multiple_values_in_ck = bool(getter.collection_column_position);
 
 
@@ -1041,7 +1043,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     const row& updated_row = update.cells();
 
     const bool base_has_nonexpiring_marker = update.marker().is_live() && !update.marker().is_expiring();
-    return boost::algorithm::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
+    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
 

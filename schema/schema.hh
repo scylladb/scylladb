@@ -13,8 +13,7 @@
 #include <functional>
 #include <optional>
 #include <unordered_map>
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <boost/lexical_cast.hpp>
 #include <boost/dynamic_bitset.hpp>
 
@@ -629,6 +628,8 @@ private:
     column_count_type _regular_column_count;
     column_count_type _static_column_count;
 
+    std::vector<const column_definition*> _all_columns_in_select_order;
+
     extensions_map& extensions() {
         return _raw._extensions;
     }
@@ -641,8 +642,8 @@ public:
     typedef std::vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;
     typedef typename columns_type::const_iterator const_iterator;
-    typedef boost::iterator_range<iterator> iterator_range_type;
-    typedef boost::iterator_range<const_iterator> const_iterator_range_type;
+    typedef std::ranges::subrange<iterator> iterator_range_type;
+    typedef std::ranges::subrange<const_iterator> const_iterator_range_type;
 
     static constexpr int32_t NAME_LENGTH = 48;
 
@@ -656,6 +657,7 @@ private:
 
     lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def) const;
     void rebuild();
+    void compute_all_columns_in_select_order();
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
@@ -838,10 +840,9 @@ public:
     const_iterator_range_type columns(column_kind) const;
     // Returns a range of column definitions
 
-    typedef boost::range::joined_range<const_iterator_range_type, const_iterator_range_type>
-        select_order_range;
-
-    select_order_range all_columns_in_select_order() const;
+    std::ranges::range auto all_columns_in_select_order() const {
+        return _all_columns_in_select_order | std::views::transform([] (const column_definition* def) -> const column_definition& { return *def; });
+    }
     uint32_t position(const column_definition& column) const;
 
     const columns_type& all_columns() const {

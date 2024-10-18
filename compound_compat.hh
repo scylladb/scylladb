@@ -10,6 +10,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/join.hpp>
 #include <compare>
 #include "compound.hh"
 #include "schema/schema.hh"
