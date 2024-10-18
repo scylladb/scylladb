@@ -23,7 +23,8 @@ if(DEFINED CMAKE_BUILD_TYPE)
 endif(DEFINED CMAKE_BUILD_TYPE)
 
 include(mode.common)
-if(CMAKE_CONFIGURATION_TYPES)
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(is_multi_config)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         include(mode.${config})
         list(APPEND scylla_build_modes ${scylla_build_mode_${config}})
@@ -47,16 +48,55 @@ set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE INTERNAL "")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-set(Seastar_TESTING ON CACHE BOOL "" FORCE)
-set(Seastar_API_LEVEL 7 CACHE STRING "" FORCE)
-set(Seastar_DEPRECATED_OSTREAM_FORMATTERS OFF CACHE BOOL "" FORCE)
-set(Seastar_APPS ON CACHE BOOL "" FORCE)
-set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
-set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
-set(Seastar_IO_URING OFF CACHE BOOL "" FORCE)
-set(Seastar_SCHEDULING_GROUPS_COUNT 16 CACHE STRING "" FORCE)
-set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
-add_subdirectory(seastar)
+if(is_multi_config)
+    find_package(Seastar)
+    # this is atypical compared to standard ExternalProject usage:
+    # - Seastar's build system should already be configured at this point.
+    # - We maintain separate project variants for each configuration type.
+    #
+    # Benefits of this approach:
+    # - Allows the parent project to consume the compile options exposed by
+    #   .pc file. as the compile options vary from one config to another.
+    # - Allows application of config-specific settings
+    # - Enables building Seastar within the parent project's build system
+    # - Facilitates linking of artifacts with the external project target,
+    #   establishing proper dependencies between them
+    include(ExternalProject)
+
+    ExternalProject_Add(Seastar
+        SOURCE_DIR "${PROJECT_SOURCE_DIR}/seastar"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>/seastar"
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR>
+          --target seastar
+          --target seastar_testing
+          --target seastar_perf_testing
+          --target app_iotune
+        BUILD_ALWAYS ON
+        BUILD_BYPRODUCTS
+          <BINARY_DIR>/libseastar.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          <BINARY_DIR>/libseastar_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          <BINARY_DIR>/libseastar_perf_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          <BINARY_DIR>/apps/iotune/iotune
+          <BINARY_DIR>/gen/include/seastar/http/chunk_parsers.hh
+          <BINARY_DIR>/gen/include/seastar/http/request_parser.hh
+          <BINARY_DIR>/gen/include/seastar/http/response_parser.hh
+        INSTALL_COMMAND "")
+    add_dependencies(Seastar::seastar Seastar)
+    add_dependencies(Seastar::seastar_testing Seastar)
+else()
+    set(Seastar_TESTING ON CACHE BOOL "" FORCE)
+    set(Seastar_API_LEVEL 7 CACHE STRING "" FORCE)
+    set(Seastar_DEPRECATED_OSTREAM_FORMATTERS OFF CACHE BOOL "" FORCE)
+    set(Seastar_APPS ON CACHE BOOL "" FORCE)
+    set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
+    set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
+    set(Seastar_IO_URING OFF CACHE BOOL "" FORCE)
+    set(Seastar_SCHEDULING_GROUPS_COUNT 16 CACHE STRING "" FORCE)
+    set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
+    add_subdirectory(seastar)
+endif()
+
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
 
 find_package(Sanitizers QUIET)
@@ -101,6 +141,7 @@ find_package(libxcrypt REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(xxHash REQUIRED)
+find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -274,8 +315,9 @@ target_link_libraries(scylla PRIVATE
     utils)
 
 target_link_libraries(scylla PRIVATE
-    seastar
+    Seastar::seastar
     absl::headers
+    yaml-cpp::yaml-cpp
     Boost::program_options)
 
 target_include_directories(scylla PRIVATE
