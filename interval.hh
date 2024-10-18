@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include <algorithm>
 #include <list>
 #include <vector>
 #include <optional>
