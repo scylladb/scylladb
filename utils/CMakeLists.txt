@@ -1,6 +1,6 @@
 find_package(cryptopp REQUIRED)
 find_package(rapidxml REQUIRED)
-
+find_package(GnuTLS 3.3.26 REQUIRED)
 add_library(utils STATIC)
 target_sources(utils
   PRIVATE
@@ -60,7 +60,8 @@ target_link_libraries(utils
     Boost::regex
     cryptopp::cryptopp
     rapidxml::rapidxml
-    yaml-cpp::yaml-cpp)
+    yaml-cpp::yaml-cpp
+    GnuTLS::gnutls)
 
 check_headers(check-headers utils
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
