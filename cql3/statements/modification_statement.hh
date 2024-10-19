@@ -94,7 +94,7 @@ private:
     std::optional<bool> _is_raw_counter_shard_write;
 
 protected:
-    std::optional<restrictions::statement_restrictions> _restrictions;
+    shared_ptr<const restrictions::statement_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 

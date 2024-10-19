@@ -66,7 +66,7 @@ public:
         : update_statement(std::move(audit_info), statement_type::INSERT, bound_terms, s, std::move(attrs), stats)
         , _value(std::move(v))
         , _default_unset(default_unset) {
-        _restrictions = restrictions::statement_restrictions(s, false);
+        _restrictions = cql3::restrictions::make_trivial_statement_restrictions(s, false);
     }
 private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const override;

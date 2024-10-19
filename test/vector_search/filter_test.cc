@@ -23,7 +23,7 @@ using namespace cql3;
 namespace {
 
 /// Helper to create statement_restrictions from a WHERE clause string
-restrictions::statement_restrictions make_restrictions(
+shared_ptr<const restrictions::statement_restrictions> make_restrictions(
         std::string_view where_clause, cql_test_env& env, const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
 
@@ -63,8 +63,8 @@ SEASTAR_TEST_CASE(to_json_empty_restrictions) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto schema = e.local_db().find_schema("ks", "t");
-        restrictions::statement_restrictions restr(schema, false);
-        auto json = rjson::print(vector_search::prepare_filter(restr, false).to_json(query_options({})));
+        shared_ptr<const restrictions::statement_restrictions> restr = restrictions::make_trivial_statement_restrictions(schema, false);
+        auto json = rjson::print(vector_search::prepare_filter(*restr, false).to_json(query_options({})));
 
         BOOST_CHECK_EQUAL(json, "{}");
     });
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(to_json_with_allow_filtering) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -87,7 +87,7 @@ SEASTAR_TEST_CASE(to_json_single_column_eq) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=42", e);
-        auto json = get_restrictions_json(restr, false);
+        auto json = get_restrictions_json(*restr, false);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":42}],"allow_filtering":false})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -99,7 +99,7 @@ SEASTAR_TEST_CASE(to_json_single_column_lt) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck<100", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"<","lhs":"ck","rhs":100}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(to_json_single_column_gt) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck>50", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">","lhs":"ck","rhs":50}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -123,7 +123,7 @@ SEASTAR_TEST_CASE(to_json_single_column_lte) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck<=75", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"<=","lhs":"ck","rhs":75}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -135,7 +135,7 @@ SEASTAR_TEST_CASE(to_json_single_column_gte) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck>=25", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">=","lhs":"ck","rhs":25}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -147,7 +147,7 @@ SEASTAR_TEST_CASE(to_json_single_column_in) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck in (1, 2, 3)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"IN","lhs":"ck","rhs":[1,2,3]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -159,7 +159,7 @@ SEASTAR_TEST_CASE(to_json_string_value) {
         cquery_nofail(e, "create table ks.t(pk text, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk='hello'", e);
-        auto json = get_restrictions_json(restr, false);
+        auto json = get_restrictions_json(*restr, false);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"hello"}],"allow_filtering":false})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_eq) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)=(10, 20)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()==()","lhs":["ck1","ck2"],"rhs":[10,20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -183,7 +183,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_lt) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)<(10, 20)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<()","lhs":["ck1","ck2"],"rhs":[10,20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -195,7 +195,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_gt) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>(10, 20)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>()","lhs":["ck1","ck2"],"rhs":[10,20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_lte) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)<=(10, 20)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()<=()","lhs":["ck1","ck2"],"rhs":[10,20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -219,7 +219,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_gte) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>=(10, 20)", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()>=()","lhs":["ck1","ck2"],"rhs":[10,20]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -231,7 +231,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_in) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2) in ((1, 2), (3, 4))", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"()IN()","lhs":["ck1","ck2"],"rhs":[[1,2],[3,4]]}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -243,7 +243,7 @@ SEASTAR_TEST_CASE(to_json_multiple_restrictions) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck>=10 and ck<100", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">=","lhs":"ck","rhs":10},{"type":"<","lhs":"ck","rhs":100}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -255,7 +255,7 @@ SEASTAR_TEST_CASE(to_json_with_boolean_value) {
         cquery_nofail(e, "create table ks.t(pk int, ck boolean, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("ck=true", e);
-        auto json = get_restrictions_json(restr, true);
+        auto json = get_restrictions_json(*restr, true);
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"ck","rhs":true}],"allow_filtering":true})json";
         BOOST_CHECK_EQUAL(json, expected);
@@ -267,7 +267,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_partition_key) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(restr, false);
+        auto filter = vector_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(42))};
         auto options = make_query_options(std::move(bind_values));
@@ -283,7 +283,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_clustering_key) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=? and ck>?", e);
-        auto filter = vector_search::prepare_filter(restr, true);
+        auto filter = vector_search::prepare_filter(*restr, true);
 
         std::vector<raw_value> bind_values = {
             raw_value::make_value(int32_type->decompose(1)),
@@ -301,7 +301,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_different_values) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(restr, false);
+        auto filter = vector_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values1 = {raw_value::make_value(int32_type->decompose(100))};
         auto options1 = make_query_options(std::move(bind_values1));
@@ -322,7 +322,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_string_value) {
         cquery_nofail(e, "create table ks.t(pk text, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=?", e);
-        auto filter = vector_search::prepare_filter(restr, false);
+        auto filter = vector_search::prepare_filter(*restr, false);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(utf8_type->decompose("hello_world"))};
         auto options = make_query_options(std::move(bind_values));
@@ -338,7 +338,7 @@ SEASTAR_TEST_CASE(to_json_mixed_literals_and_bind_markers) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck>?", e);
-        auto filter = vector_search::prepare_filter(restr, true);
+        auto filter = vector_search::prepare_filter(*restr, true);
 
         std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(25))};
         auto options = make_query_options(std::move(bind_values));
@@ -354,7 +354,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_in_list) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=1 and ck in ?", e);
-        auto filter = vector_search::prepare_filter(restr, true);
+        auto filter = vector_search::prepare_filter(*restr, true);
 
         auto list_type = list_type_impl::get_instance(int32_type, true);
         auto list_val = make_list_value(list_type, {data_value(10), data_value(20), data_value(30)});
@@ -373,7 +373,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_multi_column) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
         auto restr = make_restrictions("pk=1 and (ck1, ck2)>?", e);
-        auto filter = vector_search::prepare_filter(restr, true);
+        auto filter = vector_search::prepare_filter(*restr, true);
 
         auto tuple_type = tuple_type_impl::get_instance({int32_type, int32_type});
         auto tuple_val = make_tuple_value(tuple_type, {data_value(10), data_value(20)});
@@ -392,7 +392,7 @@ SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto restr = make_restrictions("pk=42", e);
-        auto filter = vector_search::prepare_filter(restr, false);
+        auto filter = vector_search::prepare_filter(*restr, false);
 
         auto options1 = query_options({});
         auto json1 = rjson::print(filter.to_json(options1));

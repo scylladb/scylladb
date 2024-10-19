@@ -44,7 +44,7 @@ query::clustering_row_ranges slice(
             /*for_view=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes)
-            .get_clustering_bounds(query_options({}));
+            ->get_clustering_bounds(query_options({}));
 }
 
 /// Overload that parses the WHERE clause from string.  Named differently to disambiguate when where_clause is
@@ -429,11 +429,11 @@ SEASTAR_TEST_CASE(index_selection) {
                     /*for_view=*/false,
                     /*allow_filtering=*/true,
                     restrictions::check_indexes::yes);
-            auto [idx, restrictions_expr] = sr.find_idx(sim);
+            auto [idx, restrictions_expr] = sr->find_idx(sim);
             return {where_clause,
                     idx ? std::optional(idx->metadata().name()) : std::nullopt,
-                    sr.uses_secondary_indexing(),
-                    sr.need_filtering()};
+                    sr->uses_secondary_indexing(),
+                    sr->need_filtering()};
         };
 
         auto none = std::optional<sstring>{};
@@ -643,34 +643,34 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             bool full_pk = has_pk1 && has_pk2;
 
             BOOST_CHECK_MESSAGE(
-                sr.partition_key_restrictions_is_empty() == (!has_pk1 && !has_pk2),
+                sr->partition_key_restrictions_is_empty() == (!has_pk1 && !has_pk2),
                 ctx_msg("partition_key_restrictions_is_empty"));
 
             BOOST_CHECK_MESSAGE(
-                sr.partition_key_restrictions_is_all_eq() == true,
+                sr->partition_key_restrictions_is_all_eq() == true,
                 ctx_msg("partition_key_restrictions_is_all_eq"));
 
             BOOST_CHECK_MESSAGE(
-                sr.has_partition_key_unrestricted_components() == (!has_pk1 || !has_pk2),
+                sr->has_partition_key_unrestricted_components() == (!has_pk1 || !has_pk2),
                 ctx_msg("has_partition_key_unrestricted_components"));
 
             unsigned pk_restricted = (has_pk1 ? 1u : 0u) + (has_pk2 ? 1u : 0u);
             BOOST_CHECK_MESSAGE(
-                sr.partition_key_restrictions_size() == pk_restricted,
+                sr->partition_key_restrictions_size() == pk_restricted,
                 ctx_msg(fmt::format("partition_key_restrictions_size: got {} want {}",
-                                    sr.partition_key_restrictions_size(), pk_restricted)));
+                                    sr->partition_key_restrictions_size(), pk_restricted)));
 
             BOOST_CHECK_MESSAGE(
-                sr.has_token_restrictions() == false,
+                sr->has_token_restrictions() == false,
                 ctx_msg("has_token_restrictions"));
 
             BOOST_CHECK_MESSAGE(
-                sr.key_is_in_relation() == false,
+                sr->key_is_in_relation() == false,
                 ctx_msg("key_is_in_relation"));
 
             // is_key_range: true unless full PK is specified with EQ
             BOOST_CHECK_MESSAGE(
-                sr.is_key_range() == !full_pk,
+                sr->is_key_range() == !full_pk,
                 ctx_msg("is_key_range"));
 
             // --- Clustering key APIs ---
@@ -679,34 +679,34 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             bool has_any_ck = has_ck1 || has_ck2_slice;
 
             BOOST_CHECK_MESSAGE(
-                sr.has_clustering_columns_restriction() == has_any_ck,
+                sr->has_clustering_columns_restriction() == has_any_ck,
                 ctx_msg("has_clustering_columns_restriction"));
 
             unsigned ck_restricted = (has_ck1 ? 1u : 0u) + (has_ck2_slice ? 1u : 0u);
             BOOST_CHECK_MESSAGE(
-                sr.clustering_columns_restrictions_size() == ck_restricted,
+                sr->clustering_columns_restrictions_size() == ck_restricted,
                 ctx_msg(fmt::format("clustering_columns_restrictions_size: got {} want {}",
-                                    sr.clustering_columns_restrictions_size(), ck_restricted)));
+                                    sr->clustering_columns_restrictions_size(), ck_restricted)));
 
             BOOST_CHECK_MESSAGE(
-                sr.has_unrestricted_clustering_columns() == (ck_restricted < 2),
+                sr->has_unrestricted_clustering_columns() == (ck_restricted < 2),
                 ctx_msg("has_unrestricted_clustering_columns"));
 
             BOOST_CHECK_MESSAGE(
-                sr.clustering_key_restrictions_has_IN() == false,
+                sr->clustering_key_restrictions_has_IN() == false,
                 ctx_msg("clustering_key_restrictions_has_IN"));
 
             // clustering_key_restrictions_has_only_eq: true iff all CK restrictions are EQ.
             // CK2 is a slice (>), so if CK2 is present, it's not all-eq.
             BOOST_CHECK_MESSAGE(
-                sr.clustering_key_restrictions_has_only_eq() == !has_ck2_slice,
+                sr->clustering_key_restrictions_has_only_eq() == !has_ck2_slice,
                 ctx_msg("clustering_key_restrictions_has_only_eq"));
 
             // ck_restrictions_need_filtering: CK slice on ck2 without ck1 prefix needs filtering.
             // Also: ck2 > 0 alone (without ck1 prefix) needs filtering.
             bool ck_needs_filter = has_any_ck && ((!has_pk1 || !has_pk2) || (has_ck2_slice && !has_ck1));
             BOOST_CHECK_MESSAGE(
-                sr.ck_restrictions_need_filtering() == ck_needs_filter,
+                sr->ck_restrictions_need_filtering() == ck_needs_filter,
                 ctx_msg("ck_restrictions_need_filtering"));
 
             // --- Non-primary-key APIs ---
@@ -721,89 +721,89 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                           || has_m_val || has_m_key || has_m_ent || has_fs;
 
             BOOST_CHECK_MESSAGE(
-                sr.has_non_primary_key_restriction() == has_nonpk,
+                sr->has_non_primary_key_restriction() == has_nonpk,
                 ctx_msg("has_non_primary_key_restriction"));
 
             // --- Per-column restriction checks ---
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&pk1_def) == has_pk1,
+                sr->is_restricted(&pk1_def) == has_pk1,
                 ctx_msg("is_restricted(pk1)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&pk2_def) == has_pk2,
+                sr->is_restricted(&pk2_def) == has_pk2,
                 ctx_msg("is_restricted(pk2)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&ck1_def) == has_ck1,
+                sr->is_restricted(&ck1_def) == has_ck1,
                 ctx_msg("is_restricted(ck1)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&ck2_def) == has_ck2_slice,
+                sr->is_restricted(&ck2_def) == has_ck2_slice,
                 ctx_msg("is_restricted(ck2)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&v1_def) == has_v1,
+                sr->is_restricted(&v1_def) == has_v1,
                 ctx_msg("is_restricted(v1)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&v3_def) == has_v3,
+                sr->is_restricted(&v3_def) == has_v3,
                 ctx_msg("is_restricted(v3)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&s1_def) == has_s1,
+                sr->is_restricted(&s1_def) == has_s1,
                 ctx_msg("is_restricted(s1)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&m1_def) == has_m_val,
+                sr->is_restricted(&m1_def) == has_m_val,
                 ctx_msg("is_restricted(m1)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&m2_def) == has_m_key,
+                sr->is_restricted(&m2_def) == has_m_key,
                 ctx_msg("is_restricted(m2)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&m3_def) == has_m_ent,
+                sr->is_restricted(&m3_def) == has_m_ent,
                 ctx_msg("is_restricted(m3)"));
             BOOST_CHECK_MESSAGE(
-                sr.is_restricted(&fs_def) == has_fs,
+                sr->is_restricted(&fs_def) == has_fs,
                 ctx_msg("is_restricted(fs)"));
 
             // has_eq_restriction_on_column: pk1/pk2/ck1/v1/v3 are EQ, ck2 is slice, s1 is CONTAINS
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(pk1_def) == has_pk1,
+                sr->has_eq_restriction_on_column(pk1_def) == has_pk1,
                 ctx_msg("has_eq_restriction_on_column(pk1)"));
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(pk2_def) == has_pk2,
+                sr->has_eq_restriction_on_column(pk2_def) == has_pk2,
                 ctx_msg("has_eq_restriction_on_column(pk2)"));
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(ck1_def) == has_ck1,
+                sr->has_eq_restriction_on_column(ck1_def) == has_ck1,
                 ctx_msg("has_eq_restriction_on_column(ck1)"));
             // ck2 > 0 is a slice, not EQ:
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(ck2_def) == false,
+                sr->has_eq_restriction_on_column(ck2_def) == false,
                 ctx_msg("has_eq_restriction_on_column(ck2)"));
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(v1_def) == has_v1,
+                sr->has_eq_restriction_on_column(v1_def) == has_v1,
                 ctx_msg("has_eq_restriction_on_column(v1)"));
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(v3_def) == has_v3,
+                sr->has_eq_restriction_on_column(v3_def) == has_v3,
                 ctx_msg("has_eq_restriction_on_column(v3)"));
             // s1 CONTAINS is not EQ:
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(s1_def) == false,
+                sr->has_eq_restriction_on_column(s1_def) == false,
                 ctx_msg("has_eq_restriction_on_column(s1)"));
             // m1 CONTAINS is not EQ:
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(m1_def) == false,
+                sr->has_eq_restriction_on_column(m1_def) == false,
                 ctx_msg("has_eq_restriction_on_column(m1)"));
             // m2 CONTAINS KEY is not EQ:
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(m2_def) == false,
+                sr->has_eq_restriction_on_column(m2_def) == false,
                 ctx_msg("has_eq_restriction_on_column(m2)"));
             // m3[1] = 'a' is a subscript EQ.  has_eq_restriction_on_column
             // only recognizes column_value/tuple_constructor in the LHS, not
             // subscript expressions, so it returns false for m3.
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(m3_def) == false,
+                sr->has_eq_restriction_on_column(m3_def) == false,
                 ctx_msg("has_eq_restriction_on_column(m3)"));
             // fs = {1,2} is a regular EQ on frozen collection:
             BOOST_CHECK_MESSAGE(
-                sr.has_eq_restriction_on_column(fs_def) == has_fs,
+                sr->has_eq_restriction_on_column(fs_def) == has_fs,
                 ctx_msg("has_eq_restriction_on_column(fs)"));
 
             // --- Index selection ---
-            auto [idx_opt, idx_expr] = sr.find_idx(sim);
+            auto [idx_opt, idx_expr] = sr->find_idx(sim);
 
             // Determine expected index.  The scoring algorithm:
             //   - Search groups: PK columns → CK columns → non-PK columns
@@ -867,9 +867,9 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                                     idx_opt ? idx_opt->metadata().name() : "(none)",
                                     expected_idx.value_or("(none)"))));
             BOOST_CHECK_MESSAGE(
-                sr.uses_secondary_indexing() == uses_idx,
+                sr->uses_secondary_indexing() == uses_idx,
                 ctx_msg(fmt::format("uses_secondary_indexing: got {} want {}",
-                                    sr.uses_secondary_indexing(), uses_idx)));
+                                    sr->uses_secondary_indexing(), uses_idx)));
 
             // --- need_filtering ---
             // Filtering is needed when:
@@ -880,7 +880,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             //   - Non-PK restrictions that aren't consumed by the index need filtering
             //   - When using an index, remaining restrictions beyond the indexed one need filtering
             // The exact logic is complex; we check it indirectly.
-            bool need_filt = sr.need_filtering();
+            bool need_filt = sr->need_filtering();
 
             // Some invariants we can always check:
             // 1. If no restrictions at all, no filtering needed.
@@ -925,7 +925,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             // PK filtering is needed when PK is partially specified.
             // But when using secondary indexing, the PK restrictions are not evaluated
             // directly, so pk_restrictions_need_filtering may be false.
-            bool pk_needs_filter = sr.pk_restrictions_need_filtering();
+            bool pk_needs_filter = sr->pk_restrictions_need_filtering();
             if (!uses_idx && has_pk1 != has_pk2) {
                 BOOST_CHECK_MESSAGE(pk_needs_filter,
                     ctx_msg("pk_restrictions_need_filtering: partial PK should need filtering"));
@@ -941,12 +941,12 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
 
             // --- is_empty ---
             BOOST_CHECK_MESSAGE(
-                sr.is_empty() == (mask == 0),
+                sr->is_empty() == (mask == 0),
                 ctx_msg("is_empty"));
 
             // --- get_not_null_columns: none of our fragments use IS NOT NULL ---
             BOOST_CHECK_MESSAGE(
-                sr.get_not_null_columns().empty(),
+                sr->get_not_null_columns().empty(),
                 ctx_msg("get_not_null_columns should be empty"));
 
             // --- Index table range APIs ---
@@ -957,7 +957,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 if (is_local_idx) {
                     // Local index: get_local_index_clustering_ranges should work.
                     // Local index CK = (indexed_column, base_ck1, base_ck2, ...).
-                    auto ranges = sr.get_local_index_clustering_ranges(query_options({}), *sr.get_view_schema());
+                    auto ranges = sr->get_local_index_clustering_ranges(query_options({}), *sr->get_view_schema());
                     BOOST_CHECK_MESSAGE(!ranges.empty(),
                         ctx_msg("get_local_index_clustering_ranges should not be empty"));
                     // With a single EQ on the indexed column, expect exactly 1 range.
@@ -967,7 +967,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 } else {
                     // Global index: get_global_index_clustering_ranges should work.
                     // Global index CK = (token, pk1, pk2, ..., ck1, ck2, ...).
-                    auto ranges = sr.get_global_index_clustering_ranges(query_options({}), *sr.get_view_schema());
+                    auto ranges = sr->get_global_index_clustering_ranges(query_options({}), *sr->get_view_schema());
                     BOOST_CHECK_MESSAGE(!ranges.empty(),
                         ctx_msg("get_global_index_clustering_ranges should not be empty"));
                     if (full_pk) {
