@@ -42,8 +42,7 @@ During a read operation, the coordinator communicates with just enough replicas 
 
 .. image:: 5-read_op_RF_3_CL_2.jpg
 
-
-
+The diagram above illustrates the read operation where the coordinator V forwarded the read operation to X, Z and W, **respectively**, where Z and X failed to return its value, but W returned succesfully, ilustrated by the value **Read 1**, meeting the Consistency Level configured.
 
 The Consistency Level is tunable per operation in CQL.   This is known as :term:`tunable consistency<Tunable Consistency>`. Sometimes response latency is more important, making it necessary to adjust settings on a per-query or operation level to override keyspace or even data center-wide consistency settings.  In other words, the Consistency Level setting allows you to choose a point in the consistency vs. latency tradeoff.
 
