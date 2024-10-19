@@ -983,7 +983,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     }
     // Use one timestamp for all mutations for the ease of debugging
     const auto ts = api::new_timestamp();
-    for (const auto& cdef : std::views::join(std::array{s->static_columns(), s->regular_columns()})) {
+    for (const auto& cdef : s->static_and_regular_columns()) {
         mutation m(history_tbl, pk);
         auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version().uuid()),
                                                                  utf8_type->decompose(cdef.name_as_text())});

@@ -840,6 +840,9 @@ public:
     const_iterator_range_type columns(column_kind) const;
     // Returns a range of column definitions
 
+    const_iterator_range_type primary_key_columns() const;
+    const_iterator_range_type static_and_regular_columns() const;
+
     std::ranges::range auto all_columns_in_select_order() const {
         return _all_columns_in_select_order | std::views::transform([] (const column_definition* def) -> const column_definition& { return *def; });
     }

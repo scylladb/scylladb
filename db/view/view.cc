@@ -200,7 +200,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             })
         && _schema.partition_key_size() == base.partition_key_size();
 
-    for (auto&& view_col : std::views::join(std::array{_schema.partition_key_columns(), _schema.clustering_key_columns()})) {
+    for (auto&& view_col : _schema.primary_key_columns()) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
             if (view_col.get_computation().depends_on_non_primary_key_column()) {
