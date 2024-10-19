@@ -33,7 +33,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>

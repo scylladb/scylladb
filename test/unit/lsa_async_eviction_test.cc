@@ -14,7 +14,7 @@
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 void print_stats() {
     std::cout << "free " << memory::stats().free_memory()

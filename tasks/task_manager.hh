@@ -19,7 +19,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "gms/inet_address.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"

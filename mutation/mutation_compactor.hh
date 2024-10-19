@@ -14,7 +14,7 @@
 #include "tombstone_gc.hh"
 #include "full_position.hh"
 #include <type_traits>
-#include "log.hh"
+#include "utils/log.hh"
 
 extern logging::logger mclog;
 

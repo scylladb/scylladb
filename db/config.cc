@@ -30,7 +30,7 @@
 #include "db/tags/extension.hh"
 #include "config.hh"
 #include "extensions.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "service/tablet_allocator_fwd.hh"
 #include "utils/config_file_impl.hh"
 #include <seastar/core/metrics_api.hh>

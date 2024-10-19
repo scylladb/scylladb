@@ -13,7 +13,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastarx.hh"
 #include <boost/program_options.hpp>
 

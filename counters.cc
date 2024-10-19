@@ -10,7 +10,7 @@
 #include "counters.hh"
 #include "mutation/mutation.hh"
 #include "combine.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 logging::logger cell_locker_log("cell_locker");
 

@@ -18,7 +18,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/defer.hh>
 
-#include "log.hh"
+#include "utils/log.hh"
 
 #include "direct_failure_detector/failure_detector.hh"
 

@@ -8,7 +8,7 @@
  */
 
 #include "topology_state_machine.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 #include <boost/range/adaptors.hpp>
 

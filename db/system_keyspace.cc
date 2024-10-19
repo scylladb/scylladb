@@ -26,7 +26,7 @@
 #include "schema/schema_builder.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <seastar/core/enum.hh>
 #include "gms/inet_address.hh"
 #include "message/messaging_service.hh"

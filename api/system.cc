@@ -20,7 +20,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/http/short_streams.hh>
 
-#include "log.hh"
+#include "utils/log.hh"
 
 extern logging::logger apilog;
 

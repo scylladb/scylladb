@@ -50,7 +50,7 @@
 #include "utils/UUID.hh"
 #include "utils/to_string.hh"
 #include "gms/inet_address.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
 #include "gms/gossiper.hh"

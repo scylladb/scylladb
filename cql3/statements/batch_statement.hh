@@ -11,7 +11,7 @@
 #include "cql3/cql_statement.hh"
 #include "raw/batch_statement.hh"
 #include "timestamp.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "service_permit.hh"
 #include "exceptions/coordinator_result.hh"
 #include "tracing/trace_state.hh"

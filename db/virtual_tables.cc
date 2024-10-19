@@ -34,7 +34,7 @@
 #include "types/list.hh"
 #include "types/types.hh"
 #include "utils/build_id.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace db {
 

@@ -18,7 +18,7 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <seastar/core/thread.hh>
 #include <chrono>
 #include "db/schema_tables.hh"

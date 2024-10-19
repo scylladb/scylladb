@@ -8,7 +8,7 @@
 
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "serialization.hh"
 #include "error.hh"
 #include "concrete_types.hh"

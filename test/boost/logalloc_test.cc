@@ -35,7 +35,7 @@
 #include "utils/lsa/weak_ptr.hh"
 #include "test/lib/make_random_string.hh"
 #endif
-#include "log.hh"
+#include "utils/log.hh"
 
 [[gnu::unused]]
 static auto x = [] {

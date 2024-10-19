@@ -39,7 +39,7 @@
 #include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "release.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"

@@ -20,7 +20,7 @@
 #include "gms/gossiper.hh"
 #include "idl/mapreduce_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "message/messaging_service.hh"
 #include "query-request.hh"
 #include "query_ranges_to_vnodes.hh"

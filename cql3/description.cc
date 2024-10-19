@@ -11,7 +11,7 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include "cql3/util.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "types/types.hh"
 
 static logging::logger dlogger{"description"};

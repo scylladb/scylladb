@@ -10,7 +10,7 @@
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_exception.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <cfloat>
 #include <fmt/ranges.h>
 

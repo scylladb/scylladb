@@ -10,7 +10,7 @@
 #include <seastar/core/sharded.hh>
 
 #include "schema_registry.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "db/schema_tables.hh"
 #include "view_info.hh"
 

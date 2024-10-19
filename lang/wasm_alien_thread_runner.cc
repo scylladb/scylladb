@@ -12,7 +12,7 @@
 #include <seastar/core/reactor.hh>
 #include <unistd.h>
 
-#include "log.hh"
+#include "utils/log.hh"
 #include "lang/wasm.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 #include <seastar/core/posix.hh>

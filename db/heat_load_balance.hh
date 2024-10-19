@@ -32,7 +32,7 @@
 #include <cassert>
 #include <fmt/ranges.h>  // IWYU pragma: keep
 #include <boost/range/adaptor/map.hpp>
-#include "log.hh"
+#include "utils/log.hh"
 
 extern logging::logger hr_logger;
 

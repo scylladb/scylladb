@@ -52,7 +52,7 @@
 #include "utils/class_registrator.hh"
 #include "utils/error_injection.hh"
 #include "utils/runtime.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/directories.hh"
 #include "debug.hh"
 #include "auth/common.hh"
