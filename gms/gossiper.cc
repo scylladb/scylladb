@@ -34,9 +34,9 @@
 #include <chrono>
 #include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
-#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/count_if.hpp>
 #include <boost/range/algorithm/partition.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <utility>

@@ -10,7 +10,7 @@
 #include "topology_state_machine.hh"
 #include "log.hh"
 
-#include <boost/range/adaptors.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 namespace service {
 

@@ -23,7 +23,8 @@
 #include "user_aggregate.hh"
 #include "cql3/expr/expression.hh"
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptors.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 #include "error_injection_fcts.hh"
 

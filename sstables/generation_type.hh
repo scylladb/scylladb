@@ -15,10 +15,10 @@
 #include <compare>
 #include <limits>
 #include <stdexcept>
-#include <boost/range/adaptors.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
+#include <boost/range/adaptor/transformed.hpp>
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"

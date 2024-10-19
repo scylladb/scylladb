@@ -15,7 +15,6 @@
 #include <boost/regex.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptors.hpp>
 #include <seastar/util/log.hh>
 
 #include "exceptions/exceptions.hh"

@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/range/adaptors.hpp>
 
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -16,7 +15,6 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/defer.hh>
 
-#include <boost/range/adaptors.hpp>
 
 #include "db/timeout_clock.hh"
 #include "message/messaging_service.hh"

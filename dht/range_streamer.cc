@@ -14,7 +14,6 @@
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "db/config.hh"
-#include <boost/range/adaptors.hpp>
 #include <fmt/ranges.h>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>

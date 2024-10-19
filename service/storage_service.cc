@@ -61,7 +61,6 @@
 #include "utils/user_provided_param.hh"
 #include "version.hh"
 #include "dht/range_streamer.hh"
-#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>

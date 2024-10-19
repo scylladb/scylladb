@@ -34,6 +34,8 @@
 #include "utils/to_string.hh"
 #include "service/topology_coordinator.hh"
 
+#include <boost/regex.hpp>
+
 using namespace locator;
 using namespace replica;
 using namespace service;

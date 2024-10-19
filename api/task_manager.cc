@@ -18,7 +18,6 @@
 #include "utils/overloaded_functor.hh"
 
 #include <utility>
-#include <boost/range/adaptors.hpp>
 
 namespace api {
 
