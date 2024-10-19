@@ -23,6 +23,14 @@ namespace cql3 {
 
 namespace restrictions {
 
+/// A set of discrete values.
+using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
+
+/// General set of values.  Empty set and single-element sets are always value_list.  interval is
+/// never singular and never has start > end.  Universal set is a interval with both bounds null.
+using value_set = std::variant<value_list, interval<managed_bytes>>;
+
+
 ///In some cases checking if columns have indexes is undesired of even
 ///impossible, because e.g. the query runs on a pseudo-table, which does not
 ///have an index-manager, or even a table object.
