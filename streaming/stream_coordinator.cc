@@ -10,7 +10,7 @@
 
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_coordinator.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace streaming {
 

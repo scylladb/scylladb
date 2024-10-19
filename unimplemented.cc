@@ -10,7 +10,7 @@
 #include "unimplemented.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/enum.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastarx.hh"
 
 namespace unimplemented {

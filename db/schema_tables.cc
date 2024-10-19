@@ -23,7 +23,7 @@
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
 #include <seastar/coroutine/all.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "frozen_schema.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_query.hh"

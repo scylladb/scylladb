@@ -27,7 +27,7 @@ extern "C" {
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {

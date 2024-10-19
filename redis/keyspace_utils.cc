@@ -14,7 +14,7 @@
 #include "types/types.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include <seastar/core/future.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "auth/service.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"

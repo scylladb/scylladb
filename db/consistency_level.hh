@@ -14,7 +14,7 @@
 #include "db/read_repair_decision.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "replica/database_fwd.hh"
 
 namespace gms {

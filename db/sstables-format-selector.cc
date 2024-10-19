@@ -10,7 +10,7 @@
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "sstables-format-selector.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"

@@ -13,7 +13,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "service/storage_proxy.hh"
 #include "utils/result_combinators.hh"
 #include "db/view/delete_ghost_rows_visitor.hh"

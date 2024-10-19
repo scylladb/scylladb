@@ -12,7 +12,7 @@
 #include <seastar/util/lazy.hh>
 #include <utility>
 
-#include "log.hh"
+#include "utils/log.hh"
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
 #include "utils/assert.hh"

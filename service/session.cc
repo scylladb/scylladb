@@ -7,7 +7,7 @@
  */
 
 #include "service/session.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace service {
 

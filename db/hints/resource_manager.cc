@@ -10,7 +10,7 @@
 #include "gms/inet_address.hh"
 #include "locator/token_metadata.hh"
 #include "manager.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/disk-error-handler.hh"

@@ -12,7 +12,7 @@
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
 #include "collection_mutation.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace cql3 {
 

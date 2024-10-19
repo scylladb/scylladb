@@ -12,7 +12,7 @@
 
 #include "mutation/mutation.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "clustering_interval_set.hh"
 #include "mutation/mutation_partition_v2.hh"
 #include "dht/i_partitioner.hh"

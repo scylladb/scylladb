@@ -22,7 +22,7 @@
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace sstables {
 

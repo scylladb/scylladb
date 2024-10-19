@@ -16,7 +16,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/test_utils.hh"
 #include "types/list.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <chrono>
 
 using namespace std::literals::chrono_literals;

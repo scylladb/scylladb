@@ -12,7 +12,7 @@
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/map.hpp>

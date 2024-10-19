@@ -12,7 +12,7 @@
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>

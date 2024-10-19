@@ -9,7 +9,7 @@
 #pragma once
 
 // Scylla includes.
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace db::hints {
 namespace internal {

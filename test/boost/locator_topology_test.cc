@@ -21,7 +21,7 @@
 #include "locator/host_id.hh"
 #include "locator/topology.hh"
 #include "locator/load_sketch.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 extern logging::logger testlog;
 

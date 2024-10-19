@@ -17,7 +17,7 @@
 #include <seastar/net/tls.hh>
 
 #include "seastarx.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace utils::http {
 
