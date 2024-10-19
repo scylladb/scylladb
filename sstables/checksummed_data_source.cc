@@ -74,11 +74,12 @@ public:
                 on_internal_error(sstlog, "Requested digest check but no digest was provided.");
             }
             if (_end_pos - _pos < _file_len) {
-                on_internal_error(sstlog, seastar::format(
-                        "Cannot check digest with a partial read: current pos={}, end pos={}, file len={}",
-                        _pos, _end_pos, _file_len));
+                sstlog.debug("Checksummed reader cannot calculate digest with partial read: current pos={}, end pos={}, file len={}. Disabling digest check.",
+                        _pos, _end_pos, _file_len);
+                _digests = {false};
+            } else {
+                _digests = {true, *digest, ChecksumType::init_checksum()};
             }
-            _digests = {*digest, ChecksumType::init_checksum()};
         }
         auto start = _beg_pos & ~(chunk_size - 1);
         auto end = (_end_pos & ~(chunk_size - 1)) + chunk_size;
@@ -106,7 +107,9 @@ public:
             }
 
             if constexpr (check_digest) {
-                _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.begin(), buf.size());
+                if (_digests.can_calculate_digest) {
+                    _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.begin(), buf.size());
+                }
             }
 
             buf.trim_front(_pos & (chunk_size - 1));
@@ -114,7 +117,7 @@ public:
             _underlying_pos += chunk_size;
 
             if constexpr (check_digest) {
-                if (_pos == _file_len && _digests.expected_digest != _digests.actual_digest) {
+                if (_digests.can_calculate_digest && _pos == _file_len && _digests.expected_digest != _digests.actual_digest) {
                     throw malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
                 }
             }
@@ -131,7 +134,10 @@ public:
 
     virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         if constexpr (check_digest) {
-            on_internal_error(sstlog, "Tried to skip on a data source for which digest check has been requested.");
+            if (_digests.can_calculate_digest) {
+                sstlog.debug("Checksummed reader cannot calculate digest with skipped data: current pos={}, end pos={}, skip len={}. Disabling digest check.", _pos, _end_pos, n);
+                _digests.can_calculate_digest = false;
+            }
         }
         auto chunk_size = _checksum.chunk_size;
         if (_pos + n > _end_pos) {
