@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#pragma  once
+#pragma once
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
