@@ -110,6 +110,6 @@ if(NOT TARGET Seastar::iotune)
     string (TOUPPER ${config} CONFIG)
     set_property(TARGET Seastar::iotune
       PROPERTY
-        IMPORTED_LOCATION_${CONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/seastar/apps/iotune/iotune)
+        IMPORTED_LOCATION_${CONFIG} ${CMAKE_BINARY_DIR}/${config}/seastar/apps/iotune/iotune)
   endforeach()
 endif()
