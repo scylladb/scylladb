@@ -50,7 +50,6 @@
 #include "partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
 #include "utils/assert.hh"
-#include "utils/ranges.hh"
 #include "mutation/mutation_rebuilder.hh"
 
 #include "readers/from_mutations_v2.hh"
@@ -451,9 +450,9 @@ std::vector<dht::decorated_key> generate_keys(schema_ptr s, int count) {
 }
 
 std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
-    return ranges::to<std::vector<dht::ring_position>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& key) {
+    return keys | std::views::transform([] (const dht::decorated_key& key) {
         return dht::ring_position(key);
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
@@ -488,9 +487,9 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
         };
 
         auto make_reader = [&] (reader_permit permit, const dht::partition_range& pr) {
-            return make_combined_reader(s, permit, ranges::to<std::vector<mutation_reader>>(mutations | boost::adaptors::transformed([&pr, s, permit] (auto& ms) {
+            return make_combined_reader(s, permit, mutations | std::views::transform([&pr, s, permit] (auto& ms) {
                 return make_mutation_reader_from_mutations_v2(s, permit, {ms}, pr);
-            })));
+            }) | std::ranges::to<std::vector>());
         };
 
         auto pr = dht::partition_range::make_open_ended_both_sides();
@@ -1244,9 +1243,10 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         auto populate = [&env] (schema_ptr s, const std::vector<mutation>& mutations) {
             const auto remote_shard = (this_shard_id() + 1) % smp::count;
-            auto frozen_mutations = ranges::to<std::vector<frozen_mutation>>(
+            auto frozen_mutations =
                 mutations
-                | boost::adaptors::transformed([] (const mutation& m) { return freeze(m); }));
+                | std::views::transform([] (const mutation& m) { return freeze(m); })
+                | std::ranges::to<std::vector>();
             auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
                 auto mt = make_lw_shared<replica::memtable>(s.get());
 
@@ -1371,13 +1371,15 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
 
     const auto check = [](std::vector<range> ranges, key key, std::vector<range> output_ranges, schema_ptr schema,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        auto actual_ranges = ranges::to<query::clustering_row_ranges>(ranges | boost::adaptors::transformed(
-                    [&] (const range& r) { return r.to_clustering_range(*schema); }));
+        auto actual_ranges = ranges | std::views::transform(
+                    [&] (const range& r) { return r.to_clustering_range(*schema); })
+            | std::ranges::to<query::clustering_row_ranges>();
 
         query::trim_clustering_row_ranges_to(*schema, actual_ranges, key.to_clustering_key(*schema));
 
-        const auto expected_ranges = ranges::to<query::clustering_row_ranges>(output_ranges | boost::adaptors::transformed(
-                    [&] (const range& r) { return r.to_clustering_range(*schema); }));
+        const auto expected_ranges = output_ranges | std::views::transform(
+                    [&] (const range& r) { return r.to_clustering_range(*schema); })
+            | std::ranges::to<query::clustering_row_ranges>();
 
         if (!std::equal(actual_ranges.begin(), actual_ranges.end(), expected_ranges.begin(), expected_ranges.end(),
                     [tri_cmp = clustering_key::tri_compare(*schema)] (const query::clustering_range& a, const query::clustering_range& b) {
