@@ -12,7 +12,6 @@
 #include <random>
 #include <seastar/core/sstring.hh>
 #include "redis/lolwut.hh"
-#include "redis/version.hh"
 
 using namespace seastar;
 
@@ -176,6 +175,7 @@ future<bytes> lolwut5(const int cols, const int squares_per_row, const int squar
     auto c = canvas::draw_schotter(cols, squares_per_row, squares_per_col);
     auto rendered = c.render_canvas();
     const bytes msg {"\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. "};
+    const bytes redis_version = "5.0.8";
     const bytes nr {"\n"};
     rendered += msg;
     rendered += redis_version;
