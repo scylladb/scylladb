@@ -9,6 +9,7 @@
 #pragma once
 
 #include "bytes.hh"
+#include <memory>
 
 class schema;
 class partition_key;
