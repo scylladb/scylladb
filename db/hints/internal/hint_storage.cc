@@ -20,7 +20,7 @@
 #include <seastar/core/sstring.hh>
 
 // Boost features.
-#include <boost/range/adaptors.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"

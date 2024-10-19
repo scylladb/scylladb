@@ -17,7 +17,6 @@
 #include <algorithm>
 
 #include <boost/range/algorithm.hpp>
-#include <boost/range/adaptors.hpp>
 #include <boost/range/join.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/string/join.hpp>

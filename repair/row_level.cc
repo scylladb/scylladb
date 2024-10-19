@@ -34,7 +34,6 @@
 #include <algorithm>
 #include <random>
 #include <optional>
-#include <boost/range/adaptors.hpp>
 #include <boost/intrusive/list.hpp>
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"

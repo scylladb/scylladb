@@ -28,7 +28,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 
 // Boost features.
-#include <boost/range/adaptors.hpp>
 
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"

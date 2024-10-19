@@ -9,7 +9,8 @@
 #pragma once
 
 #include <list>
-#include <boost/range/adaptors.hpp>
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/join.hpp>
 #include <seastar/core/on_internal_error.hh>

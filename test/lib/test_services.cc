@@ -20,6 +20,7 @@
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <iostream>
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>

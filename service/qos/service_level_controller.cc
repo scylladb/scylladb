@@ -9,6 +9,7 @@
 #include "cql3/util.hh"
 #include "utils/assert.hh"
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <chrono>
 
 #include <seastar/core/sleep.hh>

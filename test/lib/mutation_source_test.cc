@@ -8,6 +8,7 @@
 
 #include <set>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/sliced.hpp>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include "partition_slice_builder.hh"

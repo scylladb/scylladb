@@ -12,7 +12,7 @@
 #include "cql3/statements/property_definitions.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptors.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/algorithm.hpp>
 
 namespace sstables {

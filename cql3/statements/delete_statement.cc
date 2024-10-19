@@ -10,7 +10,6 @@
 
 #include "utils/assert.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/range/adaptors.hpp>
 
 #include "data_dictionary/data_dictionary.hh"
 #include "delete_statement.hh"

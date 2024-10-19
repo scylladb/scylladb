@@ -8,11 +8,12 @@
 
 #pragma once
 
+#include <boost/range/adaptor/map.hpp>
+
 #include <unordered_map>
 #include <exception>
 #include <absl/container/btree_set.h>
 #include <fmt/core.h>
-#include <boost/range/adaptors.hpp>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>

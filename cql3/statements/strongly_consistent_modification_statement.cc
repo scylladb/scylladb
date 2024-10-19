@@ -11,7 +11,6 @@
 
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
 
-#include <boost/range/adaptors.hpp>
 #include <optional>
 
 #include <seastar/core/future.hh>

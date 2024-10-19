@@ -8,9 +8,9 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
 
