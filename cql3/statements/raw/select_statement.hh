@@ -104,7 +104,7 @@ public:
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, bool for_view);
 private:
     std::vector<selection::prepared_selector> maybe_jsonize_select_clause(std::vector<selection::prepared_selector> select, data_dictionary::database db, schema_ptr schema);
-    ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
+    ::shared_ptr<const restrictions::statement_restrictions> prepare_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         prepare_context& ctx,

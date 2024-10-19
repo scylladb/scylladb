@@ -977,7 +977,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
                                         uint32_t bound_terms,
                                         lw_shared_ptr<const parameters> parameters,
                                         ::shared_ptr<selection::selection> selection,
-                                        ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                        ::shared_ptr<const restrictions::statement_restrictions> restrictions,
                                         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
@@ -1539,7 +1539,7 @@ public:
         uint32_t bound_terms,
         lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
         bool is_reversed,
         ordering_comparator_type ordering_comparator,
@@ -1577,7 +1577,7 @@ private:
     uint32_t bound_terms,
     lw_shared_ptr<const select_statement::parameters> parameters,
     ::shared_ptr<selection::selection> selection,
-    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+    ::shared_ptr<const restrictions::statement_restrictions> restrictions,
     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
     bool is_reversed,
     parallelized_select_statement::ordering_comparator_type ordering_comparator,
@@ -2205,7 +2205,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     return make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
 }
 
-::shared_ptr<restrictions::statement_restrictions>
+::shared_ptr<const restrictions::statement_restrictions>
 select_statement::prepare_restrictions(data_dictionary::database db,
                                        schema_ptr schema,
                                        prepare_context& ctx,
@@ -2215,8 +2215,8 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        restrictions::check_indexes do_check_indexes)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes));
+        return restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));

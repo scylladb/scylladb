@@ -812,7 +812,7 @@ bool has_only_eq_binops(const expression& e) {
     return non_eq_binop == nullptr;
 }
 
-statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
+statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering)
     : _schema(schema)
     , _partition_range_is_simple(true)
 { }
@@ -1092,7 +1092,8 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     return prefix;
 }
 
-statement_restrictions::statement_restrictions(data_dictionary::database db,
+statement_restrictions::statement_restrictions(private_tag,
+        data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const expr::expression& where_clause,
@@ -1101,7 +1102,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         bool for_view,
         bool allow_filtering,
         check_indexes do_check_indexes)
-    : statement_restrictions(schema, allow_filtering)
+    : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
     for (auto&& relation_expr : boolean_factors(where_clause)) {
@@ -2912,7 +2913,7 @@ const std::unordered_set<const column_definition*> statement_restrictions::get_n
     return _not_null_columns;
 }
 
-statement_restrictions
+shared_ptr<const statement_restrictions>
 analyze_statement_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
@@ -2923,7 +2924,14 @@ analyze_statement_restrictions(
         bool for_view,
         bool allow_filtering,
         check_indexes do_check_indexes) {
-    return statement_restrictions(db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes);
+}
+
+shared_ptr<const statement_restrictions>
+make_trivial_statement_restrictions(
+        schema_ptr schema,
+        bool allow_filtering) {
+    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), allow_filtering);
 }
 
 } // namespace restrictions

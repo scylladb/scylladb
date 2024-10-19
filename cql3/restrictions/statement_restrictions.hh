@@ -32,6 +32,7 @@ using check_indexes = bool_class<class check_indexes_tag>;
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
 class statement_restrictions {
+    struct private_tag {}; // Tag for private constructor
 private:
     schema_ptr _schema;
 
@@ -130,9 +131,10 @@ public:
      * @param cfm the column family meta data
      * @return a new empty <code>StatementRestrictions</code>.
      */
-    statement_restrictions(schema_ptr schema, bool allow_filtering);
+    statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering);
 
-    friend statement_restrictions analyze_statement_restrictions(
+public:
+    friend shared_ptr<const statement_restrictions> analyze_statement_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
@@ -142,9 +144,14 @@ public:
         bool for_view,
         bool allow_filtering,
         check_indexes do_check_indexes);
+    friend shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
+        schema_ptr schema,
+        bool allow_filtering);
 
-private:
-    statement_restrictions(data_dictionary::database db,
+    statement_restrictions(const statement_restrictions&) = delete;
+    statement_restrictions& operator=(const statement_restrictions&) = delete;
+    statement_restrictions(private_tag,
+        data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const expr::expression& where_clause,
@@ -410,7 +417,7 @@ public:
     void validate_primary_key(const query_options& options) const;
 };
 
-statement_restrictions analyze_statement_restrictions(
+shared_ptr<const statement_restrictions> analyze_statement_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
@@ -421,6 +428,9 @@ statement_restrictions analyze_statement_restrictions(
         bool allow_filtering,
         check_indexes do_check_indexes);
 
+shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
+        schema_ptr schema,
+        bool allow_filtering);
 
 // Extracts all binary operators which have the given column on their left hand side.
 // Extracts only single-column restrictions.

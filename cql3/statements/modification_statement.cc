@@ -597,7 +597,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // Since this cache is only meaningful for LWT queries, just clear the ids
     // if it's not a conditional statement so that the AST nodes don't
     // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions.has_value()) {
+    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
         ctx.clear_pk_function_calls_cache();
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;

@@ -43,7 +43,7 @@ query::clustering_row_ranges slice(
             /*for_view=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes)
-            .get_clustering_bounds(query_options({}));
+            ->get_clustering_bounds(query_options({}));
 }
 
 /// Overload that parses the WHERE clause from string.  Named differently to disambiguate when where_clause is
