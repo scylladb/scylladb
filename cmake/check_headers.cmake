@@ -46,7 +46,7 @@ function (check_headers check_headers_target target)
       DEPENDS ${CMAKE_SOURCE_DIR}/${fn}
       # silence "-Wpragma-once-outside-header"
       COMMAND sed
-            -e "s/^#pragma once//"
+            -e "s/^#pragma \\+once//"
             "${fn}" > "${src}"
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       VERBATIM)
