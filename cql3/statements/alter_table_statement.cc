@@ -269,7 +269,7 @@ void alter_table_statement::drop_column(const query_options& options, const sche
             drop_timestamp = _attrs->get_timestamp(now, options);
         }
 
-        for (auto&& column_def : std::views::join(std::array{schema.static_columns(), schema.regular_columns()})) { // find
+        for (auto&& column_def : schema.static_and_regular_columns()) { // find
             if (column_def.name() == column_name.name()) {
                 cfm.remove_column(column_name.name(), drop_timestamp);
                 break;

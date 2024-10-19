@@ -845,7 +845,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     static const bytes eor_column_name = cdc::log_meta_column_name_bytes("end_of_batch");
 
     std::optional<attrs_to_get> key_names =
-        std::views::join(std::array{base->partition_key_columns(), base->clustering_key_columns()})
+        base->primary_key_columns()
         | std::views::transform([&] (const column_definition& cdef) {
             return std::make_pair<std::string, attrs_to_get_node>(cdef.name_as_text(), {}); })
         | std::ranges::to<attrs_to_get>()
