@@ -40,6 +40,22 @@ using check_indexes = bool_class<class check_indexes_tag>;
 // WHERE clause fragments such as WHERE token(pk) > 1 or WHERE pk1 IN :list1 AND pk2 IN :list2.
 using get_partition_key_ranges_fn_t = std::function<dht::partition_range_vector (const query_options&)>;
 
+struct no_partition_range_restrictions {
+};
+
+struct token_range_restrictions {
+    expr::expression token_restrictions = expr::conjunction({});
+};
+
+struct single_column_partition_range_restrictions {
+    std::vector<expr::expression> per_column_restrictions;
+};
+
+using partition_range_restrictions = std::variant<
+        no_partition_range_restrictions,
+        token_range_restrictions,
+        single_column_partition_range_restrictions>;
+
 /**
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
@@ -126,7 +142,7 @@ private:
     /// binary_operators on token.  If single-column restrictions define the partition range, each element holds
     /// restrictions for one partition column.  Each partition column has a corresponding element, but the elements
     /// are in arbitrary order.
-    std::vector<expr::expression> _partition_range_restrictions;
+    partition_range_restrictions _partition_range_restrictions;
 
     bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
 
