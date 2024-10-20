@@ -97,4 +97,16 @@ public:
     static const aws_errors& get_errors();
 };
 
+class aws_exception : public std::exception {
+    aws_error _error;
+
+public:
+    explicit aws_exception(const aws_error& error) noexcept : _error(error) {}
+    explicit aws_exception(aws_error&& error) noexcept : _error(std::move(error)) {}
+
+    const char* what() const noexcept override { return _error.get_error_message().c_str(); }
+
+    const aws_error& error() const noexcept { return _error; }
+};
+
 } // namespace aws
