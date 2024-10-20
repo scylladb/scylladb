@@ -39,8 +39,7 @@ db::extensions::commitlog_file_extensions() const {
 
 std::set<sstring>
 db::extensions::schema_extension_keywords() const {
-    return boost::copy_range<std::set<sstring>>(
-            _schema_extensions | boost::adaptors::map_keys);
+    return _schema_extensions | std::views::keys | std::ranges::to<std::set>();
 }
 
 void db::extensions::add_sstable_file_io_extension(sstring n, sstable_file_io_extension f) {

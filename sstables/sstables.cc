@@ -1698,7 +1698,7 @@ static
 void
 populate_statistics_offsets(sstable_version_types v, statistics& s) {
     // copy into a sorted vector to guarantee consistent order
-    auto types = boost::copy_range<std::vector<metadata_type>>(s.contents | boost::adaptors::map_keys);
+    auto types = s.contents | std::views::keys | std::ranges::to<std::vector>();
     std::ranges::sort(types);
 
     // populate the hash with garbage so we can calculate its size
@@ -2240,7 +2240,7 @@ void sstable::validate_originating_host_id() const {
 
 std::vector<sstring> sstable::component_filenames() const {
     std::vector<sstring> res;
-    for (auto c : sstable_version_constants::get_component_map(_version) | boost::adaptors::map_keys) {
+    for (auto c : sstable_version_constants::get_component_map(_version) | std::views::keys) {
         if (has_component(c)) {
             res.emplace_back(filename(c));
         }

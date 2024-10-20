@@ -253,7 +253,7 @@ future<> range_streamer::stream_async() {
     return do_for_each(_to_stream, [this, description = _description] (auto& stream) {
         const auto& keyspace = stream.first;
         auto& ip_range_vec = stream.second;
-        auto ips = boost::copy_range<std::list<inet_address>>(ip_range_vec | boost::adaptors::map_keys);
+        auto ips = ip_range_vec | std::views::keys | std::ranges::to<std::list>();
         // Fetch from or send to peer node in parallel
         logger.info("{} with {} for keyspace={} started, nodes_to_stream={}", description, ips, keyspace, ip_range_vec.size());
         return parallel_for_each(ip_range_vec, [this, description, keyspace] (auto& ip_range) {

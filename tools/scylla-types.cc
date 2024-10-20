@@ -382,7 +382,7 @@ For more information about individual actions, see their specific help:
 $ scylla types {{action}} --help
 )";
 
-    const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
+    const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
         .name = app_name,
         .description = seastar::format(description_template, app_name, app_name, boost::algorithm::join(operations | boost::adaptors::transformed(

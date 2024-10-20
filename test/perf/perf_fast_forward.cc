@@ -1909,11 +1909,12 @@ int scylla_fast_forward_main(int argc, char** argv) {
                 ),
             "Test groups to run")
         ("datasets", bpo::value<std::vector<std::string>>()->default_value(
-                boost::copy_range<std::vector<std::string>>(datasets
-                    | boost::adaptors::filtered([] (auto&& e) {
+                datasets
+                    | std::views::filter([] (auto&& e) {
                         return e.second->enabled_by_default();
                     })
-                    | boost::adaptors::map_keys)),
+                    | std::views::keys
+                    | std::ranges::to<std::vector<std::string>>()),
             "Use only the following datasets")
         ("list-tests", "Show available test groups")
         ("list-datasets", "Show available datasets")

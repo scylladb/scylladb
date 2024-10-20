@@ -515,11 +515,9 @@ tasks::task_manager::task_ptr repair::task_manager_module::get_shard_task_ptr(in
 }
 
 std::vector<int> repair::task_manager_module::get_active() const {
-    std::vector<int> res;
-    boost::push_back(res, _status | boost::adaptors::filtered([] (auto& x) {
+    return _status | std::views::filter([] (auto& x) {
         return x.second == repair_status::RUNNING;
-    }) | boost::adaptors::map_keys);
-    return res;
+    }) | std::views::keys | std::ranges::to<std::vector>();
 }
 
 size_t repair::task_manager_module::nr_running_repair_jobs() {
@@ -1587,7 +1585,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             rs.get_metrics().bootstrap_finished_ranges = 0;
             rs.get_metrics().bootstrap_total_ranges = nr_ranges_total;
         }).get();
-        rlogger.info("bootstrap_with_repair: started with keyspaces={}, nr_ranges_total={}", ks_erms | boost::adaptors::map_keys, nr_ranges_total);
+        rlogger.info("bootstrap_with_repair: started with keyspaces={}, nr_ranges_total={}", ks_erms | std::views::keys, nr_ranges_total);
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
@@ -1734,7 +1732,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             sync_data_using_repair(keyspace_name, erm, std::move(desired_ranges), std::move(range_sources), reason, nullptr).get();
             rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, nr_ranges);
         }
-        rlogger.info("bootstrap_with_repair: finished with keyspaces={}", ks_erms | boost::adaptors::map_keys);
+        rlogger.info("bootstrap_with_repair: finished with keyspaces={}", ks_erms | std::views::keys);
     });
 }
 
@@ -1772,7 +1770,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             static std::list<gms::inet_address> no_ignore_nodes;
             return ops ? ops->ignore_nodes : no_ignore_nodes;
         };
-        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, leaving_node, get_ignore_nodes());
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | std::views::keys, leaving_node, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
@@ -1930,7 +1928,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
         }
-        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, leaving_node);
+        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | std::views::keys, leaving_node);
     });
 }
 
@@ -2019,7 +2017,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                 source_dc.reset();
             }
         }
-        rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}, ignore_nodes={} replaced_node={}", op, ks_erms | boost::adaptors::map_keys, source_dc, nr_ranges_total, ignore_nodes, replaced_node);
+        rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}, ignore_nodes={} replaced_node={}", op, ks_erms | std::views::keys, source_dc, nr_ranges_total, ignore_nodes, replaced_node);
         for (const auto& [keyspace_name, erm] : ks_erms) {
             size_t nr_ranges_skipped = 0;
             if (!db.has_keyspace(keyspace_name)) {
@@ -2150,7 +2148,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
             sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, nullptr).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc_for_keyspace, nr_ranges);
         }
-        rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, ks_erms | boost::adaptors::map_keys, source_dc);
+        rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, ks_erms | std::views::keys, source_dc);
     });
 }
 

@@ -296,8 +296,8 @@ storage_options::s3 storage_options::s3::from_map(const std::map<sstring, sstrin
     }
     if (values.size() > allowed_options.size()) {
         throw std::runtime_error(fmt::format("Extraneous options for S3: {}; allowed: {}",
-            boost::algorithm::join(values | boost::adaptors::map_keys, ","),
-            boost::algorithm::join(allowed_options | boost::adaptors::map_keys, ",")));
+            fmt::join(values | std::views::keys, ","),
+            fmt::join(allowed_options | std::views::keys, ",")));
     }
     return options;
 }
