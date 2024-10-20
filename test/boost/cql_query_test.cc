@@ -1274,6 +1274,7 @@ SEASTAR_TEST_CASE(test_range_deletion_scenarios) {
 
 SEASTAR_TEST_CASE(test_range_deletion_scenarios_with_compact_storage) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
         e.execute_cql("create table cf (p int, c int, v text, primary key (p, c)) with compact storage;").get();
         for (auto i = 0; i < 10; ++i) {
             e.execute_cql(format("insert into cf (p, c, v) values (1, {:d}, 'abc');", i)).get();
@@ -2626,6 +2627,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
 
 SEASTAR_TEST_CASE(test_compact_storage) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
         e.execute_cql("create table tcs (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").get();
         BOOST_REQUIRE(e.local_db().has_schema("ks", "tcs"));
         e.execute_cql("insert into tcs (p1, c1, r1) values (1, 2, 3);").get();
@@ -2743,8 +2745,9 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
 
 
 SEASTAR_TEST_CASE(test_result_order) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table tro (p1 int, c1 text, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result().then([&e] {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
+        e.execute_cql("create table tro (p1 int, c1 text, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result().then([&e] {
             return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'z', 1);").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'bbbb', 2);").discard_result();
@@ -2767,7 +2770,7 @@ SEASTAR_TEST_CASE(test_result_order) {
                 { int32_type->decompose(1), utf8_type->decompose(sstring("cccc")), int32_type->decompose(6) },
                 { int32_type->decompose(1), utf8_type->decompose(sstring("z")), int32_type->decompose(1) },
             });
-        });
+        }).get();
     });
 }
 
@@ -3730,6 +3733,7 @@ SEASTAR_TEST_CASE(test_aggregate_and_simple_selection_together) {
 
 SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
         cquery_nofail(e, "CREATE TYPE my_udf (first text);");
         cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
         cquery_nofail(e, "alter type my_udf add test_int int;");

@@ -49,7 +49,7 @@ public:
 
     prepared_statement(seastar::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices);
 
-    prepared_statement(seastar::shared_ptr<cql_statement>&& statement_);
+    prepared_statement(seastar::shared_ptr<cql_statement>&& statement_, std::vector<sstring> warnings = {});
 
     checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());
