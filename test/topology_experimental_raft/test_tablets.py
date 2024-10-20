@@ -854,6 +854,80 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
     await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
     await compaction_task
 
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_correctness_of_tablet_split_finalization_after_restart(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval'],
+    }, cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    servers.append(await manager.server_add(config={
+        'error_injections_at_startup': ['delay_split_compaction']
+    }, cmdline=cmdline))
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH compaction = {'class': 'NullCompactionStrategy'};")
+
+    # enough to trigger multiple splits with max size of 1024 bytes.
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    async def check():
+        logger.info("Checking table")
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test;")
+        assert len(rows) == len(keys)
+        for r in rows:
+            assert r.c == r.pk
+
+    await check()
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, "test")
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count == 2
+
+    await manager.api.enable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing", one_shot=False)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await s1_log.wait_for('Finalizing resize decision for table', from_mark=s1_mark)
+
+    # Delays refresh of tablet stats, so balancer works with whichever it got last.
+    await manager.api.disable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing")
+    await manager.api.disable_injection(servers[0].ip_addr, "short_tablet_stats_refresh_interval")
+    time.sleep(1)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
+    await manager.server_start(servers[1].server_id)
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
+
+    await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count > 2
+
+    await check()
+
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
