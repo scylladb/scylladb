@@ -24,11 +24,9 @@ aws_error::aws_error(aws_error_type error_type, std::string&& error_message, ret
     : _type(error_type), _message(std::move(error_message)), _is_retryable(is_retryable) {
 }
 
-aws_error aws_error::parse(seastar::sstring&& body) {
-    aws_error ret_val;
-
+std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
     if (body.empty()) {
-        return ret_val;
+        return {};
     }
 
     auto doc = std::make_unique<rapidxml::xml_document<>>();
@@ -36,7 +34,7 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error&) {
         // Most likely not an XML which is possible, just return
-        return ret_val;
+        return {};
     }
 
     const auto* error_node = doc->first_node("Error");
@@ -48,11 +46,12 @@ aws_error aws_error::parse(seastar::sstring&& body) {
     }
 
     if (!error_node) {
-        return ret_val;
+        return {};
     }
 
     const auto* code_node = error_node->first_node("Code");
     const auto* message_node = error_node->first_node("Message");
+    aws_error ret_val;
 
     if (code_node && message_node) {
         std::string code = code_node->value();

@@ -94,7 +94,7 @@ public:
     [[nodiscard]] const std::string& get_error_message() const { return _message; }
     [[nodiscard]] aws_error_type get_error_type() const { return _type; }
     [[nodiscard]] retryable is_retryable() const { return _is_retryable; }
-    static aws_error parse(seastar::sstring&& body);
+    static std::optional<aws_error> parse(seastar::sstring&& body);
     static aws_error from_http_code(seastar::http::reply::status_type http_code);
     static const aws_errors& get_errors();
 };
