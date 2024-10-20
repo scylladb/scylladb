@@ -27,6 +27,7 @@
 #include "cql3/functions/token_fct.hh"
 #include "dht/i_partitioner.hh"
 #include "types/tuple.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace {
 struct maybe_column_definition {
@@ -825,7 +826,7 @@ void with_current_binary_operator(
 }
 
 /// Every token, or if no tokens, an EQ/IN of every single PK column.
-static std::vector<expr::expression> extract_partition_range(
+static partition_range_restrictions extract_partition_range(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
     struct extract_partition_range_visitor {
@@ -935,12 +936,14 @@ static std::vector<expr::expression> extract_partition_range(
 
     expr::visit(v, where_clause);
     if (v.tokens) {
-        return {std::move(*v.tokens)};
+        return token_range_restrictions{.token_restrictions = std::move(*v.tokens)};
     }
     if (v.single_column.size() == schema->partition_key_size()) {
-        return v.single_column | std::views::values | std::ranges::to<std::vector>();
+        return single_column_partition_range_restrictions{
+            .per_column_restrictions = v.single_column | std::views::values | std::ranges::to<std::vector>(),
+        };
     }
-    return {};
+    return no_partition_range_restrictions{};
 }
 
 /// Extracts where_clause atoms with clustering-column LHS and copies them to a vector.  These elements define the
@@ -1946,29 +1949,29 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
 
 get_partition_key_ranges_fn_t
 statement_restrictions::build_partition_key_ranges_fn() const {
-    if (_partition_range_restrictions.empty()) {
+    return std::visit(overloaded_functor{
+     [&] (const no_partition_range_restrictions&) -> get_partition_key_ranges_fn_t {
       return [] (const query_options& options) -> dht::partition_range_vector{
         return {dht::partition_range::make_open_ended_both_sides()};
       };
-    }
-    if (has_partition_token(_partition_range_restrictions[0], *_schema)) {
-        if (_partition_range_restrictions.size() != 1) {
-            on_internal_error(
-                    rlogger,
-                    format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
+     },
+     [&] (const token_range_restrictions& r) -> get_partition_key_ranges_fn_t {
+      return [&] (const query_options& options) -> dht::partition_range_vector {
+        return partition_ranges_from_token(r.token_restrictions, options, *_schema);
+      };
+     },
+     [&] (const single_column_partition_range_restrictions& r) -> get_partition_key_ranges_fn_t {
+        if (_partition_range_is_simple) {
+            return [&] (const query_options& options) {
+                // Special case to avoid extra allocations required for a Cartesian product.
+                return partition_ranges_from_EQs(r.per_column_restrictions, options, *_schema);
+            };
+        } else {
+            return [&] (const query_options& options) {
+                return partition_ranges_from_singles(r.per_column_restrictions, options, *_schema);
+            };
         }
-      return [&] (const query_options& options) {
-        return partition_ranges_from_token(_partition_range_restrictions[0], options, *_schema);
-      };
-    } else if (_partition_range_is_simple) {
-      return [&] (const query_options& options) {
-        // Special case to avoid extra allocations required for a Cartesian product.
-        return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
-      };
-    }
-  return [&] (const query_options& options) {
-    return partition_ranges_from_singles(_partition_range_restrictions, options, *_schema);
-  };
+      }}, _partition_range_restrictions);
 }
 
 namespace {
@@ -2744,10 +2747,13 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
     _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size(), expr::conjunction({}));
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
-    for (const auto& e : _partition_range_restrictions) {
+    auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_partition_range_restrictions);
+    if (single_column_partition_key_restrictions) {
+      for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
         const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
         const auto pos = _schema->position(*col) + 1;
         (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
+      }
     }
 
     if (std::ranges::any_of(*_idx_tbl_ck_prefix | std::views::drop(1), is_empty_restriction)) {
@@ -2893,7 +2899,7 @@ sstring statement_restrictions::to_string() const {
     return _where ? expr::to_string(*_where) : "";
 }
 
-static void validate_primary_key_restrictions(const query_options& options, const std::vector<expr::expression>& restrictions) {
+static void validate_primary_key_restrictions(const query_options& options, std::span<const expr::expression> restrictions) {
     for (const auto& r: restrictions) {
         for_each_expression<binary_operator>(r, [&](const binary_operator& binop) {
             if (binop.op != oper_t::EQ && binop.op != oper_t::IN) {
@@ -2912,7 +2918,16 @@ static void validate_primary_key_restrictions(const query_options& options, cons
 }
 
 void statement_restrictions::validate_primary_key(const query_options& options) const {
-    validate_primary_key_restrictions(options, _partition_range_restrictions);
+    std::visit(overloaded_functor{
+        [&] (const no_partition_range_restrictions&) {
+        },
+        [&] (const token_range_restrictions& r) {
+            validate_primary_key_restrictions(options, std::span(&r.token_restrictions, 1));
+        },
+        [&] (const single_column_partition_range_restrictions& r) {
+            validate_primary_key_restrictions(options, r.per_column_restrictions);
+        }
+    }, _partition_range_restrictions);
     validate_primary_key_restrictions(options, _clustering_prefix_restrictions);
 }
 
