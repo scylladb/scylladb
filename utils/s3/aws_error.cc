@@ -75,6 +75,42 @@ aws_error aws_error::parse(seastar::sstring&& body) {
     return ret_val;
 }
 
+aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code) {
+    const auto& all_errors = get_errors();
+    switch (http_code) {
+    case seastar::http::reply::status_type::unauthorized:
+        return all_errors.at("HTTP_UNAUTHORIZED");
+    case seastar::http::reply::status_type::forbidden:
+        return all_errors.at("HTTP_FORBIDDEN");
+    case seastar::http::reply::status_type::not_found:
+        return all_errors.at("HTTP_NOT_FOUND");
+    case seastar::http::reply::status_type::too_many_requests:
+        return all_errors.at("HTTP_TOO_MANY_REQUESTS");
+    case seastar::http::reply::status_type::internal_server_error:
+        return all_errors.at("HTTP_INTERNAL_SERVER_ERROR");
+    case seastar::http::reply::status_type::bandwidth_limit_exceeded:
+        return all_errors.at("HTTP_BANDWIDTH_LIMIT_EXCEEDED");
+    case seastar::http::reply::status_type::service_unavailable:
+        return all_errors.at("HTTP_SERVICE_UNAVAILABLE");
+    case seastar::http::reply::status_type::request_timeout:
+        return all_errors.at("HTTP_REQUEST_TIMEOUT");
+    case seastar::http::reply::status_type::page_expired:
+        return all_errors.at("HTTP_PAGE_EXPIRED");
+    case seastar::http::reply::status_type::login_timeout:
+        return all_errors.at("HTTP_LOGIN_TIMEOUT");
+    case seastar::http::reply::status_type::gateway_timeout:
+        return all_errors.at("HTTP_GATEWAY_TIMEOUT");
+    case seastar::http::reply::status_type::network_connect_timeout:
+        return all_errors.at("HTTP_NETWORK_CONNECT_TIMEOUT");
+    case seastar::http::reply::status_type::network_read_timeout:
+        return all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
+    default:
+        return {aws_error_type::UNKNOWN,
+                "Unknown server error has been encountered",
+                retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
+    }
+}
+
 const aws_errors& aws_error::get_errors() {
     static const std::unordered_map<std::string_view, const aws_error> aws_error_map{
         {"IncompleteSignature", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
