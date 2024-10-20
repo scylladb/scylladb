@@ -271,7 +271,6 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
         co_await seastar::sleep(_retry_strategy->delay_before_retry(request_ex.error(), retries));
         try {
             e = {};
-            // TODO: We have to pass expected as nullopt here to prevent the http client to validate it and fail before we have a chance to analyze the error
             co_return co_await gc.http.make_request(req, handler, std::nullopt);
         } catch (const aws::aws_exception& ex) {
             ++retries;
@@ -284,13 +283,16 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
     }
 }
 
-http::experimental::client::reply_handler client::make_s3_error_handler(http::experimental::client::reply_handler&& handler,
-                                                                        multipart_upload_completion is_mpu_completion) {
-    return [is_mpu_completion, handler{std::move(handler)}](const http::reply& rep, input_stream<char>&& in) -> future<> {
+http::experimental::client::reply_handler client::make_s3_error_handler(
+        http::experimental::client::reply_handler&& handler, http::reply::status_type expected, multipart_upload_completion is_mpu_completion) {
+    return [is_mpu_completion, handler{std::move(handler)}, expected](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto payload = std::move(in);
         auto error = co_await look_for_error(rep, payload, is_mpu_completion);
         if (error.get_error_type() != aws::aws_error_type::OK) {
             co_await coroutine::return_exception(aws::aws_exception(std::move(error)));
+        }
+        if (rep._status != expected) {
+            co_return co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
         }
         co_await handler(rep, std::move(payload));
     };
@@ -300,7 +302,7 @@ future<> client::make_request(http::request req, http::experimental::client::rep
         multipart_upload_completion is_mpu_completion_req) {
     authorize(req);
     auto& gc = find_or_create_client();
-    auto error_aware_handler = make_s3_error_handler(std::move(handle), is_mpu_completion_req);
+    auto error_aware_handler = make_s3_error_handler(std::move(handle), expected, is_mpu_completion_req);
 
     return do_retryable_request(gc, std::move(req), std::move(error_aware_handler));
 }
@@ -311,7 +313,7 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, ht
     auto handle = [&gc, handle = std::move(handle_ex)](const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    auto error_aware_handler = make_s3_error_handler(std::move(handle), multipart_upload_completion::no);
+    auto error_aware_handler = make_s3_error_handler(std::move(handle), expected, multipart_upload_completion::no);
 
     return do_retryable_request(gc, std::move(req), std::move(error_aware_handler));
 }
