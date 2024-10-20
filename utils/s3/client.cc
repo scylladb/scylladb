@@ -85,8 +85,8 @@ static future<> look_for_errors(const http::reply&, input_stream<char>&& in_) {
     auto in = std::move(in_);
     auto body = co_await util::read_entire_stream_contiguous(in);
     auto possible_error = aws::aws_error::parse(std::move(body));
-    if (possible_error.get_error_type() != aws::aws_error_type::OK) {
-        throw std::system_error(std::error_code(EIO, std::generic_category()), possible_error.get_error_message());
+    if (possible_error && possible_error->get_error_type() != aws::aws_error_type::OK) {
+        throw std::system_error(std::error_code(EIO, std::generic_category()), possible_error->get_error_message());
     }
 }
 
