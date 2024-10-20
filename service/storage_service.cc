@@ -676,7 +676,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 #endif
 
     rtlogger.debug("reload raft topology state");
-    std::unordered_set<raft::server_id> prev_normal = boost::copy_range<std::unordered_set<raft::server_id>>(_topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys);
+    std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
 
     std::unordered_set<locator::host_id> tablet_hosts;
     if (_db.local().get_config().enable_tablets()) {
@@ -1939,7 +1939,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
 
         std::unordered_set<inet_address> ips;
         const auto& am = _group0->address_map();
-        for (auto id : _topology_state_machine._topology.normal_nodes | boost::adaptors::map_keys) {
+        for (auto id : _topology_state_machine._topology.normal_nodes | std::views::keys) {
             auto ip = am.find(id);
             if (ip) {
                 ips.insert(*ip);
@@ -2995,7 +2995,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         }));
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
-            initial_contact_nodes, loaded_endpoints | boost::adaptors::map_keys, loaded_peer_features.size());
+            initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
     for (auto& x : loaded_peer_features) {
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
@@ -4285,7 +4285,7 @@ public:
 };
 
 void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req) {
-    auto ops_uuids = boost::copy_range<std::vector<node_ops_id>>(_node_ops| boost::adaptors::map_keys);
+    auto ops_uuids = _node_ops | std::views::keys | std::ranges::to<std::vector>();
     std::string msg;
     if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare ||
             req.cmd == node_ops_cmd::decommission_prepare || req.cmd == node_ops_cmd::bootstrap_prepare) {
@@ -4346,7 +4346,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
 
         if (req.cmd == node_ops_cmd::query_pending_ops) {
             bool ok = true;
-            auto ops_uuids = boost::copy_range<std::list<node_ops_id>>(_node_ops| boost::adaptors::map_keys);
+            auto ops_uuids = _node_ops| std::views::keys | std::ranges::to<std::list>();
             node_ops_cmd_response resp(ok, ops_uuids);
             slogger.debug("node_ops_cmd_handler: Got query_pending_ops request from {}, pending_ops={}", coordinator, ops_uuids);
             return resp;

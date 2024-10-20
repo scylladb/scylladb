@@ -10,6 +10,7 @@
  * Copyright (C) 2020-present ScyllaDB
  */
 
+#include <algorithm>
 #include <stdexcept>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -70,7 +71,7 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
     }
 
     if (keyspace_names.size() == 0) {
-        boost::copy(_db.local().get_keyspaces() | boost::adaptors::map_keys, std::back_inserter(keyspace_names));
+        std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(keyspace_names));
     };
 
     return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), sf, this] () mutable {

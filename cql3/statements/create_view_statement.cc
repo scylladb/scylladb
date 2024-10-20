@@ -294,7 +294,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     } else if (!non_pk_restrictions.empty()) {
         throw exceptions::invalid_request_exception(seastar::format("Non-primary key columns cannot be restricted in the SELECT statement used for materialized view {} creation (got restrictions on: {})",
                 column_family(),
-                fmt::join(non_pk_restrictions | boost::adaptors::map_keys | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ")));
+                fmt::join(non_pk_restrictions | std::views::keys | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
 
     // IS NOT NULL restrictions are handled separately from other restrictions.

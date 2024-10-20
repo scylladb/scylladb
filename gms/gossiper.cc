@@ -678,7 +678,7 @@ future<> gossiper::apply_state_locally_without_listener_notification(std::unorde
 
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
     auto start = std::chrono::steady_clock::now();
-    auto endpoints = boost::copy_range<utils::chunked_vector<inet_address>>(map | boost::adaptors::map_keys);
+    auto endpoints = map | std::views::keys | std::ranges::to<utils::chunked_vector<inet_address>>();
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
     auto node_is_seed = [this] (gms::inet_address ip) { return is_seed(ip); };
     boost::partition(endpoints, node_is_seed);
@@ -1562,7 +1562,7 @@ const std::unordered_map<inet_address, endpoint_state_ptr>& gms::gossiper::get_e
 }
 
 std::vector<inet_address> gossiper::get_endpoints() const {
-    return boost::copy_range<std::vector<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys);
+    return _endpoint_state_map | std::views::keys | std::ranges::to<std::vector>();
 }
 
 stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iteration(const inet_address&, const endpoint_state&)> func) const {
@@ -2731,7 +2731,7 @@ int gossiper::get_down_endpoint_count() const noexcept {
 }
 
 int gossiper::get_up_endpoint_count() const noexcept {
-    return boost::count_if(_endpoint_state_map | boost::adaptors::map_keys, [this] (const inet_address& ep) {
+    return std::ranges::count_if(_endpoint_state_map | std::views::keys, [this] (const inet_address& ep) {
         return is_alive(ep);
     });
 }

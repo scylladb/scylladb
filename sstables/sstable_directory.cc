@@ -383,7 +383,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             _directory, _state->descriptors.size(), _state->generations_found.size());
 
     if (!_state->generations_found.empty()) {
-        directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, sstables::generation_type{}, [] (generation_type a, generation_type b) {
+        directory._max_generation_seen = std::ranges::fold_left(_state->generations_found | std::views::keys, sstables::generation_type{}, [] (generation_type a, generation_type b) {
             return std::max<generation_type>(a, b);
         });
 
