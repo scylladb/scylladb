@@ -219,6 +219,22 @@ future<> map_s3_client_exception(std::exception_ptr ex) {
 
     try {
         std::rethrow_exception(std::move(ex));
+    } catch (const aws::aws_exception& e) {
+        int error_code;
+        switch (e.error().get_error_type()) {
+        case aws::aws_error_type::HTTP_NOT_FOUND:
+        case aws::aws_error_type::RESOURCE_NOT_FOUND:
+            error_code = ENOENT;
+            break;
+        case aws::aws_error_type::HTTP_FORBIDDEN:
+        case aws::aws_error_type::HTTP_UNAUTHORIZED:
+        case aws::aws_error_type::ACCESS_DENIED:
+            error_code = EACCES;
+            break;
+        default:
+            error_code = EIO;
+        }
+        return make_exception_future<>(storage_io_error(error_code, format("S3 request failed. Reason: {}", e.what())));
     } catch (const httpd::unexpected_status_error& e) {
         auto status = e.status();
 
