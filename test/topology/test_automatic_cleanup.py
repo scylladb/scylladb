@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from test.pylib.manager_client import ManagerClient
-from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 import pytest
 import logging
