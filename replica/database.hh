@@ -1633,6 +1633,7 @@ public:
     }
 
     const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
+    locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
     wasm::manager& wasm() noexcept { return _wasm; }
@@ -1792,6 +1793,7 @@ public:
 
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
+    dht::token_range_vector get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm);
     dht::token_range_vector get_keyspace_local_ranges(sstring ks);
     std::optional<dht::token_range_vector> maybe_get_keyspace_local_ranges(sstring ks);
 

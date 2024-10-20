@@ -10,6 +10,7 @@
 
 #include <seastar/core/future.hh>
 #include "streaming/stream_reason.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "seastarx.hh"
 
 namespace replica {
@@ -22,13 +23,9 @@ class system_distributed_keyspace;
 
 }
 
-namespace locator {
-class token_metadata;
-}
-
 namespace db::view {
 
-future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, const locator::token_metadata& tm, const replica::table& t,
+future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_dist_ks, locator::token_metadata_ptr tmptr, const replica::table& t,
         streaming::stream_reason reason);
 
 }

@@ -224,13 +224,14 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         // - segregate resharded tables into compaction groups
         // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
         //   so that cleanup can be considered per compaction group
-        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
+        const auto& erm = db.local().find_keyspace(ks).get_vnode_effective_replication_map();
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(erm));
         reshard(directory, db, ks, cf, make_sstable, owned_ranges_ptr).get();
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, make_sstable,
                 [] (const sstables::shared_sstable&) { return true; }).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), erm->get_token_metadata_ptr(), *global_table, streaming::stream_reason::repair).get();
 
         size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &view_update_generator] (sstables::sstable_directory& dir) {
             return make_sstables_available(dir, db, view_update_generator, use_view_update_path, ks, cf);
