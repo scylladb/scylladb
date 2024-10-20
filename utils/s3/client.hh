@@ -88,7 +88,7 @@ class client : public enable_shared_from_this<client> {
 
     using multipart_upload_completion = bool_class<struct is_multipart_upload_completion_req>;
     static http::experimental::client::reply_handler make_s3_error_handler(http::experimental::client::reply_handler&& handler,
-                                                                           multipart_upload_completion is_mpu_completion);
+            http::reply::status_type expected, multipart_upload_completion is_mpu_completion);
     static future<aws::aws_error> look_for_error(const http::reply& reply, input_stream<char>& in_, multipart_upload_completion is_mpu_completion);
 
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply,
