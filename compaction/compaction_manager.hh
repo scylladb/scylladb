@@ -591,6 +591,8 @@ private:
     future<compaction_manager::compaction_stats_opt> compaction_done() noexcept {
         return _compaction_done.get_future();
     }
+
+    future<sstables::sstable_set> sstable_set_for_tombstone_gc(::compaction::table_state& t);
 public:
     bool stopping() const noexcept {
         return _compaction_data.abort.abort_requested();
