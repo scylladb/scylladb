@@ -2853,6 +2853,46 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/repair",
+         "operations":[
+            {
+               "nickname":"repair_tablet",
+               "method":"POST",
+               "summary":"Repair a tablet",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ks",
+                     "description":"Keyspace name to repair",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name to repair",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"tokens",
+                     "description":"Tokens owned by the tablets to repair. Multiple tokens can be provided using a comma-separated list. When set to the special word 'all', all tablets will be repaired",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/tablets/balancing",
          "operations":[
             {
