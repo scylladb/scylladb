@@ -230,7 +230,7 @@ public:
     inet_address get_endpoint_for_host_id(locator::host_id host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
+    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map() const;
 
     /// Returns host_id of the local node.
     host_id get_my_id() const;
