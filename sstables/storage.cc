@@ -681,16 +681,12 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
-static sstring format_table_directory_name(sstring name, table_id id) {
-    auto uuid_sstring = id.to_sstring();
-    boost::erase_all(uuid_sstring, "-");
-    return format("{}-{}", name, uuid_sstring);
-}
-
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
     for (const auto& dd : mgr.config().data_file_directories()) {
-        auto dir = format("{}/{}/{}", dd, s.ks_name(), format_table_directory_name(s.cf_name(), s.id()));
+        auto uuid_sstring = s.id().to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
         dirs.emplace_back(std::move(dir));
     }
     co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {

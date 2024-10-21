@@ -1892,7 +1892,7 @@ public:
 };
 
 // A helper function to parse the directory name back
-// into name and uuid of the table (see format_table_directory_name())
+// into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
 } // namespace replica
