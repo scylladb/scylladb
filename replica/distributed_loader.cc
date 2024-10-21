@@ -340,9 +340,7 @@ future<> table_populator::stop() {
 }
 
 future<> table_populator::collect_subdirs(const data_dictionary::storage_options::local& so, sstables::sstable_state state) {
-    auto datadirs = _global_table->get_config().all_datadirs
-            | std::views::transform([] (const sstring& d) { return std::filesystem::path(d); })
-            | std::ranges::to<std::vector<std::filesystem::path>>();
+    auto datadirs = _global_table->get_sstables_manager().get_local_directories(so);
     co_await coroutine::parallel_for_each(datadirs, [&] (const std::filesystem::path& datadir) -> future<> {
         auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
         co_await dptr->start(_global_table.as_sharded_parameter(), state,

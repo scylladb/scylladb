@@ -700,6 +700,16 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
+std::vector<std::filesystem::path> get_local_directories(const db::config& db, const data_dictionary::storage_options::local& so) {
+    // see how this path is formatted by init_table_storage() above
+    auto table_dir = so.dir.parent_path().filename() / so.dir.filename();
+    return db.data_file_directories()
+            | std::views::transform([&table_dir] (const auto& datadir) {
+                return std::filesystem::path(datadir) / table_dir;
+            })
+            | std::ranges::to<std::vector<std::filesystem::path>>();
+}
+
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
     data_dictionary::storage_options nopts;
     nopts.value = data_dictionary::storage_options::s3 {

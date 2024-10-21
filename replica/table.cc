@@ -2748,9 +2748,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             return all_snapshots;
         }
 
-        auto datadirs = _config.all_datadirs
-                | std::views::transform([] (const sstring& d) { return fs::path(d); })
-                | std::ranges::to<std::vector<fs::path>>();
+        auto datadirs = _sstables_manager.get_local_directories(*so);
         for (auto& datadir : datadirs) {
             fs::path snapshots_dir = datadir / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get();
