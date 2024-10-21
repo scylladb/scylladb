@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for_first_completed
 from test.topology.conftest import skip_mode
 from collections.abc import Coroutine
 import pytest
@@ -11,13 +12,6 @@ import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
-
-async def wait_for_first_completed(coros: list[Coroutine]):
-    done, pending = await asyncio.wait([asyncio.create_task(c) for c in coros], return_when = asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    for t in done:
-        await t
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
