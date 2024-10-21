@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+from collections.abc import Coroutine
 import threading
 import time
 import asyncio
@@ -246,3 +247,11 @@ async def wait_for_view(cql: Session, name: str, node_count: int, timeout: int =
         return done[0][0] == node_count or None
     deadline = time.time() + timeout
     await wait_for(view_is_built, deadline)
+
+
+async def wait_for_first_completed(coros: list[Coroutine]):
+    done, pending = await asyncio.wait([asyncio.create_task(c) for c in coros], return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    for t in done:
+        await t
