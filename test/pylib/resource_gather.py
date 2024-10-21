@@ -31,7 +31,7 @@ def get_cgroup() -> Path:
     # Extract the relative cgroup for the process and make it absolute and add where the test.py process should be
     # placed in.
     # This can be used to manipulate the cgroup's controllers
-    return Path(f'/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}/initial')
+    return Path(f"/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}/initial")
 
 CGROUP_INITIAL: Path = get_cgroup()
 CGROUP_TESTS: Path = CGROUP_INITIAL.parent / 'tests'
