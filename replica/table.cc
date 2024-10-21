@@ -2743,6 +2743,10 @@ future<bool> table::snapshot_exists(sstring tag) {
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
+        auto* so = std::get_if<storage_options::local>(&_storage_opts->value);
+        if (so == nullptr || so->dir.empty()) {
+            return all_snapshots;
+        }
         for (auto& datadir : _config.all_datadirs) {
             fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get();
