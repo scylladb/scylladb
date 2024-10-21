@@ -638,20 +638,15 @@ class Test:
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         self.env = dict(self.suite.base_env)
-        Test._reset(self)
-
-    def reset(self) -> None:
-        """Reset this object, including all derived state."""
-        for cls in reversed(self.__class__.__mro__):
-            _reset = getattr(cls, '_reset', None)
-            if _reset is not None:
-                _reset(self)
-
-    def _reset(self) -> None:
-        """Reset the test before a retry, if it is retried as flaky"""
         self.success = False
         self.time_start: float = 0
         self.time_end: float = 0
+
+    def reset(self) -> None:
+        """Reset the test before a retry, if it is retried as flaky"""
+        self.success = False
+        self.time_start = 0
+        self.time_end = 0
 
     @abstractmethod
     async def run(self, options: argparse.Namespace) -> 'Test':
@@ -692,12 +687,6 @@ class UnitTest(Test):
         if self.mode == "coverage":
             self.env.update(coverage.env(self.path))
 
-        UnitTest._reset(self)
-
-    def _reset(self) -> None:
-        """Reset the test before a retry, if it is retried as flaky"""
-        pass
-
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
@@ -728,12 +717,12 @@ class BoostTest(UnitTest):
         boost_args += ['--']
         self.args = boost_args + self.args
         self.casename = casename
-        BoostTest._reset(self)
         self.__test_case_elements: list[ET.Element] = []
         self.allows_compaction_groups = allows_compaction_groups
 
-    def _reset(self) -> None:
+    def reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
+        super().reset()
         self.__test_case_elements = []
 
     def get_test_cases(self) -> list[ET.Element]:
@@ -800,11 +789,6 @@ class CQLApprovalTest(Test):
         self.reject = suite.suite_path / (self.shortname + ".reject")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
-        CQLApprovalTest._reset(self)
-        self._prepare_args(suite.options)
-
-    def _reset(self) -> None:
-        """Reset the test before a retry, if it is retried as flaky"""
         self.is_before_test_ok = False
         self.is_executed_ok = False
         self.is_new = False
@@ -815,6 +799,21 @@ class CQLApprovalTest(Test):
         self.server_log = None
         self.server_log_filename = None
         self.env: Dict[str, str] = dict()
+        self._prepare_args(suite.options)
+
+    def reset(self) -> None:
+        """Reset the test before a retry, if it is retried as flaky"""
+        super().reset()
+        self.is_before_test_ok = False
+        self.is_executed_ok = False
+        self.is_new = False
+        self.is_after_test_ok = False
+        self.is_equal_result = False
+        self.summary = "not run"
+        self.unidiff = None
+        self.server_log = None
+        self.server_log_filename = None
+        self.env = dict()
         old_tmpfile = pathlib.Path(self.tmpfile)
         if old_tmpfile.exists():
             old_tmpfile.unlink()
@@ -948,11 +947,6 @@ class RunTest(Test):
         self.args.append(f"--alluredir={self.allure_dir}")
         if not suite.options.save_log_on_success:
             self.args.append("--allure-no-capture")
-        RunTest._reset(self)
-
-    def _reset(self):
-        """Reset the test before a retry, if it is retried as flaky"""
-        pass
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -976,7 +970,8 @@ class PythonTest(Test):
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
-        PythonTest._reset(self)
+        self.is_before_test_ok = False
+        self.is_after_test_ok = False
 
     def _prepare_pytest_params(self, options: argparse.Namespace):
         self.args = [
@@ -1006,8 +1001,9 @@ class PythonTest(Test):
             arg += '::' + self.casename
         self.args.append(arg)
 
-    def _reset(self) -> None:
+    def reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
+        super().reset()
         self.server_log = None
         self.server_log_filename = None
         self.is_before_test_ok = False
@@ -1108,7 +1104,6 @@ class ToolTest(Test):
         launcher = self.suite.cfg.get("launcher", "pytest")
         self.path = launcher.split(maxsplit=1)[0]
         self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        ToolTest._reset(self)
 
     def _prepare_pytest_params(self, options: argparse.Namespace):
         launcher = self.suite.cfg.get("launcher", "pytest")
@@ -1132,10 +1127,6 @@ class ToolTest(Test):
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
         self.args.append(str(self.suite.suite_path / (self.shortname + ".py")))
-
-    def _reset(self) -> None:
-        """Reset the test before a retry, if it is retried as flaky"""
-        pass
 
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
