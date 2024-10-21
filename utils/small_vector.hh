@@ -105,7 +105,7 @@ private:
     }
 
     void reserve_at_least(size_t n) {
-        if (__builtin_expect(_begin + n > _capacity_end, false)) {
+        if (__builtin_expect(n > capacity(), false)) {
             expand(std::max(n, capacity() * 2));
         }
     }
@@ -245,7 +245,7 @@ public:
     }
 
     void reserve(size_t n) {
-        if (__builtin_expect(_begin + n > _capacity_end, false)) {
+        if (__builtin_expect(n > capacity(), false)) {
             expand(n);
         }
     }
