@@ -1009,19 +1009,22 @@ class client::do_upload_file : private multipart_upload {
     future<> multi_part_upload(file&& f, uint64_t total_size, size_t part_size) {
         co_await start_upload();
 
-        for (size_t offset = 0; offset < total_size; offset += part_size) {
-            part_size = std::min(total_size - offset, part_size);
-            s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
-            co_await upload_part(file{f}, offset, part_size);
-        }
-
         std::exception_ptr ex;
         try {
+            for (size_t offset = 0; offset < total_size; offset += part_size) {
+                part_size = std::min(total_size - offset, part_size);
+                s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
+                co_await upload_part(file{f}, offset, part_size);
+            }
+
             co_await finalize_upload();
         } catch (...) {
             ex = std::current_exception();
         }
         if (ex) {
+            if (!_bg_flushes.is_closed()) {
+                co_await _bg_flushes.close();
+            }
             co_await abort_upload();
             std::rethrow_exception(ex);
         }
