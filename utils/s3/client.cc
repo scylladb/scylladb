@@ -298,13 +298,12 @@ http::experimental::client::reply_handler client::make_s3_error_handler(
     };
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected,
-        multipart_upload_completion is_mpu_completion_req) {
-    authorize(req);
-    auto& gc = find_or_create_client();
-    auto error_aware_handler = make_s3_error_handler(std::move(handle), expected, is_mpu_completion_req);
-
-    return do_retryable_request(gc, std::move(req), std::move(error_aware_handler));
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
+    return make_request(std::move(req), [](http::experimental::client::reply_handler&& handler, http::reply::status_type expected) {
+            return make_s3_error_handler(std::move(handler), expected, multipart_upload_completion::no);
+        },
+        std::move(handle),
+        expected);
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, http::reply::status_type expected) {
@@ -313,7 +312,16 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, ht
     auto handle = [&gc, handle = std::move(handle_ex)](const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    auto error_aware_handler = make_s3_error_handler(std::move(handle), expected, multipart_upload_completion::no);
+    return make_request(std::move(req), std::move(handle), expected);
+}
+
+future<> client::make_request(http::request req,
+                              custom_error_handler error_handler,
+                              http::experimental::client::reply_handler handle,
+                              http::reply::status_type expected) {
+    authorize(req);
+    auto& gc = find_or_create_client();
+    auto error_aware_handler = error_handler(std::move(handle), expected);
 
     return do_retryable_request(gc, std::move(req), std::move(error_aware_handler));
 }
@@ -785,7 +793,12 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::ok, multipart_upload_completion::yes);
+    co_await _client->make_request(
+        std::move(req),[](http::experimental::client::reply_handler&& handler, http::reply::status_type expected) {
+            return make_s3_error_handler(std::move(handler), expected, multipart_upload_completion::yes);
+        },
+        ignore_reply,
+        http::reply::status_type::ok);
     _upload_id = ""; // now upload_started() returns false
 }
 
