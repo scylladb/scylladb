@@ -1662,6 +1662,9 @@ user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 curdir = os.getcwd()
 user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 
+# Since gcc 13, libgcc doesn't need the exception workaround
+user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
+
 if args.target != '':
     user_cflags += ' -march=' + args.target
 
