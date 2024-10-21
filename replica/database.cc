@@ -31,7 +31,6 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
-#include <boost/algorithm/string/erase.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/range/adaptor/map.hpp>
@@ -2553,12 +2552,6 @@ std::pair<sstring, table_id> parse_table_directory_name(const sstring& directory
         on_internal_error(dblog, format("table directory entry name '{}' is invalid: no '-' separator found at pos {}", directory_name, pos));
     }
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
-}
-
-sstring format_table_directory_name(sstring name, table_id id) {
-    auto uuid_sstring = id.to_sstring();
-    boost::erase_all(uuid_sstring, "-");
-    return format("{}-{}", name, uuid_sstring);
 }
 
 future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {

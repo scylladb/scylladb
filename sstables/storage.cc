@@ -10,6 +10,7 @@
 
 #include <cerrno>
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/erase.hpp>
 
 #include <exception>
 #include <stdexcept>
@@ -33,7 +34,6 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
-#include "replica/database.hh" // need to move format_table_directory_name here eventually
 
 #include "checked-file-impl.hh"
 
@@ -681,10 +681,16 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
     }, s_opts.value);
 }
 
+static sstring format_table_directory_name(sstring name, table_id id) {
+    auto uuid_sstring = id.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return format("{}-{}", name, uuid_sstring);
+}
+
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
     for (const auto& dd : mgr.config().data_file_directories()) {
-        auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
+        auto dir = format("{}/{}/{}", dd, s.ks_name(), format_table_directory_name(s.cf_name(), s.id()));
         dirs.emplace_back(std::move(dir));
     }
     co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
