@@ -2743,8 +2743,14 @@ future<bool> table::snapshot_exists(sstring tag) {
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
-        for (auto& datadir : _config.all_datadirs) {
-            fs::path snapshots_dir = fs::path(datadir) / sstables::snapshots_dir;
+        auto* so = std::get_if<storage_options::local>(&_storage_opts->value);
+        if (so == nullptr || so->dir.empty()) {
+            return all_snapshots;
+        }
+
+        auto datadirs = _sstables_manager.get_local_directories(*so);
+        for (auto& datadir : datadirs) {
+            fs::path snapshots_dir = datadir / sstables::snapshots_dir;
             auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get();
             if (!file_exists) {
                 continue;
@@ -2753,7 +2759,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             lister::scan_dir(snapshots_dir,  lister::dir_entry_types::of<directory_entry_type::directory>(), [datadir, &all_snapshots] (fs::path snapshots_dir, directory_entry de) {
                 auto snapshot_name = de.name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                return get_snapshot_details(snapshots_dir / fs::path(snapshot_name), fs::path(datadir)).then([&all_snapshots, snapshot_name] (auto details) {
+                return get_snapshot_details(snapshots_dir / fs::path(snapshot_name), datadir).then([&all_snapshots, snapshot_name] (auto details) {
                     auto& sd = all_snapshots.at(snapshot_name);
                     sd.total += details.total;
                     sd.live += details.live;

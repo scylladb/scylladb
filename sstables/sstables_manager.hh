@@ -197,6 +197,8 @@ public:
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
 
+    std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
+
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
