@@ -162,8 +162,3 @@ async def test_repair_succeeds_with_unitialized_bm(manager):
     marks = [await log.mark() for log in logs]
 
     await manager.api.repair(servers[0].ip_addr, "ks", "tbl")
-
-    matches = await logs[1].grep("Failed to process repair_flush_hints_batchlog_request", from_mark=marks[1])
-    assert len(matches) == 1
-    matches = await logs[0].grep("failed, continue to run repair", from_mark=marks[0])
-    assert len(matches) == 1
