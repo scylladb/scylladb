@@ -80,17 +80,22 @@ void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::
 }
 
 static
-cql_test_config tablet_cql_test_config() {
+cql_test_config tablet_cql_test_config(bool enable_tablets = true) {
     cql_test_config c;
-    c.db_config->enable_tablets(true);
-    c.initial_tablets = 2;
+    c.db_config->enable_tablets(enable_tablets);
+    if (enable_tablets) {
+        c.initial_tablets = 2;
+    }
     return c;
 }
 
 static
-future<table_id> add_table(cql_test_env& e) {
+future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
     auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([id] (std::string_view ks_name) {
+    co_await e.create_table([&] (std::string_view ks_name) {
+        if (!test_ks_name.empty()) {
+            ks_name = test_ks_name;
+        }
         return *schema_builder(ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type)
@@ -3235,4 +3240,79 @@ SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
         }).get();
         assert(all_tablets);
     }, cfg);
+}
+
+namespace {
+
+future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, const cql_test_config& cfg, uint64_t initial_tablets = 0) {
+    co_await do_with_cql_env_thread([&] (cql_test_env& e) {
+        sstring extra;
+        if (tablets_opt) {
+            if (*tablets_opt) {
+                if (initial_tablets) {
+                    extra = format(" and tablets = {{ 'initial' : {} }}", initial_tablets);
+                } else {
+                    extra = " and tablets = { 'enabled' : true }";
+                }
+            } else {
+                extra = " and tablets = { 'enabled' : false }";
+            }
+        }
+        auto q = format("create keyspace {} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}{};", ks_name, extra);
+        testlog.debug("{}", q);
+        e.execute_cql(q).get();
+        BOOST_REQUIRE(e.local_db().has_keyspace(ks_name));
+
+        auto tid = add_table(e, ks_name).get();
+        auto total = e.db().map_reduce0([&] (replica::database& db) {
+            auto count = db.find_column_family(tid).get_stats().tablet_count;
+            testlog.debug("shard table_count={}", count);
+            return count;
+        }, int64_t(0), std::plus<int64_t>()).get();
+        if (tablets_opt.value_or(cfg.db_config->enable_tablets())) {
+            if (initial_tablets) {
+                BOOST_REQUIRE_EQUAL(total, initial_tablets);
+            } else {
+                BOOST_REQUIRE_GT(total, 0);
+            }
+        } else {
+            BOOST_REQUIRE_EQUAL(total, 0);
+        }
+    }, cfg);
+}
+
+}
+
+// Test that tablets can be explicitly enabled
+// when creating a keyspace when the `enable_tablets`
+// configuration option is set to `false`.
+SEASTAR_TEST_CASE(test_explicit_tablets_enable) {
+    auto cfg = tablet_cql_test_config(false);
+
+    // By default tablets are disabled
+    co_await test_create_keyspace("test_default_settings", std::nullopt, cfg);
+
+    // Tablets can be explicitly enabled for a new keyspace
+    co_await test_create_keyspace("test_explictly_enabled_0", true, cfg, 0);
+    co_await test_create_keyspace("test_explictly_enabled_128", true, cfg, 128);
+
+    // Tablets can also be explicitly disabled for a new keyspace
+    co_await test_create_keyspace("test_explictly_disabled", false, cfg);
+}
+
+// Test that tablets can be explicitly disabled
+// when creating a keyspace when the `enable_tablets`
+// configuration option is set to `true`.
+SEASTAR_TEST_CASE(test_explicit_tablets_disable) {
+    auto cfg = tablet_cql_test_config(true);
+
+    // By default tablets are enabled
+    co_await test_create_keyspace("test_default_settings", std::nullopt, cfg);
+
+    // Tablets can be explicitly disabled for a new keyspace
+    co_await test_create_keyspace("test_explictly_disabled", false, cfg);
+
+    // Tablets can also be explicitly enabled for a new keyspace
+    co_await test_create_keyspace("test_explictly_enabled_0", true, cfg, 0);
+    co_await test_create_keyspace("test_explictly_enabled_128", true, cfg, 128);
 }
