@@ -785,8 +785,33 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
         slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, sel.tables);
     }
 
+    auto merge_keyspace_schemas = [&](auto &&keyspace, auto &&scylla_keyspace) {
+        if (!keyspace.empty() && !scylla_keyspace.empty()) {
+            for (const auto& ks_iter : keyspace) {
+                const auto &ks_name = ks_iter.first;
+                if (keyspace[ks_name] && scylla_keyspace[ks_name]) {
+                    auto ks_rows = keyspace[ks_name]->rows();
+                    auto ks_scylla_rows = scylla_keyspace[ks_name]->rows();
+                    typeof(ks_rows) out;
+                    for (auto &e: ks_rows) {
+                        out.push_back(e);
+                    }
+                    for (auto &e: ks_scylla_rows) {
+                        out.push_back(e);
+                    }
+
+                    auto keyspace_merged = make_lw_shared<query::result_set>(keyspace.begin()->second->schema(),
+                                                                             std::move(out));
+                    keyspace[ks_name] = keyspace_merged;
+                }
+            }
+        }
+    };
+
     // current state of the schema
     auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
+    merge_keyspace_schemas(old_keyspaces, old_scylla_keyspaces);
     auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
     auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
@@ -798,6 +823,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
 
     // with new data applied
     auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
+    merge_keyspace_schemas(new_keyspaces, new_scylla_keyspaces);
     auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
     auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
