@@ -3,7 +3,7 @@ add_scylla_test(UUID_test
 add_scylla_test(aggregate_fcts_test
   KIND SEASTAR)
 add_scylla_test(allocation_strategy_test
-  KIND SEASTAR)
+  KIND BOOST)
 add_scylla_test(alternator_unit_test
   KIND BOOST
   LIBRARIES alternator)
@@ -32,7 +32,8 @@ add_scylla_test(broken_sstable_test
 add_scylla_test(btree_test
   KIND SEASTAR)
 add_scylla_test(bytes_ostream_test
-  KIND SEASTAR)
+  KIND BOOST
+  LIBRARIES Seastar::seastar_testing)
 add_scylla_test(cache_algorithm_test
   KIND SEASTAR)
 add_scylla_test(cache_mutation_reader_test
@@ -48,7 +49,8 @@ add_scylla_test(cartesian_product_test
 add_scylla_test(castas_fcts_test
   KIND SEASTAR)
 add_scylla_test(cdc_generation_test
-  KIND SEASTAR)
+  KIND BOOST
+  LIBRARIES Seastar::seastar_testing)
 add_scylla_test(cdc_test
   KIND SEASTAR)
 add_scylla_test(cell_locker_test
@@ -159,7 +161,8 @@ add_scylla_test(index_reader_test
 add_scylla_test(index_with_paging_test
   KIND SEASTAR)
 add_scylla_test(input_stream_test
-  KIND SEASTAR)
+  KIND BOOST
+  LIBRARIES Seastar::seastar_testing)
 add_scylla_test(intrusive_array_test
   KIND SEASTAR)
 add_scylla_test(json_cql_query_test
@@ -192,7 +195,8 @@ add_scylla_test(logalloc_standard_allocator_segment_pool_backend_test
 add_scylla_test(logalloc_test
   KIND SEASTAR)
 add_scylla_test(managed_bytes_test
-  KIND SEASTAR)
+  KIND BOOST
+  LIBRARIES Seastar::seastar_testing)
 add_scylla_test(managed_vector_test
   KIND SEASTAR)
 add_scylla_test(map_difference_test
