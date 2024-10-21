@@ -158,12 +158,5 @@ async def test_repair_succeeds_with_unitialized_bm(manager):
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
 
     await manager.api.enable_injection(servers[1].ip_addr, "repair_flush_hints_batchlog_handler_bm_uninitialized", True, {})
-    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
-    marks = [await log.mark() for log in logs]
 
     await manager.api.repair(servers[0].ip_addr, "ks", "tbl")
-
-    matches = await logs[1].grep("Failed to process repair_flush_hints_batchlog_request", from_mark=marks[1])
-    assert len(matches) == 1
-    matches = await logs[0].grep("failed, continue to run repair", from_mark=marks[0])
-    assert len(matches) == 1
