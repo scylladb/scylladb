@@ -394,7 +394,6 @@ class table : public enable_lw_shared_from_this<table>
             , public weakly_referencable<table> {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;

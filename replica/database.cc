@@ -1231,9 +1231,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
     const db::config& db_config = db.get_config();
 
-    for (auto& extra : db_config.data_file_directories()) {
-        cfg.all_datadirs.push_back(format("{}/{}/{}", extra, s.ks_name(), format_table_directory_name(s.cf_name(), s.id())));
-    }
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
