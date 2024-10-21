@@ -731,3 +731,38 @@ def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
                 # no longer has permissions on this table.
                 #eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}_scylla_cdc_log')) # Reproduces #19798
                 eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {table}_scylla_cdc_log'))
+
+# Test that an unprivileged user can read from *some* system tables, such
+# as system_schema.tables, but cannot read from *other* system tables - most
+# notibly the system.roles table. Allowing unprivileged users to read from
+# the roles table could have allowed them to read other users' salted hash
+# keys (which can be used to brute-force the other users' passwords, and in
+# Alternator - to directly log as those users!)
+def test_select_system_table(cql):
+    # Figure out which keyspace contains the roles table (its location changed
+    # across different releases of Scylla and Cassandra)
+    roles_table = None
+    for ks in ['system', 'system_auth_v2', 'system_auth']:
+        try:
+            t = ks + '.roles'
+            cql.execute(f'SELECT * FROM {t}')
+            # If we're still here, the SELECT didn't fail
+            roles_table = t
+        except:
+            pass
+    assert roles_table
+
+    with new_user(cql) as user1:
+        with new_session(cql, user1) as user1_session:
+            # user1 was not explicity granted permissions for
+            # system_schema.tables, but can still read permissions it!
+            # This white-listing of certain system tables that even an
+            # unprivileged user can read happens in the function
+            # service::client_state::has_access().
+            eventually_authorized(lambda: user1_session.execute('SELECT * FROM system_schema.tables'))
+            # But the system.roles table is NOT white-listed - it should be
+            # unreadable to the unprivileged user, until explicitly granted
+            # the permission to read it:
+            eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
+            grant(cql, 'SELECT', roles_table, user1)
+            eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
