@@ -1745,6 +1745,16 @@ schema::regular_columns() const {
 }
 
 schema::const_iterator_range_type
+schema::primary_key_columns() const {
+    return std::ranges::subrange(_raw._columns.begin(), _raw._columns.begin() + column_offset(column_kind::static_column));
+}
+
+schema::const_iterator_range_type
+schema::static_and_regular_columns() const {
+    return std::ranges::subrange(_raw._columns.begin() + column_offset(column_kind::static_column), _raw._columns.end());
+}
+
+schema::const_iterator_range_type
 schema::columns(column_kind kind) const {
     switch (kind) {
     case column_kind::partition_key:
