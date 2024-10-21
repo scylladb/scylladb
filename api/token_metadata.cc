@@ -71,7 +71,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
 
     ss::get_host_id_map.set(r, [&tm](const_req req) {
         std::vector<ss::mapper> res;
-        return map_to_key_value(tm.local().get()->get_endpoint_to_host_id_map_for_reading(), res);
+        return map_to_key_value(tm.local().get()->get_endpoint_to_host_id_map(), res);
     });
 
     static auto host_or_broadcast = [&tm](const_req req) {
