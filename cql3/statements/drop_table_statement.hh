@@ -24,6 +24,11 @@ class drop_table_statement : public schema_altering_statement {
 public:
     drop_table_statement(cf_name cf_name, bool if_exists);
 
+    // Prevent race between drop/truncate and tablet migration
+    virtual bool needs_topology_quiesce() const override {
+        return true;
+    }
+
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const override;

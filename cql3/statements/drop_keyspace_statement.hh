@@ -24,6 +24,11 @@ class drop_keyspace_statement : public schema_altering_statement {
 public:
     drop_keyspace_statement(const sstring& keyspace, bool if_exists);
 
+    // Prevent race between drop/truncate and tablet migration
+    virtual bool needs_topology_quiesce() const override {
+        return true;
+    }
+
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     virtual void validate(query_processor&, const service::client_state& state) const override;

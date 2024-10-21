@@ -233,6 +233,13 @@ class ScyllaRESTAPIClient():
         await self.client.post(f"/v2/error_injection/injection/{injection}",
                                host=node_ip, params={"one_shot": str(one_shot)}, json={ key: str(value) for key, value in parameters.items() })
 
+    async def disable_injection(self, node_ip: str, injection: str) -> None:
+        """Enable error injection named `injection` on `node_ip`. Depending on `one_shot`,
+           the injection will be executed only once or every time the process passes the injection point.
+           Note: this only has an effect in specific build modes: debug,dev,sanitize.
+        """
+        await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
+
     async def get_injection(self, node_ip: str, injection: str) -> list[dict[str, Any]]:
         """Read the state of the error injection named `injection` on `node_ip`.
            The returned information includes whether the error injections is

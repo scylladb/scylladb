@@ -54,6 +54,11 @@ public:
         return false;
     }
 
+    // Returns true for statements that needs guard to be taken before the execution
+    virtual bool needs_topology_quiesce() const {
+        return false;
+    }
+
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
 
     virtual ~cql_statement()

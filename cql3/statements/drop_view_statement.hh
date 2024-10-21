@@ -30,6 +30,11 @@ private:
 public:
     drop_view_statement(cf_name view_name, bool if_exists);
 
+    // Prevent race between drop/truncate and tablet migration
+    virtual bool needs_topology_quiesce() const override {
+        return true;
+    }
+
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;

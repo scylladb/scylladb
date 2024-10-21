@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, True) for s in servers]
     await asyncio.gather(*errs)
+    try:
+        yield error_name
+    finally:
+        errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
+        await asyncio.gather(*errs)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -35,13 +40,12 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
-    await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
+    async for e in inject_error_on(manager, "stream_tablet_fail_on_drain", servers):
+        await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
 
-    await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
-
-    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
-               from_mark=mark) for log, mark in zip(logs, marks)]
-    assert sum(len(x) for x in matches) == 1
+        matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
+                from_mark=mark) for log, mark in zip(logs, marks)]
+        assert sum(len(x) for x in matches) == 1
 
     await cql.run_async("DROP KEYSPACE test;")
 

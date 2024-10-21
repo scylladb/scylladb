@@ -38,6 +38,11 @@ class drop_index_statement : public schema_altering_statement {
 public:
     drop_index_statement(::shared_ptr<index_name> index_name, bool if_exists);
 
+    // Prevent race between drop/truncate and tablet migration
+    virtual bool needs_topology_quiesce() const override {
+        return true;
+    }
+
     virtual const sstring& column_family() const override;
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;

@@ -538,6 +538,9 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
     while (true)  {
         try {
+            if (statement->needs_topology_quiesce()) {
+                co_await remote_.get().ss.await_topology_quiesced();
+            }
             auto guard = co_await remote_.get().mm.start_group0_operation();
             co_return co_await fn(query_state, statement, options, std::move(guard));
         } catch (const service::group0_concurrent_modification& ex) {
