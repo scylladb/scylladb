@@ -386,7 +386,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     segregate_by_timestamp(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
-    testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
+    testlog.debug("Data split into {} buckets: {}", buckets.size(), buckets | std::views::keys | std::ranges::to<std::vector>());
 
     assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
 }
@@ -585,7 +585,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
 
     segregate_by_token_group(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
-    testlog.info("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
+    testlog.info("Data split into {} buckets: {}", buckets.size(), buckets | std::views::keys | std::ranges::to<std::vector>());
 
     assert_that_segregator_produces_correct_data(buckets, muts, semaphore.make_permit(), random_schema);
 }

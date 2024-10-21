@@ -396,7 +396,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
         auto segments = log.get_active_segment_names();
         BOOST_REQUIRE(segments.size() > 1);
 
-        auto ids = boost::copy_range<std::vector<segment_id_type>>(set.usage() | boost::adaptors::map_keys);
+        auto ids = set.usage() | std::views::keys | std::ranges::to<std::vector>();
         std::sort(ids.begin(), ids.end());
         auto id = ids.front();
         auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {

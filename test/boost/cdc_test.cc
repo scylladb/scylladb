@@ -1141,7 +1141,7 @@ SEASTAR_THREAD_TEST_CASE(test_list_logging) {
             auto map = value_cast<map_type_impl::native_type>(std::move(v));
             auto cpy = boost::copy_range<std::vector<data_value>>(map | boost::adaptors::map_values);
             // verify key is timeuuid
-            for (auto& key : map | boost::adaptors::map_keys) {
+            for (auto& key : map | std::views::keys) {
                 value_cast<utils::UUID>(key);
             }
             return ::make_list_value(list_type, std::move(cpy));
@@ -1678,7 +1678,7 @@ static void test_pre_post_image(cql_test_env& e, const std::vector<image_persist
         }
 
         // Register new encountered timestamps so that we won't repeat them in next run
-        for (const auto& time : groups | boost::adaptors::map_keys) {
+        for (const auto& time : groups | std::views::keys) {
             processed_times.insert(time);
         }
 

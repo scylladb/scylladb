@@ -8,6 +8,7 @@
 #include <vector>
 #include <list>
 #include <random>
+#include <ranges>
 #include <fmt/ranges.h>
 #include "heat_load_balance.hh"
 
@@ -298,7 +299,7 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
                 sorted_deficits.insert(it, std::make_pair(i, deficit[i]));
             }
         }
-        hr_logger.trace("sorted_deficits={}{}", sorted_deficits | boost::adaptors::map_keys, sorted_deficits | boost::adaptors::map_values);
+        hr_logger.trace("sorted_deficits={}{}", sorted_deficits | std::views::keys, sorted_deficits | std::views::values);
         float s = 0;
         int count = mixed_count;
         for (auto& d : sorted_deficits) {

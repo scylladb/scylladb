@@ -25,7 +25,7 @@ public:
     template <typename T>
     dummy_sharder(const dht::static_sharder& sharding, const std::map<dht::token, T>& something_by_token)
         : dht::static_sharder(sharding)
-        , _tokens(boost::copy_range<std::vector<dht::token>>(something_by_token | boost::adaptors::map_keys)) {
+        , _tokens(something_by_token | std::views::keys | std::ranges::to<std::vector>()) {
     }
 
     virtual unsigned shard_of(const dht::token& t) const override;

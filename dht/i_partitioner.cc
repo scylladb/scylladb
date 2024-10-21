@@ -87,7 +87,7 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
                 partitioner_name,
                 fmt::join(
                     class_registry<i_partitioner>::classes() |
-                    boost::adaptors::map_keys,
+                    std::views::keys,
                     ", "),
                 e.what()));
     }

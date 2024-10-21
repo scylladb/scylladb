@@ -490,7 +490,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             .build();
 
         auto make_random_options = [&] () {
-            auto option_dcs = boost::copy_range<std::vector<sstring>>(node_count_per_dc | boost::adaptors::map_keys);
+            auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
             std::map<sstring, sstring> options;
             std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
             size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
@@ -687,7 +687,7 @@ static bool has_sufficient_replicas(
                 const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
                 const std::unordered_map<sstring, size_t>& datacenters) noexcept {
 
-    for (auto& dc : datacenters | boost::adaptors::map_keys) {
+    for (auto& dc : datacenters | std::views::keys) {
         if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints,
                         datacenters)) {
             return false;

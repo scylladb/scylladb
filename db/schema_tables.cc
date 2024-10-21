@@ -1980,7 +1980,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
             drop_column_from_schema_mutation(computed_columns(), table_or_view, column.name_as_text(), timestamp, mutations);
         }
     }
-    for (auto& column : table_or_view->dropped_columns() | boost::adaptors::map_keys) {
+    for (auto& column : table_or_view->dropped_columns() | std::views::keys) {
         drop_column_from_schema_mutation(dropped_columns(), table_or_view, column, timestamp, mutations);
     }
     mutation m1{scylla_tables(), pkey};

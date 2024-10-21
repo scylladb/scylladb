@@ -2191,7 +2191,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
     // likely that a batch will contain both tables which always demand LWT and ones
     // that don't - it's fragile to split a batch into multiple storage proxy requests though.
     // Hence, the decision is conservative - if any table enforces LWT,the whole batch will use it.
-    const bool needs_lwt = boost::algorithm::any_of(mutation_builders | boost::adaptors::map_keys, [] (const schema_ptr& schema) {
+    const bool needs_lwt = std::ranges::any_of(mutation_builders | std::views::keys, [] (const schema_ptr& schema) {
         return rmw_operation::get_write_isolation_for_schema(schema) == rmw_operation::write_isolation::LWT_ALWAYS;
     });
     if (!needs_lwt) {

@@ -1280,7 +1280,7 @@ void help_operation(const tool_app_template::config& cfg, const bpo::variables_m
     if (vm.contains("command")) {
         const auto command = vm["command"].as<std::vector<sstring>>();
         const auto& ops = get_operations_with_func();
-        auto keys = ops | boost::adaptors::map_keys;
+        auto keys = ops | std::views::keys;
         auto it = std::ranges::find_if(keys, [&] (const operation& op) { return op.name() == command[0]; });
         if (it == keys.end()) {
             throw std::invalid_argument(fmt::format("unknown command {}", get_command_name(command)));
@@ -4508,7 +4508,7 @@ Supported Nodetool operations:
 
 For more information, see: {})";
 
-    const auto operations = boost::copy_range<std::vector<operation>>(get_operations_with_func() | boost::adaptors::map_keys);
+    const auto operations = get_operations_with_func() | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
             .name = app_name,
             .description = seastar::format(description_template, app_name, nlog.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {

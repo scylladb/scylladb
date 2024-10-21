@@ -413,14 +413,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
         auto nodes = boost::range::join(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
-            | boost::adaptors::filtered([&cmd, &exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
+            | std::views::filter([&cmd, &exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                 // We must send barrier and barrier_and_drain to the decommissioning node
                 // as it might be accepting or coordinating requests.
                 bool include_decommissioning_node = n.second.state == node_state::decommissioning
                         && (cmd.cmd == raft_topology_cmd::command::barrier || cmd.cmd == raft_topology_cmd::command::barrier_and_drain);
                 return !exclude_nodes.contains(n.first) && (n.second.state == node_state::normal || include_decommissioning_node);
             })
-            | boost::adaptors::map_keys;
+            | std::views::keys;
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }

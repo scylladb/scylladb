@@ -15,6 +15,7 @@
 #include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <ranges>
 
 using namespace std::chrono_literals;
 
@@ -103,7 +104,10 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
 future<std::set<tasks::task_id>> node_ops_virtual_task::get_ids() const {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return boost::copy_range<std::set<tasks::task_id>>(co_await get_entries(sys_ks, topology, get_task_manager().get_task_ttl()) | boost::adaptors::map_keys);
+    co_return co_await get_entries(sys_ks, topology, get_task_manager().get_task_ttl())
+        | std::views::keys
+        | std::views::transform([](const utils::UUID& uuid) { return tasks::task_id(uuid); })
+        | std::ranges::to<std::set>();
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable() const {

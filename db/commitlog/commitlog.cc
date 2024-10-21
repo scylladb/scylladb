@@ -2183,7 +2183,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
         flushing += size - waste;
 
-        for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+        for (auto& id : s->_cf_dirty |  std::views::keys) {
             ids.insert(id);
         }
 
@@ -2244,7 +2244,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
                 // There is data in this segment that has lived longer than allowed (might be flushed actually
                 // but can still affect compaction/resurrect stuff on replay). Collect all dirty 
                 // id:s (stuff keeping this segment alive), and ask for them to be memtable flushed
-                for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+                for (auto& id : s->_cf_dirty | std::views::keys) {
                     ids.insert(id);
                 }
 
@@ -2572,7 +2572,7 @@ struct fmt::formatter<db::commitlog::segment::cf_mark> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     template <typename FormatContext>
     auto format(const db::commitlog::segment::cf_mark& m, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", fmt::join(m.s._cf_dirty | boost::adaptors::map_keys, ", "));
+        return fmt::format_to(ctx.out(), "{}", fmt::join(m.s._cf_dirty | std::views::keys, ", "));
     }
 };
 
