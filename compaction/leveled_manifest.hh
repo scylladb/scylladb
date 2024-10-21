@@ -16,7 +16,7 @@
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "interval.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 class leveled_manifest {
     table_state& _table_s;

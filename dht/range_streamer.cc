@@ -11,7 +11,7 @@
 #include "dht/range_streamer.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "streaming/stream_plan.hh"
 #include "db/config.hh"
 #include <fmt/ranges.h>

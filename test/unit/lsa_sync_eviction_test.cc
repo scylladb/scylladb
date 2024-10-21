@@ -13,7 +13,7 @@
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 #include <random>
 

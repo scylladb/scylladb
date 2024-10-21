@@ -14,7 +14,7 @@
 #include "cdc/log.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"

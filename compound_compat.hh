@@ -15,7 +15,7 @@
 #include "compound.hh"
 #include "schema/schema.hh"
 #include "sstables/version.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 //FIXME: de-inline methods and define this as static in a .cc file.
 extern logging::logger compound_logger;

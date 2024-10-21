@@ -10,7 +10,7 @@
 
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastarx.hh"
 
 namespace sstables {

@@ -23,7 +23,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/util.hh"
 #include "db/marshal/type_parser.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace auth {
 

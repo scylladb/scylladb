@@ -11,7 +11,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/closeable.hh>
 
-#include "log.hh"
+#include "utils/log.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "db/cql_type_parser.hh"
 #include "db/system_keyspace.hh"

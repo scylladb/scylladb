@@ -8,7 +8,7 @@
 
 #include "alternator/error.hh"
 #include "auth/common.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include <string>
 #include <string_view>
 #include "bytes.hh"

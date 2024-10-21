@@ -51,7 +51,7 @@
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
 

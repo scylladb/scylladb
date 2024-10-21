@@ -44,7 +44,7 @@
 #include "gms/application_state.hh"
 #include "db/config.hh"
 #include "db_clock.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "release.hh"
 #include "tools/format_printers.hh"
 #include "tools/utils.hh"

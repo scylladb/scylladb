@@ -18,7 +18,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
 #include <vector>

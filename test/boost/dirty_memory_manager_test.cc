@@ -32,7 +32,7 @@
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
 #include "test/lib/log.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 [[gnu::unused]]
 static auto x = [] {

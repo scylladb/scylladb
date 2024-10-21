@@ -26,7 +26,7 @@
 
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"

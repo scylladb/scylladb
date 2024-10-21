@@ -8,7 +8,7 @@
 
 #include "utils/assert.hh"
 #include "row_locking.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 static logging::logger mylog("row_locking");
 

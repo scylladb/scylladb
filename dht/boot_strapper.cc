@@ -19,7 +19,7 @@
 #include "dht/boot_strapper.hh"
 #include "dht/range_streamer.hh"
 #include "gms/gossiper.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "db/config.hh"
 #include "replica/database.hh"
 #include "streaming/stream_reason.hh"

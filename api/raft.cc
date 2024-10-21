@@ -12,7 +12,7 @@
 
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_address_map.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 using namespace seastar::httpd;
 

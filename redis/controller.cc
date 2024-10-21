@@ -13,7 +13,7 @@
 #include "redis/server.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "auth/common.hh"
 
 static logging::logger slogger("controller");

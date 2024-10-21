@@ -21,7 +21,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/on_internal_error.hh>
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace seastar {
 extern logger seastar_logger;

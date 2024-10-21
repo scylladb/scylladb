@@ -16,7 +16,7 @@
 #include "utils/logalloc.hh"
 #include "utils/UUID_gen.hh"
 #include "row_cache.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "readers/combined.hh"
 #include "readers/mutation_fragment_v1_stream.hh"

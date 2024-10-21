@@ -10,7 +10,7 @@
 
 #include "sstables/random_access_reader.hh"
 #include "utils/disk-error-handler.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace sstables {
 

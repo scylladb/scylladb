@@ -10,7 +10,7 @@
 #include "service/raft/raft_address_map.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/gossiper.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "raft/server.hh"
 #include "replica/database.hh"
 #include "service/raft/raft_group_registry.hh"

@@ -12,7 +12,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <ostream>
 #include <boost/lexical_cast.hpp>
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace gms {
 

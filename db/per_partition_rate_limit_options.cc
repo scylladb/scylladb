@@ -11,7 +11,7 @@
 #include "exceptions/exceptions.hh"
 #include "serializer.hh"
 #include "schema/schema.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace db {
 

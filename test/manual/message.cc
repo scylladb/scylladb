@@ -23,7 +23,7 @@
 #include "gms/gossip_digest.hh"
 #include "api/api.hh"
 #include "utils/UUID.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "locator/token_metadata.hh"
 #include "db/schema_tables.hh"
 #include "idl/gossip.dist.hh"

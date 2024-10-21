@@ -17,7 +17,7 @@
 
 #include "utils/allocation_strategy.hh"
 #include "utils/logalloc.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "test/perf/perf.hh"
 
 class piggie {

@@ -28,7 +28,7 @@
 #include "utils/assert.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/chunked_vector.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace bi = boost::intrusive;
 

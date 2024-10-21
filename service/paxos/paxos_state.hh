@@ -9,7 +9,7 @@
 #pragma once
 #include "seastar/core/semaphore.hh"
 #include "service/paxos/proposal.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/digest_algorithm.hh"
 #include "db/timeout_clock.hh"
 #include <unordered_map>

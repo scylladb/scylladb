@@ -17,7 +17,7 @@
 #include "service/memory_limiter.hh"
 #include "db/config.hh"
 #include "gms/gossiper.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "cql3/query_processor.hh"
 
 using namespace seastar;

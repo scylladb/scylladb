@@ -18,7 +18,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "compaction/compaction_manager.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"

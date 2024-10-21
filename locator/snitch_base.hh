@@ -20,7 +20,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace gms {
 

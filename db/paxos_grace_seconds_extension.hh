@@ -9,7 +9,7 @@
 
 #include "serializer.hh"
 #include "schema/schema.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 extern logging::logger dblog;
 

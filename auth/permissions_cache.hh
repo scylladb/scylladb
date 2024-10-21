@@ -17,7 +17,7 @@
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "auth/role_or_anonymous.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 

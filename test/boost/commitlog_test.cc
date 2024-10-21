@@ -38,7 +38,7 @@
 #include "db/commitlog/rp_set.hh"
 #include "db/extensions.hh"
 #include "readers/combined.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/data_model.hh"

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "log.hh"
+#include "utils/log.hh"
 
 #include "seastarx.hh"
 

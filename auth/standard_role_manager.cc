@@ -29,7 +29,7 @@
 #include "cql3/util.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastar/core/loop.hh"
 #include "seastar/coroutine/maybe_yield.hh"
 #include "service/raft/raft_group0_client.hh"

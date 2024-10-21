@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "log.hh"
+#include "utils/log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"
 #include "utils/assert.hh"

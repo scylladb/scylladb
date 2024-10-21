@@ -18,7 +18,7 @@
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "enum_set.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastarx.hh"
 
 namespace service {

@@ -42,7 +42,7 @@
 #include "query-result-writer.hh"
 #include "map_difference.hh"
 #include <seastar/coroutine/all.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "frozen_schema.hh"
 #include "schema/schema_registry.hh"
 #include "system_keyspace.hh"

@@ -7,7 +7,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"

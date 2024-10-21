@@ -20,7 +20,7 @@
 #include "gms/application_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/messaging_service.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "db/system_keyspace.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>

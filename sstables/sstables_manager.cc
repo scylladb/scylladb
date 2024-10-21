@@ -8,7 +8,7 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"

@@ -9,7 +9,7 @@
 #include "user_function.hh"
 #include "cql3/description.hh"
 #include "cql3/util.hh"
-#include "log.hh"
+#include "utils/log.hh"
 #include "lang/wasm.hh"
 
 #include <seastar/core/thread.hh>

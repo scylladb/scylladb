@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "log.hh"
+#include "utils/log.hh"
 #include "metadata_collector.hh"
 #include "mutation/position_in_partition.hh"
 

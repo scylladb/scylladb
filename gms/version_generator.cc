@@ -12,7 +12,7 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/print.hh>
-#include "log.hh"
+#include "utils/log.hh"
 #include "seastarx.hh"
 #include "version_generator.hh"
 

@@ -10,7 +10,7 @@
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
-#include "log.hh"
+#include "utils/log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"

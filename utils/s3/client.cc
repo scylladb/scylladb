@@ -42,7 +42,7 @@
 #include "utils/aws_sigv4.hh"
 #include "utils/exceptions.hh"
 #include "db_clock.hh"
-#include "log.hh"
+#include "utils/log.hh"
 
 template <>
 struct fmt::formatter<s3::tag> {

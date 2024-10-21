@@ -20,7 +20,7 @@
 #include "sstables/key.hh"
 #include <seastar/core/thread.hh>
 #include <seastar/core/on_internal_error.hh>
-#include "log.hh"
+#include "utils/log.hh"
 
 namespace dht {
 
