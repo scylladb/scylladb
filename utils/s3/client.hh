@@ -91,9 +91,14 @@ class client : public enable_shared_from_this<client> {
             http::reply::status_type expected, multipart_upload_completion is_mpu_completion);
     static future<aws::aws_error> look_for_error(const http::reply& reply, input_stream<char>& in_, multipart_upload_completion is_mpu_completion);
 
+    using custom_error_handler =
+        std::function<http::experimental::client::reply_handler(http::experimental::client::reply_handler&&, http::reply::status_type)>;
+    future<> make_request(http::request req,
+                          custom_error_handler error_handler,
+                          http::experimental::client::reply_handler handle = ignore_reply,
+                          http::reply::status_type expected = http::reply::status_type::ok);
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply,
-            http::reply::status_type expected = http::reply::status_type::ok,
-            multipart_upload_completion is_mpu_completion_req = multipart_upload_completion::no);
+            http::reply::status_type expected = http::reply::status_type::ok);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
     future<> make_request(http::request req, reply_handler_ext handle, http::reply::status_type expected = http::reply::status_type::ok);
     future<> do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler) const;
