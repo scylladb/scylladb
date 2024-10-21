@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
+print(2)
 import argparse
 import json
 import os
