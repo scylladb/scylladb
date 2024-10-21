@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "readers/combined_reader_stats.hh"
 #include "sstables/shared_sstable.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"
@@ -77,6 +78,7 @@ struct compaction_stats {
     uint64_t validation_errors = 0;
     // Bloom filter checks during max purgeable calculation
     uint64_t bloom_filter_checks = 0;
+    combined_reader_statistics reader_statistics;
 
     compaction_stats& operator+=(const compaction_stats& r) {
         ended_at = std::max(ended_at, r.ended_at);
