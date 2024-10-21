@@ -307,6 +307,19 @@ dht::token_range tablet_map::get_token_range(tablet_id id) const {
     }
 }
 
+dht::token_range tablet_map::get_post_split_token_range_of(const token& t) const noexcept {
+    auto get_last_token_post_split = [&] (tablet_id id) {
+        return dht::last_token_of_compaction_group(_log2_tablets + 1, size_t(id));
+    };
+
+    auto id_after_split = tablet_id(dht::compaction_group_of(_log2_tablets + 1, t));
+    if (id_after_split == first_tablet()) {
+        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token_post_split(id_after_split), true});
+    } else {
+        return dht::token_range::make({get_last_token_post_split(tablet_id(size_t(id_after_split) - 1)), false}, {get_last_token_post_split(id_after_split), true});
+    }
+}
+
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     const auto& replicas = get_tablet_info(id).replicas;
     return replicas.at(size_t(id) % replicas.size());

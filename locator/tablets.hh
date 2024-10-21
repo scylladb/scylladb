@@ -426,6 +426,7 @@ public:
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
+    dht::token_range get_post_split_token_range_of(const token& t) const noexcept;
 
     const locator::resize_decision& resize_decision() const;
 public:
