@@ -955,3 +955,25 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
                         shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
                         iter = ds1.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
                         unauthorized(lambda: ds1.get_records(ShardIterator=iter))
+
+# Test that the ability to read from *any* system table through Alternator
+# requires permissions for this specific table. This is different from the
+# logic in CQL where a table like system_schema.tables is readable to any
+# user (see test/cql-pytest/test_permissions.py::test_select_system_table).
+# Allowing unprivileged users to read from arbitrary system tables could
+# have opened many risks, the most serious of which being the ability to
+# read system.roles which contains the secret key of other, possibly more
+# privileged, users.
+def test_rbac_system_table(dynamodb, cql):
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            client = d.meta.client
+            internal_prefix = '.scylla.alternator.'
+            tbl1 = 'system_schema.tables'
+            # Without SELECT permissions, reading from the system table will
+            # fail:
+            unauthorized(lambda: client.scan(TableName=internal_prefix+tbl1))
+            # Adding SELECT permissions on this specific system table, the
+            # read will succeed:
+            with temporary_grant(cql, 'SELECT', tbl1, role):
+                authorized(lambda: client.scan(TableName=internal_prefix+tbl1))
