@@ -312,11 +312,8 @@ dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) 
 }
 
 dht::token_range tablet_map::get_token_range(tablet_id id) const {
-    if (id == first_tablet()) {
-        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id), true});
-    } else {
-        return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1)), false}, {get_last_token(id), true});
-    }
+    check_tablet_id(id);
+    return get_token_range(id, _log2_tablets);
 }
 
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
