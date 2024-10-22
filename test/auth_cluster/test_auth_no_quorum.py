@@ -6,7 +6,6 @@
 
 import asyncio
 import time
-from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 import pytest
 from cassandra.auth import PlainTextAuthProvider
