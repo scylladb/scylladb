@@ -41,6 +41,13 @@ struct on_column {
     bool operator==(const on_column&) const = default;
 };
 
+// Placeholder type indicating we're solving for the partition key token.
+struct on_partition_key_token {
+    const ::schema* schema;
+
+    bool operator==(const on_partition_key_token&) const = default;
+};
+
 // A predicate on a column or a combination of columns. The WHERE clause analyzer
 // will attempt to convert predicates (that return true or false for a particular row)
 // to solvers (that return the set of column values that satisfy the predicate) when possible.
@@ -52,7 +59,8 @@ struct predicate {
     expr::expression filter;
     // What column the predicate can be solved for
     std::variant<
-            on_column                     // solving for a single column: e.g. c1 = 3
+            on_column,                     // solving for a single column: e.g. c1 = 3
+            on_partition_key_token         // solving for the token, e.g. token(pk1, pk2) >= :var
     > on;
     // Whether the returned value_set will resolve to a single value.
     bool is_singleton = false;
@@ -71,7 +79,7 @@ struct no_partition_range_restrictions {
 };
 
 struct token_range_restrictions {
-    expr::expression token_restrictions = expr::conjunction({});
+    predicate token_restrictions;
 };
 
 struct single_column_partition_range_restrictions {

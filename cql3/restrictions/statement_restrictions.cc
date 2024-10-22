@@ -144,6 +144,9 @@ solve(const predicate& ac, const query_options& options) {
             [&] (const on_column& oc) {
                 return possible_column_values(oc.column, ac.filter, options);
             },
+            [&] (const on_partition_key_token& pkt) {
+                return possible_partition_token_values(ac.filter, options, *pkt.schema);
+            },
         },
         ac.on);
 }
@@ -250,6 +253,7 @@ type(const predicate& p) {
     return std::visit(
         overloaded_functor{
             [] (const on_column& oc) { return oc.column->type->without_reversed().shared_from_this(); },
+            [] (const on_partition_key_token&) { return long_type; },
         },
         p.on);
 }
@@ -999,7 +1003,15 @@ static partition_range_restrictions extract_partition_range(
 
     expr::visit(v, where_clause);
     if (v.tokens) {
-        return token_range_restrictions{.token_restrictions = std::move(*v.tokens)};
+        return token_range_restrictions{
+            .token_restrictions = predicate{
+                // It's not really a column, but...
+                .solve_for = std::bind(possible_partition_token_values, *v.tokens, std::placeholders::_1, std::ref(*schema)),
+                .filter = *v.tokens,
+                .on = on_partition_key_token{schema.get()},
+                .is_singleton = false, // It could return a single token, but it's not important to track it
+            },
+        };
     }
     if (v.single_column.size() == schema->partition_key_size()) {
         return single_column_partition_range_restrictions{
@@ -1907,10 +1919,10 @@ namespace {
 using namespace expr;
 
 /// Computes partition-key ranges from token atoms in ex.
-dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex,
+dht::partition_range_vector partition_ranges_from_token(const predicate& ex,
                                                         const query_options& options,
                                                         const schema& table_schema) {
-    auto values = possible_partition_token_values(ex, options, table_schema);
+    auto values = solve(ex, options);
     if (values == value_set(value_list{})) {
         return {};
     }
@@ -2980,7 +2992,7 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
         [&] (const no_partition_range_restrictions&) {
         },
         [&] (const token_range_restrictions& r) {
-            validate_primary_key_restrictions(options, std::span(&r.token_restrictions, 1));
+            validate_primary_key_restrictions(options, std::span(&r.token_restrictions.filter, 1));
         },
         [&] (const single_column_partition_range_restrictions& r) {
             validate_primary_key_restrictions(options, r.per_column_restrictions | std::views::transform(&predicate::filter));
