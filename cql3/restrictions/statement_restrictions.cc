@@ -836,6 +836,7 @@ bool is_empty_restriction(const expression& e) {
     return !contains_non_conjunction;
 }
 
+static
 bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
     value_set possible_vals = possible_column_values(&cdef, e, options);
     return std::visit(overloaded_functor {
@@ -2995,6 +2996,16 @@ statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
         const query_options& options) const {
     return _get_local_index_clustering_ranges_fn(options);
+}
+
+bytes_opt
+statement_restrictions::value_for_index_partition_key(const query_options& options) const {
+    const column_definition* cdef = _schema->get_column_definition(to_bytes(_idx_opt->target_column()));
+    if (!cdef) {
+        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    }
+
+    return value_for(*cdef, _idx_restrictions, options);
 }
 
 sstring statement_restrictions::to_string() const {

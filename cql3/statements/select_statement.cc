@@ -1082,7 +1082,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     auto& last_base_pk = last_pos.partition;
     auto* last_base_ck = last_pos.position.has_key() ? &last_pos.position.key() : nullptr;
 
-    bytes_opt indexed_column_value = restrictions::value_for(*cdef, _used_index_restrictions, options);
+    bytes_opt indexed_column_value = _restrictions->value_for_index_partition_key(options);
 
     auto index_pk = [&]() {
         if (_index.metadata().local()) {
@@ -1282,12 +1282,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
 dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_global_index_posting_list(const query_options& options) const {
     dht::partition_range_vector partition_ranges;
 
-    const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
-    if (!cdef) {
-        throw exceptions::invalid_request_exception("Indexed column not found in schema");
-    }
-
-    bytes_opt value = restrictions::value_for(*cdef, _used_index_restrictions, options);
+    bytes_opt value = _restrictions->value_for_index_partition_key(options);
     if (value) {
         auto pk = partition_key::from_single_value(*_view_schema, *value);
         auto dk = dht::decorate_key(*_view_schema, pk);

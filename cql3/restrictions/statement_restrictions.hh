@@ -488,6 +488,9 @@ public:
     std::vector<query::clustering_range> get_local_index_clustering_ranges(
             const query_options& options) const;
 
+    /// Finds the value of partition key of the index table
+    bytes_opt value_for_index_partition_key(const query_options&) const;
+
     sstring to_string() const;
 
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
@@ -520,10 +523,6 @@ std::vector<expr::expression> extract_single_column_restrictions_for_column(cons
 
 // Checks whether this expression is empty - doesn't restrict anything
 bool is_empty_restriction(const expr::expression&);
-
-// Finds the value of the given column in the expression
-// In case of multpiple possible values calls on_internal_error
-bytes_opt value_for(const column_definition&, const expr::expression&, const query_options&);
 
 }
 
