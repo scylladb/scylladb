@@ -132,6 +132,22 @@ bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
 
+static
+value_set
+solve(const predicate& ac, const query_options& options) {
+    if (ac.solve_for) {
+        return ac.solve_for(options);
+    }
+
+    return std::visit(
+        overloaded_functor{
+            [&] (const on_column& oc) {
+                return possible_column_values(oc.column, ac.filter, options);
+            },
+        },
+        ac.on);
+}
+
 namespace {
 
 const value_set empty_value_set = value_list{};
@@ -226,6 +242,53 @@ interval<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
 
 interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val) {
     return to_range<const clustering_key_prefix&>(op, val);
+}
+
+static
+data_type
+type(const predicate& p) {
+    return std::visit(
+        overloaded_functor{
+            [] (const on_column& oc) { return oc.column->type->without_reversed().shared_from_this(); },
+        },
+        p.on);
+}
+
+static
+predicate
+make_conjunction(predicate a, predicate b) {
+    if (a.on != b.on) {
+        on_internal_error(rlogger, "make_conjunction: merging predicate targets");
+    }
+
+    auto& sa = a.solve_for;
+    auto& sb = b.solve_for;
+
+    auto sa_and_sb = std::invoke([&] -> solve_for_t {
+        if (sa && sb) {
+            return [sa = std::move(sa), sb = std::move(sb), type = type(a)] (const query_options& options) {
+                return intersection(sa(options), sb(options), type.get());
+            };
+        } else {
+            return {};
+        }
+    });
+
+    return predicate{
+        .solve_for = std::move(sa_and_sb),
+        .filter = make_conjunction(std::move(a.filter), std::move(b.filter)),
+        .on = a.on,
+        .is_singleton = false,  // Even if both columns are singletons, the conjunction of them can return zero values.
+    };
+}
+
+static
+const column_definition*
+require_on_single_column(const predicate& p) {
+    if (auto* pcol = std::get_if<on_column>(&p.on)) {
+        return pcol->column;
+    }
+    on_internal_error(rlogger, "require_on_single_column: predicate is not on a single column");
 }
 
 // When cdef == nullptr it finds possible token values instead of column values.
@@ -832,7 +895,7 @@ static partition_range_restrictions extract_partition_range(
     struct extract_partition_range_visitor {
         schema_ptr table_schema;
         std::optional<expression> tokens;
-        std::unordered_map<const column_definition*, expression> single_column;
+        std::unordered_map<const column_definition*, predicate> single_column;
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
@@ -866,9 +929,15 @@ static partition_range_restrictions extract_partition_range(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto [it, inserted] = single_column.try_emplace(s->col, b);
+                    auto a = predicate{
+                        .solve_for = std::bind_front(possible_column_values, s->col, b),
+                        .filter = b,
+                        .on = on_column{s->col},
+                        .is_singleton = b.op == oper_t::EQ,
+                    };
+                    const auto [it, inserted] = single_column.try_emplace(s->col, std::move(a));
                     if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), b);
+                        it->second = make_conjunction(std::move(it->second), std::move(a));
                     }
                 }
             });
@@ -1887,30 +1956,26 @@ void error_if_exceeds_clustering_key_limit(size_t size, size_t clustering_limit)
 
 /// Computes partition-key ranges from expressions, which contains EQ/IN for every partition column.
 dht::partition_range_vector partition_ranges_from_singles(
-        const std::vector<expr::expression>& expressions, const query_options& options, const schema& schema) {
+        const std::vector<predicate>& expressions, const query_options& options, const schema& schema) {
     const size_t size_limit =
             options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
     // Each element is a vector of that column's possible values:
     std::vector<std::vector<managed_bytes>> column_values(schema.partition_key_size());
     size_t product_size = 1;
     for (const auto& e : expressions) {
-        if (const auto arbitrary_binop = find_binop(e, [] (const binary_operator&) { return true; })) {
-            if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
-                const value_set vals = possible_column_values(cv->col, e, options);
+                const value_set vals = solve(e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
                         return {};
                     }
                     product_size *= lst->size();
                     error_if_exceeds_partition_key_limit(product_size, size_limit);
-                    column_values[schema.position(*cv->col)] = std::move(*lst);
+                    column_values[schema.position(*require_on_single_column(e))] = std::move(*lst);
                 } else {
                     throw exceptions::invalid_request_exception(
                             "Only EQ and IN relation are supported on the partition key "
                             "(unless you use the token() function or ALLOW FILTERING)");
                 }
-            }
-        }
     }
     cartesian_product cp(column_values);
     dht::partition_range_vector ranges;
@@ -1922,15 +1987,14 @@ dht::partition_range_vector partition_ranges_from_singles(
 /// Computes partition-key ranges from EQ restrictions on each partition column.  Returns a single singleton range if
 /// the EQ restrictions are not mutually conflicting.  Otherwise, returns an empty vector.
 dht::partition_range_vector partition_ranges_from_EQs(
-        const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
+        const std::vector<predicate>& eq_expressions, const query_options& options, const schema& schema) {
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
-        const auto col = expr::get_subscripted_column(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
+        const auto vals = std::get<value_list>(solve(e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
         }
-        pk_value[schema.position(*col)] = std::move(vals[0]);
+        pk_value[schema.position(*require_on_single_column(e))] = std::move(vals[0]);
     }
     return {range_from_bytes(schema, pk_value)};
 }
@@ -2744,9 +2808,9 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_partition_range_restrictions);
     if (single_column_partition_key_restrictions) {
       for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
-        const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
+        const auto col = expr::as<column_value>(find(e.filter, oper_t::EQ)->lhs).col;
         const auto pos = _schema->position(*col) + 1;
-        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
+        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e.filter, &idx_tbl_schema.clustering_column_at(pos));
       }
     }
 
@@ -2893,7 +2957,7 @@ sstring statement_restrictions::to_string() const {
     return _where ? expr::to_string(*_where) : "";
 }
 
-static void validate_primary_key_restrictions(const query_options& options, std::span<const expr::expression> restrictions) {
+static void validate_primary_key_restrictions(const query_options& options, std::ranges::range auto&& restrictions) {
     for (const auto& r: restrictions) {
         for_each_expression<binary_operator>(r, [&](const binary_operator& binop) {
             if (binop.op != oper_t::EQ && binop.op != oper_t::IN) {
@@ -2919,7 +2983,7 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
             validate_primary_key_restrictions(options, std::span(&r.token_restrictions, 1));
         },
         [&] (const single_column_partition_range_restrictions& r) {
-            validate_primary_key_restrictions(options, r.per_column_restrictions);
+            validate_primary_key_restrictions(options, r.per_column_restrictions | std::views::transform(&predicate::filter));
         }
     }, _partition_range_restrictions);
     validate_primary_key_restrictions(options, _clustering_prefix_restrictions);
