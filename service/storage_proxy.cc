@@ -238,15 +238,18 @@ class storage_proxy::remote {
     const gms::gossiper& _gossiper;
     migration_manager& _mm;
     sharded<db::system_keyspace>& _sys_ks;
-
+    raft_group0_client& _group0_client;
+    topology_state_machine& _topology_state_machine;
+ 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
 
     bool _stopped{false};
 
 public:
-    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks)
-        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks)
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
+                raft_group0_client& group0_client, topology_state_machine& tsm)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm)
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -6610,8 +6613,9 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
-void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks) {
-    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks);
+void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
+        raft_group0_client& group0_client, topology_state_machine& tsm) {
+    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks, group0_client, tsm);
 }
 
 future<> storage_proxy::stop_remote() {

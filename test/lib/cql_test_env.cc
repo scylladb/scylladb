@@ -930,7 +930,7 @@ private:
             });
 
             if (cfg_in.need_remote_proxy) {
-                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks)).get();
+                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine)).get();
             }
             auto stop_proxy_remote = defer([this, need = cfg_in.need_remote_proxy] {
                 if (need) {
