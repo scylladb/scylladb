@@ -167,8 +167,7 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     auto sst = co_await env.reusable_sst(std::move(schema), load_dir, generation);
     sstable_generation_generator gen(generation.as_int());
     sstables::test(sst).change_generation_number(gen());
-    co_await sstables::test(sst).change_dir(write_dir);
-    co_await sstables::test(sst).store();
+    co_await sstables::test(sst).store(write_dir);
     co_return sst;
 }
 

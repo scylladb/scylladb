@@ -103,10 +103,6 @@ public:
         _sst->_generation = generation;
     }
 
-    future<> change_dir(sstring dir) {
-        return _sst->_storage->change_dir_for_test(dir);
-    }
-
     void set_data_file_size(uint64_t size) {
         _sst->_data_file_size = size;
     }
@@ -119,7 +115,8 @@ public:
         _sst->_run_identifier = identifier;
     }
 
-    future<> store() {
+    future<> store(sstring dir) {
+        co_await _sst->_storage->change_dir_for_test(dir);
         _sst->_recognized_components.erase(component_type::Index);
         _sst->_recognized_components.erase(component_type::Data);
         co_await seastar::async([sst = _sst] {
