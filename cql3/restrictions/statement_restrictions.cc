@@ -2922,27 +2922,24 @@ unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
-        const query_options& options,
-        const schema& idx_tbl_schema) const {
+        const query_options& options) const {
     if (!_idx_tbl_ck_prefix) {
         on_internal_error(
                 rlogger, "statement_restrictions::get_global_index_clustering_ranges called with unprepared index");
     }
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
-    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
-    const query_options& options,
-    const schema& idx_tbl_schema
-) const {
+    const query_options& options) const {
     if (!_idx_tbl_ck_prefix.has_value()) {
         on_internal_error(
                 rlogger, "statement_restrictions::get_global_index_token_clustering_ranges called with unprepared index");
     }
 
-    const column_definition& token_column = idx_tbl_schema.clustering_column_at(0);
+    const column_definition& token_column = _view_schema->clustering_column_at(0);
 
     // In old indexes the token column was of type blob.
     // This causes problems with sorting and must be handled separately.
@@ -2950,19 +2947,18 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_to
         return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
     }
 
-    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
-        const query_options& options,
-        const schema& idx_tbl_schema) const {
+        const query_options& options) const {
     if (!_idx_tbl_ck_prefix.has_value()) {
         on_internal_error(
             rlogger, "statement_restrictions::get_local_index_clustering_ranges called with unprepared index");
     }
 
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
-    return get_single_column_clustering_bounds(options, idx_tbl_schema, *_idx_tbl_ck_prefix);
+    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
 }
 
 sstring statement_restrictions::to_string() const {
