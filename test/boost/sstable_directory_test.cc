@@ -806,7 +806,8 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
         // Now start atomic deletion -- create the pending deletion log for all
         // three sstables, move TOC file for one of them into temporary-TOC, and 
         // partially delete another
-        sstable_directory::create_pending_deletion_log(ssts_to_remove).get();
+        auto base_opened_dir = opened_directory(base);
+        sstable_directory::create_pending_deletion_log(base_opened_dir, ssts_to_remove).get();
         rename_file(test(ssts_to_remove[1]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[1]).filename(sstables::component_type::TemporaryTOC).native()).get();
         rename_file(test(ssts_to_remove[2]).filename(sstables::component_type::TOC).native(), test(ssts_to_remove[2]).filename(sstables::component_type::TemporaryTOC).native()).get();
         remove_file(test(ssts_to_remove[2]).filename(sstables::component_type::Data).native()).get();

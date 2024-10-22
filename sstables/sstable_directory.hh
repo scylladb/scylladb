@@ -33,6 +33,7 @@ namespace sstables {
 enum class sstable_state;
 class storage;
 class sstables_manager;
+class opened_directory;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
 class directory_semaphore {
@@ -272,6 +273,11 @@ public:
     using can_be_remote = bool_class<struct can_be_remote_tag>;
     future<> collect_output_unshared_sstables(std::vector<sstables::shared_sstable> resharded_sstables, can_be_remote);
 
+    struct pending_delete_result {
+        sstring pending_delete_log;
+        std::unordered_set<sstring> prefixes;
+    };
+
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
     // and if A contained some data that was tombstoned by B, and if B was
@@ -285,11 +291,10 @@ public:
     //
     // This function only solves the second problem for now.
 
-    // Creates the deletion log for atomic deletion of sstables (helper for the
+    // Creates the deletion log for atomic deletion of sstables at `base_dir` (helper for the
     // above function that's also used by tests)
-    // Returns an unordered_map of <directory with sstables, logfile_name> for every sstable prefix.
-    // Currently, atomicity is guranteed only within each unique prefix and not across prefixes (See #18862)
-    static future<std::unordered_map<sstring, sstring>> create_pending_deletion_log(const std::vector<shared_sstable>& ssts);
+    // Returns the name of the pending_delete_log and an unordered_set of sstable prefixes.
+    static future<pending_delete_result> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
 };
