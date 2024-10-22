@@ -957,7 +957,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 if (is_local_idx) {
                     // Local index: get_local_index_clustering_ranges should work.
                     // Local index CK = (indexed_column, base_ck1, base_ck2, ...).
-                    auto ranges = sr->get_local_index_clustering_ranges(query_options({}), *sr->get_view_schema());
+                    auto ranges = sr->get_local_index_clustering_ranges(query_options({}));
                     BOOST_CHECK_MESSAGE(!ranges.empty(),
                         ctx_msg("get_local_index_clustering_ranges should not be empty"));
                     // With a single EQ on the indexed column, expect exactly 1 range.
@@ -967,7 +967,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 } else {
                     // Global index: get_global_index_clustering_ranges should work.
                     // Global index CK = (token, pk1, pk2, ..., ck1, ck2, ...).
-                    auto ranges = sr->get_global_index_clustering_ranges(query_options({}), *sr->get_view_schema());
+                    auto ranges = sr->get_global_index_clustering_ranges(query_options({}));
                     BOOST_CHECK_MESSAGE(!ranges.empty(),
                         ctx_msg("get_global_index_clustering_ranges should not be empty"));
                     if (full_pk) {

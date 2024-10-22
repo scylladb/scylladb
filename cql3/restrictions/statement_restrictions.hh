@@ -466,15 +466,15 @@ private:
 public:
     /// Calculates clustering ranges for querying a global-index table.
     std::vector<query::clustering_range> get_global_index_clustering_ranges(
-            const query_options& options, const schema& idx_tbl_schema) const;
+            const query_options& options) const;
 
     /// Calculates clustering ranges for querying a global-index table for queries with token restrictions present.
     std::vector<query::clustering_range> get_global_index_token_clustering_ranges(
-            const query_options& options, const schema& idx_tbl_schema) const;
+            const query_options& options) const;
 
     /// Calculates clustering ranges for querying a local-index table.
     std::vector<query::clustering_range> get_local_index_clustering_ranges(
-            const query_options& options, const schema& idx_tbl_schema) const;
+            const query_options& options) const;
 
     sstring to_string() const;
 

@@ -1370,11 +1370,11 @@ query::partition_slice view_indexed_table_select_statement::get_partition_slice_
         // Only EQ restrictions on base partition key can be used in an index view query
         if (pk_restrictions_is_single && _restrictions->partition_key_restrictions_is_all_eq()) {
             partition_slice_builder.with_ranges(
-                    _restrictions->get_global_index_clustering_ranges(options, *_view_schema));
+                    _restrictions->get_global_index_clustering_ranges(options));
         } else if (_restrictions->has_token_restrictions()) {
             // Restrictions like token(p1, p2) < 0 have all partition key components restricted, but require special handling.
             partition_slice_builder.with_ranges(
-                    _restrictions->get_global_index_token_clustering_ranges(options, *_view_schema));
+                    _restrictions->get_global_index_token_clustering_ranges(options));
         }
     }
 
@@ -1385,7 +1385,7 @@ query::partition_slice view_indexed_table_select_statement::get_partition_slice_
     partition_slice_builder partition_slice_builder{*_view_schema};
 
     partition_slice_builder.with_ranges(
-        _restrictions->get_local_index_clustering_ranges(options, *_view_schema));
+        _restrictions->get_local_index_clustering_ranges(options));
 
     return partition_slice_builder.build();
 }
