@@ -1358,6 +1358,11 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
+
+    _get_clustering_bounds_fn = build_get_clustering_bounds_fn();
+    _get_global_index_clustering_ranges_fn = build_get_global_index_clustering_ranges_fn();
+    _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
+    _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
 }
 
 bool
@@ -2663,7 +2668,9 @@ query::clustering_range range_from_raw_bounds(
 
 } // anonymous namespace
 
-std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
+get_clustering_bounds_fn_t
+statement_restrictions::build_get_clustering_bounds_fn() const {
+  return [&] (const query_options& options) -> std::vector<query::clustering_range> {
     if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
@@ -2702,6 +2709,11 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     } else {
         return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
     }
+  };
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
+    return _get_clustering_bounds_fn(options);
 }
 
 namespace {
@@ -2921,22 +2933,27 @@ unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not
     return count;
 }
 
-std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
-        const query_options& options) const {
+get_clustering_bounds_fn_t
+statement_restrictions::build_get_global_index_clustering_ranges_fn() const {
     if (!_idx_tbl_ck_prefix) {
-        on_internal_error(
-                rlogger, "statement_restrictions::get_global_index_clustering_ranges called with unprepared index");
+        return {};
     }
 
+  return [&] (const query_options& options) {
     // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
     return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+  };
 }
 
-std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
-    const query_options& options) const {
+std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
+        const query_options& options) const {
+    return _get_global_index_clustering_ranges_fn(options);
+}
+
+get_clustering_bounds_fn_t
+statement_restrictions::build_get_global_index_token_clustering_ranges_fn() const {
     if (!_idx_tbl_ck_prefix.has_value()) {
-        on_internal_error(
-                rlogger, "statement_restrictions::get_global_index_token_clustering_ranges called with unprepared index");
+        return {};
     }
 
     const column_definition& token_column = _view_schema->clustering_column_at(0);
@@ -2944,21 +2961,36 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_to
     // In old indexes the token column was of type blob.
     // This causes problems with sorting and must be handled separately.
     if (token_column.type != long_type) {
+      return [&] (const query_options& options) {
         return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
+      };
     }
 
+  return [&] (const query_options& options) {
     return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+  };
+}
+
+std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
+    const query_options& options) const {
+    return _get_global_index_token_clustering_ranges_fn(options);
+}
+
+get_clustering_bounds_fn_t
+statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
+    if (!_idx_tbl_ck_prefix.has_value()) {
+        return {};
+    }
+
+  return [&] (const query_options& options) {
+    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
+    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+  };
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
         const query_options& options) const {
-    if (!_idx_tbl_ck_prefix.has_value()) {
-        on_internal_error(
-            rlogger, "statement_restrictions::get_local_index_clustering_ranges called with unprepared index");
-    }
-
-    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
-    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+    return _get_local_index_clustering_ranges_fn(options);
 }
 
 sstring statement_restrictions::to_string() const {
