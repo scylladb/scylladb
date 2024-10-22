@@ -385,7 +385,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables_a
     sstables::compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, on_replace, std::move(can_purge));
 
     if (should_update_history) {
-        co_await update_history(*_compacting_table, res, cdata);
+        co_await update_history(*_compacting_table, sstables::compaction_result(res), cdata);
     }
 
     co_return res;
@@ -455,7 +455,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
 
     co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
 }
-future<> compaction_task_executor::update_history(table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
+future<> compaction_task_executor::update_history(table_state& t, sstables::compaction_result&& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
     if (auto sys_ks = _cm._sys_ks.get_permit()) {
@@ -1317,7 +1317,7 @@ protected:
                     // the weight earlier to remove unnecessary
                     // serialization.
                     weight_r.deregister();
-                    co_await update_history(*_compacting_table, res, _compaction_data);
+                    co_await update_history(*_compacting_table, std::move(res), _compaction_data);
                 }
                 _cm.reevaluate_postponed_compactions();
                 continue;
