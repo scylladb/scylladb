@@ -1364,6 +1364,7 @@ statement_restrictions::statement_restrictions(private_tag,
     _get_global_index_clustering_ranges_fn = build_get_global_index_clustering_ranges_fn();
     _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
     _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
+    _value_for_index_partition_key_fn = build_value_for_index_partition_key_fn();
 }
 
 bool
@@ -2998,14 +2999,24 @@ std::vector<query::clustering_range> statement_restrictions::get_local_index_clu
     return _get_local_index_clustering_ranges_fn(options);
 }
 
-bytes_opt
-statement_restrictions::value_for_index_partition_key(const query_options& options) const {
+get_singleton_value_fn_t
+statement_restrictions::build_value_for_index_partition_key_fn() const {
+    if (!_idx_opt) {
+        return {};
+    }
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_idx_opt->target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
+  return [this, cdef] (const query_options& options) {
     return value_for(*cdef, _idx_restrictions, options);
+  };
+}
+
+bytes_opt
+statement_restrictions::value_for_index_partition_key(const query_options& options) const {
+    return _value_for_index_partition_key_fn(options);
 }
 
 sstring statement_restrictions::to_string() const {
