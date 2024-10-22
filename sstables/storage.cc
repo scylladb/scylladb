@@ -10,6 +10,7 @@
 
 #include <cerrno>
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/erase.hpp>
 
 #include <exception>
 #include <stdexcept>
@@ -33,7 +34,6 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
-#include "replica/database.hh" // need to move format_table_directory_name here eventually
 
 #include "checked-file-impl.hh"
 
@@ -684,7 +684,9 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
     for (const auto& dd : mgr.config().data_file_directories()) {
-        auto dir = format("{}/{}/{}", dd, s.ks_name(), replica::format_table_directory_name(s.cf_name(), s.id()));
+        auto uuid_sstring = s.id().to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
         dirs.emplace_back(std::move(dir));
     }
     co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
@@ -698,6 +700,16 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
         .dir = fs::path(std::move(dirs[0])),
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+}
+
+std::vector<std::filesystem::path> get_local_directories(const db::config& db, const data_dictionary::storage_options::local& so) {
+    // see how this path is formatted by init_table_storage() above
+    auto table_dir = so.dir.parent_path().filename() / so.dir.filename();
+    return db.data_file_directories()
+            | std::views::transform([&table_dir] (const auto& datadir) {
+                return std::filesystem::path(datadir) / table_dir;
+            })
+            | std::ranges::to<std::vector<std::filesystem::path>>();
 }
 
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {

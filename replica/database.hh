@@ -394,7 +394,6 @@ class table : public enable_lw_shared_from_this<table>
             , public weakly_referencable<table> {
 public:
     struct config {
-        std::vector<sstring> all_datadirs;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;
@@ -1892,10 +1891,8 @@ public:
     future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
 };
 
-// A pair of helper functions to make directory name for a table
-// out of its name and uuid, and to parse the directory name back
-// into name and uuid of the table
-sstring format_table_directory_name(sstring name, table_id id);
+// A helper function to parse the directory name back
+// into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
 } // namespace replica

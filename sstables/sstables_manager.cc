@@ -325,6 +325,10 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
     }, so.value);
 }
 
+std::vector<std::filesystem::path> sstables_manager::get_local_directories(const data_dictionary::storage_options::local& so) const {
+    return sstables::get_local_directories(_db_config, so);
+}
+
 void sstables_manager::on_unlink(sstable* sst) {
     // Remove the sst from manager's reclaimed list to prevent any attempts to reload its components.
     _reclaimed.erase(*sst);
