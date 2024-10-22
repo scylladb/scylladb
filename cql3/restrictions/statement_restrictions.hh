@@ -79,6 +79,9 @@ using get_partition_key_ranges_fn_t = std::function<dht::partition_range_vector 
 // WHERE clause fragments such as WHERE ck > 1 or WHERE (ck1, ck2) > (1, 2).
 using get_clustering_bounds_fn_t = std::function<std::vector<query::clustering_range> (const query_options& options)>;
 
+// A function that returns a singleton value, usable for a key (e.g. bytes_opt)
+using get_singleton_value_fn_t = std::function<bytes_opt (const query_options&)>;
+
 struct no_partition_range_restrictions {
 };
 
@@ -196,6 +199,7 @@ private:
     get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
     get_clustering_bounds_fn_t _get_global_index_token_clustering_ranges_fn;
     get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
+    get_singleton_value_fn_t _value_for_index_partition_key_fn;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -396,6 +400,7 @@ private:
     get_clustering_bounds_fn_t build_get_global_index_clustering_ranges_fn() const;
     get_clustering_bounds_fn_t build_get_global_index_token_clustering_ranges_fn() const;
     get_clustering_bounds_fn_t build_get_local_index_clustering_ranges_fn() const;
+    get_singleton_value_fn_t build_value_for_index_partition_key_fn() const;
 public:
     /**
      * Returns the specified range of the partition key.
