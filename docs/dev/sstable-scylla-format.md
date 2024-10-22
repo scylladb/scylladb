@@ -59,6 +59,15 @@ Scylla executable that created the sstable.
 `ext_timestamp_stats` (tag 9): a `map<ext_timestamp_stats_type, int64_t>` with statistics
 about timestamps in the sstable, like: `min_live_timestamp`, and `min_live_row_marker_timestamp`.
 
+`sstable_identifier` (tag 10): a uuid identifying the sstable for its whole lifetime.
+It is derived from the sstable uuid generation, upon creation (or uniquely generated
+if the sstable has numerical generation).  Yet, unlike the sstable that may
+change if the sstable is migrated to a different shard or node, the sstable
+identifier is stable and copied with the rest of the scylla metadata.
+
+The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
+can be used to dump the scylla metadata in JSON format.
+
 ## sharding_metadata subcomponent
 
     sharding_metadata = token_range_count token_range*
