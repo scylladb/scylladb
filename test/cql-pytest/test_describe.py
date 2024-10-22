@@ -1351,6 +1351,25 @@ class AuthSLContext:
         for sl in service_levels:
             self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
 
+class ServiceLevel:
+    def __init__(self, name: str, timeout: int|None = None, wl_type: str|None = None):
+        self.name = name
+        self.timeout = timeout
+        self.wl_type = wl_type
+
+    def get_create_stmt(self) -> str:
+        # Note: `CREATE SERVICE LEVEL` statements returned by `DESC SCHEMA WITH INTERNALS` always uses
+        #       `std::chrono::milliseconds` as its resolution. For that reason, we use milliseconds in
+        #       create statements too so that they're easy to compare with Scylla's output.
+        timeout = None if not self.timeout else f"TIMEOUT = {self.timeout}ms"
+        wl_type = None if not self.wl_type else f"WORKLOAD_TYPE = '{self.wl_type}'"
+        
+        opts = [opt for opt in [timeout, wl_type] if opt is not None]
+        if opts:
+            return f"CREATE SERVICE LEVEL {self.name} WITH {" AND ".join(opts)};"
+
+        return f"CREATE SERVICE LEVEL {self.name};"
+
 ###
 
 def test_create_role_with_salted_hash(cql):
@@ -2189,9 +2208,8 @@ def test_desc_service_levels_format(cql):
     """
 
     with AuthSLContext(cql):
-        sl_name = "my_service_level"
-        stmt = f"CREATE SERVICE LEVEL {sl_name};"
-        cql.execute(stmt)
+        sl = ServiceLevel("my_service_level")
+        cql.execute(sl.get_create_stmt())
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
         desc_iter = filter_service_levels(desc_iter)
@@ -2200,8 +2218,8 @@ def test_desc_service_levels_format(cql):
 
         assert result.keyspace_name == None
         assert result.type == "service_level"
-        assert result.name == sl_name
-        assert result.create_statement == stmt
+        assert result.name == sl.name
+        assert result.create_statement == sl.get_create_stmt()
 
 def test_desc_service_levels_quotation_marks(cql):
     """
@@ -2212,12 +2230,12 @@ def test_desc_service_levels_quotation_marks(cql):
         sl1_raw = "service \" 'level maybe'"
         sl2_raw = "service ' \"level perhaps\""
 
-        sl1_single_quote = make_identifier(sl1_raw, quotation_mark="'")
-        sl1_double_quote = make_identifier(sl1_raw, quotation_mark='"')
-        sl2_double_quote = make_identifier(sl2_raw, quotation_mark='"')
+        sl1_single_quote = ServiceLevel(make_identifier(sl1_raw, quotation_mark="'"))
+        sl1_double_quote = ServiceLevel(make_identifier(sl1_raw, quotation_mark='"'))
+        sl2_double_quote = ServiceLevel(make_identifier(sl2_raw, quotation_mark='"'))
 
-        cql.execute(f"CREATE SERVICE LEVEL {sl1_single_quote}")
-        cql.execute(f"CREATE SERVICE LEVEL {sl2_double_quote}")
+        cql.execute(sl1_single_quote.get_create_stmt())
+        cql.execute(sl2_double_quote.get_create_stmt())
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
         desc_iter = filter_service_levels(desc_iter)
@@ -2225,13 +2243,13 @@ def test_desc_service_levels_quotation_marks(cql):
         desc_elements = list(desc_iter)
         element_names_iter = extract_names(desc_elements)
 
-        assert set(element_names_iter) == {sl1_double_quote, sl2_double_quote}
+        assert set(element_names_iter) == {sl1_double_quote.name, sl2_double_quote.name}
 
         desc_iter = extract_create_statements(desc_elements)
 
         expected_result = {
-            f"CREATE SERVICE LEVEL {sl1_double_quote};",
-            f"CREATE SERVICE LEVEL {sl2_double_quote};"
+            sl1_double_quote.get_create_stmt(),
+            sl2_double_quote.get_create_stmt()
         }
 
         assert set(desc_iter) == expected_result
@@ -2243,8 +2261,8 @@ def test_desc_service_levels_uppercase(cql):
     """
 
     with AuthSLContext(cql):
-        sl = '"myServiceLevel"'
-        cql.execute(f"CREATE SERVICE LEVEL {sl}")
+        sl = ServiceLevel('"myServiceLevel"')
+        cql.execute(sl.get_create_stmt())
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
         desc_iter = filter_service_levels(desc_iter)
@@ -2252,10 +2270,10 @@ def test_desc_service_levels_uppercase(cql):
         desc_elements = list(desc_iter)
 
         sl_iter = map(lambda row: row.name, desc_elements)
-        assert list(sl_iter) == [sl]
+        assert list(sl_iter) == [sl.name]
 
         desc_iter = extract_create_statements(desc_elements)
-        assert list(desc_iter) == [f"CREATE SERVICE LEVEL {sl};"]
+        assert list(desc_iter) == [sl.get_create_stmt()]
 
 def test_desc_service_levels_unicode(cql):
     """
@@ -2264,8 +2282,8 @@ def test_desc_service_levels_unicode(cql):
     """
 
     with AuthSLContext(cql):
-        sl = '"レベル"'
-        cql.execute(f"CREATE SERVICE LEVEL {sl}")
+        sl = ServiceLevel('"レベル"')
+        cql.execute(sl.get_create_stmt())
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
         desc_iter = filter_service_levels(desc_iter)
@@ -2273,10 +2291,10 @@ def test_desc_service_levels_unicode(cql):
         desc_elements = list(desc_iter)
 
         sl_iter = map(lambda row: row.name, desc_elements)
-        assert list(sl_iter) == [sl]
+        assert list(sl_iter) == [sl.name]
 
         desc_iter = extract_create_statements(desc_elements)
-        assert list(desc_iter) == [f"CREATE SERVICE LEVEL {sl};"]
+        assert list(desc_iter) == [sl.get_create_stmt()]
 
 def test_desc_auth_service_levels(cql):
     """
@@ -2285,27 +2303,27 @@ def test_desc_auth_service_levels(cql):
     """
 
     with AuthSLContext(cql):
-        create_sl = ["CREATE SERVICE LEVEL {};"]
-        # Note: `CREATE SERVICE LEVEL` statements returned by `DESC SCHEMA WITH INTERNALS` always uses
-        #       `std::chrono::milliseconds` as its resolution. For that reason, we use milliseconds in
-        #       these statements too to reuse them later in the assert.
-        create_sl_time = [f"CREATE SERVICE LEVEL {{}} WITH TIMEOUT = {timeout};" for timeout in ["10ms", "350ms", "20000ms"]]
-        create_sl_wl_type = [f"CREATE SERVICE LEVEL {{}} WITH WORKLOAD_TYPE = '{work_type}';"
-                            for work_type in ["interactive", "batch"]]
-        create_sl_time_and_wl_type = [f"CREATE SERVICE LEVEL {{}} WITH TIMEOUT = {timeout} AND WORKLOAD_TYPE = '{work_type}';"
-                                    for work_type in ["interactive", "batch"] for timeout in ["10ms", "350ms", "20000ms"]]
+        service_levels = {
+            # No additional parameters.
+            ServiceLevel("sl1"),
+            # Timeout parameter.
+            ServiceLevel("sl2", timeout=10), ServiceLevel("sl3", timeout=350), ServiceLevel("sl4", 20000),
+            # Workload type parameter.
+            ServiceLevel("sl5", wl_type="interactive"), ServiceLevel("sl6", wl_type="batch"),
+            # Timeout and workload parameter.
+            ServiceLevel("sl7", timeout=25000, wl_type="interactive")
+        }
 
-        create_sl_stmts = [*create_sl, *create_sl_time, *create_sl_wl_type, *create_sl_time_and_wl_type]
-        create_sl_stmts = [stmt.format(f'"my f@v0rit3 s3rv!c3 l3v3l!! !nd3x {idx}"') for idx, stmt in enumerate(create_sl_stmts)]
+        sl_create_stmts = set(map(lambda sl: sl.get_create_stmt(), service_levels))
 
-        for stmt in create_sl_stmts:
+        for stmt in sl_create_stmts:
             cql.execute(stmt)
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
         desc_iter = filter_service_levels(desc_iter)
         desc_iter = extract_create_statements(desc_iter)
 
-        assert set(create_sl_stmts) == set(desc_iter)
+        assert sl_create_stmts == set(desc_iter)
 
 def test_desc_attach_service_level_format(cql):
     """
