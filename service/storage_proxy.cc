@@ -1549,7 +1549,7 @@ public:
         // is completed successfully (see hint_to_dead_endpoints), or we don't achieve
         // CL because we didn't store sufficient hints and we don't have live targets,
         // so the handler is completed with error.
-        if (!_cl_achieved) {
+        if (!_cl_achieved && !utils::get_local_injector().enter("abstract_write_response_handler_no_targets_dont_set_failure")) {
             _error = error::FAILURE;
         }
         _proxy->remove_response_handler(_id);
