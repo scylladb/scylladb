@@ -232,5 +232,37 @@ def test_group_by_non_aggregated_mutation_attribute_of_column(cql, table1):
     assert [row[1] for row in results] == [100000001, 100000003, 100000005, 100000007]
     assert all([[row[2] > 900000] for row in results])
 
+# This test is from cassandra_tests/validation/operations/select_group_by_test.py::testGroupByWithPaging()
+# Reproduces #21267
+@pytest.mark.xfail(reason="issue #21267")
+def test_group_by_static_column(cql, test_keyspace):
+
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, s int static, d int, primary key (a, b, c)") as table:
+        cql.execute(f'UPDATE {table} SET s = 3 WHERE a = 1;')
+        cql.execute(f'UPDATE {table} SET s = 2 WHERE a = 2;')
+        cql.execute(f'UPDATE {table} SET s = 3 WHERE a = 3;')
+        cql.execute(f'UPDATE {table} SET s = 3 WHERE a = 4;')
+
+        stmt = cql.prepare(f'INSERT INTO {table} (a, b, c, d) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 2, 1, 3])
+        cql.execute(stmt, [1, 2, 2, 6])
+        cql.execute(stmt, [1, 4, 2, 12])
+        cql.execute(stmt, [1, 4, 3, 6])
+        cql.execute(stmt, [2, 2, 3, 3])
+        cql.execute(stmt, [2, 4, 3, 6])
+        cql.execute(stmt, [4, 8, 2, 12])
+
+        result = cql.execute(f'SELECT a, b, s, count(b), count(s) FROM {table} WHERE a = 3 GROUP BY a')
+        # This is the expected and correct result of the query:
+        assert {(3, None, 3, 0, 1)} == set(result)
+
+        # When we remove the WHERE clause, we get all the rows, and b and count(b)
+        # the wrong values (it seems they have leftover values from the previous row)
+        result = cql.execute(f'SELECT a, b, s, count(b), count(s) FROM {table} GROUP BY a')
+        # FIXME: this test reproduces bug #21267
+        # the assert below is the correct result set
+        assert {(1, 2, 3, 4, 4), (2, 2, 2, 2, 2), (4, 8, 3, 1, 1), (3, None, 3, 0, 1)} == set(result)
+
+
 # NOTE: we have tests for the combination of GROUP BY and SELECT DISTINCT
 # in test_distinct.py (reproducing issue #12479).
