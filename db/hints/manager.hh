@@ -34,8 +34,6 @@
 #include <span>
 #include <unordered_map>
 
-class fragmented_temporary_buffer;
-
 namespace utils {
 class directories;
 } // namespace utils
