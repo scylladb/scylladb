@@ -880,15 +880,9 @@ static partition_range_restrictions extract_partition_range(
 
         void operator()(const subscript& sub) {
             const column_value& cval = get_subscripted_column(sub.val);
-
-            with_current_binary_operator(*this, [&] (const binary_operator& b) {
-                if (cval.col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto [it, inserted] = single_column.try_emplace(cval.col, b);
-                    if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), b);
-                    }
-                }
-            });
+            if (cval.col->is_partition_key()) {
+                on_internal_error(rlogger, "extract_partition_range(subscript)");
+            }
         }
 
         void operator()(const constant&) {}
