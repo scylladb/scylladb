@@ -303,6 +303,14 @@ dht::token tablet_map::get_first_token(tablet_id id) const {
     }
 }
 
+dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) const {
+    if (id == first_tablet()) {
+        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id, log2_tablets), true});
+    } else {
+        return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1), log2_tablets), false}, {get_last_token(id, log2_tablets), true});
+    }
+}
+
 dht::token_range tablet_map::get_token_range(tablet_id id) const {
     if (id == first_tablet()) {
         return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id), true});

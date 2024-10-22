@@ -330,6 +330,10 @@ private:
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
+
+    /// Returns token_range which contains all tokens owned by the specified tablet
+    /// when the tablet_count is `1 << log2_tablets`.
+    dht::token_range get_token_range(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
     ///
