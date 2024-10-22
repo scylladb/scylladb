@@ -75,6 +75,10 @@ using check_indexes = bool_class<class check_indexes_tag>;
 // WHERE clause fragments such as WHERE token(pk) > 1 or WHERE pk1 IN :list1 AND pk2 IN :list2.
 using get_partition_key_ranges_fn_t = std::function<dht::partition_range_vector (const query_options&)>;
 
+// A function that returns the clustering key ranges for a query. It is the solver of
+// WHERE clause fragments such as WHERE ck > 1 or WHERE (ck1, ck2) > (1, 2).
+using get_clustering_bounds_fn_t = std::function<std::vector<query::clustering_range> (const query_options& options)>;
+
 struct no_partition_range_restrictions {
 };
 
@@ -188,6 +192,10 @@ private:
     std::optional<secondary_index::index> _idx_opt;
     expr::expression _idx_restrictions = expr::conjunction({});
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
+    get_clustering_bounds_fn_t _get_clustering_bounds_fn;
+    get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;
+    get_clustering_bounds_fn_t _get_global_index_token_clustering_ranges_fn;
+    get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -384,6 +392,10 @@ private:
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
     void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db);
     get_partition_key_ranges_fn_t build_partition_key_ranges_fn() const;
+    get_clustering_bounds_fn_t build_get_clustering_bounds_fn() const;
+    get_clustering_bounds_fn_t build_get_global_index_clustering_ranges_fn() const;
+    get_clustering_bounds_fn_t build_get_global_index_token_clustering_ranges_fn() const;
+    get_clustering_bounds_fn_t build_get_local_index_clustering_ranges_fn() const;
 public:
     /**
      * Returns the specified range of the partition key.
