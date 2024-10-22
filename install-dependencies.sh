@@ -141,6 +141,7 @@ declare -A pip_packages=(
     [scylla-api-client]=
     [treelib]=
     [allure-pytest]=
+    [pytest-xdist]=
 )
 
 pip_symlinks=(
