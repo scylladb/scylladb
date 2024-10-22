@@ -79,31 +79,8 @@ and to the TRUNCATE data definition query.
 
 In addition, the timeout parameter can be applied to SELECT queries as well.
 
-```{eval-rst}
-.. _keyspace-storage-options:
- ```
- 
-## Keyspace storage options
 
-<!---
-This section must be moved to Data Definition> CREATE KEYSPACE
-when support for object storage is GA.
- --->
-
-By default, SStables of a keyspace are stored in a local directory.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
-
-Support for object storage is experimental and must be explicitly
-enabled in the ``scylla.yaml`` configuration file by specifying 
-the ``keyspace-storage-options`` option:
-
-```
- experimental_features:
-     - keyspace-storage-options
-```
-
-After enabling object storage support, configure your endpoints by 
+After [enabling object storage support](../operating-scylla/admin.rst#admin-keyspace-storage-options), configure your endpoints by
 following these [instructions](../operating-scylla/admin.rst#object-storage-configuration).
 
 

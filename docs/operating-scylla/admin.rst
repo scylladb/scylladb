@@ -260,6 +260,33 @@ Use ``scylla --help`` to get the list of experimental features.
 
 ScyllaDB Enterprise and ScyllaDB Cloud do not officially support experimental Features.
 
+.. _admin-keyspace-storage-options:
+
+Keyspace storage options
+------------------------
+
+..
+   This section must be moved to Data Definition> CREATE KEYSPACE
+   when support for object storage is GA.
+
+By default, SStables of a keyspace are stored in a local directory.
+As an alternative, you can configure your keyspace to be stored
+on Amazon S3 or another S3-compatible object store.
+
+Support for object storage is experimental and must be explicitly
+enabled in the ``scylla.yaml`` configuration file by specifying
+the ``keyspace-storage-options`` option:
+
+.. code-block:: yaml
+
+   experimental_features:
+     - keyspace-storage-options
+
+
+Before creating keyspaces with object storage, you also need to
+:ref:`configure <object-storage-configuration>` the object storage
+credentials and endpoint.
+
 Monitoring
 ==========
 ScyllaDB exposes interfaces for online monitoring, as described below.
