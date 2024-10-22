@@ -254,10 +254,6 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (!table) {
         throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
     }
-    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
-        // we want to hide cdc log table from the user
-        throw exceptions::invalid_request_exception(format("{}.{} is a cdc log table and it cannot be described directly. Try `DESC TABLE {}.{}` to describe cdc base table and it's log table.", ks, name, ks, cdc::base_name(name)));
-    }
 
     auto schema = table->schema();
     auto idxs = table->get_index_manager().list_indexes();
@@ -266,7 +262,18 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
 
     // table
     replica::schema_describe_helper describe_helper{db};
-    result.push_back(schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS));
+    auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
+        // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
+        // This way, the user learns about the internals of the table, but they're also told not to execute it.
+        table_desc.create_statement = seastar::format(
+                "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                "   A CDC log table is created automatically when the base is created.\n"
+                "\n{}\n"
+                "*/",
+                *table_desc.create_statement);
+    }
+    result.push_back(std::move(table_desc));
 
     // indexes
     std::ranges::sort(idxs, std::ranges::less(), [] (const auto& a) {
