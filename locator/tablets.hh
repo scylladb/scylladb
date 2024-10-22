@@ -327,6 +327,9 @@ private:
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
     resize_decision _resize_decision;
+
+    /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
+    dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
     ///
