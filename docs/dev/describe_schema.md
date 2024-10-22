@@ -91,6 +91,42 @@ would require changing the configuration to be even able to insert the data. Tha
 
 For that reason, the user should be aware of this fact and make sure they are prepared for possible "data loss".
 
+## Describing CDC tables
+Creating a table with `cdc = {'enabled': true}` leads to the creation of a corresponding CDC log table.
+Because of that, when describing the schema, we cannot include create statements for CDC log tables—they'll
+have already been recreated by restoring the base tables.
+
+However, there are two problems with not providing any information regarding log tables:
+
+* If the log table has been modified, we need to alter it after it's restored by recreating the base table.
+  The reason for that is the options of the log table are independent of the options the base table uses,
+  e.g. the base table may use `bloom_filter_fp_chance = 0.1`, while the log table `bloom_filter_fp_chance = 0.3`.
+  If we didn't provide an `ALTER` statement for the log table, the restored one would use the default options
+  and the schema would be different from the original one,
+
+* When the user executes `DESCRIBE SCHEMA`, they may want to learn about *all* of the elements of the schema.
+  Skipping the log tables might suggest that they don't exist.
+
+That's why we impose the following semantics on describing CDC tables:
+
+* `DESCRIBE SCHEMA/KEYSPACE/TABLE` print a `CREATE` statement for the CDC base table,
+
+* `DESCRIBE SCHEMA/KEYSPACE` print an `ALTER` statement for the CDC log table. That statement will
+  ensure that the restored log table uses the same parameters as the original one,
+
+* `DESCRIBE TABLE <base table>` prints a `CREATE` statement for the base table and an `ALTER`
+  statement for the log table,
+
+* `DESCRIBE TABLE <log table>` prints a `CREATE` statement for the log table *only*.
+  The statement is wrapped within CQL comment markers: `/* */`.
+
+The reason why `DESC TABLE <log table>` prints a `CREATE` and not an `ALTER` statement is that it enforces providing
+a list of its columns with their types, i.e. we provide complete information about the table.
+
+The rationale for printing the statement as a comment is that we want to implicitly suggest
+that the user should *not* execute the statement.
+
+
 ## Restoring process and its side effects
 
 When a resource is created, the current role is always granted full permissions to that resource. As a consequence, the role used to restore the backup will gain permissions to all of the resources that will be recreated.
