@@ -213,7 +213,7 @@ An example that excludes a datacenter while using ``replication_factor``::
   By default, SStables of a keyspace are stored locally.
   As an alternative, you can configure your keyspace to be stored
   on Amazon S3 or another S3-compatible object store.
-  See :ref:`Keyspace storage options <keyspace-storage-options>` for details.
+  See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
 
 .. _tablets:
 
