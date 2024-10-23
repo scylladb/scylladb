@@ -997,7 +997,8 @@ void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto gossip_running = client.get("/storage_service/gossiping").GetBool();
     fmt::print("{:<23}: {}\n", "ID", rjson::to_string_view(client.get("/storage_service/hostid/local")));
     fmt::print("{:<23}: {}\n", "Gossip active", gossip_running);
-    fmt::print("{:<23}: {}\n", "Thrift active", client.get("/storage_service/rpc_server").GetBool());
+    // thrift protocol is not supported anymore
+    fmt::print("{:<23}: {}\n", "Thrift active", false);
     fmt::print("{:<23}: {}\n", "Native Transport active", client.get("/storage_service/native_transport").GetBool());
     fmt::print("{:<23}: {}\n", "Load", file_size_printer(client.get("/storage_service/load").GetDouble()));
     if (gossip_running) {
