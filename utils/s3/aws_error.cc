@@ -24,11 +24,9 @@ aws_error::aws_error(aws_error_type error_type, std::string&& error_message, ret
     : _type(error_type), _message(std::move(error_message)), _is_retryable(is_retryable) {
 }
 
-aws_error aws_error::parse(seastar::sstring&& body) {
-    aws_error ret_val;
-
+std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
     if (body.empty()) {
-        return ret_val;
+        return {};
     }
 
     auto doc = std::make_unique<rapidxml::xml_document<>>();
@@ -36,7 +34,7 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error&) {
         // Most likely not an XML which is possible, just return
-        return ret_val;
+        return {};
     }
 
     const auto* error_node = doc->first_node("Error");
@@ -48,11 +46,12 @@ aws_error aws_error::parse(seastar::sstring&& body) {
     }
 
     if (!error_node) {
-        return ret_val;
+        return {};
     }
 
     const auto* code_node = error_node->first_node("Code");
     const auto* message_node = error_node->first_node("Message");
+    aws_error ret_val;
 
     if (code_node && message_node) {
         std::string code = code_node->value();
@@ -73,6 +72,42 @@ aws_error aws_error::parse(seastar::sstring&& body) {
         ret_val._type = aws_error_type::UNKNOWN;
     }
     return ret_val;
+}
+
+aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code) {
+    const auto& all_errors = get_errors();
+    switch (http_code) {
+    case seastar::http::reply::status_type::unauthorized:
+        return all_errors.at("HTTP_UNAUTHORIZED");
+    case seastar::http::reply::status_type::forbidden:
+        return all_errors.at("HTTP_FORBIDDEN");
+    case seastar::http::reply::status_type::not_found:
+        return all_errors.at("HTTP_NOT_FOUND");
+    case seastar::http::reply::status_type::too_many_requests:
+        return all_errors.at("HTTP_TOO_MANY_REQUESTS");
+    case seastar::http::reply::status_type::internal_server_error:
+        return all_errors.at("HTTP_INTERNAL_SERVER_ERROR");
+    case seastar::http::reply::status_type::bandwidth_limit_exceeded:
+        return all_errors.at("HTTP_BANDWIDTH_LIMIT_EXCEEDED");
+    case seastar::http::reply::status_type::service_unavailable:
+        return all_errors.at("HTTP_SERVICE_UNAVAILABLE");
+    case seastar::http::reply::status_type::request_timeout:
+        return all_errors.at("HTTP_REQUEST_TIMEOUT");
+    case seastar::http::reply::status_type::page_expired:
+        return all_errors.at("HTTP_PAGE_EXPIRED");
+    case seastar::http::reply::status_type::login_timeout:
+        return all_errors.at("HTTP_LOGIN_TIMEOUT");
+    case seastar::http::reply::status_type::gateway_timeout:
+        return all_errors.at("HTTP_GATEWAY_TIMEOUT");
+    case seastar::http::reply::status_type::network_connect_timeout:
+        return all_errors.at("HTTP_NETWORK_CONNECT_TIMEOUT");
+    case seastar::http::reply::status_type::network_read_timeout:
+        return all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
+    default:
+        return {aws_error_type::UNKNOWN,
+                "Unknown server error has been encountered",
+                retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
+    }
 }
 
 const aws_errors& aws_error::get_errors() {
@@ -132,7 +167,29 @@ const aws_errors& aws_error::get_errors() {
         {"RequestTimeTooSkewedException", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
-        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)}};
+        {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
+        {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
+        {"HTTP_NOT_FOUND", aws_error(aws_error_type::HTTP_NOT_FOUND, retryable::no)},
+        {"HTTP_TOO_MANY_REQUESTS", aws_error(aws_error_type::HTTP_TOO_MANY_REQUESTS, retryable::yes)},
+        {"HTTP_INTERNAL_SERVER_ERROR", aws_error(aws_error_type::HTTP_INTERNAL_SERVER_ERROR, retryable::yes)},
+        {"HTTP_BANDWIDTH_LIMIT_EXCEEDED", aws_error(aws_error_type::HTTP_BANDWIDTH_LIMIT_EXCEEDED, retryable::yes)},
+        {"HTTP_SERVICE_UNAVAILABLE", aws_error(aws_error_type::HTTP_SERVICE_UNAVAILABLE, retryable::yes)},
+        {"HTTP_REQUEST_TIMEOUT", aws_error(aws_error_type::HTTP_REQUEST_TIMEOUT, retryable::yes)},
+        {"HTTP_PAGE_EXPIRED", aws_error(aws_error_type::HTTP_PAGE_EXPIRED, retryable::yes)},
+        {"HTTP_LOGIN_TIMEOUT", aws_error(aws_error_type::HTTP_LOGIN_TIMEOUT, retryable::yes)},
+        {"HTTP_GATEWAY_TIMEOUT", aws_error(aws_error_type::HTTP_GATEWAY_TIMEOUT, retryable::yes)},
+        {"HTTP_NETWORK_CONNECT_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_CONNECT_TIMEOUT, retryable::yes)},
+        {"HTTP_NETWORK_READ_TIMEOUT", aws_error(aws_error_type::HTTP_NETWORK_READ_TIMEOUT, retryable::yes)},
+        {"NoSuchUpload", aws_error(aws_error_type::NO_SUCH_UPLOAD, retryable::no)},
+        {"BucketAlreadyOwnedByYou", aws_error(aws_error_type::BUCKET_ALREADY_OWNED_BY_YOU, retryable::no)},
+        {"ObjectAlreadyInActiveTierError", aws_error(aws_error_type::OBJECT_ALREADY_IN_ACTIVE_TIER, retryable::no)},
+        {"NoSuchBucket", aws_error(aws_error_type::NO_SUCH_BUCKET, retryable::no)},
+        {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
+        {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
+        {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
+        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)}};
     return aws_error_map;
 }
+
 } // namespace aws

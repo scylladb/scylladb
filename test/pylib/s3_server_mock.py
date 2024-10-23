@@ -25,6 +25,7 @@ class Policy(Enum):
     SUCCESS = 0
     RETRYABLE_FAILURE = 1
     NONRETRYABLE_FAILURE = 2
+    NEVERENDING_RETRYABLE_FAILURE = 3
 
 
 class LRUCache:
@@ -113,7 +114,6 @@ class InjectingHandler(BaseHTTPRequestHandler):
             put_data = self.rfile.read(int(content_length))
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
-        self.send_header('Content-Length', '0')
         self.send_header('Connection', 'keep-alive')
         query_components = self.parsed_qs()
         if 'Key' in query_components and 'Policy' in query_components:
@@ -122,11 +122,28 @@ class InjectingHandler(BaseHTTPRequestHandler):
             self.send_header('ETag', "SomeTag_" + query_components.get("partNumber")[0])
         else:
             self.send_header('ETag', "SomeTag")
+
+        if self.headers['x-amz-copy-source']:
+            response_body = """<CopyPartResult>
+                                    <LastModified>2011-04-11T20:34:56.000Z</LastModified>
+                                    <ETag>"9b2cf535f27731c974343645a3985328"</ETag>
+                               </CopyPartResult>""".encode('utf-8')
+            self.send_header('Content-Length', str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+            return
+
+        self.send_header('Content-Length', '0')
         self.end_headers()
 
     # Processes DELETE method, does nothing except providing in the response expected headers and response code
     def do_DELETE(self):
-        self.send_response(204)
+        query_components = self.parsed_qs()
+        if 'uploadId' in query_components and self.policies.get(
+                urlparse(self.path).path) == Policy.NONRETRYABLE_FAILURE:
+            self.send_response(404)
+        else:
+            self.send_response(204)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Content-Length', '0')
         self.send_header('Connection', 'keep-alive')
@@ -153,9 +170,10 @@ class InjectingHandler(BaseHTTPRequestHandler):
                                     <Key>Example-Object</Key>
                                     <ETag>"3858f62230ac3c915f300c664312c11f-9"</ETag>
                                 </CompleteMultipartUploadResult>"""
-                case Policy.RETRYABLE_FAILURE:
-                    # should succeed on retry
-                    self.policies.put(path, Policy.SUCCESS)
+                case Policy.RETRYABLE_FAILURE | Policy.NEVERENDING_RETRYABLE_FAILURE:
+                    if self.policies.get(path) == Policy.RETRYABLE_FAILURE:
+                        # should succeed on retry
+                        self.policies.put(path, Policy.SUCCESS)
                     return """<?xml version="1.0" encoding="UTF-8"?>
 
                                 <Error>
