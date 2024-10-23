@@ -95,6 +95,10 @@ else()
     set(Seastar_SCHEDULING_GROUPS_COUNT 16 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
     add_subdirectory(seastar)
+    target_compile_definitions (seastar
+      PRIVATE
+        NO_EXCEPTION_INTERCEPT
+        SEASTAR_NO_EXCEPTION_HACK)
 endif()
 
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
