@@ -61,7 +61,7 @@ Nodetool
    nodetool-commands/viewbuildstatus
    nodetool-commands/version
 
-The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes. ScyllaDB’s nodetool is a fork of `the Apache Cassandra nodetool <https://cassandra.apache.org/doc/latest/tools/nodetool/nodetool.html>`_ with the same syntax and a subset of the operations.
+The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes.
 
 .. _nodetool-generic-options:
 
@@ -133,4 +133,4 @@ Operations that are not listed below are currently not available.
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
 * :doc:`version </operating-scylla/nodetool-commands/version>` - Print the DB version.
 
-.. include:: /rst_include/apache-copyrights.rst
+
