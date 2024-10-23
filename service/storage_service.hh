@@ -940,6 +940,9 @@ public:
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
 
+public:
+    future<locator::effective_replication_map_ptr> get_erm_when_table_has_no_migrations(sstring ks_name, sstring table_name);
+    
 private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
