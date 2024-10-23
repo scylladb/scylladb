@@ -9,7 +9,7 @@
 #pragma once
 
 #include "i_partitioner.hh"
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace dht {
 

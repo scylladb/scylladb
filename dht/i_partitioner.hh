@@ -19,7 +19,6 @@
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
 #include "dht/decorated_key.hh"
-#include "dht/ring_position.hh"
 #include "utils/maybe_yield.hh"
 
 namespace dht {

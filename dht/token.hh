@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "types/types.hh"
 
 #include <limits>
