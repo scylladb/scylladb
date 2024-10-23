@@ -23,6 +23,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "replica/database.hh"
 #include "utils/to_string.hh"
+#include "replica/tablets.hh"
 
 
 namespace service {
@@ -297,9 +298,14 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
     }
 }
 
+void raft_group0_client::validate_change(const topology_change& change) {
+    replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
+}
+
 template<typename Command>
 requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
 group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
+    validate_change(change);
     group0_command group0_cmd {
         .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
@@ -320,6 +326,7 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
 template<typename Command>
 requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
 group0_command raft_group0_client::prepare_command(Command change, std::string_view description) {
+    validate_change(change);
     const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
 
     group0_command group0_cmd {
@@ -337,8 +344,8 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
     return group0_cmd;
 }
 
-raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, maintenance_mode_enabled maintenance_mode)
-        : _raft_gr(raft_gr), _sys_ks(sys_ks), _maintenance_mode(maintenance_mode) {
+raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
+        : _raft_gr(raft_gr), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
 }
 
 size_t raft_group0_client::max_command_size() const {
