@@ -505,6 +505,7 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
     if (backlog_tracker) {
         table::add_sstable_to_backlog_tracker(get_backlog_tracker(), sstable);
     }
+    _max_seen_timestamp = std::max(_max_seen_timestamp, sstable->get_stats_metadata().max_timestamp);
     return new_sstables;
 }
 
@@ -2373,6 +2374,32 @@ table::make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set
     };
 }
 
+std::function<api::timestamp_type(const dht::decorated_key&)>
+table::get_max_purgeable_fn_for_cache_underlying_reader() const {
+    return [this](const dht::decorated_key& dk) {
+        auto sg = storage_group_for_token(dk.token());
+        auto max_purgeable_timestamp = api::max_timestamp;
+
+        sg->for_each_compaction_group([&dk, &max_purgeable_timestamp] (const compaction_group_ptr& cg) {
+            const auto& mt = cg->memtables()->active_memtable();
+            api::timestamp_type memtable_min_timestamp = mt.get_min_timestamp();
+            if (memtable_min_timestamp > cg->max_seen_timestamp()) {
+                // All the entries in the memtable are newer than the entries in the
+                // SSTable within this compaction group. So, no need to check further.
+                return;
+            }
+
+            // If a memtable with a minimum timestamp lower than the current maximum
+            // purgeable timestamp has the given key, the tombstone should not be purged.
+            if (memtable_min_timestamp < max_purgeable_timestamp && mt.contains_partition(dk)) {
+                max_purgeable_timestamp = memtable_min_timestamp;
+            }
+        });
+
+        return max_purgeable_timestamp;
+    };
+}
+
 snapshot_source
 table::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
@@ -2388,7 +2415,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
-                [](const dht::decorated_key&) { return api::max_timestamp; },
+                get_max_purgeable_fn_for_cache_underlying_reader(),
                 _compaction_manager.get_tombstone_gc_state(),
                 fwd);
         }, [this, sst_set] {
