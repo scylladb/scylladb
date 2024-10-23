@@ -462,38 +462,6 @@ def test_status_keyspace_multi_dc(request, nodetool, uses_tablets, table):
     _do_test_status(request, nodetool, status_target, nodes)
 
 
-def test_status_keyspace_joining_node(request, nodetool):
-    """ Joining nodes do not have some attributes available yet:
-    * load
-    * host_id
-    """
-    nodes = [
-        Node(
-            endpoint="127.0.0.1",
-            host_id="78a9c1d0-b341-467e-a076-9eff4cf7ffc6",
-            load=206015,
-            tokens=["-9175818098208185248", "-3983536194780899528"],
-            datacenter="datacenter1",
-            rack="rack1",
-            status=NodeStatus.Up,
-            state=NodeState.Normal,
-        ),
-        Node(
-            endpoint="127.0.0.2",
-            host_id=None,
-            load=None,
-            tokens=["-1810801828328238220", "2983536194780899528"],
-            datacenter="datacenter1",
-            rack="rack2",
-            status=NodeStatus.Up,
-            state=NodeState.Joining,
-        ),
-    ]
-
-    status_target = StatusQueryTarget(keyspace="ks", table=None, uses_tablets=False)
-    _do_test_status(request, nodetool, status_target, nodes)
-
-
 @pytest.mark.parametrize("resolve", (None, '-r', '--resolve-ip'))
 def test_status_resolve(request, nodetool, resolve):
     nodes = [
@@ -510,3 +478,40 @@ def test_status_resolve(request, nodetool, resolve):
     ]
 
     _do_test_status(request, nodetool, None, nodes, resolve)
+
+
+def test_status_with_zero_token_nodes(request, nodetool):
+    nodes = [
+        Node(
+            endpoint="127.0.0.1",
+            host_id="78a9c1d0-b341-467e-a076-9eff4cf7ffc6",
+            load=206015,
+            tokens=["-9175818098208185248", "-3983536194780899528"],
+            datacenter="datacenter1",
+            rack="rack1",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+        Node(
+            endpoint="127.0.0.2",
+            host_id="ed341f60-b12a-4fd4-9917-e80977ded0f9",
+            load=277624,
+            tokens=[],
+            datacenter="datacenter1",
+            rack="rack2",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+        Node(
+            endpoint="127.0.0.3",
+            host_id="1e77eb26-a372-4eb4-aeaa-72f224cf6b4c",
+            load=353236,
+            tokens=[],
+            datacenter="datacenter1",
+            rack="rack3",
+            status=NodeStatus.Down,
+            state=NodeState.Leaving,
+        ),
+    ]
+
+    _do_test_status(request, nodetool, None, nodes)
