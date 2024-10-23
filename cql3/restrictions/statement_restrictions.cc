@@ -2670,11 +2670,13 @@ query::clustering_range range_from_raw_bounds(
 
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_clustering_bounds_fn() const {
-  return [&] (const query_options& options) -> std::vector<query::clustering_range> {
     if (_clustering_prefix_restrictions.empty()) {
+      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         return {query::clustering_range::make_open_ended_both_sides()};
+      };
     }
     if (find_binop(_clustering_prefix_restrictions[0], is_multi_column)) {
+      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
             using namespace expr;
@@ -2706,10 +2708,12 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
             }
         }
         return bounds;
+      };
     } else {
+      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
+      };
     }
-  };
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
