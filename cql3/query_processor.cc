@@ -570,7 +570,6 @@ query_processor::execute_direct_without_checking_exception_message(const sstring
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state(), d);
     auto statement = p->statement;
-    const auto warnings = std::move(p->warnings);
     if (statement->get_bound_terms() != options.get_values_count()) {
         const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
                 statement->get_bound_terms(),
@@ -586,7 +585,7 @@ query_processor::execute_direct_without_checking_exception_message(const sstring
 #endif
     auto user = query_state.get_client_state().user();
     tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
-    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(warnings));
+    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
 }
 
 future<::shared_ptr<result_message>>
