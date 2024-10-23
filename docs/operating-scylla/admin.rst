@@ -23,16 +23,18 @@ ScyllaDB Configuration
 ======================
 ScyllaDB configuration files are:
 
-+-------------------------------------------------------+---------------------------------+
-| Installed location                                    | Description                     |
-+=======================================================+=================================+
-| :code:`/etc/default/scylla-server` (Ubuntu/Debian)    | Server startup options          |
-| :code:`/etc/sysconfig/scylla-server` (others)         |                                 |
-+-------------------------------------------------------+---------------------------------+
-| :code:`/etc/scylla/scylla.yaml`                       | Main ScyllaDB configuration file|
-+-------------------------------------------------------+---------------------------------+
-| :code:`/etc/scylla/cassandra-rackdc.properties`       | Rack & dc configuration file    |
-+-------------------------------------------------------+---------------------------------+
++-------------------------------------------------------+-----------------------------------+
+| Installed location                                    | Description                       |
++=======================================================+===================================+
+| :code:`/etc/default/scylla-server` (Ubuntu/Debian)    | Server startup options            |
+| :code:`/etc/sysconfig/scylla-server` (others)         |                                   |
++-------------------------------------------------------+-----------------------------------+
+| :code:`/etc/scylla/scylla.yaml`                       | Main ScyllaDB configuration file  |
++-------------------------------------------------------+-----------------------------------+
+| :code:`/etc/scylla/cassandra-rackdc.properties`       | Rack & dc configuration file      |
++-------------------------------------------------------+-----------------------------------+
+| :code:`/etc/scylla/object_storage.yaml`               | Object storage configuration file |
++-------------------------------------------------------+-----------------------------------+
 
 .. _check-your-current-version-of-scylla:
 
@@ -92,6 +94,57 @@ The :code:`scylla-server` file contains configuration related to starting up the
 .. _admin-scylla.yaml:
 
 .. include:: /operating-scylla/scylla-yaml.inc
+
+.. _object-storage-configuration:
+
+Configuring Object Storage :label-caution:`Experimental`
+========================================================
+
+Scylla has the ability to communicate directly with S3-compatible storage. This
+feature enables various functionalities, but requires proper configuration of
+storage endpoints.
+
+To enable S3-compatible storage features, you need to describe the endpoints
+where SSTable files can be stored. This is done using a YAML configuration file.
+
+The ``object_storage.yaml`` file should follow this format:
+
+.. code-block:: yaml
+
+   endpoints:
+     - name: <endpoint_address_or_domain_name>
+       port: <port_number>
+       https: <true_or_false> # optional
+       aws_region: <region_name> # optional, e.g. us-east-1
+       aws_access_key_id: <access_key> # optional
+       aws_secret_access_key: <secret_access_key> # optional
+       aws_session_token: <session_token> # optional
+
+
+The AWS-related options (``aws_region``, ``aws_access_key_id``,
+``aws_secret_access_key``, ``aws_session_token``) can be configured in two ways:
+
+* Directly in the YAML file (as shown above).
+* Using environment variables:
+
+  - ``AWS_DEFAULT_REGION``
+  - ``AWS_ACCESS_KEY_ID``
+  - ``AWS_SECRET_ACCESS_KEY``
+  - ``AWS_SESSION_TOKEN``
+
+.. note::
+
+   - All AWS-related parameters must be either present or absent as a group.
+   - When set, these values are used by the S3 client to sign requests.
+   - If not set, requests are sent unsigned, which may not be accepted by all servers.
+
+By default, Scylla looks for the configuration file named ``object_storage.yaml``
+in the same directory as ``scylla.yaml``. You can override this location using the
+:confval:`object_storage_config_file` option in ``scylla.yaml``:
+
+.. code-block:: yaml
+
+   object-storage-config-file: object-storage-config-file.yaml
 
 .. _admin-compression:
 
@@ -206,6 +259,33 @@ For example, some of the experimental features in ScyllaDB Open Source 4.5 are: 
 Use ``scylla --help`` to get the list of experimental features.
 
 ScyllaDB Enterprise and ScyllaDB Cloud do not officially support experimental Features.
+
+.. _admin-keyspace-storage-options:
+
+Keyspace storage options
+------------------------
+
+..
+   This section must be moved to Data Definition> CREATE KEYSPACE
+   when support for object storage is GA.
+
+By default, SStables of a keyspace are stored in a local directory.
+As an alternative, you can configure your keyspace to be stored
+on Amazon S3 or another S3-compatible object store.
+
+Support for object storage is experimental and must be explicitly
+enabled in the ``scylla.yaml`` configuration file by specifying
+the ``keyspace-storage-options`` option:
+
+.. code-block:: yaml
+
+   experimental_features:
+     - keyspace-storage-options
+
+
+Before creating keyspaces with object storage, you also need to
+:ref:`configure <object-storage-configuration>` the object storage
+credentials and endpoint.
 
 Monitoring
 ==========

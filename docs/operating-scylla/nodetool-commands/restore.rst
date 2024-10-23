@@ -32,7 +32,8 @@ Options
 -------
 
 * ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
-* ``--endpoint`` - ID of the configured object storage endpoint to load SSTables from
+* ``--endpoint`` - Name of the configured object storage endpoint to load SSTables from.
+  This should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--bucket`` - Name of the bucket to load SSTables from
 * ``--prefix`` - The share prefix for object keys of backed up SSTables
 * ``--keyspace`` - Name of the keyspace to load SSTables into
