@@ -51,6 +51,9 @@
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
+#include "replica/exceptions.hh"
+#include "service/paxos/prepare_response.hh"
+#include "idl/storage_proxy.dist.hh"
 
 #include "service/topology_coordinator.hh"
 

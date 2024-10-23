@@ -203,7 +203,8 @@ enum class messaging_verb : int32_t {
     JOIN_NODE_QUERY = 73,
     TASKS_GET_CHILDREN = 74,
     TABLET_REPAIR = 75,
-    LAST = 76,
+    TRUNCATE_WITH_TABLETS = 76,
+    LAST = 77,
 };
 
 } // namespace netw

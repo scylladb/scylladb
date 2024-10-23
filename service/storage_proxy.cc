@@ -263,6 +263,7 @@ public:
         ser::storage_proxy_rpc_verbs::register_read_mutation_data(&_ms, std::bind_front(&remote::handle_read_mutation_data, this));
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
+        ser::storage_proxy_rpc_verbs::register_truncate_with_tablets(&_ms, std::bind_front(&remote::handle_truncate_with_tablets, this));
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
@@ -925,7 +926,12 @@ private:
     }
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
-        return replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
+        co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
+    }
+
+    future<> handle_truncate_with_tablets(sstring ksname, sstring cfname, service::frozen_topology_guard frozen_guard) {
+        topology_guard guard(frozen_guard);
+        co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
     }
 
     future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
