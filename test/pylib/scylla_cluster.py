@@ -1254,6 +1254,8 @@ class ScyllaClusterManager:
         # The currently running test case with self.test_uname prepended, e.g.
         # test_topology.1::test_add_server_add_column
         self.current_test_case_full_name: str = ''
+        self.cluster: ScyllaCluster | None = None
+        self.site: aiohttp.web.UnixSite | None = None
         self.clusters: Pool[ScyllaCluster] = clusters
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
@@ -1315,17 +1317,18 @@ class ScyllaClusterManager:
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
         self.logger.info("ScyllaManager stopping for test %s", self.test_uname)
-        if hasattr(self, "site"):
+        if self.site:
             await self.site.stop()
-            del self.site
-        if not self.cluster.is_dirty:
-            self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=False)
-        else:
-            self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                            self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=True)
-        del self.cluster
+            self.site = None
+        if self.cluster:
+            if not self.cluster.is_dirty:
+                self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
+                await self.clusters.put(self.cluster, is_dirty=False)
+            else:
+                self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
+                                self.cluster, self.test_uname)
+                await self.clusters.put(self.cluster, is_dirty=True)
+            self.cluster = None
         if os.path.exists(self.manager_dir):
             await async_rmtree(self.manager_dir)
         self.is_running = False
