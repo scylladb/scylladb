@@ -176,20 +176,24 @@ mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     return m;
 }
 
-static
-tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
+tablet_replica_set tablet_replica_set_from_cell(const data_value& v) {
     tablet_replica_set result;
-    auto v = value_cast<list_type_impl::native_type>(
-            replica_set_type->deserialize_value(raw_value));
-    result.reserve(v.size());
-    for (const data_value& replica_v : v) {
+    auto list_v = value_cast<list_type_impl::native_type>(v);
+    result.reserve(list_v.size());
+    for (const data_value& replica_v : list_v) {
         std::vector<data_value> replica_dv = value_cast<tuple_type_impl::native_type>(replica_v);
-        result.emplace_back(tablet_replica {
+        result.emplace_back(
             host_id(value_cast<utils::UUID>(replica_dv[0])),
             shard_id(value_cast<int>(replica_dv[1]))
-        });
+        );
     }
     return result;
+}
+
+static
+tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
+    return tablet_replica_set_from_cell(
+            replica_set_type->deserialize_value(raw_value));
 }
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
@@ -203,6 +207,72 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
                 co_await tablet_map_to_mutation(tablets, id, s->ks_name(), s->cf_name(), ts));
     }
     co_await db.apply(freeze(muts), db::no_timeout);
+}
+
+static table_id to_tablet_metadata_key(const schema& s, const partition_key& key) {
+    const auto elements = key.explode(s);
+    return ::table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+}
+
+static dht::token to_tablet_metadata_row_key(const schema& s, const clustering_key& key) {
+    const auto elements = key.explode(s);
+    return dht::token::from_int64(value_cast<int64_t>(long_type->deserialize_value(elements[0])));
+}
+
+static std::optional<tablet_replica_set> maybe_deserialize_replica_set(const rows_entry& row, const column_definition& cdef) {
+    const auto* cell = row.row().cells().find_cell(cdef.id);
+    if (!cell) {
+        return std::nullopt;
+    }
+    auto dv = cdef.type->deserialize_value(cell->as_atomic_cell(cdef).value());
+    return tablet_replica_set_from_cell(dv);
+}
+
+static void do_validate_tablet_metadata_change(const locator::tablet_metadata& tm, const schema& s, const mutation& m) {
+    const auto table_id = to_tablet_metadata_key(s, m.key());
+    const auto& mp = m.partition();
+
+    if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
+        return;
+    }
+
+    auto& r_cdef = *s.get_column_definition("replicas");
+    auto& nr_cdef = *s.get_column_definition("new_replicas");
+
+    for (const auto& row : mp.clustered_rows()) {
+        if (row.row().deleted_at()) {
+            return;
+        }
+
+        auto new_replicas = maybe_deserialize_replica_set(row, nr_cdef);
+        if (!new_replicas) {
+            continue;
+        }
+
+        auto token = to_tablet_metadata_row_key(s, row.key());
+        auto replicas = maybe_deserialize_replica_set(row, r_cdef);
+        if (!replicas) {
+            replicas = tm.get_tablet_map(table_id).get_tablet_info(token).replicas;
+        }
+
+        std::unordered_set<tablet_replica> pending = substract_sets(*new_replicas, *replicas);
+        if (pending.size() > 1) {
+            throw std::runtime_error(fmt::format("Too many pending replicas for table {} last_token {}: {}",
+                                            table_id, token, pending));
+        }
+    }
+}
+
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations) {
+    auto s = db::system_keyspace::tablets();
+
+    for (const auto& cm : mutations) {
+        if (cm.column_family_id() != s->id()) {
+            continue;
+        }
+
+        do_validate_tablet_metadata_change(tm, *s, cm.to_mutation(s));
+    }
 }
 
 future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {

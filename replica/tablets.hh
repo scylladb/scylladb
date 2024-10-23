@@ -61,6 +61,9 @@ mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 /// The timestamp must be greater than api::min_timestamp.
 future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata&, api::timestamp_type);
 
+/// Reads the replica set from given cell value
+locator::tablet_replica_set tablet_replica_set_from_cell(const data_value&);
+
 /// Reads tablet metadata from system.tablets.
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 
@@ -72,5 +75,8 @@ future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<d
 
 /// Reads tablet transition stage (if any)
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
+
+/// Validates changes to system.tablets represented by mutations
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations);
 
 } // namespace replica
