@@ -307,6 +307,10 @@ class ScyllaRESTAPIClient():
         """Flush keyspace"""
         await self.client.post(f"/storage_service/keyspace_flush/{ks}", host=node_ip)
 
+    async def flush_all_keyspaces(self, node_ip: str) -> None:
+        """Flush all keyspaces"""
+        await self.client.post(f"/storage_service/flush", host=node_ip)
+
     async def backup(self, node_ip: str, ks: str, tag: str, dest: str, bucket: str) -> str:
         """Backup keyspace's snapshot"""
         params = {"keyspace": ks,
