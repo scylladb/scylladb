@@ -791,7 +791,9 @@ static void assert_partition_start(mutation_reader& rd) {
 
 // A dataset with one large partition with many clustered fragments.
 // Partition key: pk int [0]
-// Clusterint key: ck int [0 .. n_rows() - 1]
+// Clustering key: ck int [0 .. n_rows() * 2 - 1]
+// Present keys are odd: 1, 3, ...
+// Missing keys are even: 0, 2, ...
 class clustered_ds {
 public:
     virtual int n_rows(const table_config&) = 0;
@@ -801,7 +803,11 @@ public:
     }
 
     virtual clustering_key make_ck(const schema& s, int ck) {
-        return clustering_key::from_single_value(s, serialized(ck));
+        return clustering_key::from_single_value(s, serialized(ck * 2 + 1));
+    }
+
+    virtual clustering_key make_missing_ck(const schema& s, int ck) {
+        return clustering_key::from_single_value(s, serialized(ck * 2));
     }
 };
 
@@ -916,17 +922,34 @@ static test_result slice_rows_by_ck(replica::column_family& cf, clustered_ds& ds
     return test_reading_all(rd);
 }
 
-static test_result select_spread_rows(replica::column_family& cf, clustered_ds& ds, int stride = 0, int n_read = 1) {
+static test_result select_spread_rows(replica::column_family& cf, clustered_ds& ds, int stride = 0, int n_read = 1, int offset = 0) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
-        sb.with_range(query::clustering_range::make_singular(ds.make_ck(*cf.schema(), i * stride)));
+        sb.with_range(query::clustering_range::make_singular(ds.make_ck(*cf.schema(), i * stride + offset)));
     }
 
     auto slice = sb.build();
+    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader_v2(cf.schema(),
         semaphore.make_permit(),
-        query::full_partition_range,
+        pr,
+        slice);
+    auto close_rd = deferred_close(rd);
+
+    return test_reading_all(rd);
+}
+
+static test_result select_missing_row(replica::column_family& cf, clustered_ds& ds, int key) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto sb = partition_slice_builder(*cf.schema());
+    sb.with_range(query::clustering_range::make_singular(ds.make_missing_ck(*cf.schema(), key)));
+
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*cf.schema(), ds.make_pk(*cf.schema())));
+    auto slice = sb.build();
+    auto rd = cf.make_reader_v2(cf.schema(),
+        semaphore.make_permit(),
+        pr,
         slice);
     auto close_rd = deferred_close(rd);
 
@@ -1605,22 +1628,54 @@ void test_large_partition_slicing_single_partition_reader(app_template &app, rep
 void test_large_partition_select_few_rows(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
-    output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
-    auto test = [&](int stride, int read) {
+    output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
+    auto test = [&](int offset, int stride, int read) {
       run_test_case(app, [&] {
-        auto r = select_spread_rows(cf, ds, stride, read);
-        r.set_params(to_sstrings(stride, read));
+        auto r = select_spread_rows(cf, ds, stride, read, offset);
+        r.set_params(to_sstrings(offset, stride, read));
         check_fragment_count(r, read);
         return r;
       });
     };
 
-    test(n_rows / 1, 1);
-    test(n_rows / 2, 2);
-    test(n_rows / 4, 4);
-    test(n_rows / 8, 8);
-    test(n_rows / 16, 16);
-    test(2, n_rows / 2);
+    test(n_rows / 2, 1, 1);
+    test(n_rows / 2 + 1, 1, 1);
+
+    test(0, n_rows / 1, 1);
+    test(0, n_rows / 2, 2);
+    test(0, n_rows / 4, 4);
+    test(0, n_rows / 8, 8);
+    test(0, n_rows / 16, 16);
+    test(0, 2, n_rows / 2);
+}
+
+void test_large_partition_select_missing_rows(app_template &app, replica::column_family& cf, clustered_ds& ds) {
+    auto n_rows = ds.n_rows(cfg);
+
+    output_mgr->set_test_param_names({{"offset", "{:<7}"}}, test_result::stats_names());
+    auto test = [&](int offset) {
+      run_test_case(app, [&] {
+        auto r = select_missing_row(cf, ds, offset);
+        r.set_params(to_sstrings(offset));
+        check_fragment_count(r, 0);
+        return r;
+      });
+    };
+
+    test(0);
+    test(1);
+
+    test(n_rows / 3);
+
+    test(n_rows / 2 - 1);
+    test(n_rows / 2);
+    test(n_rows / 2 + 1);
+
+    test(n_rows * 2 / 3);
+
+    test(n_rows - 1);
+    test(n_rows);
+    test(n_rows * 2);
 }
 
 void test_large_partition_forwarding(app_template &app, replica::column_family& cf, clustered_ds& ds) {
@@ -1858,6 +1913,13 @@ static std::initializer_list<test_group> test_groups = {
         make_test_fn(test_large_partition_select_few_rows),
     },
     {
+        "large-partition-select-missing-rows",
+        "Testing single-row reads of a missing key from a large partition",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        make_test_fn(test_large_partition_select_missing_rows),
+    },
+    {
         "large-partition-forwarding",
         "Testing forwarding with clustering restriction in a large partition",
         test_group::requires_cache::no,
@@ -1929,6 +1991,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
         ("with-compression", "Generates compressed sstables")
         ("rows", bpo::value<int>()->default_value(1000000), "Number of CQL rows in a partition. Relevant only for population.")
         ("value-size", bpo::value<int>()->default_value(100), "Size of value stored in a cell. Relevant only for population.")
+        ("column-index-size-in-kb", bpo::value<int>(), "Overrides default column_index_size_in_kb config.")
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
@@ -1972,7 +2035,9 @@ int scylla_fast_forward_main(int argc, char** argv) {
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
         db_cfg.unspooled_dirty_soft_limit(1.0); // prevent background memtable flushes.
-
+        if (app.configuration().contains("column-index-size-in-kb")) {
+            db_cfg.column_index_size_in_kb(app.configuration()["column-index-size-in-kb"].as<int>());
+        }
         db_cfg.sstable_format(app.configuration()["sstable-format"].as<std::string>());
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();

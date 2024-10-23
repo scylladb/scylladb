@@ -100,6 +100,9 @@ Scylla with issue #4363 fixed)
 bit 5: CorrectUDTsInCollections (if set, indicates that the sstable was generated
 by Scylla with issue #6130 fixed)
 
+bit 6: CorrectLastPiBlockWidth (if set, indicates that the width of the last promoted index block never includes
+the partition end marker)
+
 ## extension_attributes subcomponent
 
     extension_attributes = extension_attribute_count extension_attribute*
