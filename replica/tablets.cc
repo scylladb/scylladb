@@ -245,6 +245,50 @@ static void do_update_tablet_metadata_change_hint(locator::tablet_metadata_chang
     }
 }
 
+static std::optional<tablet_replica_set> maybe_deserialize_replica_set(const rows_entry& row, const column_definition& cdef) {
+    const auto* cell = row.row().cells().find_cell(cdef.id);
+    if (!cell) {
+        return std::nullopt;
+    }
+    auto dv = cdef.type->deserialize_value(cell->as_atomic_cell(cdef).value());
+    return tablet_replica_set_from_cell(dv);
+}
+
+static void do_validate_tablet_metadata_change(const locator::tablet_metadata& tm, const schema& s, const mutation& m) {
+    const auto table_id = to_tablet_metadata_key(s, m.key());
+    const auto& mp = m.partition();
+
+    if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
+        return;
+    }
+
+    auto& r_cdef = *s.get_column_definition("replicas");
+    auto& nr_cdef = *s.get_column_definition("new_replicas");
+
+    for (const auto& row : mp.clustered_rows()) {
+        if (row.row().deleted_at()) {
+            return;
+        }
+
+        auto new_replicas = maybe_deserialize_replica_set(row, nr_cdef);
+        if (!new_replicas) {
+            continue;
+        }
+
+        auto token = to_tablet_metadata_row_key(s, row.key());
+        auto replicas = maybe_deserialize_replica_set(row, r_cdef);
+        if (!replicas) {
+            replicas = tm.get_tablet_map(table_id).get_tablet_info(token).replicas;
+        }
+
+        std::unordered_set<tablet_replica> pending = substract_sets(*new_replicas, *replicas);
+        if (pending.size() > 1) {
+            throw std::runtime_error(fmt::format("Too many pending replicas for table {} last_token {}: {}",
+                                            table_id, token, pending));
+        }
+    }
+}
+
 std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const std::vector<canonical_mutation>& mutations) {
     tablet_logger.trace("tablet_metadata_change_hint({})", mutations.size());
     auto s = db::system_keyspace::tablets();
@@ -264,6 +308,18 @@ std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_h
     }
 
     return hint;
+}
+
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations) {
+    auto s = db::system_keyspace::tablets();
+
+    for (const auto& cm : mutations) {
+        if (cm.column_family_id() != s->id()) {
+            continue;
+        }
+
+        do_validate_tablet_metadata_change(tm, *s, cm.to_mutation(s));
+    }
 }
 
 void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hint, const mutation& m) {

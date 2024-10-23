@@ -28,6 +28,10 @@
 #include "db/system_keyspace.hh"
 #include "service/maintenance_mode.hh"
 
+namespace locator {
+class shared_token_metadata;
+}
+
 namespace service {
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.
 
@@ -72,6 +76,7 @@ public:
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
     db::system_keyspace& _sys_ks;
+    locator::shared_token_metadata& _token_metadata;
 
     // See `group0_guard::impl` for explanation of the purpose of these locks.
     semaphore _read_apply_mutex = semaphore(1);
@@ -103,8 +108,12 @@ class raft_group0_client {
         service::broadcast_tables::query_result get();
     };
 
+    template <typename Command>
+    void validate_change(const Command& change) {}
+    void validate_change(const topology_change& change);
+
 public:
-    raft_group0_client(service::raft_group_registry&, db::system_keyspace&, maintenance_mode_enabled);
+    raft_group0_client(service::raft_group_registry&, db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
 
     // Call after `system_keyspace` is initialized.
     future<> init();
