@@ -17,6 +17,7 @@
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -116,6 +117,9 @@ public:
                          sstring object_name,
                          std::optional<tag> tag = {},
                          std::optional<size_t> max_part_size = {});
+    future<> upload_file(std::filesystem::path path,
+                         sstring object_name,
+                         upload_progress& up);
 
     void update_config(endpoint_config_ptr);
 

@@ -913,6 +913,7 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 class client::do_upload_file : private multipart_upload {
     const std::filesystem::path _path;
     size_t _part_size;
+    upload_progress& _progress;
 
     // each time, we read up to transmit size from disk.
     // this is also an option which limits the number of multipart upload tasks.
@@ -934,7 +935,8 @@ class client::do_upload_file : private multipart_upload {
     // transmit data from input to output in chunks sized up to unit_size
     static future<> copy_to(input_stream<char> input,
                             output_stream<char> output,
-                            size_t unit_size) {
+                            size_t unit_size,
+                            upload_progress& progress) {
         std::exception_ptr ex;
         try {
             for (;;) {
@@ -943,6 +945,7 @@ class client::do_upload_file : private multipart_upload {
                     break;
                 }
                 co_await output.write(buf.get(), buf.size());
+                progress.uploaded += buf.size();
             }
             co_await output.flush();
         } catch (...) {
@@ -967,10 +970,10 @@ class client::do_upload_file : private multipart_upload {
         req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
         req.query_parameters.emplace("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
-        req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size] (output_stream<char>&& out_) {
+        req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
             auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
             auto output = std::move(out_);
-            return copy_to(std::move(input), std::move(output), _transmit_size);
+            return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
         // upload the parts in the background for better throughput
         auto gh = _bg_flushes.hold();
@@ -1039,10 +1042,10 @@ class client::do_upload_file : private multipart_upload {
         if (_tag) {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
-        req.write_body("bin", len, [f = std::move(f)] (output_stream<char>&& out_) mutable {
+        req.write_body("bin", len, [f = std::move(f), &progress = _progress] (output_stream<char>&& out_) mutable {
             auto input = make_file_input_stream(std::move(f), input_stream_options());
             auto output = std::move(out_);
-            return copy_to(std::move(input), std::move(output), _transmit_size);
+            return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
         co_await _client->make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
             gc.write_stats.update(len, s3_clock::now() - start);
@@ -1055,10 +1058,12 @@ public:
                    std::filesystem::path path,
                    sstring object_name,
                    std::optional<tag> tag,
-                   size_t part_size)
+                   size_t part_size,
+                   upload_progress& up)
         : multipart_upload(std::move(cln), std::move(object_name), std::move(tag))
         , _path{std::move(path)}
         , _part_size(part_size)
+        , _progress(up)
     {
     }
 
@@ -1066,6 +1071,7 @@ public:
         auto f = co_await open_file_dma(_path.native(), open_flags::ro);
         const auto stat = co_await f.stat();
         const uint64_t file_size = stat.st_size;
+        _progress.total += file_size;
         // use multipart upload when possible in order to transmit parts in
         // parallel to improve throughput
         if (file_size > aws_minimum_part_size) {
@@ -1081,13 +1087,25 @@ public:
 
 future<> client::upload_file(std::filesystem::path path,
                               sstring object_name,
+                              upload_progress& up) {
+    do_upload_file do_upload{shared_from_this(),
+                             std::move(path),
+                             std::move(object_name),
+                             {}, 0, up};
+    co_await do_upload.upload();
+}
+
+future<> client::upload_file(std::filesystem::path path,
+                              sstring object_name,
                               std::optional<tag> tag,
                               std::optional<size_t> part_size) {
+    upload_progress noop;
     do_upload_file do_upload{shared_from_this(),
                              std::move(path),
                              std::move(object_name),
                              std::move(tag),
-                             part_size.value_or(0)};
+                             part_size.value_or(0),
+                             noop};
     co_await do_upload.upload();
 }
 
