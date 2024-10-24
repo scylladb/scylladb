@@ -327,6 +327,40 @@ struct cf_stats {
     uint64_t total_view_updates_on_wrong_node = 0;
 };
 
+/*!
+ * \brief consumption_unit_counter represents a mechanism for tracking the consumption units.
+ *
+ * Consumption units are simplified representations of user operations within the system.
+ * Each operation performed by a user consumes a specific number of
+ * units, depending on its complexity and resource requirements.
+ *
+ * The `consumption_unit_counter` class encapsulates the concept of consumption units.
+ *
+ * This class is **front-end-protocol-agnostic**, meaning it does not depend on any specific front-end protocol.
+ * Each protocol that utilizes this class will define how the consumption units are updated and managed within
+ * its context.
+ *
+ * Consumption units serve two primary purposes:
+ *
+ * 1. Billing: They provide a standardized way to quantify resource usage, enabling accurate and transparent
+ *    billing based on the capacity units consumed by a user's operations.
+ *
+ * 2. Usage Limitations: They help enforce usage policies by limiting the number of capacity units
+ *    a user can consume within a given time frame.
+ *
+ */
+class consumption_unit_counter {
+    uint64_t _total_units = 0;
+public:
+    uint64_t get_units() const noexcept {
+        return _total_units;
+    }
+    uint64_t add_units(uint64_t units) noexcept {
+        _total_units += units;
+        return _total_units;
+    }
+};
+
 class table;
 using column_family = table;
 struct table_stats;
@@ -351,6 +385,8 @@ struct table_stats {
     int64_t memtable_range_tombstone_reads = 0;
     int64_t memtable_row_tombstone_reads = 0;
     int64_t tablet_count = 0;
+    consumption_unit_counter consumed_read_units;
+    consumption_unit_counter consumed_write_units;
     mutation_application_stats memtable_app_stats;
     utils::timed_rate_moving_average_summary_and_histogram reads{256};
     utils::timed_rate_moving_average_summary_and_histogram writes{256};
