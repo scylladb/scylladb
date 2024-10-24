@@ -145,6 +145,68 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
     out.write(bytes_view(value_ptr, sizeof(int64_t)));
 }
 
+// Encode the length of a varint value as comparable bytes.
+// The length will be treated as an unsigned variable length integer and will use
+// an encoding similar to encode_signed_long_type.
+// Numbers between 0 and 127 are encoded in one byte, using 0 in the most significant bit.
+// Larger values have 1s in as many of the most significant bits as the number of additional bytes
+// in the representation, followed by a 0 and then the serialized value itself.
+//
+// (i.e) <(n - 1) msb bits of 1s><1 or more bits of 0 padding><serialized value>
+//       where n = number of bytes in encoding
+//
+// The encoding ensures that longer numbers compare larger than shorter ones.
+// Since we never use a longer representation than necessary, this implies numbers compare correctly.
+// As the number of bytes is specified in the bits of the first, no value is a prefix of another.
+// The encoded length is XORed with the provided sign mask before writing,
+// enabling the caller to invert the encoding for negative varint values.
+// Note: The encoding does not support lengths greater than `(1 << 63) − 1`,
+// but this is okay as the length of a varint in bytes cannot reach that limit.
+void encode_varint_length(uint64_t length, int64_t sign_mask, bytes_ostream& out) {
+    const auto bits_minus_one = std::bit_width(length | 1) - 1; // 0 to 63 (the | 1 is to make sure 0 maps to 0 (1 bit))
+    const auto bytes_minus_one = std::min(8, bits_minus_one / 7);
+    std::array<char, 9> buffer;
+    if (bytes_minus_one == 8) {
+        // 9 byte encoding. Prefix an extra sign byte to the value.
+        buffer[0] = sign_mask == 0 ? 0xFF: 0;
+    } else {
+        // Incorporate the length bits into the first non-zero byte of the value
+        int64_t mask = (-0x100 >> bytes_minus_one) & 0xFF;
+        length |= (mask << (bytes_minus_one * 8));
+    }
+
+    // XOR the length with sign mask and copy the big endian form to the buffer.
+    seastar::write_be(buffer.data() + 1, length ^ sign_mask);
+    // Write out the non-zero bytes from the big endian form
+    out.write(buffer.data() + 8 - bytes_minus_one, bytes_minus_one + 1);
+}
+
+// Decode the length of a varint from comparable bytes.
+// Refer encode_varint_length() for the encoding details.
+uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_mask) {
+    // Count the number of bytes to read
+    const uint8_t first_byte = static_cast<uint8_t>(src[0]) ^ uint8_t(sign_mask);
+    auto bytes_minus_one = std::countl_one(first_byte);
+
+    // Use a buffer to read the serialized bytes, which is in big endian order.
+    std::array<int8_t, 9> buffer;
+    int bytes_pos = 8 - bytes_minus_one;
+    read_fragmented_checked(src, bytes_minus_one + 1, buffer.data() + bytes_pos);
+    // Prefix sign mask to the value
+    std::memset(buffer.data(), int8_t(sign_mask & 0xFF), bytes_pos);
+
+    // Read the big endian value as an int64 and XOR with the sign mask.
+    // Skip reading buffer[0] as it is used only to read the extra sign byte in case of a 9-byte encoding.
+    int64_t length = read_be<int64_t>(reinterpret_cast<const char*>(buffer.data() + 1)) ^ sign_mask;
+    if (bytes_minus_one < 8) {
+        // Length bits were incorporated into the first non-zero byte
+        // of the value for values with bytes_minus_one < 8; Remove them.
+        int64_t mask = (-0x100 >> bytes_minus_one) & 0xFF;
+        length ^= (mask << (bytes_minus_one * 8));
+    }
+    return length;
+}
+
 // Fixed length signed floating point number encode/decode.
 // To encode :
 //   If positive : invert first bit to make it greater than all negatives
