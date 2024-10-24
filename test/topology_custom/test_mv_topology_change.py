@@ -193,3 +193,43 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
     # will be held for long time until the write timeouts.
     # Otherwise, it is expected to complete in short time.
     await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=30)
+
+# TODO: Explain the issue and change the name of the test to something more precise.
+#
+# Note to myself: Find out why this test doesn't work with three nodes and RF=2.
+#                 Find out why it works with this config.
+#
+# Reproducer of scylladb/scylladb#12711.
+@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.asyncio
+async def test_mv_broken_promises(manager: ManagerClient):
+    [server1, server2, server3, server4] = await manager.servers_add(servers_num=4)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.t_view AS SELECT pk, v FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk)")
+
+    await manager.server_stop_gracefully(server4.server_id)
+
+    alive_servers = [server1, server2, server3]
+
+    for server in alive_servers:
+        await manager.api.enable_injection(server.ip_addr, "reject_incoming_hints", one_shot=False)
+        await manager.api.enable_injection(server.ip_addr, "abstract_write_response_handler_no_targets_dont_set_failure", one_shot=False)
+
+    logs = [await manager.server_open_log(server.server_id) for server in alive_servers]
+    logs = [(log, await log.mark()) for log in logs]
+
+    for i in range(100):
+        await cql.run_async(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})")
+
+    await manager.remove_node(server1.server_id, server4.server_id, timeout=30)
+
+    pattern = re.compile(r"Error applying view update .* \(view: ks\.t_view, .*\): seastar::broken_promise")
+    results = [await log.grep(pattern, from_mark=mark) for log, mark in logs]
+    # Flatten the list of lists.
+    # TODO: Verify this is OK.
+    results = sum(results, [])
+
+    assert results != []
