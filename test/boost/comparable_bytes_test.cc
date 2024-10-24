@@ -216,3 +216,18 @@ BOOST_AUTO_TEST_CASE(test_float) {
 BOOST_AUTO_TEST_CASE(test_double) {
     byte_comparable_test(generate_floating_point_test_data<double>());
 }
+
+void encode_varint_length(uint64_t length, int64_t sign_mask, bytes_ostream& out);
+uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_only_byte);
+BOOST_AUTO_TEST_CASE(test_varint_length_encoding) {
+    for (int shift = 0; shift < 64; shift++) {
+        uint64_t length = (uint64_t(1) << shift) - 1;
+        for (int64_t sign_mask : {0, -1}) {
+            bytes_ostream out;
+            encode_varint_length(length, sign_mask, out);
+            auto mb = std::move(out).to_managed_bytes();
+            auto mbv = managed_bytes_view(mb);
+            BOOST_REQUIRE_EQUAL(length, decode_varint_length(mbv, sign_mask));
+        }
+    }
+}
