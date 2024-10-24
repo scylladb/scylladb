@@ -82,6 +82,31 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
 
 
 @pytest.mark.asyncio
+async def test_backup_to_non_existent_bucket(manager: ManagerClient, s3_server):
+    '''backup should fail if the destination bucket does not exist'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    ks, cf = await prepare_snapshot_for_backup(manager, server)
+
+    workdir = await manager.server_get_workdir(server.server_id)
+    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
+    assert len(files) > 0
+
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', s3_server.address, "non-existant-bucket", prefix)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None
+    assert status['state'] == 'failed'
+
+
+@pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_backup_is_abortable(manager: ManagerClient, s3_server):
     '''check that backing up a snapshot for a keyspace works'''
