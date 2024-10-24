@@ -42,7 +42,8 @@ private:
         read_strategy strategy,
         const dht::sharder& remote_sharder,
         unsigned remote_shard,
-        gc_clock::time_point compaction_time);
+        gc_clock::time_point compaction_time,
+        size_t max_buffer_size);
 
 public:
     repair_reader(
@@ -55,7 +56,8 @@ public:
         unsigned remote_shard,
         uint64_t seed,
         read_strategy strategy,
-        gc_clock::time_point compaction_time);
+        gc_clock::time_point compaction_time,
+        size_t max_buffer_size);
 
     future<mutation_fragment_opt>
     read_mutation_fragment();
