@@ -15,6 +15,7 @@
 #include "test/lib/random_utils.hh"
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
+#include "utils/multiprecision_int.hh"
 
 BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_data_value(data_value::make_null(int32_type)) == comparable_bytes_opt());
@@ -230,4 +231,24 @@ BOOST_AUTO_TEST_CASE(test_varint_length_encoding) {
             BOOST_REQUIRE_EQUAL(length, decode_varint_length(mbv, sign_mask));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_varint) {
+    // Generate small integers
+    std::vector<data_value> test_data = generate_integer_test_data<int64_t>([] (int64_t n) {
+        return data_value(utils::multiprecision_int(n));
+    });
+
+    // Generate more large numbers
+    test_data.reserve(test_data.size() + (20 * 4 * 4));
+    auto multiprecision_one = utils::multiprecision_int(1);
+    for (int shift = 1; shift <= 20; shift++) {
+        for (auto shift_multiplier : {64, 100, 256, 512}) {
+            auto large_number = multiprecision_one << shift * shift_multiplier;
+            for (auto number : std::initializer_list<utils::multiprecision_int>{large_number, large_number - 1, -large_number, -(large_number - 1)}) {
+                test_data.emplace_back(number);
+            }
+        }
+    }
+    byte_comparable_test(std::move(test_data));
 }
