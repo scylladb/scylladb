@@ -115,6 +115,8 @@ static void encode_signed_long_type(int64_t value, bytes_ostream& out) {
 }
 
 // Refer encode_signed_long_type() for the encoding details
+// If prefix_sign_bytes is false, any redundant leading sign bits will not be written.
+template <bool prefix_sign_bytes>
 static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out) {
     const int8_t first_byte = static_cast<int8_t>(src[0]);
     // Count the number of bytes to read by counting the inverted sign bits in the first byte
@@ -132,17 +134,25 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
         // Flip the 9th inverted sign bit
         buffer[1] ^= BYTE_SIGN_MASK;
     } else {
-        // We read the serialized bytes into their positions w.r.to the big endian
-        // order and then fill with sign bytes at the front.
-        int bytes_pos = sizeof(int64_t) - num_bytes;
-        std::memset(value_ptr, ~inverted_sign_mask, bytes_pos);
+        int bytes_pos = 0;
+        if constexpr (prefix_sign_bytes) {
+            // We read the serialized bytes into their positions w.r.to the big endian
+            // order and then fill with sign bytes at the front.
+            bytes_pos = sizeof(int64_t) - num_bytes;
+            std::memset(value_ptr, ~inverted_sign_mask, bytes_pos);
+        }
         read_fragmented_checked(src, num_bytes, value_ptr + bytes_pos);
         // Flip the inverted sign bits in first significant byte of the value
         value_ptr[bytes_pos] ^= int8_t((-0x100 >> num_bytes) & 0xFF);
     }
 
-    // Write out the entire long value which is in the big endian order.
-    out.write(bytes_view(value_ptr, sizeof(int64_t)));
+    if constexpr (prefix_sign_bytes) {
+        // Write out the entire long value which is in the big endian order.
+        out.write(bytes_view(value_ptr, sizeof(int64_t)));
+    } else {
+        // Write out only the significant bytes of the long.
+        out.write(bytes_view(value_ptr, num_bytes));
+    }
 }
 
 // Encode the length of a varint value as comparable bytes.
@@ -314,7 +324,7 @@ struct from_comparable_bytes_visitor {
     }
 
     void operator()(const long_type_impl&) {
-        decode_signed_long_type(comparable_bytes_view, out);
+        decode_signed_long_type<true>(comparable_bytes_view, out);
     }
 
     // Decoding for float and double
