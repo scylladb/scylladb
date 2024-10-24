@@ -50,4 +50,6 @@ build_submodule(python3 python3
 check_headers(check-headers tools
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
 
-add_subdirectory(testing/dist-check)
+if(Scylla_DIST)
+  add_subdirectory(testing/dist-check)
+endif()
