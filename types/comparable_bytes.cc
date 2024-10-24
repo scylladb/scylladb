@@ -17,6 +17,7 @@
 logging::logger cblogger("comparable_bytes");
 
 static constexpr uint8_t BYTE_SIGN_MASK = 0x80;
+static constexpr int VARINT_FULL_FORM_THRESHOLD = 7;
 
 static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_read, bytes::value_type* out) {
     if (view.size_bytes() < bytes_to_read) {
@@ -225,6 +226,95 @@ uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_mask) {
     return length;
 }
 
+// Constructs a byte-comparable representation of the varint number.
+//
+// We encode the number :
+//    directly as long type, if the length is 6 or smaller (the encoding has non-00/FF first byte)
+//    <signbyte><length as unsigned integer - 7><7 or more bytes>, otherwise
+// where <signbyte> is 00 for negative numbers and FF for positive ones, and the length's bytes are inverted if
+// the number is negative (so that longer length sorts smaller).
+//
+// Because we present the sign separately, we don't need to include 0x00 prefix for positive integers whose first
+// byte is >= 0x80 or 0xFF prefix for negative integers whose first byte is < 0x80. Note that we do this before
+// taking the length for the purposes of choosing between long and full-form encoding.
+//
+// The representations are prefix-free, because the choice between long and full-form encoding is determined by
+// the first byte where signed longs are properly ordered between full-form negative and full-form positive, long
+// encoding is prefix-free, and full-form representations of different length always have length bytes that differ.
+//
+// Examples:
+//    -1            as 7F
+//    0             as 80
+//    1             as 81
+//    127           as C07F
+//    255           as C0FF
+//    2^32-1        as F8FFFFFFFF
+//    2^32          as F900000000
+//    2^56-1        as FEFFFFFFFFFFFFFF
+//    2^56          as FF000100000000000000
+static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    // Peek first byte
+    uint8_t first_byte = static_cast<uint8_t>(serialized_bytes_view[0]);
+    const int64_t sign_mask = first_byte < 0x80 ? 0 : -1;
+    // Discard first byte if it is a sign only byte
+    if (first_byte == uint8_t(sign_mask & 0xFF)) {
+        serialized_bytes_view.remove_prefix(1);
+    }
+
+    const size_t serialized_bytes_size = serialized_bytes_view.size_bytes();
+    if (serialized_bytes_size < VARINT_FULL_FORM_THRESHOLD) {
+        // Length is 6 bytes or less - encode it as a signed long.
+        // The serialized bytes are in big endian format with the leading sign only bytes trimmed out.
+        // Copy the bytes into a int64_t taking into account the leading trimmed out sign bytes.
+        int64_t value = sign_mask;
+        read_fragmented_checked(serialized_bytes_view, serialized_bytes_size,
+            reinterpret_cast<bytes::value_type*>(&value) + sizeof(int64_t) - serialized_bytes_size);
+        // Value is in big endian; flip it to host byte order and encode.
+        encode_signed_long_type(seastar::be_to_cpu(value), out);
+        return;
+    }
+
+    // Full form encoding;
+    // Invert and write the sign byte
+    write_native_int<uint8_t>(out, uint8_t(~sign_mask & 0xFF));
+
+    // Encode length section (length - 7)
+    encode_varint_length(serialized_bytes_view.size_bytes() - VARINT_FULL_FORM_THRESHOLD, sign_mask, out);
+
+    // Encode rest of data as it is
+    out.write(serialized_bytes_view);
+    // Clear the view after writing
+    serialized_bytes_view = managed_bytes_view();
+}
+
+// Decode a byte-comparable representation to the varint number.
+static void decode_varint_type(managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    // Check the first byte to determine if the bytes were encoded using long or full-form encoding
+    const uint8_t sign_byte = ~uint8_t(comparable_bytes_view[0]);
+    if (sign_byte != 0 && sign_byte != 0xFF) {
+        // First byte is in the range 01-FE, extract the varint using signed long decoder
+        decode_signed_long_type<false>(comparable_bytes_view, out);
+        return;
+    }
+
+    // The encoded bytes are in full-form
+    // Consume the sign byte
+    comparable_bytes_view.remove_prefix(1);
+
+    // Read the length
+    uint64_t length = decode_varint_length(comparable_bytes_view, sign_byte ? -1 : 0) + VARINT_FULL_FORM_THRESHOLD;
+
+    // Add a leading sign byte if there is no sign bit in first bit
+    if ((comparable_bytes_view[0] & BYTE_SIGN_MASK) != (sign_byte & BYTE_SIGN_MASK)) {
+        write_native_int<uint8_t>(out, sign_byte);
+    }
+
+    // Consume length bytes from src and write them into out
+    out.write(comparable_bytes_view.prefix(length));
+    // Remove the bytes that were consumed
+    comparable_bytes_view.remove_prefix(length);
+}
+
 // Fixed length signed floating point number encode/decode.
 // To encode :
 //   If positive : invert first bit to make it greater than all negatives
@@ -269,6 +359,11 @@ struct to_comparable_bytes_visitor {
     // The long type uses variable-length encoding, unlike other smaller fixed-length signed integers.
     void operator()(const long_type_impl&) {
         encode_signed_long_type(read_simple<int64_t>(serialized_bytes_view), out);
+    }
+
+    // Encode variable length integers
+    void operator()(const varint_type_impl&) {
+        encode_varint_type(serialized_bytes_view, out);
     }
 
     // Encoding for float and double
@@ -334,6 +429,10 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const long_type_impl&) {
         decode_signed_long_type<true>(comparable_bytes_view, out);
+    }
+
+    void operator()(const varint_type_impl&) {
+        decode_varint_type(comparable_bytes_view, out);
     }
 
     // Decoding for float and double
