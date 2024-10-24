@@ -133,7 +133,7 @@ void space_watchdog::on_timer() {
     //    |  |- ...
     //
 
-    for (auto& per_device_limits : _per_device_limits_map | boost::adaptors::map_values) {
+    for (auto& per_device_limits : _per_device_limits_map | std::views::values) {
         _total_size = 0;
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();

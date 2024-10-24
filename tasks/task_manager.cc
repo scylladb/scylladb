@@ -674,10 +674,11 @@ const task_manager::tasks_collection& task_manager::get_tasks_collection() const
 
 future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {
     return container().map_reduce0([parent_id] (task_manager& tm) {
-        return boost::copy_range<std::vector<task_id>>(tm.get_local_tasks() |
-            boost::adaptors::map_values |
-            boost::adaptors::filtered([parent_id] (const auto& task) { return task->get_parent_id() == parent_id; }) |
-            boost::adaptors::transformed([] (const auto& task) { return task->id(); }));
+        return tm.get_local_tasks() |
+            std::views::values |
+            std::views::filter([parent_id] (const auto& task) { return task->get_parent_id() == parent_id; }) |
+            std::views::transform([] (const auto& task) { return task->id(); }) |
+            std::ranges::to<std::vector>();
     }, std::vector<task_id>{}, concat<task_id>);
 }
 

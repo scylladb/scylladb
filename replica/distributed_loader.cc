@@ -442,7 +442,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 {
     dblog.info("Populating Keyspace {}", ks_name);
 
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | std::views::values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();
         sstring cfname = s->cf_name();
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);

@@ -91,7 +91,7 @@ public:
 
     uint64_t sstables_pending_work() const noexcept {
         return _inactive_pending_work +
-            boost::accumulate(_monitors | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&read_monitor::pending_work)), uint64_t(0));
+            std::ranges::fold_left(_monitors | std::views::values | std::views::transform(std::mem_fn(&read_monitor::pending_work)), uint64_t(0), std::plus());
     }
 };
 

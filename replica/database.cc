@@ -809,7 +809,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
     auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.initial_tablets(), tmp_ksm.durable_writes(),
-                    boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()), tmp_ksm.get_storage_options());
+                    ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), std::move(ks.metadata()->user_types()), tmp_ksm.get_storage_options());
 
     bool old_durable_writes = ks.metadata()->durable_writes();
     bool new_durable_writes = new_ksm->durable_writes();
@@ -1161,10 +1161,9 @@ std::vector<sstring> database::get_tablets_keyspaces() const {
 }
 
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
-    return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
-        get_tables_metadata().filter([] (auto uuid_and_cf) {
+    return get_tables_metadata().filter([] (auto uuid_and_cf) {
             return !is_system_keyspace(uuid_and_cf.second->schema()->ks_name());
-        }) | boost::adaptors::map_values);
+        }) | std::views::values | std::ranges::to<std::vector>();
 }
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {

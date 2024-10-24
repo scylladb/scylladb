@@ -22,19 +22,19 @@ db::extensions::~extensions()
 std::vector<sstables::file_io_extension*>
 db::extensions::sstable_file_io_extensions() const {
     using etype = sstables::file_io_extension;
-    return boost::copy_range<std::vector<etype*>>(
-            _sstable_file_io_extensions
-            | boost::adaptors::map_values
-            | boost::adaptors::transformed(std::mem_fn(&std::unique_ptr<etype>::get)));
+    return _sstable_file_io_extensions
+            | std::views::values
+            | std::views::transform(std::mem_fn(&std::unique_ptr<etype>::get))
+            | std::ranges::to<std::vector>();
 }
 
 std::vector<db::commitlog_file_extension*>
 db::extensions::commitlog_file_extensions() const {
     using etype = db::commitlog_file_extension;
-    return boost::copy_range<std::vector<etype*>>(
-            _commitlog_file_extensions
-            | boost::adaptors::map_values
-            | boost::adaptors::transformed(std::mem_fn(&std::unique_ptr<etype>::get)));
+    return _commitlog_file_extensions
+            | std::views::values
+            | std::views::transform(std::mem_fn(&std::unique_ptr<etype>::get))
+            | std::ranges::to<std::vector>();
 }
 
 std::set<sstring>

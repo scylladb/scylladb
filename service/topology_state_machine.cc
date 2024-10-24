@@ -110,15 +110,15 @@ std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& en
 std::set<sstring> topology_features::calculate_not_yet_enabled_features() const {
     return ::service::calculate_not_yet_enabled_features(
             enabled_features,
-            normal_supported_features | boost::adaptors::map_values);
+            normal_supported_features | std::views::values);
 }
 
 std::set<sstring> topology::calculate_not_yet_enabled_features() const {
     return ::service::calculate_not_yet_enabled_features(
             enabled_features,
             normal_nodes
-            | boost::adaptors::map_values
-            | boost::adaptors::transformed([] (const replica_state& rs) -> const std::set<sstring>& {
+            | std::views::values
+            | std::views::transform([] (const replica_state& rs) -> const std::set<sstring>& {
                 return rs.supported_features;
             }));
 }

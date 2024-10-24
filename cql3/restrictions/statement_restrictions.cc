@@ -956,7 +956,7 @@ static std::vector<expr::expression> extract_partition_range(
         return {std::move(*v.tokens)};
     }
     if (v.single_column.size() == schema->partition_key_size()) {
-        return boost::copy_range<std::vector<expression>>(v.single_column | boost::adaptors::map_values);
+        return v.single_column | std::views::values | std::ranges::to<std::vector>();
     }
     return {};
 }
@@ -2834,7 +2834,7 @@ unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not
     // 3. a SLICE restriction isn't on a last place
     column_id position = 0;
     unsigned int count = 0;
-    for (const auto& restriction : column_restrictions | boost::adaptors::map_values) {
+    for (const auto& restriction : column_restrictions | std::views::values) {
         if (find_needs_filtering(restriction)
             || position != get_the_only_column(restriction).col->id) {
             return count;

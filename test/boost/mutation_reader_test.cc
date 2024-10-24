@@ -1901,7 +1901,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
     auto shard_pkeys = std::vector<std::vector<uint32_t>>(smp::count, std::vector<uint32_t>{});
     auto i = unsigned(0);
-    for (auto pkey : pkeys_by_tokens | boost::adaptors::map_values) {
+    for (auto pkey : pkeys_by_tokens | std::views::values) {
         shard_pkeys[i++ % smp::count].push_back(pkey);
     }
 

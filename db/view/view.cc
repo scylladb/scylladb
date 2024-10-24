@@ -399,8 +399,8 @@ public:
 
     bool check_if_matches(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) const {
         std::vector<bytes> ck = key.explode();
-        return boost::algorithm::all_of(
-            _view.select_statement(_db).get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
+        return std::ranges::all_of(
+            _view.select_statement(_db).get_restrictions()->get_non_pk_restriction() | std::views::values,
             [&] (auto&& r) {
                 // FIXME: move outside all_of(). However, crashes.
                 auto static_and_regular_columns = cql3::expr::get_non_pk_values(*_selection, static_row, &row);

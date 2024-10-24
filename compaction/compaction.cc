@@ -439,7 +439,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) {}
 
     uint64_t compacted() const {
-        return boost::accumulate(_generated_monitors | boost::adaptors::map_values | boost::adaptors::transformed([](auto& monitor) { return monitor.compacted(); }), uint64_t(0));
+        return std::ranges::fold_left(_generated_monitors | std::views::values | std::views::transform([](auto& monitor) { return monitor.compacted(); }), uint64_t(0), std::plus());
     }
 
     void remove_exhausted_sstables(const std::vector<sstables::shared_sstable>& exhausted_sstables) {

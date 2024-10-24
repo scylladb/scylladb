@@ -161,7 +161,7 @@ void functions::remove_function(const function_name& name, const std::vector<dat
 }
 
 std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_function> func) const {
-    for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
+    for (const shared_ptr<function>& fptr : _declared | std::views::values) {
         auto aggregate = dynamic_pointer_cast<user_aggregate>(fptr);
         if (aggregate && (same_signature(aggregate->sfunc(), func)
             || (same_signature(aggregate->finalfunc(), func))
@@ -174,7 +174,7 @@ std::optional<function_name> functions::used_by_user_aggregate(shared_ptr<user_f
 }
 
 std::optional<function_name> functions::used_by_user_function(const ut_name& user_type) const {
-    for (const shared_ptr<function>& fptr : _declared | boost::adaptors::map_values) {
+    for (const shared_ptr<function>& fptr : _declared | std::views::values) {
         for (auto& arg_type : fptr->arg_types()) {
             if (arg_type->references_user_type(user_type.get_keyspace(), user_type.get_user_type_name())) {
                 return fptr->name();

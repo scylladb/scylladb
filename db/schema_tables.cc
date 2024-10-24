@@ -1255,7 +1255,7 @@ std::vector<mutation> make_create_keyspace_mutations(schema_features features, l
         for (const auto& kv : keyspace->user_types().get_all_types()) {
             add_type_to_schema_mutation(kv.second, timestamp, mutations);
         }
-        for (auto&& s : keyspace->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& s : keyspace->cf_meta_data() | std::views::values) {
             add_table_or_view_to_schema_mutation(s, timestamp, true, mutations);
         }
     }

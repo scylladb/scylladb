@@ -50,7 +50,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
         dummy_sharder sharder(s->get_sharder(), mutations_by_token);
 
-        auto merged_mutations = boost::copy_range<std::vector<std::vector<frozen_mutation>>>(mutations_by_token | boost::adaptors::map_values);
+        auto merged_mutations = mutations_by_token | std::views::values | std::ranges::to<std::vector>();
 
         auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<replica::memtable>>>>();
         for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {

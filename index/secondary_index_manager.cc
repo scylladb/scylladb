@@ -318,14 +318,15 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
 }
 
 std::vector<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
-    return boost::copy_range<std::vector<index_metadata>>(_indices
-           | boost::adaptors::map_values
-           | boost::adaptors::filtered([&] (auto& index) { return index.depends_on(cdef); })
-           | boost::adaptors::transformed([&] (auto& index) { return index.metadata(); }));
+    return _indices
+           | std::views::values
+           | std::views::filter([&] (auto& index) { return index.depends_on(cdef); })
+           | std::views::transform([&] (auto& index) { return index.metadata(); })
+           | std::ranges::to<std::vector>();
 }
 
 std::vector<index> secondary_index_manager::list_indexes() const {
-    return boost::copy_range<std::vector<index>>(_indices | boost::adaptors::map_values);
+    return _indices | std::views::values | std::ranges::to<std::vector>();
 }
 
 bool secondary_index_manager::is_index(view_ptr view) const {
@@ -333,13 +334,13 @@ bool secondary_index_manager::is_index(view_ptr view) const {
 }
 
 bool secondary_index_manager::is_index(const schema& s) const {
-    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&s] (const index& i) {
+    return std::ranges::any_of(_indices | std::views::values, [&s] (const index& i) {
         return s.cf_name() == index_table_name(i.metadata().name());
     });
 }
 
 bool secondary_index_manager::is_global_index(const schema& s) const {
-    return boost::algorithm::any_of(_indices | boost::adaptors::map_values, [&s] (const index& i) {
+    return std::ranges::any_of(_indices | std::views::values, [&s] (const index& i) {
         return !i.metadata().local() && s.cf_name() == index_table_name(i.metadata().name());
     });
 }

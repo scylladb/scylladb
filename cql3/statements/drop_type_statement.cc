@@ -90,7 +90,7 @@ bool drop_type_statement::validate_while_executing(query_processor& qp) const {
         auto&& keyspace = type->_keyspace;
         auto&& name = type->_name;
 
-        for (auto&& ut : all_types | boost::adaptors::map_values) {
+        for (auto&& ut : all_types | std::views::values) {
             if (ut->_keyspace == keyspace && ut->_name == name) {
                 continue;
             }
@@ -100,7 +100,7 @@ bool drop_type_statement::validate_while_executing(query_processor& qp) const {
             }
         }
 
-        for (auto&& cfm : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& cfm : ks.metadata()->cf_meta_data() | std::views::values) {
             for (auto&& col : cfm->all_columns()) {
                 if (col.type->references_user_type(keyspace, name)) {
                     throw exceptions::invalid_request_exception(format("Cannot drop user type {}.{} as it is still used by table {}.{}", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));

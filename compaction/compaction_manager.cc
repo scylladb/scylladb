@@ -1141,7 +1141,7 @@ future<> compaction_manager::really_do_stop() {
     // Reset the metrics registry
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
-    co_await coroutine::parallel_for_each(_compaction_state | boost::adaptors::map_values, [] (compaction_state& cs) -> future<> {
+    co_await coroutine::parallel_for_each(_compaction_state | std::views::values, [] (compaction_state& cs) -> future<> {
         if (!cs.gate.is_closed()) {
             co_await cs.gate.close();
         }

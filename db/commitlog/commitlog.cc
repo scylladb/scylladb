@@ -2146,7 +2146,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         return;
     }
     // defensive copy.
-    auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
+    auto callbacks = _flush_handlers | std::views::values | std::ranges::to<std::vector>();
     auto& active = _segments.back();
 
     // RP at "start" of segment we leave untouched.
@@ -2269,7 +2269,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
     }
 
     if (!ids.empty()) {
-        auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
+        auto callbacks = _flush_handlers | std::views::values | std::ranges::to<std::vector>();
         // For each CF id: for each callback c: call c(id, high)
         for (auto& f : callbacks) {
             for (auto& id : ids) {

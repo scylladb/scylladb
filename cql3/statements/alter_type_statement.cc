@@ -57,7 +57,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
         throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_cql_string()));
     }
 
-    for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+    for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
         for (auto&& column : schema->partition_key_columns()) {
             if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
                 throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the partition key column {} of table {}.{}",
@@ -72,7 +72,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     auto res = co_await service::prepare_update_type_announcement(sp, updated, ts);
     std::move(res.begin(), res.end(), std::back_inserter(m));
 
-    for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+    for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
         auto cfm = schema_builder(schema);
         bool modified = false;
         for (auto&& column : schema->all_columns()) {
@@ -137,7 +137,7 @@ user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database d
 
     if (_field_type->is_duration()) {
         auto&& ks = db.find_keyspace(keyspace());
-        for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
             for (auto&& column : schema->clustering_key_columns()) {
                 if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
                     throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the clustering key column {} of table {}.{} where durations are not allowed",

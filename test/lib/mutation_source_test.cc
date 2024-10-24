@@ -2833,5 +2833,5 @@ std::vector<mutation> squash_mutations(std::vector<mutation> mutations) {
             it->second.apply(mut);
         }
     }
-    return boost::copy_range<std::vector<mutation>>(merged_muts | boost::adaptors::map_values);
+    return merged_muts | std::views::values | std::ranges::to<std::vector>();
 }

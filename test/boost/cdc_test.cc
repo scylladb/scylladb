@@ -1139,7 +1139,7 @@ SEASTAR_THREAD_TEST_CASE(test_list_logging) {
             }
         }, [&](data_value v) {
             auto map = value_cast<map_type_impl::native_type>(std::move(v));
-            auto cpy = boost::copy_range<std::vector<data_value>>(map | boost::adaptors::map_values);
+            auto cpy = map | std::views::values | std::ranges::to<std::vector>();
             // verify key is timeuuid
             for (auto& key : map | std::views::keys) {
                 value_cast<utils::UUID>(key);

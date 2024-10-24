@@ -3364,8 +3364,8 @@ future<>
 repair_service::remove_repair_meta() {
     rlogger.debug("Remove all repair_meta for all nodes");
     auto repair_metas = make_lw_shared<utils::chunked_vector<repair_meta_ptr>>(
-            boost::copy_range<utils::chunked_vector<repair_meta_ptr>>(repair_meta_map()
-            | boost::adaptors::map_values));
+            repair_meta_map()
+            | std::views::values | std::ranges::to<utils::chunked_vector<repair_meta_ptr>>());
     repair_meta_map().clear();
     co_await coroutine::parallel_for_each(*repair_metas, [&] (auto& rm) -> future<> {
         co_await rm->stop();
