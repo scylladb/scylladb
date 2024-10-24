@@ -2517,6 +2517,7 @@ def configure_using_cmake(args):
         'CMAKE_EXE_LINKER_FLAGS': semicolon_separated(args.user_ldflags),
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
         'Scylla_CHECK_HEADERS': 'ON',
+        'Scylla_DIST': 'ON' if args.enable_dist in (None, True) else 'OFF',
         'Scylla_TEST_TIMEOUT': args.test_timeout,
         'Scylla_TEST_REPEAT': args.test_repeat,
     }

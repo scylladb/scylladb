@@ -237,6 +237,10 @@ include(check_headers)
 check_headers(check-headers scylla-main
   GLOB ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
 
+option(Scylla_DIST
+  "Build dist targets"
+  ON)
+
 add_custom_target(compiler-training)
 
 add_subdirectory(api)
@@ -329,4 +333,6 @@ add_custom_target(maybe-scylla
 add_dependencies(compiler-training
   maybe-scylla)
 
-add_subdirectory(dist)
+if(Scylla_DIST)
+  add_subdirectory(dist)
+endif()
