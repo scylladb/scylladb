@@ -131,6 +131,53 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
     out.write(src, bytes_to_read);
 }
 
+// Encode the length of a varint value as comparable bytes.
+// The length will be treated as an unsigned variable length integer and will use
+// an encoding similar to encode_signed_long_type.
+// Numbers between 0 and 127 are encoded in one byte, using 0 in the most significant bit.
+// Larger values have 1s in as many of the most significant bits as the number of additional bytes
+// in the representation, followed by a 0 and then the serialized value itself.
+//
+// (i.e) <(n - 1) msb bits of 1s><1 or more bits of 0 padding><serialized value>
+//       where n = number of bytes in encoding
+//
+// The encoding ensures that longer numbers compare larger than shorter ones.
+// Since we never use a longer representation than necessary, this implies numbers compare correctly.
+// As the number of bytes is specified in the bits of the first, no value is a prefix of another.
+// The encoded byte is XORed with the provided sign byte before writing,
+// enabling the caller to invert the encoding for negative varint values.
+// Note: The encoding does not support lengths greater than `(1 << 64) − 1`,
+// but this is okay as the length of a varint in bytes cannot reach that limit.
+void encode_varint_length(uint64_t length, uint8_t sign_only_byte, bytes_ostream& out) {
+    const size_t bitsMinusOne = std::bit_width(length | 1) - 1; // 0 to 63 (the | 1 is to make sure 0 maps to 0 (1 bit))
+    const size_t bytesMinusOne = bitsMinusOne / 7;
+    const int mask = -256 >> bytesMinusOne; // sequence of bytesMinusOne 1s in the most-significant bits
+    int pos = bytesMinusOne * 8;
+    out.write<uint8_t>(uint8_t((length >> pos) | mask) ^ sign_only_byte);
+    while (pos > 0) {
+        pos -= 8;
+        out.write<uint8_t>(uint8_t((length >> pos) & 0xFF) ^ sign_only_byte);
+    }
+}
+
+// Decode the length of a varint from comparable bytes.
+// Refer encode_varint_length() for the encoding details.
+uint64_t decode_varint_length(managed_bytes_view& src, uint8_t sign_only_byte) {
+    uint8_t first_byte = read_simple<uint8_t>(src) ^ sign_only_byte;
+
+    uint64_t length = 0;
+    int bytes;
+    // Read an extra byte while the next most significant bit is 1.
+    for (bytes = 0; bytes <= 7 && ((first_byte << bytes) & 0x80) != 0; ++bytes) {
+        length = (length << 8) | (read_simple<uint8_t>(src) ^ sign_only_byte);
+    }
+
+    // Strip the length bits from the leading byte.
+    first_byte &= ~(-256 >> bytes);
+    // Add the rest of the bits of the leading byte.
+    return length | (uint64_t(first_byte) << bytes * 8);
+}
+
 // Fixed length signed floating point number encode/decode.
 // To encode :
 //   If positive : invert first bit to make it greater than all negatives
