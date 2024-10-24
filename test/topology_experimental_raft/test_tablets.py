@@ -10,6 +10,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.repair import get_tablet_task_id, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
 
@@ -30,8 +31,12 @@ async def inject_error_one_shot_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-async def inject_error_on(manager, error_name, servers):
-    errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
+async def inject_error_on(manager, error_name, servers, params = {}):
+    errs = [manager.api.enable_injection(s.ip_addr, error_name, False, params) for s in servers]
+    await asyncio.gather(*errs)
+
+async def inject_error_off(manager, error_name, servers):
+    errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
 
 async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo], ranges: str = ''):
@@ -1497,3 +1502,31 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
 
     logger.info("Verify data is not resurrected")
     await assert_empty_table()
+
+@pytest.mark.repair
+@pytest.mark.asyncio
+async def test_tablet_manual_repair(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    token = -1
+
+    start = time.time()
+    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    duration = time.time() - start
+    map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logging.info(f'map1={map1} duration={duration}')
+
+    await asyncio.sleep(1)
+
+    start = time.time()
+    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    duration = time.time() - start
+    map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logging.info(f'map2={map2} duration={duration}')
+
+    t1 = map1[str(token)]
+    t2 = map2[str(token)]
+    logging.info(f't1={t1} t2={t2}')
+
+    assert t2 > t1
+
+    await cql.run_async("DROP KEYSPACE test;")
