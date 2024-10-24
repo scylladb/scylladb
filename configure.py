@@ -2495,6 +2495,33 @@ class BuildType(NamedTuple):
     cmake_build_type: str
 
 
+def generate_compdb_for_cmake_build(source_dir, build_dir):
+    # Since Seastar and Scylla are configured as separate projects, their compilation
+    # databases need to be merged into a single database for tooling consumption.
+    compdb = 'compile_commands.json'
+    scylla_compdb_path = os.path.join(build_dir, compdb)
+    seastar_compdb_path = ''
+    # sort build types by supposed indexing speed
+    for build_type in ['Dev', 'Debug', 'RelWithDebInfo', 'Sanitize']:
+        seastar_compdb_path = os.path.join(build_dir, build_type, 'seastar', compdb)
+        if os.path.exists(seastar_compdb_path):
+            break
+    assert seastar_compdb_path, "Seasetar's building system is not configured yet."
+    # if the file exists, just overwrite it so we can keep it updated
+    with open(os.path.join(source_dir, compdb), 'w+b') as merged_compdb:
+        # "merge-compdb.py" considers all object files under the "--prefix"
+        # directory as relevant. Since CMake generates .o files in
+        # "CMakeFiles" directories, we preserve the compilation rules for
+        # these generated files.
+        prefix = "CMakeFiles"
+        subprocess.run([os.path.join(source_dir, 'scripts/merge-compdb.py'),
+                        prefix,
+                        scylla_compdb_path,
+                        seastar_compdb_path],
+                       stdout=merged_compdb,
+                       check=True)
+
+
 def configure_using_cmake(args):
     # all supported build modes, and if they are built by default if selected
     build_modes = {'debug': BuildType(True, 'Debug'),
@@ -2540,16 +2567,7 @@ def configure_using_cmake(args):
                       '-B', build_dir,
                       '-S', source_dir]
     subprocess.check_call(cmake_command, shell=False, cwd=source_dir)
-
-    compdb_source = os.path.join(source_dir, 'compile_commands.json')
-    compdb_target = os.path.join(build_dir, 'compile_commands.json')
-    
-    try:
-        os.symlink(compdb_target, compdb_source)
-    except FileExistsError:
-        # if there is already a valid compile_commands.json link in the
-        # source root, we are done.
-        pass
+    generate_compdb_for_cmake_build(source_dir, build_dir)
 
 
 if __name__ == '__main__':
