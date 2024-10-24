@@ -1705,7 +1705,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
+        '-DSeastar_SCHEDULING_GROUPS_COUNT=17',
         '-DSeastar_IO_URING=OFF', # io_uring backend is not stable enough
     ]
 
