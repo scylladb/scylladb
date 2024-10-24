@@ -368,7 +368,7 @@ future<> persistent_feature_enabler::enable_features() {
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
     std::set<sstring> feats_set = co_await _sys_ks.load_local_enabled_features();
-    for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
+    for (feature& f : _feat.registered_features() | std::views::values) {
         if (!f && features.contains(f.name())) {
             feats_set.emplace(f.name());
         }
@@ -384,7 +384,7 @@ future<> persistent_feature_enabler::enable_features() {
 future<> feature_service::enable(std::set<std::string_view> list) {
     // `gms::feature::enable` should be run within a seastar thread context
     return seastar::async([this, list = std::move(list)] {
-        for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
+        for (gms::feature& f : _registered_features | std::views::values) {
             if (list.contains(f.name())) {
                 f.enable();
             }

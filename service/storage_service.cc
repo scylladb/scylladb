@@ -4556,7 +4556,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             });
         } else if (req.cmd == node_ops_cmd::replace_prepare_mark_alive) {
             // Wait for local node has marked replacing node as alive
-            auto nodes = boost::copy_range<std::vector<inet_address>>(req.replace_nodes| boost::adaptors::map_values);
+            auto nodes = req.replace_nodes| std::views::values | std::ranges::to<std::vector>();
             try {
                 _gossiper.wait_alive(nodes, std::chrono::milliseconds(120 * 1000)).get();
             } catch (...) {
@@ -6156,7 +6156,7 @@ static bool increases_replicas_per_rack(const locator::topology& topology, const
     for (auto& replica: tinfo.replicas) {
         m[topology.get_rack(replica.host)]++;
     }
-    auto max = *boost::max_element(m | boost::adaptors::map_values);
+    auto max = *std::ranges::max_element(m | std::views::values);
     return m[dst_rack] + 1 > max;
 }
 

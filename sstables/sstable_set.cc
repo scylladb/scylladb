@@ -157,7 +157,7 @@ sstable_set::all_sstable_runs() const {
 
 std::vector<frozen_sstable_run>
 partitioned_sstable_set::all_sstable_runs() const {
-    return boost::copy_range<std::vector<frozen_sstable_run>>(_all_runs | boost::adaptors::map_values);
+    return _all_runs | std::views::values | std::ranges::to<std::vector<frozen_sstable_run>>();
 }
 
 lw_shared_ptr<const sstable_list>
@@ -508,11 +508,11 @@ std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
 }
 
 std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition_range& range) const {
-    return boost::copy_range<std::vector<shared_sstable>>(*_sstables | boost::adaptors::map_values);
+    return *_sstables | std::views::values | std::ranges::to<std::vector>();
 }
 
 lw_shared_ptr<const sstable_list> time_series_sstable_set::all() const {
-    return make_lw_shared<const sstable_list>(boost::copy_range<const sstable_list>(*_sstables | boost::adaptors::map_values));
+    return make_lw_shared<const sstable_list>(*_sstables | std::views::values | std::ranges::to<sstable_list>());
 }
 
 size_t

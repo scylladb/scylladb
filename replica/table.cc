@@ -415,30 +415,30 @@ bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
 }
 
 api::timestamp_type storage_group::min_memtable_timestamp() const {
-    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_timestamp)));
+    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_timestamp)));
 }
 
 api::timestamp_type storage_group::min_memtable_live_timestamp() const {
-    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_live_timestamp)));
+    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_timestamp)));
 }
 
 api::timestamp_type storage_group::min_memtable_live_row_marker_timestamp() const {
-    return *boost::range::min_element(compaction_groups() | boost::adaptors::transformed(std::mem_fn(&compaction_group::min_memtable_live_row_marker_timestamp)));
+    return std::ranges::min(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::min_memtable_live_row_marker_timestamp)));
 }
 
 api::timestamp_type table::min_memtable_timestamp() const {
-    return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
-        | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_timestamp)));
+    return std::ranges::min(storage_groups() | std::views::values
+        | std::views::transform(std::mem_fn(&storage_group::min_memtable_timestamp)));
 }
 
 api::timestamp_type table::min_memtable_live_timestamp() const {
-    return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
-        | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_live_timestamp)));
+    return std::ranges::min(storage_groups() | std::views::values
+        | std::views::transform(std::mem_fn(&storage_group::min_memtable_live_timestamp)));
 }
 
 api::timestamp_type table::min_memtable_live_row_marker_timestamp() const {
-    return *boost::range::min_element(storage_groups() | boost::adaptors::map_values
-        | boost::adaptors::transformed(std::mem_fn(&storage_group::min_memtable_live_row_marker_timestamp)));
+    return std::ranges::min(storage_groups() | std::views::values
+        | std::views::transform(std::mem_fn(&storage_group::min_memtable_live_row_marker_timestamp)));
 }
 
 // Not performance critical. Currently used for testing only.
@@ -609,7 +609,7 @@ static std::optional<gate::holder> try_hold_gate(gate& g) noexcept {
 }
 
 future<> storage_group_manager::parallel_foreach_storage_group(std::function<future<>(storage_group&)> f) {
-    co_await coroutine::parallel_for_each(_storage_groups | boost::adaptors::map_values, [&] (const storage_group_ptr sg) -> future<> {
+    co_await coroutine::parallel_for_each(_storage_groups | std::views::values, [&] (const storage_group_ptr sg) -> future<> {
         // Table-wide ops, like 'nodetool compact', are inherently racy with migrations, so it's okay to skip
         // storage of tablets being migrated away.
         if (auto holder = try_hold_gate(sg->async_gate())) {
@@ -619,7 +619,7 @@ future<> storage_group_manager::parallel_foreach_storage_group(std::function<fut
 }
 
 future<> storage_group_manager::for_each_storage_group_gently(std::function<future<>(storage_group&)> f) {
-    auto storage_groups = boost::copy_range<std::vector<storage_group_ptr>>(_storage_groups | boost::adaptors::map_values);
+    auto storage_groups = _storage_groups | std::views::values | std::ranges::to<std::vector>();
     for (auto& sg: storage_groups) {
         if (auto holder = try_hold_gate(sg->async_gate())) {
             co_await f(*sg.get());
@@ -640,7 +640,7 @@ const storage_group_map& storage_group_manager::storage_groups() const {
 }
 
 future<> storage_group_manager::stop_storage_groups() noexcept {
-    return parallel_for_each(_storage_groups | boost::adaptors::map_values, [] (auto sg) { return sg->stop("table removal"); });
+    return parallel_for_each(_storage_groups | std::views::values, [] (auto sg) { return sg->stop("table removal"); });
 }
 
 void storage_group_manager::clear_storage_groups() {
@@ -953,7 +953,7 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(_storage_groups | boost::adaptors::map_values,
+    auto split_ready = std::ranges::all_of(_storage_groups | std::views::values,
         std::mem_fn(&storage_group::set_split_mode));
 
     // The table replica will say to coordinator that its split status is ready by
@@ -2146,7 +2146,7 @@ bool storage_group::no_compacted_sstable_undeleted() const {
 // garbage-collect a tombstone that covers data in an sstable that may not be
 // successfully deleted.
 lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undeleted() const {
-    bool no_compacted_undeleted_sstable = std::ranges::all_of(storage_groups() | boost::adaptors::map_values,
+    bool no_compacted_undeleted_sstable = std::ranges::all_of(storage_groups() | std::views::values,
                                                               std::mem_fn(&storage_group::no_compacted_sstable_undeleted));
     if (no_compacted_undeleted_sstable) {
         return get_sstables();
@@ -2883,7 +2883,7 @@ bool storage_group::can_flush() const {
 }
 
 bool table::can_flush() const {
-    return std::ranges::any_of(storage_groups() | boost::adaptors::map_values, std::mem_fn(&storage_group::can_flush));
+    return std::ranges::any_of(storage_groups() | std::views::values, std::mem_fn(&storage_group::can_flush));
 }
 
 future<> compaction_group::clear_memtables() {
@@ -2920,7 +2920,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     // materialized view was created right after truncation started, and it
     // would not have compaction disabled when this function is called on it.
     if (!schema()->is_view()) {
-        auto compaction_disabled = std::ranges::all_of(storage_groups() | boost::adaptors::map_values,
+        auto compaction_disabled = std::ranges::all_of(storage_groups() | std::views::values,
                                                        std::mem_fn(&storage_group::compaction_disabled));
         if (!compaction_disabled) {
             utils::on_internal_error(fmt::format("compaction not disabled on table {}.{} during TRUNCATE",
