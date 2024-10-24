@@ -269,7 +269,13 @@ Use the transport option:
 
    cassandra-stress "write n=100k cl=ONE no-warmup" -transport "truststore=$HOME/jks/truststore.jks truststore-password=cassandra"
 
+How do you use username and password?
 
+Use the mode option: 
+
+.. code-block:: cql
+    
+   cassandra-stress   write n=100000 -rate threads=50 -node <<IP>> -mode native cql3 user=scylla password='*****'
 
 .. include:: /rst_include/apache-copyrights.rst
 
