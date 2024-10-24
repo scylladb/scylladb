@@ -1081,6 +1081,20 @@ multishard_combining_reader_v2::multishard_combining_reader_v2(
         mutation_reader::forwarding fwd_mr)
     : impl(std::move(s), std::move(permit)), _keep_alive_sharder(std::move(keep_alive_sharder)), _sharder(sharder) {
 
+    // The permit of the multishard reader is destroyed after the permits of its child readers.
+    // Therefore its semaphore resources won't be automatically released
+    // until children acquire their own resources.
+    //
+    // This creates a dependency (an edge in the "resource allocation graph"),
+    // where the semaphore used by the multishard reader depends on the semaphores used by children.
+    // When such dependencies create a cycle, and permits are acquired by different reads
+    // in just the right order, a deadlock will happen.
+    //
+    // One way to prevent the deadlock is to avoid the resource dependency by ensuring
+    // that the resources of multishard reader are released before the children attempt to acquire theirs.
+    // We do this here.
+    _permit.release_base_resources();
+
     on_partition_range_change(pr);
 
     _shard_readers.reserve(_sharder.shard_count());
