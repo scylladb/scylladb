@@ -254,10 +254,6 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (!table) {
         throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
     }
-    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
-        // we want to hide cdc log table from the user
-        throw exceptions::invalid_request_exception(format("{}.{} is a cdc log table and it cannot be described directly. Try `DESC TABLE {}.{}` to describe cdc base table and it's log table.", ks, name, ks, cdc::base_name(name)));
-    }
 
     auto schema = table->schema();
     auto idxs = table->get_index_manager().list_indexes();
@@ -291,6 +287,17 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         if (cdc_log_alter) {
             result.push_back(*cdc_log_alter);
         }
+    }
+
+    if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
+        if (result.size() != 1) {
+            on_internal_error(dlogger, "CDC log table is not supposed to have secondary indexes or MVs derived from it");
+        }
+
+        // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
+        // This way, the user learns about the internals of the table, but it's implicitly implied that
+        // they should not execute the statement.
+        result[0].create_statement = seastar::format("/*\n{}\n*/", *result[0].create_statement);
     }
 
     co_return result;
