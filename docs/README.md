@@ -3,7 +3,7 @@
 This repository contains the source files for ScyllaDB Open Source documentation.
 
 - The `dev` folder contains developer-oriented documentation related to the ScyllaDB code base. It is not published and is only available via GitHub.
-- All other folders and files contain user-oriented documentation related to ScyllaDB Open Source and are sources for [docs.scylladb.com](https://docs.scylladb.com/).
+- All other folders and files contain user-oriented documentation related to ScyllaDB Open Source and are sources for [opensource.docs.scylladb.com](https://opensource.docs.scylladb.com/).
 
 To report a documentation bug or suggest an improvement, open an issue in [GitHub issues](https://github.com/scylladb/scylla/issues) for this project.
 
@@ -11,33 +11,42 @@ To contribute to the documentation, open a GitHub pull request.
 
 ## Key Guidelines for Contributors
 
-- Follow the [ScyllaDB Style Guide](https://docs.google.com/document/d/1lyHp1MKdyj0Hh3NprNFvEczA4dFSZIFoukGUvFJb9yE/edit?usp=sharing).
 - The user documentation is written in reStructuredText (RST) - a plaintext markup language similar to Markdown. If you're not familiar with RST, see [ScyllaDB RST Examples](https://sphinx-theme.scylladb.com/stable/examples/index.html).
 - The developer documentation is written in Markdown. See [Basic Markdown Syntax](https://www.markdownguide.org/basic-syntax/) for reference.
+- Follow the [ScyllaDB Style Guide](https://docs.google.com/document/d/1lyHp1MKdyj0Hh3NprNFvEczA4dFSZIFoukGUvFJb9yE/edit?usp=sharing).
 
+To prevent the build from failing:
 
-## Creating Knowledge Base Articles
+- If you add a new file, ensure it's added to an appropriate toctree, for example:
 
-The `kb/` directory holds source files for knowledge base articles in the [Knowledge Base section](https://docs.scylladb.com/stable/kb/index.html) of the ScyllaDB documentation. 
+  ```
+   .. toctree::
+      :maxdepth: 2
+      :hidden:
 
-The `kb/kb_common` subdirectory contains a template for knowledge base articles to help you create new articles.
+      Page X </folder1/article1>
+      Page Y </folder1/article2>
+      Your New Page </folder1/your-new-article>
+  ```
+- Make sure the link syntax is correct. See the [guidelines on creating links](https://sphinx-theme.scylladb.com/stable/examples/links.html)
+- Make sure the section headings are correct. See the [guidelines on creating headings](https://sphinx-theme.scylladb.com/stable/examples/headings.html)
+  Note that the markup must be at least as long as the text in the heading. For example:
 
-To create a new knowledge base article (KB):
-
-1. Copy the `kb-article-template.rst` file from `/kb/kb_common` to `/kb` and rename it with a unique name.
-1. Open the new file and fill in the required information. 
-1. Remove what is not needed. 
-1. Run `make preview` to build the docs and preview them locally.
-1. Send a PR with "KB" in its title. 
-
+  ```
+  ----------------------
+  Prerequisites
+  ----------------------
+  ```
 
 ## Building User Documentation
 
 ### Prerequisites
 
-* Python 3. Check your version with `$ python --version`.
-* [poetry](https://python-poetry.org/) 1.8.1 or later
+* Python
+* poetry
 * make
+
+See the [ScyllaDB Sphinx Theme prerequisites](https://sphinx-theme.scylladb.com/stable/getting-started/installation.html#prerequisites) to check which versions of the above are currently required.
 
 #### Mac OS X
 
