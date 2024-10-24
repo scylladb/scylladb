@@ -1539,6 +1539,9 @@ private:
 
     db_clock::time_point _all_tables_flushed_at;
 
+    // Phased barrier for background operations like dropping tables
+    utils::phased_barrier _background_ops;
+
 public:
     data_dictionary::database as_data_dictionary() const;
     db::commitlog* commitlog_for(const schema_ptr& schema);
@@ -1707,6 +1710,7 @@ public:
     future<> shutdown();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
+    future<> await_background_ops();
 
     /// Checks whether per-partition rate limit can be applied to the operation or not.
     bool can_apply_per_partition_rate_limit(const schema& s, db::operation_type op_type) const;
@@ -1837,6 +1841,7 @@ private:
 
     struct table_truncate_state;
 
+    static future<> truncate_and_stop_table(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, global_table_ptr, bool with_snapshot, std::optional<sstring> snapshot_name_opt, bool in_background);
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
@@ -1845,7 +1850,7 @@ public:
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
     // drops the table on all shards and removes the table directory if there are no snapshots
-    static future<> drop_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, bool with_snapshot = true);
+    static future<> drop_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, bool with_snapshot = true, bool truncate_in_background = false);
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();

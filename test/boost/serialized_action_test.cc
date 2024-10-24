@@ -183,3 +183,32 @@ SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
     bar2.advance_and_await().get();
     completion_timer.cancel();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_phased_barrier_close) {
+    semaphore sem(0);
+    utils::phased_barrier bar;
+
+    auto bg_op = [&] {
+        return async([&] {
+            auto op = bar.start();
+            get_units(sem, 1).get();
+        });
+    };
+
+    auto f0 = bg_op();
+    BOOST_REQUIRE(!f0.available());
+
+    auto f1 = bar.close();
+    BOOST_REQUIRE(!f0.available());
+    BOOST_REQUIRE(!f1.available());
+
+    BOOST_REQUIRE_THROW(bg_op().get(), gate_closed_exception);
+    BOOST_REQUIRE_THROW(bar.advance_and_await().get(), gate_closed_exception);
+
+    sem.signal();
+    f0.get();
+    f1.get();
+
+    BOOST_REQUIRE_THROW(bg_op().get(), gate_closed_exception);
+    BOOST_REQUIRE_THROW(bar.advance_and_await().get(), gate_closed_exception);
+}

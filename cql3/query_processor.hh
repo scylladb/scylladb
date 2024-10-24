@@ -463,6 +463,8 @@ public:
 
     bool topology_global_queue_empty();
 
+    future<> await_topology_not_busy();
+
 private:
     // Keep the holder until you stop using the `remote` services.
     std::pair<std::reference_wrapper<remote>, gate::holder> remote();

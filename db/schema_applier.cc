@@ -600,11 +600,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     auto& db = proxy.local().get_db();
     co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name(), true, true);
     });
     co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name(), true, true);
     });
 
     if (tablet_hint) {

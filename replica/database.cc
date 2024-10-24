@@ -25,6 +25,7 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/query_processor.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -1027,7 +1028,7 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
 }
 
 future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        sstring ks_name, sstring cf_name, bool with_snapshot) {
+        sstring ks_name, sstring cf_name, bool with_snapshot, bool truncate_in_background) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
@@ -1040,6 +1041,28 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, shard
     co_await sharded_db.invoke_on_all([&] (database& db) {
         return db.detach_column_family(*table_shards);
     });
+
+    auto f = truncate_and_stop_table(sharded_db, sys_ks, std::move(table_shards), with_snapshot, std::move(snapshot_name_opt), truncate_in_background);
+    if (truncate_in_background && !f.failed()) {
+        // Perform the rest in the background
+        // This is safe since it enter the _background_ops phased barrier that is awaited in database::shutdown()
+        (void)std::move(f).handle_exception([ks_name, cf_name] (std::exception_ptr ex) {
+            dblog.error("Truncating {}.{} in the background failed: {}. Ignored", ks_name, cf_name, ex);
+        });
+    } else {
+        co_await std::move(f);
+    }
+}
+
+future<> database::truncate_and_stop_table(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks, global_table_ptr table_shards, bool with_snapshot, std::optional<sstring> snapshot_name_opt, bool in_background) {
+    auto op = sharded_db.local()._background_ops.start();
+
+    locator::effective_replication_map_ptr erm;
+    if (in_background) {
+        erm = table_shards->get_effective_replication_map();
+        co_await sys_ks.local().query_processor().await_topology_not_busy();
+    }
+
     // Use a time point in the far future (9999-12-31T00:00:00+0000)
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
@@ -2180,6 +2203,10 @@ future<> database::close_tables(table_kind kind_to_close) {
     b.cancel();
 }
 
+future<> database::await_background_ops() {
+    return _background_ops.advance_and_await();
+}
+
 void database::revert_initial_system_read_concurrency_boost() {
     _system_read_concurrency_sem.set_resources({database::max_count_system_concurrent_reads, max_memory_system_concurrent_reads()});
     dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
@@ -2201,6 +2228,7 @@ future<> database::shutdown() {
     // stop compaction across all shards before closing tables
     co_await _compaction_manager.drain();
     co_await _stop_barrier.arrive_and_wait();
+    co_await _background_ops.close();
 
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.
@@ -2566,6 +2594,8 @@ std::pair<sstring, table_id> parse_table_directory_name(const sstring& directory
 }
 
 future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
+    co_await await_background_ops();
+
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
     std::unordered_map<sstring, snapshot_details> details;
 

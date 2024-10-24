@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <functional>
 #include <vector>
 
 #include <seastar/core/sharded.hh>
@@ -122,16 +123,24 @@ private:
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
-    template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_modify_operation(Func&&);
+    future<> run_snapshot_operation(std::function<future<>()> f, bool modifying);
+    template <typename T>
+    future<T> run_snapshot_operation(std::function<future<T>()> f, bool modifying);
 
-    template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
-        return with_gate(_ops, [f = std::move(f), this] () {
-            return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
-                return with_lock(snap._lock.for_read(), std::move(f));
-            });
-        });
+    future<> run_snapshot_modify_operation(std::function<future<>()> f) {
+        return run_snapshot_operation(std::move(f), false);
+    }
+    template <typename T>
+    future<T> run_snapshot_modify_operation(std::function<future<T>()> f) {
+        return run_snapshot_operation(std::move(f), true);
+    }
+
+    future<> run_snapshot_list_operation(std::function<future<>()> f) {
+        return run_snapshot_operation(std::move(f), false);
+    }
+    template <typename T>
+    future<T> run_snapshot_list_operation(std::function<future<T>()> f) {
+        return run_snapshot_operation(std::move(f), false);
     }
 
     friend class snapshot::backup_task_impl;

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -56,13 +57,35 @@ future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, s
     });
 }
 
-template <typename Func>
-std::invoke_result_t<Func> snapshot_ctl::run_snapshot_modify_operation(Func&& f) {
-    return with_gate(_ops, [f = std::move(f), this] () {
-        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
-            return with_lock(snap._lock.for_write(), std::move(f));
+future<> snapshot_ctl::run_snapshot_operation(std::function<future<>()> f, bool modifying) {
+    auto gh = _ops.hold();
+
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [f = std::move(f), modifying] (snapshot_ctl& snap) mutable {
+            return snap.run_snapshot_operation(std::move(f), modifying);
         });
-    });
+    }
+
+    auto func = std::move(f);
+    auto lh = co_await (modifying ? _lock.hold_write_lock() : _lock.hold_read_lock());
+    co_await _db.local().await_background_ops();
+    co_return co_await func();
+}
+
+template <typename T>
+future<T> snapshot_ctl::run_snapshot_operation(std::function<future<T>()> f, bool modifying) {
+    auto gh = _ops.hold();
+
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [f = std::move(f), modifying] (snapshot_ctl& snap) mutable {
+            return snap.run_snapshot_operation(std::move(f), modifying);
+        });
+    }
+
+    auto func = std::move(f);
+    auto lh = co_await (modifying ? _lock.hold_write_lock() : _lock.hold_read_lock());
+    co_await _db.local().await_background_ops();
+    co_return co_await func();
 }
 
 future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_names, skip_flush sf) {
@@ -123,13 +146,13 @@ future<std::unordered_map<sstring, snapshot_ctl::db_snapshot_details>>
 snapshot_ctl::get_snapshot_details() {
     using snapshot_map = std::unordered_map<sstring, db_snapshot_details>;
 
-    co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
+    co_return co_await run_snapshot_list_operation(std::function<future<snapshot_map>()>([this] () -> future<snapshot_map>{
         return _db.local().get_snapshot_details();
     }));
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size() {
-    co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<int64_t> {
+    co_return co_await run_snapshot_list_operation(std::function<future<int64_t>()>([this] () -> future<int64_t> {
         int64_t total = 0;
         for (auto& [name, details] : co_await _db.local().get_snapshot_details()) {
             total += std::accumulate(details.begin(), details.end(), int64_t(0), [] (int64_t sum, const auto& d) { return sum + d.details.live; });
@@ -181,7 +204,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
-    co_return co_await run_snapshot_list_operation(coroutine::lambda([this, ks = std::move(ks), cf = std::move(cf)] () -> future<int64_t> {
+    co_return co_await run_snapshot_list_operation(std::function<future<int64_t>()>([this, ks = std::move(ks), cf = std::move(cf)] () -> future<int64_t> {
         int64_t total = 0;
         for (auto& [name, details] : co_await _db.local().find_column_family(ks, cf).get_snapshot_details()) {
             total += details.total;

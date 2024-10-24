@@ -60,6 +60,11 @@ bool query_processor::topology_global_queue_empty() {
     return remote().first.get().ss.topology_global_queue_empty();
 }
 
+future<> query_processor::await_topology_not_busy() {
+    auto [remote_, holder] = remote();
+    co_await remote_.get().ss.await_topology_not_busy();
+}
+
 static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }

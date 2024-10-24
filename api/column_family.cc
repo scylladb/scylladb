@@ -376,18 +376,20 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
 }
 
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
-    cf::get_column_family_name.set(r, [&ctx] (const_req req){
+    cf::get_column_family_name.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<sstring> res;
+        co_await ctx.db.local().await_background_ops();
         const replica::database::tables_metadata& meta = ctx.db.local().get_tables_metadata();
         res.reserve(meta.size());
         meta.for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
             res.push_back(kscf.first + ":" + kscf.second);
         });
-        return res;
+        co_return json::stream_range_as_array(std::move(res), std::identity());
     });
 
-    cf::get_column_family.set(r, [&ctx] (std::unique_ptr<http::request> req){
+    cf::get_column_family.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::list<cf::column_family_info> res;
+            co_await ctx.db.local().await_background_ops();
             ctx.db.local().get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
                 cf::column_family_info info;
                 info.ks = kscf.first;
@@ -395,17 +397,18 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
                 info.type = "ColumnFamilies";
                 res.push_back(info);
             });
-            return make_ready_future<json::json_return_type>(json::stream_range_as_array(std::move(res), std::identity()));
+            co_return json::stream_range_as_array(std::move(res), std::identity());
         });
 
-    cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
+    cf::get_column_family_name_keyspace.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<sstring> res;
+        co_await ctx.db.local().await_background_ops();
         const flat_hash_map<sstring, replica::keyspace>& keyspaces = ctx.db.local().get_keyspaces();
         res.reserve(keyspaces.size());
         for (const auto& i : keyspaces) {
             res.push_back(i.first);
         }
-        return res;
+        co_return res;
     });
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {

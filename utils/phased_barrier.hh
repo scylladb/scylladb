@@ -58,17 +58,38 @@ public:
         return { _gate };
     }
 
+    future<> close() {
+        return _gate->close();
+    }
+
+    bool is_closed() const noexcept {
+        return _gate->is_closed();
+    }
+
+    void check() const {
+        _gate->check();
+    }
+
     // Starts a new phase and waits for all operations started in any of the earlier phases.
     // It is fine to start multiple awaits in parallel.
-    // Cannot fail.
+    // May return an exceptional future with gate_closed_exception if the phased barrier is closed,
+    // but otherwise it won't fail.
     future<> advance_and_await() noexcept {
+        if (is_closed()) {
+            return make_exception_future(gate_closed_exception());
+        }
+        if (!_gate->get_count()) {
+            ++_phase;
+            return make_ready_future();
+        }
         auto new_gate = [] {
             seastar::memory::scoped_critical_alloc_section _;
             return make_lw_shared<gate>();
         }();
         ++_phase;
         auto old_gate = std::exchange(_gate, std::move(new_gate));
-        return old_gate->close().then([old_gate, op = start()] {});
+        auto op = start();
+        return old_gate->close().then([old_gate = std::move(old_gate), op = std::move(op)] {});
     }
 
     // Returns current phase number. The smallest value returned is 0.

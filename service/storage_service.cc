@@ -6475,7 +6475,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 }
 
-future<> storage_service::await_topology_quiesced() {
+future<> storage_service::await_topology_quiesced(bool with_read_barrier) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
@@ -6486,7 +6486,9 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    co_await _group0->group0_server().read_barrier(&_group0_as);
+    if (with_read_barrier) {
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+    }
     co_await _topology_state_machine.await_not_busy();
 }
 
