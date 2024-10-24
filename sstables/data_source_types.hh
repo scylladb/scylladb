@@ -14,6 +14,7 @@ namespace sstables {
 
 template<bool check_digest>
 struct digest_members {
+    bool can_calculate_digest;
     uint32_t expected_digest;
     uint32_t actual_digest;
 };
