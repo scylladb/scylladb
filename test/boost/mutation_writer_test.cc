@@ -392,8 +392,9 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 }
 
 static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema) {
-    auto bucket_readers = boost::copy_range<std::vector<mutation_reader>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
+    auto bucket_readers = buckets | std::views::values |
+            std::views::transform([&random_schema, &permit] (std::vector<mutation> muts) { return make_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }) |
+            std::ranges::to<std::vector>();
     auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);

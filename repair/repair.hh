@@ -149,7 +149,7 @@ public:
         : all(std::move(a)) {
     }
     explicit repair_neighbors(const std::unordered_map<locator::host_id, gms::inet_address>& a)
-        : all(boost::copy_range<std::vector<gms::inet_address>>(a | boost::adaptors::map_values)) {
+        : all(a | std::views::values | std::ranges::to<std::vector<gms::inet_address>>()) {
     }
     repair_neighbors(std::vector<gms::inet_address> a, std::vector<gms::inet_address> m)
         : all(std::move(a))

@@ -223,7 +223,7 @@ future<> manager::stop() {
     return _migrating_done.finally([this] {
         return _draining_eps_gate.close();
     }).finally([this] {
-        return parallel_for_each(_ep_managers | boost::adaptors::map_values, [] (hint_endpoint_manager& ep_man) {
+        return parallel_for_each(_ep_managers | std::views::values, [] (hint_endpoint_manager& ep_man) {
             return ep_man.stop();
         }).finally([this] {
             _ep_managers.clear();
@@ -690,7 +690,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
         set_draining_all();
 
         try {
-            co_await coroutine::parallel_for_each(_ep_managers | boost::adaptors::map_values,
+            co_await coroutine::parallel_for_each(_ep_managers | std::views::values,
                     [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
                 return drain_ep_manager(ep_man);
             });
