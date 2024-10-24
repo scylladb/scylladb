@@ -98,7 +98,8 @@ static void encode_signed_long_type(managed_bytes_view src, bytes_ostream& out) 
 }
 
 // Refer encode_signed_long_type() for the encoding details
-static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out) {
+// If prefix_sign_bytes is false, any redundant leading sign bits will not be written.
+static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out, bool prefix_sign_bytes) {
     uint8_t curr_byte = read_simple<uint8_t>(src);
     uint8_t length_bit = curr_byte & BYTE_SIGN_MASK;
     // Deduce bytes to read from the length bits (i.e inverted sign bits) in curr_byte
@@ -114,11 +115,17 @@ static void decode_signed_long_type(managed_bytes_view& src, bytes_ostream& out)
         }
     }
 
-    // Fill all leading bytes with sign bits, leaving space for the remaining bytes in src and curr_byte.
-    uint8_t bytes_with_sign_bit = sizeof(int64_t) - (1 + bytes_to_read);
-    const uint8_t sign_only_byte = int8_t(~length_bit) >> 7;
-    while (bytes_with_sign_bit--) {
-        out.write<uint8_t>(sign_only_byte);
+    if (prefix_sign_bytes) {
+        // Fill all leading bytes with sign bits, leaving space for the remaining bytes in src and curr_byte.
+        uint8_t bytes_with_sign_bit = sizeof(int64_t) - (1 + bytes_to_read);
+        const uint8_t sign_only_byte = int8_t(~length_bit) >> 7;
+        while (bytes_with_sign_bit--) {
+            out.write<uint8_t>(sign_only_byte);
+        }
+    } else if (length_bits_in_curr_byte == 0) {
+        // curr_byte has no sign bit, and no sign bytes are prefixed.
+        // Add an extra byte with sign bits to preserve the value's sign.
+        out.write<uint8_t>(int8_t(~length_bit) >> 7);
     }
 
     if (length_bits_in_curr_byte) {
@@ -297,7 +304,7 @@ struct from_comparable_bytes_visitor {
     }
 
     void operator()(const long_type_impl&) {
-        decode_signed_long_type(comparable_bytes_view, out);
+        decode_signed_long_type(comparable_bytes_view, out, true);
     }
 
     // Decoding for float and double
