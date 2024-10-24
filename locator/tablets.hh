@@ -46,7 +46,7 @@ struct tablet_id {
     explicit tablet_id(size_t id) : id(id) {}
     size_t value() const { return id; }
     explicit operator size_t() const { return id; }
-    bool operator<=>(const tablet_id&) const = default;
+    auto operator<=>(const tablet_id&) const = default;
 };
 
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
@@ -54,14 +54,14 @@ struct global_tablet_id {
     table_id table;
     tablet_id tablet;
 
-    bool operator<=>(const global_tablet_id&) const = default;
+    auto operator<=>(const global_tablet_id&) const = default;
 };
 
 struct tablet_replica {
     host_id host;
     shard_id shard;
 
-    bool operator==(const tablet_replica&) const = default;
+    auto operator<=>(const tablet_replica&) const = default;
 };
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
@@ -274,6 +274,8 @@ struct resize_decision {
     bool operator==(const resize_decision&) const;
     sstring type_name() const;
     seq_number_t next_sequence_number() const;
+    // Returns true if this is the initial decision, before split or merge was emitted.
+    bool initial_decision() const;
 };
 
 struct table_load_stats {
@@ -299,6 +301,12 @@ struct load_stats {
 };
 
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
+
+struct tablet_desc {
+    tablet_id tid;
+    const tablet_info* info; // cannot be null.
+    const tablet_transition_info* transition; // null if there's no transition.
+};
 
 /// Stores information about tablets of a single table.
 ///
@@ -386,6 +394,11 @@ public:
         return tablet_id(size_t(t) + 1);
     }
 
+    // Returns the pair of sibling tablets for a given tablet id.
+    // For example, if id 1 is provided, a pair of 0 and 1 is returned.
+    // Returns disengaged optional when sibling pair cannot be found.
+    std::optional<std::pair<tablet_id, tablet_id>> sibling_tablets(tablet_id t) const;
+
     /// Returns true iff tablet has a given replica.
     /// If tablet is in transition, considers both previous and next replica set.
     bool has_replica(tablet_id, tablet_replica) const;
@@ -396,6 +409,10 @@ public:
 
     /// Calls a given function for each tablet in the map in token ownership order.
     future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
+
+    /// Calls a given function for each sibling tablet in the map in token ownership order.
+    /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
+    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {
         return _transitions;
@@ -426,6 +443,7 @@ public:
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
+    bool needs_merge() const;
 
     const locator::resize_decision& resize_decision() const;
 public:

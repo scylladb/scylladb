@@ -28,6 +28,14 @@ namespace locator {
 
 seastar::logger tablet_logger("tablets");
 
+std::optional<std::pair<tablet_id, tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
+    if (tablet_count() == 1) {
+        return std::nullopt;
+    }
+    auto first_sibling = tablet_id(t.value() & ~0x1);
+    return std::make_pair(first_sibling, *next_tablet(first_sibling));
+}
+
 
 static
 write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage) {
@@ -359,6 +367,24 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tabl
     }
 }
 
+future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const {
+    auto make_desc = [this] (tablet_id tid) {
+        return tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
+    };
+    if (_tablets.size() == 1) {
+        co_return co_await func(make_desc(first_tablet()), std::nullopt);
+    }
+    for (std::optional<tablet_id> tid = first_tablet(); tid; tid = next_tablet(*tid)) {
+        auto tid1 = tid;
+        auto tid2 = tid = next_tablet(*tid);
+        if (!tid2) {
+            // Cannot happen with power-of-two invariant.
+            throw std::logic_error(format("Cannot retrieve sibling tablet with tablet count {}", tablet_count()));
+        }
+        co_await func(make_desc(*tid1), make_desc(*tid2));
+    }
+}
+
 void tablet_map::clear_transitions() {
     _transitions.clear();
 }
@@ -463,6 +489,10 @@ bool tablet_map::needs_split() const {
     return std::holds_alternative<resize_decision::split>(_resize_decision.way);
 }
 
+bool tablet_map::needs_merge() const {
+    return std::holds_alternative<resize_decision::merge>(_resize_decision.way);
+}
+
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
 }
@@ -497,6 +527,10 @@ resize_decision::seq_number_t resize_decision::next_sequence_number() const {
     // for it to happen, about 21x the age of the universe, or ~11x according to the new
     // prediction after james webb.
     return (sequence_number == std::numeric_limits<seq_number_t>::max()) ? 0 : sequence_number + 1;
+}
+
+bool resize_decision::initial_decision() const {
+    return sequence_number == 0;
 }
 
 table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {

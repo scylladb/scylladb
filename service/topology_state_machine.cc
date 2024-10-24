@@ -147,10 +147,15 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::write_both_read_old, "write both read old"},
     {topology::transition_state::write_both_read_new, "write both read new"},
     {topology::transition_state::tablet_migration, "tablet migration"},
-    {topology::transition_state::tablet_split_finalization, "tablet split finalization"},
+    {topology::transition_state::tablet_resize_finalization, "tablet resize finalization"},
     {topology::transition_state::tablet_draining, "tablet draining"},
     {topology::transition_state::left_token_ring, "left token ring"},
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
+};
+
+// Allows old deprecated names to be recognized and point to the correct transition.
+static std::unordered_map<sstring, topology::transition_state> deprecated_name_to_transition_state = {
+    {"tablet split finalization", topology::transition_state::tablet_resize_finalization},
 };
 
 topology::transition_state transition_state_from_string(const sstring& s) {
@@ -158,6 +163,10 @@ topology::transition_state transition_state_from_string(const sstring& s) {
         if (e.second == s) {
             return e.first;
         }
+    }
+    auto it = deprecated_name_to_transition_state.find(s);
+    if (it != deprecated_name_to_transition_state.end()) {
+        return it->second;
     }
     on_internal_error(tsmlogger, format("cannot map name {} to transition_state", s));
 }
