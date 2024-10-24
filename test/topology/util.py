@@ -13,7 +13,7 @@ import functools
 import operator
 import time
 import re
-from contextlib import suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
@@ -22,7 +22,6 @@ from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
-from contextlib import asynccontextmanager
 from typing import Optional, List
 
 
@@ -527,3 +526,18 @@ async def get_raft_log_size(cql, host) -> int:
 async def get_raft_snap_id(cql, host) -> str:
     query = "select snapshot_id from system.raft limit 1"
     return (await cql.run_async(query, host=host))[0].snapshot_id
+
+
+@contextmanager
+def disable_schema_agreement_wait(cql: Session):
+    """
+    A context manager that temporarily disables the schema agreement wait
+    for the given cql session.
+    """
+    assert hasattr(cql.cluster, "max_schema_agreement_wait")
+    old_value = cql.cluster.max_schema_agreement_wait
+    cql.cluster.max_schema_agreement_wait = 0
+    try:
+        yield
+    finally:
+        cql.cluster.max_schema_agreement_wait = old_value
