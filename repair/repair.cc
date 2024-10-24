@@ -1916,12 +1916,12 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
-                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
-                    rs.get_metrics().decommission_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped, nr_tables] (repair_service& rs) {
+                    rs.get_metrics().decommission_finished_ranges += nr_ranges_skipped * nr_tables;
                 }).get();
             } else if (reason == streaming::stream_reason::removenode) {
-                container().invoke_on_all([nr_ranges_skipped] (repair_service& rs) {
-                    rs.get_metrics().removenode_finished_ranges += nr_ranges_skipped;
+                container().invoke_on_all([nr_ranges_skipped, nr_tables] (repair_service& rs) {
+                    rs.get_metrics().removenode_finished_ranges += nr_ranges_skipped * nr_tables;
                 }).get();
             }
             if (is_removenode) {
