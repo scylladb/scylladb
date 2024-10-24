@@ -457,10 +457,6 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
     if (_cm._sys_ks) {
-        // FIXME: add support to merged_rows. merged_rows is a histogram that
-        // shows how many sstables each row is merged from. This information
-        // cannot be accessed until we make combined_reader more generic,
-        // for example, by adding a reducer method.
         auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
 
         co_await utils::get_local_injector().inject("update_history_wait", [](auto& handler) -> future<> {
@@ -469,8 +465,15 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
             cmlog.info("update_history_wait: released");
         });
 
+        std::unordered_map<int32_t, int64_t> rows_merged;
+        for (size_t id=0; id<res.stats.reader_statistics.rows_merged_histogram.size(); ++id) {
+            if (res.stats.reader_statistics.rows_merged_histogram[id] <= 0) {
+                continue;
+            }
+            rows_merged[id] = res.stats.reader_statistics.rows_merged_histogram[id];
+        }
         co_await sys_ks->update_compaction_history(cdata.compaction_uuid, t.schema()->ks_name(), t.schema()->cf_name(),
-                ended_at.count(), res.stats.start_size, res.stats.end_size, std::unordered_map<int32_t, int64_t>{});
+                ended_at.count(), res.stats.start_size, res.stats.end_size, std::move(rows_merged));
     }
 }
 

@@ -680,7 +680,7 @@ class selector_of_empty_readers : public reader_selector {
     size_t _remaining;
 public:
     selector_of_empty_readers(schema_ptr s, reader_permit permit, size_t count)
-        : reader_selector(s, dht::ring_position_view::min())
+        : reader_selector(s, dht::ring_position_view::min(), count)
         , _schema(s)
         , _permit(std::move(permit))
         , _remaining(count) {
@@ -858,7 +858,8 @@ public:
             std::vector<std::vector<mutation>> reader_mutations,
             dht::partition_range pr = query::full_partition_range,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
-        : reader_selector(s, dht::ring_position_view::min())
+        : reader_selector(s, dht::ring_position_view::min(),
+                          std::accumulate(reader_mutations.begin(), reader_mutations.end(), 0, [](size_t count, const auto& readers) { return count + readers.size(); }))
         , _schema(s)
         , _permit(std::move(permit))
         , _position(dht::ring_position::min())

@@ -502,6 +502,7 @@ protected:
     uint64_t _estimated_partitions = 0;
     double _estimated_droppable_tombstone_ratio = 0;
     uint64_t _bloom_filter_checks = 0;
+    combined_reader_statistics _reader_statistics;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     const bool _can_split_large_partition = false;
@@ -724,9 +725,9 @@ private:
                                                         const query::partition_slice& slice,
                                                         tracing::trace_state_ptr,
                                                         streamed_mutation::forwarding fwd,
-                                                        mutation_reader::forwarding) const = 0;
+                                                        mutation_reader::forwarding) = 0;
 
-    mutation_reader setup_sstable_reader() const {
+    mutation_reader setup_sstable_reader() {
         if (!_owned_ranges_checker) {
             return make_sstable_reader(_schema,
                                        _permit,
@@ -898,6 +899,7 @@ protected:
                 .start_size = _start_size,
                 .end_size = _end_size,
                 .bloom_filter_checks = _bloom_filter_checks,
+                .reader_statistics = std::move(_reader_statistics),
             },
         };
 
@@ -1149,7 +1151,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_local_shard_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
@@ -1157,7 +1159,9 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                unwrap_monitor_generator());
+                unwrap_monitor_generator(),
+                default_sstable_predicate(),
+                &_reader_statistics);
     }
 
     std::string_view report_start_desc() const override {
@@ -1296,7 +1300,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_local_shard_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
@@ -1600,7 +1604,7 @@ private:
     std::string _scrub_start_description;
     mutable std::string _scrub_finish_description;
     uint64_t _bucket_count = 0;
-    mutable uint64_t _validation_errors = 0;
+    uint64_t _validation_errors = 0;
 
 public:
     scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options, compaction_progress_monitor& progress_monitor)
@@ -1627,7 +1631,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
@@ -1728,7 +1732,7 @@ public:
                                                 const query::partition_slice& slice,
                                                 tracing::trace_state_ptr trace,
                                                 streamed_mutation::forwarding sm_fwd,
-                                                mutation_reader::forwarding mr_fwd) const override {
+                                                mutation_reader::forwarding mr_fwd) override {
         return _compacting->make_range_sstable_reader(std::move(s),
                 std::move(permit),
                 range,
