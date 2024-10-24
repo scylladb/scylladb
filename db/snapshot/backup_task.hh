@@ -25,7 +25,6 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
-    std::exception_ptr _ex;
     void do_backup();
 
 protected:
