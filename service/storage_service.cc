@@ -678,10 +678,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
 
-    std::unordered_set<locator::host_id> tablet_hosts;
-    if (_db.local().get_config().enable_tablets()) {
-        tablet_hosts = co_await replica::read_required_hosts(_qp);
-    }
+    std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
 
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
@@ -773,19 +770,17 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
         auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
 
-        if (_db.local().get_config().enable_tablets()) {
-            std::optional<locator::tablet_metadata> tablets;
-            if (hint.tablets_hint) {
-                // We want to update the tablet metadata incrementally, so copy it
-                // from the current token metadata and update only the changed parts.
-                tablets = co_await get_token_metadata().tablets().copy();
-                co_await replica::update_tablet_metadata(_qp, *tablets, *hint.tablets_hint);
-            } else {
-                tablets = co_await replica::read_tablet_metadata(_qp);
-            }
-            tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
-            tmptr->set_tablets(std::move(*tablets));
+        std::optional<locator::tablet_metadata> tablets;
+        if (hint.tablets_hint) {
+            // We want to update the tablet metadata incrementally, so copy it
+            // from the current token metadata and update only the changed parts.
+            tablets = co_await get_token_metadata().tablets().copy();
+            co_await replica::update_tablet_metadata(_qp, *tablets, *hint.tablets_hint);
+        } else {
+            tablets = co_await replica::read_tablet_metadata(_qp);
         }
+        tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+        tmptr->set_tablets(std::move(*tablets));
 
         co_await replicate_to_all_cores(std::move(tmptr));
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));
@@ -5388,9 +5383,6 @@ void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_c
 }
 
 future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
-    if (!_db.local().get_config().enable_tablets()) {
-        return make_ready_future<>();
-    }
     return mutate_token_metadata([this, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
         if (hint) {
             co_await replica::update_tablet_metadata(_qp, tmptr->tablets(), hint);
@@ -5484,9 +5476,6 @@ future<> storage_service::run_tablet_split_monitor() {
 
 void storage_service::start_tablet_split_monitor() {
     if (this_shard_id() != 0) {
-        return;
-    }
-    if (!_db.local().get_config().enable_tablets()) {
         return;
     }
     slogger.info("Starting the tablet split monitor...");
