@@ -69,7 +69,7 @@ generate_cxxbridge(wasmtime_bindings
 set_target_properties(Rust::rust_combined PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}")
 
-add_library(wasmtime_bindings)
+add_library(wasmtime_bindings STATIC)
 target_sources(wasmtime_bindings
   PRIVATE
     ${cxx_header}
@@ -87,7 +87,7 @@ generate_cxxbridge(inc
   OUTPUT_DIR "${binding_gen_build_dir}"
   SOURCES inc_sources)
 
-add_library(inc)
+add_library(inc STATIC)
 target_sources(inc
   PRIVATE
     ${cxx_header}

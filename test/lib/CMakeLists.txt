@@ -1,4 +1,4 @@
-add_library(test-lib)
+add_library(test-lib STATIC)
 target_sources(test-lib
   PRIVATE
     cql_assertions.cc

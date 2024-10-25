@@ -62,7 +62,7 @@ foreach(f ${swagger_files})
   list(APPEND swagger_gen_files "${scylla_swagger_gen_${fname}_files}")
 endforeach()
 
-add_library(api)
+add_library(api STATIC)
 target_sources(api
   PRIVATE
     api.cc
