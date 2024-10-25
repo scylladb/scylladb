@@ -629,7 +629,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , data_centers(data_centers_)
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
-    , total_rf(erm->get_replication_factor())
+    , total_rf(erm->get_schema_replication_factor())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
@@ -1619,7 +1619,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myid, myloc).get();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
-            auto replication_factor = erm->get_replication_factor();
+            auto replication_factor = erm->get_schema_replication_factor();
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get();

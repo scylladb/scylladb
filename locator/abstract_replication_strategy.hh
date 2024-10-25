@@ -209,7 +209,7 @@ public:
     const token_metadata& get_token_metadata() const noexcept { return *_tmptr; }
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
     const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
-    size_t get_replication_factor() const noexcept { return _replication_factor; }
+    size_t get_schema_replication_factor() const noexcept { return _replication_factor; }
 
     void invalidate() const noexcept {
         _validity_abort_source->request_abort();
