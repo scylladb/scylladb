@@ -1268,6 +1268,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             db::sstables_format_selector sst_format_selector(db);
 
+            api::set_format_selector(ctx, sst_format_selector).get();
+            auto stop_format_seletor_api = defer_verbose_shutdown("sstables format selector API", [&ctx] {
+                api::unset_format_selector(ctx).get();
+            });
+
             supervisor::notify("starting system keyspace");
             sys_ks.start(std::ref(qp), std::ref(db)).get();
             // TODO: stop()?

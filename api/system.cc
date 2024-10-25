@@ -190,4 +190,10 @@ void set_system(http_context& ctx, routes& r) {
     });
 }
 
+void set_format_selector(http_context& ctx, routes& r, db::sstables_format_selector& sel) {
+}
+
+void unset_format_selector(http_context& ctx, routes& r) {
+}
+
 }
