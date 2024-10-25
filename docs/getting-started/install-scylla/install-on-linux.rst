@@ -156,8 +156,13 @@ Install ScyllaDB
 (Optional) Install scylla-jmx
 -------------------------------
 
+<<<<<<< HEAD
     scylla-jmx becomes optional package from ScyllaDB 6.2, not installed by default.
     If you need JMX server, see :doc:`Install scylla-jmx Package </getting-started/install-scylla/install-jmx>`
+=======
+    scylla-jmx is an optional package and is not installed by default.
+    If you need JMX server, see :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`.
+>>>>>>> a5fed924e9 (doc: fix redundant references to version 6.2)
 
 
 
