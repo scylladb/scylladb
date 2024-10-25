@@ -6,7 +6,7 @@ target_link_libraries(test-raft-helper
   test-lib
   Seastar::seastar_testing)
 
-add_library(test-raft)
+add_library(test-raft STATIC)
 target_sources(test-raft
   PRIVATE
     replication.cc)
