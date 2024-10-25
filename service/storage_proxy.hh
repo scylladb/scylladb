@@ -333,7 +333,7 @@ private:
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable);
     result<response_id_type> create_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
-            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable);
+            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable, dht::token);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const read_repair_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
@@ -355,9 +355,9 @@ private:
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
     inet_address_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*) const;
+    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*, dht::token) const;
     // As above with read_repair_decision=NONE, extra=nullptr.
-    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set& live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, replica::column_family*) const;
+    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set& live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, replica::column_family*, dht::token) const;
     bool is_alive(const gms::inet_address&) const;
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             locator::effective_replication_map_ptr ermp,
@@ -450,7 +450,8 @@ private:
             tracing::trace_state_ptr tr_state,
             write_stats& stats,
             allow_hints,
-            is_cancellable);
+            is_cancellable,
+            dht::token token_id);
 
     void maybe_update_view_backlog_of(gms::inet_address, std::optional<db::view::update_backlog>);
 
@@ -629,14 +630,14 @@ public:
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
-            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable);
+            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable, dht::token);
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
-            tracing::trace_state_ptr tr_state, allow_hints, is_cancellable);
+            tracing::trace_state_ptr tr_state, allow_hints, is_cancellable, dht::token);
 
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection
     // and use different RPC verb.
-    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target);
+    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, dht::token);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
