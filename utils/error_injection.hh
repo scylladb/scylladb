@@ -363,11 +363,8 @@ public:
     // \param f lambda to be run
     [[gnu::always_inline]]
     void inject(const std::string_view& name, handler_fun f) {
-        if (!is_enabled(name)) {
+        if (!enter(name)) {
             return;
-        }
-        if (is_one_shot(name)) {
-            disable(name);
         }
         errinj_logger.debug("Triggering injection \"{}\"", name);
         f();
@@ -375,14 +372,9 @@ public:
 
     // \brief Inject a sleep for milliseconds
     [[gnu::always_inline]]
-    future<> inject(const std::string_view& name,
-            const std::chrono::milliseconds duration) {
-
-        if (!is_enabled(name)) {
+    future<> inject(const std::string_view& name, const std::chrono::milliseconds duration) {
+        if (!enter(name)) {
             return make_ready_future<>();
-        }
-        if (is_one_shot(name)) {
-            disable(name);
         }
         errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
         return seastar::sleep(duration);
@@ -392,12 +384,8 @@ public:
     template <typename Clock, typename Duration>
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline) {
-
-        if (!is_enabled(name)) {
+        if (!enter(name)) {
             return make_ready_future<>();
-        }
-        if (is_one_shot(name)) {
-            disable(name);
         }
 
         // Time left until deadline
@@ -412,10 +400,7 @@ public:
     [[gnu::always_inline]]
     std::invoke_result_t<Func> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
                 Func&& func) {
-        if (is_enabled(name)) {
-            if (is_one_shot(name)) {
-                disable(name);
-            }
+        if (enter(name)) {
             std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
             errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
             return seastar::sleep<Clock>(duration).then([func = std::move(func)] {
@@ -431,15 +416,11 @@ public:
     requires std::is_invocable_r_v<std::exception_ptr, Func>
     [[gnu::always_inline]]
     future<>
-    inject(const std::string_view& name,
-            Func&& exception_factory) {
-
-        if (!is_enabled(name)) {
+    inject(const std::string_view& name, Func&& exception_factory) {
+        if (!enter(name)) {
             return make_ready_future<>();
         }
-        if (is_one_shot(name)) {
-            disable(name);
-        }
+
         errinj_logger.debug("Triggering exception injection \"{}\"", name);
         return make_exception_future<>(exception_factory());
     }
