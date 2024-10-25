@@ -17,7 +17,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
-
+#include "network_topology_strategy.hh"
 namespace locator {
 
 template <typename ResultSet, typename SourceSet>
@@ -556,6 +556,18 @@ effective_replication_map::effective_replication_map(replication_strategy_ptr rs
 
 vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
+}
+
+
+size_t vnode_effective_replication_map::get_replication_factor([[maybe_unused]] dht::token id, const seastar::sstring& datacenter) const {
+    const auto& replication_strategy = get_replication_strategy();
+
+    if (replication_strategy.get_type() == replication_strategy_type::network_topology) {
+        const network_topology_strategy* nrs = static_cast<const network_topology_strategy*>(&replication_strategy);
+        return nrs->get_replication_factor(datacenter);
+    }
+
+    return get_replication_factor(id);
 }
 
 future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
