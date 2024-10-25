@@ -35,3 +35,16 @@ Change Data Capture (CDC)
   * :doc:`Advanced Column Types <cdc-advanced-types>`
   * :doc:`Preimages and Postimages <cdc-preimages>`
   * :doc:`Data consistency <cdc-consistency>`
+
+
+.. panel-box::
+  :title: CDC Integration Projects
+  :id: "getting-started"
+  :class: my-panel
+
+  * `Go (scylla-cdc-go) <https://github.com/scylladb/scylla-cdc-go>`_
+  * `Java (scylla-cdc-java) <https://github.com/scylladb/scylla-cdc-java>`_
+  * `Rust (scylla-cdc-rust) <https://github.com/scylladb/scylla-cdc-rust>`_
+  * :doc:`CDC Source Connector (compatible with Kafka Connect) </using-scylla/integrations/scylla-cdc-source-connector>`
+  * :doc:`CDC Source Connector Quickstart </using-scylla/integrations/scylla-cdc-source-connector-quickstart>`
+
