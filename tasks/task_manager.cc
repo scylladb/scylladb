@@ -608,12 +608,11 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
             co_return std::nullopt;
         }));
 
-        if (sequence_number) {
-            task->get_status().sequence_number = sequence_number.value();
-        } else { // Virtual task as a parent.
-            sequence_number = new_sequence_number();
+        if (!sequence_number) { // Virtual task as a parent.
             task->set_virtual_parent();
+            sequence_number = new_sequence_number();
         }
+        task->get_status().sequence_number = sequence_number.value();
     }
     if (abort) {
         task->abort();
