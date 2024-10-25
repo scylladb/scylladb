@@ -557,7 +557,8 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
 }
 
 sstring network_topology_strategy::sanity_check_read_replicas(const effective_replication_map& erm,
-                                                              const host_id_vector_replica_set& read_replicas) const {
+                                                              const host_id_vector_replica_set& read_replicas,
+                                                              const dht::token token) const {
     const auto& topology = erm.get_topology();
 
     struct rf_node_count {
@@ -566,11 +567,11 @@ sstring network_topology_strategy::sanity_check_read_replicas(const effective_re
     };
 
     absl::flat_hash_map<sstring, rf_node_count> data_centers_replication_factor;
-    std::ranges::for_each(read_replicas, [&data_centers_replication_factor, &topology, this](const auto& node) {
+    std::ranges::for_each(read_replicas, [&data_centers_replication_factor, &topology, token, &erm](const auto& node) {
         auto res = data_centers_replication_factor.emplace(topology.get_datacenter(node), rf_node_count{0, 0});
         if (res.second) {
             // For new item add replication factor.
-            res.first->second.replication_factor = get_replication_factor(res.first->first);
+            res.first->second.replication_factor = erm.get_replication_factor(token, res.first->first);
         }
         ++res.first->second.node_count;
     });

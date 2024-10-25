@@ -42,7 +42,8 @@ public:
         return true;
     }
 
-    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
+    [[nodiscard]] sstring sanity_check_read_replicas(
+            const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, dht::token token) const override;
 
 public: // tablet_aware_replication_strategy
     virtual future<effective_replication_map_ptr> make_replication_map(table_id, token_metadata_ptr) const override;
