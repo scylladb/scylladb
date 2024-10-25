@@ -8,6 +8,7 @@
 
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 
+#include <optional>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <seastar/core/shared_mutex.hh>
@@ -199,25 +200,20 @@ std::optional<timestamp_based_splitting_mutation_writer::bucket_id> timestamp_ba
         return _classifier(cell.as_atomic_cell(cdef).timestamp());
     }
     if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-        std::optional<bucket_id> bucket;
-        bool mismatch = false;
-        cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
+        return cell.as_collection_mutation().with_deserialized(*cdef.type, [this] (collection_mutation_view_description mv) {
+            std::optional<bucket_id> bucket;
             if (mv.tomb) {
                 bucket = _classifier(mv.tomb.timestamp);
             }
             for (auto&& c : mv.cells) {
-                if (mismatch) {
-                    break;
-                }
                 const auto this_bucket = _classifier(c.second.timestamp());
-                mismatch |= bucket.value_or(this_bucket) != this_bucket;
+                if (bucket && *bucket != this_bucket) {
+                    return std::optional<bucket_id>{};
+                }
                 bucket = this_bucket;
             }
+            return bucket;
         });
-        if (mismatch) {
-            bucket.reset();
-        }
-        return bucket;
     }
     throw std::runtime_error(fmt::format("Cannot classify timestamp of cell (column {} of unknown type {})", cdef.name_as_text(), cdef.type->name()));
 }
