@@ -293,7 +293,7 @@ std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized
     return opts;
 }
 
-effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {
+future<effective_replication_map_ptr> network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {
     if (!uses_tablets()) {
         on_internal_error(rslogger, format("make_replication_map() called for table {} but replication strategy not configured to use tablets", table));
     }

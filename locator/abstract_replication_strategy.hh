@@ -298,7 +298,7 @@ protected:
     }
 public:
     virtual ~per_table_replication_strategy() = default;
-    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const = 0;
+    virtual future<effective_replication_map_ptr> make_replication_map(table_id, token_metadata_ptr) const = 0;
 };
 
 // Holds the full replication_map resulting from applying the

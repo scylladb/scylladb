@@ -1011,9 +1011,10 @@ std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet
     return opts;
 }
 
-effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replication_map(
+future<effective_replication_map_ptr> tablet_aware_replication_strategy::do_make_replication_map(
         table_id table, replication_strategy_ptr rs, token_metadata_ptr tm, size_t replication_factor) const {
-    return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
+    return make_ready_future<effective_replication_map_ptr>(
+            seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor));
 }
 
 void tablet_metadata_guard::check() noexcept {

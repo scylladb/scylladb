@@ -30,7 +30,7 @@ protected:
     void process_tablet_options(abstract_replication_strategy&, replication_strategy_config_options&, replication_strategy_params);
     std::unordered_set<sstring> recognized_tablet_options() const;
     size_t get_initial_tablets() const { return _initial_tablets; }
-    effective_replication_map_ptr do_make_replication_map(table_id,
+    future<effective_replication_map_ptr> do_make_replication_map(table_id,
                                                           replication_strategy_ptr,
                                                           token_metadata_ptr,
                                                           size_t replication_factor) const;
