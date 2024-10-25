@@ -2086,8 +2086,10 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
     }
     std::vector<sstables::shared_sstable> ret;
 
-    co_await run_custom_job(t, sstables::compaction_type::Split, "Split SSTable",
-                            [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& monitor) -> future<> {
+        // FIXME: indentation.
+        auto gate = get_compaction_state(&t).gate.hold();
+        sstables::compaction_progress_monitor monitor;
+        sstables::compaction_data info = create_compaction_data();
         sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
         desc.creator = [&t] (shard_id _) {
             return t.make_sstable();
@@ -2098,7 +2100,6 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
 
         co_await sstables::compact_sstables(std::move(desc), info, t, monitor);
         co_await sst->unlink();
-    }, tasks::task_info{}, throw_if_stopping::yes);
 
     co_return ret;
 }

@@ -725,6 +725,15 @@ private:
     size_t tablet_id_for_token(dht::token t) const noexcept {
         return tablet_map().get_tablet_id(t).value();
     }
+
+    storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
+        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
+        auto sg = make_lw_shared<storage_group>(std::move(cg));
+        if (tmap.needs_split()) {
+            sg->set_split_mode();
+        }
+        return sg;
+    }
 public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
@@ -741,8 +750,7 @@ public:
 
             if (tmap.has_replica(tid, local_replica)) {
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
-                auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
-                ret[tid.value()] = make_lw_shared<storage_group>(std::move(cg));
+                ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
             }
         }
         _storage_groups = std::move(ret);
@@ -864,6 +872,7 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
     if (set_split_mode()) {
         co_return;
     }
+    co_await utils::get_local_injector().inject("delay_split_compaction", 5s);
 
     if (_main_cg->empty()) {
         co_return;
@@ -2301,8 +2310,7 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         auto transition_info = transition.second;
         if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
             auto range = new_tablet_map->get_token_range(tid);
-            auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
-            _storage_groups[tid.value()] = make_lw_shared<storage_group>(std::move(cg));
+            _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
         }
     }
