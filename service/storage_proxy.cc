@@ -495,12 +495,10 @@ public:
             co_await coroutine::parallel_for_each(all_endpoints, [&] (auto ep) {
                 return send_truncate(ep, timeout, keyspace, cfname);
             });
-           } catch (rpc::timeout_error& e) {
-               slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
-               throw;
-           } catch (...) {
-               throw;
-           }
+        } catch (rpc::timeout_error& e) {
+            slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
+            throw;
+        }
     }
 
 private:
