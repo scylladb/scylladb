@@ -64,6 +64,7 @@ private:
         std::vector<column_info> regular_schema_columns_from_sstable;
         std::vector<column_info> static_schema_columns_from_sstable;
         column_values_fixed_lengths clustering_column_value_fix_lengths;
+        bool _empty = false;
 
         state() = default;
         state(const state&) = delete;
@@ -76,18 +77,41 @@ private:
             , regular_schema_columns_from_sstable(build(s, header.regular_columns.elements, features, false))
             , static_schema_columns_from_sstable(build(s, header.static_columns.elements, features, true))
             , clustering_column_value_fix_lengths (get_clustering_values_fixed_lengths(header))
+            , _empty(false)
+        {}
+
+        state(const schema& s)
+            : schema_uuid(s.version())
+            , _empty(true)
         {}
     };
 
     lw_shared_ptr<const state> _state = make_lw_shared<const state>();
 
 public:
+    // Use for formats >= mc.
     column_translation get_for_schema(
             const schema& s, const serialization_header& header, const sstable_enabled_features& features) {
-        if (s.version() != _state->schema_uuid) {
+        if (s.version() != _state->schema_uuid) [[unlikely]] {
             _state = make_lw_shared<const state>(s, header, features);
         }
         return *this;
+    }
+
+    // Use this when we don't have a serialization header (format older than mc).
+    column_translation get_for_schema(const schema& s) {
+        if (s.version() != _state->schema_uuid) [[unlikely]] {
+            _state = make_lw_shared<const state>(s);
+        }
+        return *this;
+    }
+
+    bool empty() const {
+        return _state->_empty;
+    }
+
+    table_schema_version version() const {
+        return _state->schema_uuid;
     }
 
     const std::vector<column_info>& regular_columns() const {
