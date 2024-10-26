@@ -60,6 +60,7 @@ private:
                 const sstable_enabled_features& features,
                 bool is_static);
 
+        schema_ptr _schema;
         table_schema_version schema_uuid;
         std::vector<column_info> regular_schema_columns_from_sstable;
         std::vector<column_info> static_schema_columns_from_sstable;
@@ -73,7 +74,8 @@ private:
         state& operator=(state&&) = default;
 
         state(const schema& s, const serialization_header& header, const sstable_enabled_features& features)
-            : schema_uuid(s.version())
+            : _schema(s.shared_from_this())
+            , schema_uuid(s.version())
             , regular_schema_columns_from_sstable(build(s, header.regular_columns.elements, features, false))
             , static_schema_columns_from_sstable(build(s, header.static_columns.elements, features, true))
             , clustering_column_value_fix_lengths (get_clustering_values_fixed_lengths(header))
