@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "utils/assert.hh"
 #include "dht/token.hh"
 #include <seastar/core/smp.hh>
 #include <boost/container/static_vector.hpp>

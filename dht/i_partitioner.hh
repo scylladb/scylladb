@@ -9,13 +9,10 @@
 
 #pragma once
 
-#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/util/optimized_optional.hh>
 #include "keys.hh"
 #include <memory>
 #include <utility>
-#include <byteswap.h>
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
 #include "dht/decorated_key.hh"
