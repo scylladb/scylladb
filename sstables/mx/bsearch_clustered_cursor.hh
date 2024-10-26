@@ -172,6 +172,7 @@ public:
     cached_file& _cached_file;
     data_consumer::primitive_consumer_impl<Buffer> _primitive_parser;
     u32_parser _u32_parser;
+    column_translation _ctr;
     clustering_parser<Buffer> _clustering_parser;
     promoted_index_block_parser<Buffer> _block_parser;
     reader_permit _permit;
@@ -268,7 +269,7 @@ public:
             uint64_t promoted_index_size,
             metrics& m,
             reader_permit permit,
-            column_values_fixed_lengths cvfl,
+            column_translation ctr,
             cached_file& f,
             pi_index_type blocks_count)
         : _blocks(block_comparator{s})
@@ -280,8 +281,9 @@ public:
         , _cached_file(f)
         , _primitive_parser(permit)
         , _u32_parser(_primitive_parser)
-        , _clustering_parser(s, permit, cvfl, true)
-        , _block_parser(s, permit, std::move(cvfl))
+        , _ctr(std::move(ctr))
+        , _clustering_parser(s, permit, _ctr.clustering_column_value_fix_legths(), true)
+        , _block_parser(s, permit, _ctr.clustering_column_value_fix_legths())
         , _permit(std::move(permit))
     { }
 
@@ -513,7 +515,7 @@ public:
             uint64_t promoted_index_size,
             cached_promoted_index::metrics& metrics,
             reader_permit permit,
-            column_values_fixed_lengths cvfl,
+            column_translation ctr,
             seastar::shared_ptr<cached_file> f,
             pi_index_type blocks_count,
             tracing::trace_state_ptr trace_state,
@@ -526,7 +528,7 @@ public:
             promoted_index_size,
             metrics,
             std::move(permit),
-            std::move(cvfl),
+            std::move(ctr),
             *_cached_file,
             blocks_count)
         , _trace_state(std::move(trace_state))

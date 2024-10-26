@@ -38,7 +38,7 @@ SEASTAR_TEST_CASE(test_abort_during_index_read) {
         index_consume_entry_context<dummy_index_consumer> consumer_ctx(
             *sst, env.make_reader_permit(), consumer, trust_promoted_index::no,
             make_file_input_stream(index_file, 0, index_file_size), 0, index_file_size,
-            std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header())),
+            sst->get_column_translation(),
             sst->manager().get_abort_source());
 
         // request abort before starting to consume index, so that the consumer throws an exception as soon as it starts
