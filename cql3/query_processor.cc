@@ -60,6 +60,11 @@ bool query_processor::topology_global_queue_empty() {
     return remote().first.get().ss.topology_global_queue_empty();
 }
 
+future<service::group0_guard> query_processor::set_tablet_balancing_enabled(bool enabled, std::optional<service::group0_guard> guard) {
+    auto [remote_, holder] = remote();
+    co_return co_await remote_.get().ss.set_tablet_balancing_enabled(enabled, std::move(guard));
+}
+
 static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }

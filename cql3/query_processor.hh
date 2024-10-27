@@ -463,6 +463,8 @@ public:
 
     bool topology_global_queue_empty();
 
+    future<service::group0_guard> set_tablet_balancing_enabled(bool enabled, std::optional<service::group0_guard> = std::nullopt);
+
 private:
     // Keep the holder until you stop using the `remote` services.
     std::pair<std::reference_wrapper<remote>, gate::holder> remote();
