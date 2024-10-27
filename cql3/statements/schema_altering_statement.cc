@@ -59,6 +59,16 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
+future<service::group0_guard>
+schema_altering_statement::prepare_to_execute(query_processor&, std::optional<service::group0_guard> guard) const {
+    // guard is expected to always be engaged
+    return make_ready_future<service::group0_guard>(std::move(*guard));
+}
+
+future<> schema_altering_statement::cleanup_after_execute(query_processor& qp) const {
+    return make_ready_future();
+}
+
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     bool internal = state.get_client_state().is_internal();
@@ -74,9 +84,11 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
             throw std::logic_error(format("Attempted to modify {} via internal query: such schema changes are not propagated and thus illegal", info));
         }
     }
+    guard = co_await prepare_to_execute(qp, std::move(guard));
     service::group0_batch mc{std::move(guard)};
     auto result = co_await qp.execute_schema_statement(*this, state, options, mc);
     co_await qp.announce_schema_statement(*this, mc);
+    co_await cleanup_after_execute(qp);
     co_return std::move(result);
 }
 

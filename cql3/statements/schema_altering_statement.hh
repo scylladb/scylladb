@@ -50,8 +50,12 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
+    virtual future<service::group0_guard> prepare_to_execute(query_processor& qp, std::optional<service::group0_guard> guard) const;
+
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
+
+    virtual future<> cleanup_after_execute(query_processor& qp) const;
 
 public:
     /**
