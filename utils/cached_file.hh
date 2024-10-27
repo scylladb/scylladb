@@ -168,12 +168,14 @@ private:
                 : read_ahead * page_size;
 
         std::optional<reader_permit::resource_units> units;
+        std::optional<reader_permit::awaits_guard> await_guard;
         if (permit) {
             units = permit->consume_memory(size);
+            await_guard.emplace(*permit);
         }
 
         return _file.dma_read_exactly<char>(idx * page_size, size)
-            .then([this, units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
+            .then([this, ag = std::move(await_guard), units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
                     auto this_size = std::min(page_size, buf.size());
