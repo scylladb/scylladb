@@ -6442,40 +6442,37 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
     });
 }
 
-future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
+future<group0_guard> storage_service::set_tablet_balancing_enabled(bool enabled, std::optional<group0_guard> guard) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
-        co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.set_tablet_balancing_enabled(enabled);
-        });
+        on_internal_error(rtlogger, "set_tablet_balancing_enabled: must run on shard 0");
     }
 
     while (true) {
-        group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+        if (!guard) {
+            guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+        }
 
         std::vector<canonical_mutation> updates;
-        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard->write_timestamp())
             .set_tablet_balancing_enabled(enabled)
             .build()));
 
         sstring reason = format("Setting tablet balancing to {}", enabled);
         rtlogger.info("{}", reason);
         topology_change change{std::move(updates)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), *guard, reason);
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(*std::exchange(guard, std::nullopt)), _group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("set_tablet_balancing_enabled(): concurrent modification");
         }
     }
 
-    while (_topology_state_machine._topology.is_busy()) {
-        rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-        co_await _topology_state_machine.event.wait();
-    }
+    co_return co_await wait_for_topology_not_busy();
 }
 
 future<> storage_service::await_topology_quiesced() {

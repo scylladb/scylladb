@@ -924,7 +924,8 @@ public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
-    future<> set_tablet_balancing_enabled(bool);
+    // Must be called on shard 0
+    future<group0_guard> set_tablet_balancing_enabled(bool, std::optional<group0_guard> = std::nullopt);
     future<> await_topology_quiesced();
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining

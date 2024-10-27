@@ -1537,7 +1537,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
     ss::tablet_balancing_enable.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto enabled = validate_bool(req->get_query_param("enabled"));
-        co_await ss.local().set_tablet_balancing_enabled(enabled);
+        co_await ss.invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablet_balancing_enabled(enabled);
+        });
         co_return json_void();
     });
 
