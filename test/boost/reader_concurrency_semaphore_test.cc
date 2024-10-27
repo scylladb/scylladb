@@ -851,6 +851,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
         auto irh2 = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit2));
 
+        BOOST_REQUIRE(eventually_true([&] { return !irh1 || !irh2; }));
         require_can_admit(true, "evictable reads");
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
@@ -870,7 +871,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued_for_admission, stats_before.reads_enqueued_for_admission + 1);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
 
-        std::ignore = post_enqueue_hook(cookie1);
+        [[maybe_unused]] auto guard = post_enqueue_hook(cookie1);
 
         if (!eventually_true([&] { return permit2_fut.available(); })) {
             semaphore.broken();
@@ -1163,9 +1164,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
     BOOST_REQUIRE(irh1);
 
-    // Marking p2 as awaits should now allow p3 to be admitted by evicting p1
+    // Marking p2 as awaits should eventually allow p3 to be admitted by evicting p1
     rd2.mark_as_awaits();
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    REQUIRE_EVENTUALLY_EQUAL(semaphore.get_stats().waiters, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
@@ -1210,7 +1211,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
 
     semaphore.set_resources({4, 4 * 1024});
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    REQUIRE_EVENTUALLY_EQUAL(semaphore.get_stats().waiters, 0);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(1, 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
     permit3_fut.get();
@@ -1992,7 +1993,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_necessary_evicting) {
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
 
         ncpu_guard.reset();
-        BOOST_REQUIRE(!handle);
+        REQUIRE_EVENTUALLY_EQUAL(bool(handle), false);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, ++evicted_reads);
 
@@ -2021,8 +2022,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_necessary_evicting) {
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
 
         ncpu_guard.reset();
-        thread::yield(); // allow debug builds to schedule the fiber evicting the reads again
-        BOOST_REQUIRE(!handle);
+        REQUIRE_EVENTUALLY_EQUAL(bool(handle), false);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, ++evicted_reads);
 

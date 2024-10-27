@@ -967,6 +967,8 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             co_return;
         }
 
+        maybe_admit_waiters();
+
         while (!_ready_list.empty()) {
             auto& permit = _ready_list.front();
             dequeue_permit(permit);
@@ -1023,7 +1025,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
-    maybe_admit_waiters();
+    maybe_wake_execution_loop();
 }
 
 namespace sm = seastar::metrics;
@@ -1139,7 +1141,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     permit->on_register_as_inactive();
     if (_blessed_permit == &*permit) {
         _blessed_permit = nullptr;
-        maybe_admit_waiters();
+        maybe_wake_execution_loop();
     }
     if (!should_evict_inactive_read()) {
       try {
@@ -1463,7 +1465,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
             // So at any point in time, there should either be no waiters, or it
             // shouldn't be able to admit new reads. Otherwise something went wrong.
             maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters", nullptr);
-            maybe_admit_waiters();
+            maybe_wake_execution_loop();
         } else if (admit == can_admit::maybe) {
             tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] evicting inactive reads in the background to free up resources", _name);
             ++_stats.reads_queued_with_eviction;
@@ -1509,6 +1511,12 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     if (admit == can_admit::maybe) {
         // Evicting readers will trigger another call to `maybe_admit_waiters()` from `signal()`.
         evict_readers_in_background();
+    }
+}
+
+void reader_concurrency_semaphore::maybe_wake_execution_loop() noexcept {
+    if (!_wait_list.empty()) {
+        _ready_list_cv.signal();
     }
 }
 
@@ -1568,7 +1576,7 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
     --_stats.current_permits;
     if (_blessed_permit == &permit) {
         _blessed_permit = nullptr;
-        maybe_admit_waiters();
+        maybe_wake_execution_loop();
     }
 }
 
@@ -1580,13 +1588,13 @@ void reader_concurrency_semaphore::on_permit_not_need_cpu() noexcept {
     SCYLLA_ASSERT(_stats.need_cpu_permits);
     --_stats.need_cpu_permits;
     SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
-    maybe_admit_waiters();
+    maybe_wake_execution_loop();
 }
 
 void reader_concurrency_semaphore::on_permit_awaits() noexcept {
     ++_stats.awaits_permits;
     SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
-    maybe_admit_waiters();
+    maybe_wake_execution_loop();
 }
 
 void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
@@ -1652,7 +1660,7 @@ void reader_concurrency_semaphore::set_resources(resources r) {
     auto delta = r - _initial_resources;
     _initial_resources = r;
     _resources += delta;
-    maybe_admit_waiters();
+    maybe_wake_execution_loop();
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
