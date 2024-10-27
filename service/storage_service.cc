@@ -4736,13 +4736,16 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     co_return sstring();
 }
 
-future<> storage_service::wait_for_topology_not_busy() {
-    auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+future<group0_guard> storage_service::wait_for_topology_not_busy(std::optional<group0_guard> guard) {
+    if (!guard) {
+        guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+    }
     while (_topology_state_machine._topology.is_busy()) {
-        release_guard(std::move(guard));
+        release_guard(std::move(*guard));
         co_await _topology_state_machine.event.wait();
         guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     }
+    co_return std::move(*guard);
 }
 
 future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
