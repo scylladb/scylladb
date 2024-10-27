@@ -72,8 +72,13 @@ public:
 };
 
 class drop_statement : public schema_altering_statement {
+protected:
+    mutable bool _disabled_tablet_balancing = false;
 public:
     using schema_altering_statement::schema_altering_statement;
+
+    virtual future<service::group0_guard> prepare_to_execute(query_processor&, std::optional<service::group0_guard>) const override;
+    virtual future<> cleanup_after_execute(query_processor& qp) const override;
 };
 
 }

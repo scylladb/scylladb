@@ -15,6 +15,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "replica/database.hh"
 
 namespace cql3 {
 
@@ -67,6 +68,27 @@ schema_altering_statement::prepare_to_execute(query_processor&, std::optional<se
 
 future<> schema_altering_statement::cleanup_after_execute(query_processor& qp) const {
     return make_ready_future();
+}
+
+future<service::group0_guard>
+drop_statement::prepare_to_execute(query_processor& qp, std::optional<service::group0_guard> guard) const {
+    if (qp.db().has_keyspace(keyspace()) && qp.db().real_database().find_keyspace(keyspace()).uses_tablets() &&
+        qp.db().real_database().get_token_metadata().tablets().balancing_enabled()) {
+        // Hold table migrations and wait for topology not busy
+        // to prevent race between tablet migrations and dropping tables
+        // FIXME: abort on-going migrations of the affected tables
+        // and restrict waiting only on the dropped tables.
+        _disabled_tablet_balancing = true;
+        co_return co_await qp.set_tablet_balancing_enabled(false, std::move(guard));
+    }
+    co_return std::move(*guard);
+}
+
+future<>
+drop_statement::cleanup_after_execute(query_processor& qp) const {
+    if (_disabled_tablet_balancing) {
+        co_await qp.set_tablet_balancing_enabled(true);
+    }
 }
 
 future<::shared_ptr<messages::result_message>>
