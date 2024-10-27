@@ -1603,6 +1603,7 @@ def get_warning_options(cxx):
         '-Werror',
         '-Wextra',
         '-Wimplicit-fallthrough',
+        '-Wno-explicit-specialization-storage-class',
         '-Wno-mismatched-tags',  # clang-only
         '-Wno-c++11-narrowing',
         '-Wno-overloaded-virtual',
