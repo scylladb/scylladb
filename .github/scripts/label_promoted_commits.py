@@ -16,13 +16,8 @@ def parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repository', type=str, required=True,
                         help='Github repository name (e.g., scylladb/scylladb)')
-    parser.add_argument('--commit_before_merge', type=str, required=True, help='Git commit ID to start labeling from ('
-                                                                               'newest commit).')
-    parser.add_argument('--commit_after_merge', type=str, required=True,
-                        help='Git commit ID to end labeling at (oldest '
-                             'commit, exclusive).')
-    parser.add_argument('--update_issue', type=bool, default=False, help='Set True to update issues when backport was '
-                                                                         'done')
+    parser.add_argument('--commits', type=str, required=True, help='Range of promoted commits.')
+    parser.add_argument('--label', type=str, default='promoted-to-master', help='Label to use')
     parser.add_argument('--ref', type=str, required=True, help='PR target branch')
     return parser.parse_args()
 
@@ -53,10 +48,11 @@ def main():
     target_branch = re.search(r'branch-(\d+\.\d+)', args.ref)
     g = Github(github_token)
     repo = g.get_repo(args.repository, lazy=False)
-    commits = repo.compare(head=args.commit_after_merge, base=args.commit_before_merge)
+    start_commit, end_commit = args.commits.split('..')
+    commits = repo.compare(start_commit, end_commit).commits
     processed_prs = set()
     # Print commit information
-    for commit in commits.commits:
+    for commit in commits:
         print(f'Commit sha is: {commit.sha}')
         match = pr_pattern.search(commit.commit.message)
         if match:
@@ -66,13 +62,13 @@ def main():
             if target_branch:
                 pr = repo.get_pull(pr_number)
                 branch_name = target_branch[1]
-                refs_pr = re.findall(r'Refs (?:#|https.*?)(\d+)', pr.body)
+                refs_pr = re.findall(r'Parent PR: (?:#|https.*?)(\d+)', pr.body)
                 if refs_pr:
                     print(f'branch-{target_branch.group(1)}, pr number is: {pr_number}')
                     # 1. change the backport label of the parent PR to note that
-                    #    we've merge the corresponding backport PR
+                    #    we've merged the corresponding backport PR
                     # 2. close the backport PR and leave a comment on it to note
-                    #    that it has been merged with a certain git commit,
+                    #    that it has been merged with a certain git commit.
                     ref_pr_number = refs_pr[0]
                     mark_backport_done(repo, ref_pr_number, branch_name)
                     comment = f'Closed via {commit.sha}'
