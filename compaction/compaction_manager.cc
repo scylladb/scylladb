@@ -1066,7 +1066,7 @@ void compaction_manager::postpone_compaction_for_table(table_state* t) {
     _postponed.insert(t);
 }
 
-future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) {
+future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept {
     // To prevent compaction from being postponed while tasks are being stopped,
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
@@ -1081,8 +1081,9 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_e
             // swallow stop exception if a given procedure decides to propagate it to the caller,
             // as it happens with reshard and reshape.
         } catch (...) {
+            // just log any other errors as the callers have nothing to do with them.
             cmlog.debug("Stopping {}: task returned error: {}", *task, std::current_exception());
-            throw;
+            co_return;
         }
         cmlog.debug("Stopping {}: done", *task);
     });
@@ -1110,8 +1111,9 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
         }
         return stop_tasks(std::move(tasks), std::move(reason));
     } catch (...) {
-        return current_exception_as_future<>();
+        cmlog.error("Stopping ongoing compactions failed: {}.  Ignored", std::current_exception());
     }
+    return make_ready_future();
 }
 
 future<> compaction_manager::drain() {
@@ -1133,7 +1135,7 @@ future<> compaction_manager::stop() {
     }
 }
 
-future<> compaction_manager::really_do_stop() {
+future<> compaction_manager::really_do_stop() noexcept {
     cmlog.info("Asked to stop");
     // Reset the metrics registry
     _metrics.clear();
