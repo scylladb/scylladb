@@ -231,6 +231,8 @@ private:
 
     void maybe_admit_waiters() noexcept;
 
+    void maybe_wake_execution_loop() noexcept;
+
     // Request more memory for the permit.
     // Request is instantly granted while memory consumption of all reads is
     // below _kill_limit_multiplier.
