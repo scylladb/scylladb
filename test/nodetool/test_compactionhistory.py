@@ -28,6 +28,7 @@ HISTORY_RESPONSE = [
             "compacted_at": 1695973859380,
             "bytes_in": 11714,
             "bytes_out": 11808,
+            "rows_merged": [{"key": 1, "value": 12}],
         },
         {
             "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
@@ -36,6 +37,7 @@ HISTORY_RESPONSE = [
             "compacted_at": 1695973859491,
             "bytes_in": 5790,
             "bytes_out": 5944,
+            "rows_merged": [{"key": 1, "value": 5}, {"key": 2, "value": 1}],
         }]
 
 EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=HISTORY_RESPONSE)
@@ -43,19 +45,19 @@ EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_histo
 
 def test_text(request, nodetool):
     expected_res_cassandra = \
-"""Compaction History: 
-id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged
-edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {} 5790     5944                 
-edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {} 11714    11808                
-""".format(format_compacted_at(1695973859491), format_compacted_at(1695973859380))
-
-    # Scylla aligns number columns to the right.
-    expected_res_scylla = \
 """Compaction History:
 id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged
-edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {}     5790      5944            
-edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {}    11714     11808            
+edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {} 5790     5944  {{1: 5, 2: 1}}
+edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {} 11714    11808 {{1: 12}}
 """.format(format_compacted_at(1695973859491), format_compacted_at(1695973859380))
+
+    # Scylla aligns number columns to the right except rows_merged column.
+    expected_res_scylla = "\n".join([
+"Compaction History:",
+"id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged ",
+"edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {}     5790      5944 {{1: 5, 2: 1}}".format(format_compacted_at(1695973859491)),
+"edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {}    11714     11808 {{1: 12}}     ".format(format_compacted_at(1695973859380)),
+""])
 
     for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text"), ("compactionhistory", "-F", "text")]:
         if request.config.getoption("nodetool") != "scylla" and len(cmd) > 1:
@@ -80,7 +82,16 @@ def test_json(nodetool):
                     "compacted_at": format_compacted_at(1695973859491),
                     "bytes_in": 5790,
                     "bytes_out": 5944,
-                    "rows_merged": "",
+                    "rows_merged": [
+                        {
+                            "key": 1,
+                            "value": 5
+                        },
+                        {
+                            "key": 2,
+                            "value": 1
+                        }
+                    ],
                 },
                 {
                     "id": "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4",
@@ -89,7 +100,12 @@ def test_json(nodetool):
                     "compacted_at": format_compacted_at(1695973859380),
                     "bytes_in": 11714,
                     "bytes_out": 11808,
-                    "rows_merged": "",
+                    "rows_merged": [
+                        {
+                            "key": 1,
+                            "value": 12
+                        }
+                    ],
                 }
             ]
         }
@@ -110,7 +126,16 @@ def test_yaml(nodetool):
                     "compacted_at": format_compacted_at(1695973859491),
                     "bytes_in": 5790,
                     "bytes_out": 5944,
-                    "rows_merged": "",
+                    "rows_merged": [
+                        {
+                            "key": 1,
+                            "value": 5
+                        },
+                        {
+                            "key": 2,
+                            "value": 1
+                        }
+                    ],
                 },
                 {
                     "id": "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4",
@@ -119,7 +144,12 @@ def test_yaml(nodetool):
                     "compacted_at": format_compacted_at(1695973859380),
                     "bytes_in": 11714,
                     "bytes_out": 11808,
-                    "rows_merged": "",
+                    "rows_merged": [
+                        {
+                            "key": 1,
+                            "value": 12
+                        }
+                    ],
                 }
             ]
         }

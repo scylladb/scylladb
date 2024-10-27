@@ -527,7 +527,12 @@ void print_compactionhistory(const std::vector<Entry>& history) {
         output->add_item("compacted_at", format_compacted_at(e.compacted_at));
         output->add_item("bytes_in", e.bytes_in);
         output->add_item("bytes_out", e.bytes_out);
-        output->add_item("rows_merged", "");
+        auto seq = output->add_seq("rows_merged");
+        for (const auto& [key, value] : e.rows_merged) {
+            auto output = seq->add_map();
+            output->add_item("key", key);
+            output->add_item("value", value);
+        }
     }
 }
 
@@ -548,11 +553,18 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         int64_t compacted_at;
         int64_t bytes_in;
         int64_t bytes_out;
+        std::map<int32_t, int64_t> rows_merged;
     };
     std::vector<history_entry> history;
 
     for (const auto& history_entry_json : history_json.GetArray()) {
         const auto& history_entry_json_object = history_entry_json.GetObject();
+
+        std::map<int32_t, int64_t> rows_merged;
+        for (const auto& rows_merged_json : history_entry_json_object["rows_merged"].GetArray()) {
+            const auto& rows_merged_json_object = rows_merged_json.GetObject();
+            rows_merged.emplace(rows_merged_json_object["key"].GetInt(), rows_merged_json_object["value"].GetInt64());
+        }
 
         history.emplace_back(history_entry{
                 .id = utils::UUID(rjson::to_string_view(history_entry_json_object["id"])),
@@ -560,7 +572,8 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
                 .keyspace = std::string(rjson::to_string_view(history_entry_json_object["ks"])),
                 .compacted_at = history_entry_json_object["compacted_at"].GetInt64(),
                 .bytes_in = history_entry_json_object["bytes_in"].GetInt64(),
-                .bytes_out = history_entry_json_object["bytes_out"].GetInt64()});
+                .bytes_out = history_entry_json_object["bytes_out"].GetInt64(),
+                .rows_merged = std::move(rows_merged)});
     }
 
     std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
@@ -576,7 +589,7 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         rows.reserve(history.size());
         for (const auto& e : history) {
             rows.push_back({fmt::to_string(e.id), e.keyspace, e.table, format_compacted_at(e.compacted_at), fmt::to_string(e.bytes_in),
-                    fmt::to_string(e.bytes_out), ""});
+                    fmt::to_string(e.bytes_out), fmt::to_string(e.rows_merged)});
             for (size_t c = 0; c < rows.back().size(); ++c) {
                 max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
             }
@@ -584,7 +597,7 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
 
         const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
                 max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
-        const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}} {{:>{}}}\n", max_column_length[0],
+        const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}} {{:<{}}}\n", max_column_length[0],
                 max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
 
         fmt::print(std::cout, "Compaction History:\n");
