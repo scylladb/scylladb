@@ -177,7 +177,7 @@ private:
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
+    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason) noexcept;
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -244,7 +244,7 @@ private:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    future<> really_do_stop();
+    future<> really_do_stop() noexcept;
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
     void propagate_replacement(compaction::table_state& t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
@@ -617,7 +617,7 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
-    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);
+    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept;
     friend sstables::test_env_compaction_manager;
 };
 
