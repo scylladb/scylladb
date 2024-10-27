@@ -19,7 +19,7 @@ class cf_name;
 
 namespace statements {
 
-class drop_table_statement : public schema_altering_statement {
+class drop_table_statement : public drop_statement {
     bool _if_exists;
 public:
     drop_table_statement(cf_name cf_name, bool if_exists);

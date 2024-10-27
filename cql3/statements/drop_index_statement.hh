@@ -25,7 +25,7 @@ class index_name;
 
 namespace statements {
 
-class drop_index_statement : public schema_altering_statement {
+class drop_index_statement : public drop_statement {
     sstring _index_name;
 
     // A "drop index" statement does not specify the base table's name, just an

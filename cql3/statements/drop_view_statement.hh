@@ -24,7 +24,7 @@ class cf_name;
 namespace statements {
 
 /** A <code>DROP MATERIALIZED VIEW</code> parsed from a CQL query statement. */
-class drop_view_statement : public schema_altering_statement {
+class drop_view_statement : public drop_statement {
 private:
     bool _if_exists;
 public:

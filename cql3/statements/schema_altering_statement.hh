@@ -67,6 +67,11 @@ public:
     virtual future<std::tuple<::shared_ptr<event_t>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const;
 };
 
+class drop_statement : public schema_altering_statement {
+public:
+    using schema_altering_statement::schema_altering_statement;
+};
+
 }
 
 }

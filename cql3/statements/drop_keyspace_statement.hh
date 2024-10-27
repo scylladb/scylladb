@@ -18,7 +18,7 @@ class query_processor;
 
 namespace statements {
 
-class drop_keyspace_statement : public schema_altering_statement {
+class drop_keyspace_statement : public drop_statement {
     sstring _keyspace;
     bool _if_exists;
 public:

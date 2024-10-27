@@ -22,7 +22,7 @@ namespace cql3 {
 namespace statements {
 
 drop_table_statement::drop_table_statement(cf_name cf_name, bool if_exists)
-    : schema_altering_statement{std::move(cf_name), &timeout_config::truncate_timeout}
+    : drop_statement{std::move(cf_name), &timeout_config::truncate_timeout}
     , _if_exists{if_exists}
 {
 }
