@@ -1,8 +1,8 @@
 You can `build ScyllaDB from source <https://github.com/scylladb/scylladb#build-prerequisites>`_ on other x86_64 or aarch64 platforms, without any guarantees.
 
 +----------------------------+--------------------+-------+---------------+
-| Linux Distributions        |Ubuntu              | Debian| Rocky /       |
-|                            |                    |       | RHEL          |
+| Linux Distributions        |Ubuntu              | Debian|Rocky / CentOS |
+|                            |                    |       |/ RHEL         |
 +----------------------------+------+------+------+-------+-------+-------+
 | ScyllaDB Version / Version |20.04 |22.04 |24.04 |  11   |   8   |   9   |
 +============================+======+======+======+=======+=======+=======+
