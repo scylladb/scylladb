@@ -163,7 +163,7 @@ public:
     inet_address get_endpoint_for_host_id(host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
+    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map() const;
 
     void add_bootstrap_token(token t, host_id endpoint);
 
@@ -564,19 +564,18 @@ inet_address token_metadata_impl::get_endpoint_for_host_id(host_id host_id) cons
     }
 }
 
-std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const {
+std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_host_id_map() const {
     const auto& nodes = _topology.get_nodes_by_endpoint();
     std::unordered_map<inet_address, host_id> map;
     map.reserve(nodes.size());
     for (const auto& [endpoint, node] : nodes) {
-        // Restrict to members
-        if (!node->is_member()) {
+        if (node->left() || node->is_none()) {
             continue;
         }
         if (const auto& host_id = node->host_id()) {
             map[endpoint] = host_id;
         } else {
-            tlogger.info("get_endpoint_to_host_id_map_for_reading: endpoint {} has null host_id: state={}", endpoint, node->get_state());
+            tlogger.info("get_endpoint_to_host_id_map: endpoint {} has null host_id: state={}", endpoint, node->get_state());
         }
     }
     return map;
@@ -1043,8 +1042,8 @@ token_metadata::get_endpoint_for_host_id(host_id host_id) const {
 }
 
 std::unordered_map<inet_address, host_id>
-token_metadata::get_endpoint_to_host_id_map_for_reading() const {
-    return _impl->get_endpoint_to_host_id_map_for_reading();
+token_metadata::get_endpoint_to_host_id_map() const {
+    return _impl->get_endpoint_to_host_id_map();
 }
 
 void
