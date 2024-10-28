@@ -2512,7 +2512,7 @@ def generate_compdb_for_cmake_build(source_dir, build_dir):
         # directory as relevant. Since CMake generates .o files in
         # "CMakeFiles" directories, we preserve the compilation rules for
         # these generated files.
-        prefix = "CMakeFiles"
+        prefix = ""
         subprocess.run([os.path.join(source_dir, 'scripts/merge-compdb.py'),
                         prefix,
                         scylla_compdb_path,
