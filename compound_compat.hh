@@ -73,12 +73,12 @@ public:
         iterator(const legacy_compound_view& v)
             : _singular(v._type.is_singular())
             , _offset(_singular ? 0 : -2)
-            , _i(_singular && !v._type.begin(v._packed)->size() ?
+            , _i(_singular && !(*v._type.begin(v._packed)).size() ?
                     v._type.end(v._packed) : v._type.begin(v._packed))
         { }
 
         iterator(const legacy_compound_view& v, end_tag)
-            : _offset(v._type.is_singular() && !v._type.begin(v._packed)->size() ? 0 : -2)
+            : _offset(v._type.is_singular() && !(*v._type.begin(v._packed)).size() ? 0 : -2)
             , _i(v._type.end(v._packed))
         { }
 
@@ -89,20 +89,22 @@ public:
         iterator() {}
 
         value_type operator*() const {
-            int32_t component_size = _i->size();
+            auto tmp = *_i;
+            int32_t component_size = tmp.size();
             if (_offset == -2) {
                 return (component_size >> 8) & 0xff;
             } else if (_offset == -1) {
                 return component_size & 0xff;
             } else if (_offset < component_size) {
-                return (*_i)[_offset];
+                return tmp[_offset];
             } else { // _offset == component_size
                 return 0; // EOC field
             }
         }
 
         iterator& operator++() {
-            auto component_size = (int32_t) _i->size();
+            auto tmp = *_i;
+            auto component_size = (int32_t) tmp.size();
             if (_offset < component_size
                 // When _singular, we skip the EOC byte.
                 && (!_singular || _offset != (component_size - 1)))
@@ -165,7 +167,7 @@ public:
     // Equivalent to std::distance(begin(), end()), but computes faster
     size_t size() const {
         if (_type.is_singular()) {
-            return _type.begin(_packed)->size();
+            return (*_type.begin(_packed)).size();
         }
         size_t s = 0;
         for (auto&& component : _type.components(_packed)) {

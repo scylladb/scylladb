@@ -146,11 +146,10 @@ public:
     }
     class iterator {
     public:
-        using iterator_category = std::input_iterator_tag;
+        using iterator_category = std::forward_iterator_tag;
+        using iterator_concept = std::forward_iterator_tag;
         using value_type = const managed_bytes_view;
         using difference_type = std::ptrdiff_t;
-        using pointer = const value_type*;
-        using reference = const value_type&;
     private:
         managed_bytes_view _v;
         managed_bytes_view _current;
@@ -187,8 +186,7 @@ public:
             ++(*this);
             return i;
         }
-        const value_type& operator*() const { return _current; }
-        const value_type* operator->() const { return &_current; }
+        value_type operator*() const { return _current; }
         bool operator==(const iterator& i) const { return _remaining == i._remaining; }
     };
     static iterator begin(managed_bytes_view v) {
