@@ -5718,9 +5718,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::decommission, _decommission_result, coroutine::lambda([this] () -> future<> {
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run",
-                                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 60s); });
-
+                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
                         }));
                         co_await task->done();

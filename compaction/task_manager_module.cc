@@ -378,8 +378,7 @@ future<> global_major_compaction_task_impl::run() {
 }
 
 future<> major_keyspace_compaction_task_impl::run() {
-    co_await utils::get_local_injector().inject("compaction_major_keyspace_compaction_task_impl_run",
-            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+    co_await utils::get_local_injector().inject("compaction_major_keyspace_compaction_task_impl_run", utils::wait_for_message(10s));
 
     if (_cv) {
         co_await wait_for_your_turn(*_cv, *_current_task, _status.id);

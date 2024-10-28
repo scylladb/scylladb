@@ -2355,8 +2355,7 @@ static future<> announce_with_raft(
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [&] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
-                    [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
                     db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
@@ -2365,8 +2364,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
                     "view builder: mark view build STARTED");
         },
         [&] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
-                    [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2375,8 +2373,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [&] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
-                    [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
                     db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
@@ -2385,8 +2382,7 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
                     "view builder: mark view build SUCCESS");
         },
         [&] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
-                    [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2649,8 +2645,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         {},
         cql3::query_processor::cache_internal::no);
 
-    co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2",
-            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+    co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2", utils::wait_for_message(5min));
 
     auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
     auto col_names_str = boost::algorithm::join(col_names, ", ");
