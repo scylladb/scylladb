@@ -16,6 +16,8 @@
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
 #include "utils/multiprecision_int.hh"
+#include "utils/UUID.hh"
+#include "utils/UUID_gen.hh"
 
 BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_data_value(data_value::make_null(int32_type)) == comparable_bytes_opt());
@@ -250,5 +252,89 @@ BOOST_AUTO_TEST_CASE(test_varint) {
             }
         }
     }
+    byte_comparable_test(std::move(test_data));
+}
+
+static int64_t msb_with_version(int64_t msb, int version) {
+    // Set the version bits in the msb of the UUID
+    return (msb & ~(0xF << 12)) | (version << 12);
+}
+
+static void test_uuid_and_flipped_uuid(utils::UUID&& uuid, std::vector<data_value>& test_data,
+        std::function<data_value(utils::UUID&&)>& create_data_value) {
+    auto uuid_dv = create_data_value(std::move(uuid));
+    // negate the uuid to create a flipped version
+    auto flipped_uuid = utils::UUID_gen::negate(uuid);
+    auto flipped_uuid_dv = create_data_value(std::move(flipped_uuid));
+    // verify that the original and flipped uuids compare correctly in byte-comparable format
+    BOOST_REQUIRE(uuid <=> flipped_uuid == comparable_bytes::from_data_value(uuid_dv) <=> comparable_bytes::from_data_value(flipped_uuid_dv));
+    // add both original and flipped uuids to the test data
+    test_data.push_back(std::move(uuid_dv));
+    test_data.push_back(std::move(flipped_uuid_dv));
+}
+
+static std::vector<data_value> generate_timeuuid_test_data(bool create_timeuuid_native_type) {
+    std::function<data_value(utils::UUID&&)> create_data_value;
+    if (create_timeuuid_native_type) {
+        // create data_value for timeuuid data type
+        create_data_value = [] (utils::UUID&& time_uuid) {
+            return data_value(timeuuid_native_type(std::move(time_uuid)));
+        };
+    } else {
+        // create data_value for uuid data type
+        create_data_value = [] (utils::UUID&& time_uuid) {
+            return data_value(std::move(time_uuid));
+        };
+    }
+
+    std::vector<data_value> test_data;
+    for (auto [msb, lsb] : std::initializer_list<std::pair<int64_t, int64_t>>{
+                 {0, 0},
+                 {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min()},
+                 {std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max()},
+         }) {
+        test_uuid_and_flipped_uuid(utils::UUID(msb_with_version(msb, 1), lsb), test_data, create_data_value);
+    }
+
+    for (int i = 0; i < 500; i++) {
+        // Generate a random msb with version set to 1 (time-based UUID)
+        test_uuid_and_flipped_uuid(
+                utils::UUID(msb_with_version(tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()), 1),
+                        tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max())),
+                test_data, create_data_value);
+    }
+
+    return test_data;
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid) {
+    byte_comparable_test(generate_timeuuid_test_data(true));
+}
+
+BOOST_AUTO_TEST_CASE(test_uuid) {
+    // generate time uuids
+    auto test_data = generate_timeuuid_test_data(false);
+
+    // test few edge cases
+    test_data.emplace_back(utils::null_uuid());
+    test_data.emplace_back(utils::UUID(std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max()));
+    test_data.emplace_back(utils::UUID(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min()));
+    test_data.emplace_back(utils::UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"));
+    // test name based, type 3 uuids
+    test_data.emplace_back(utils::UUID_gen::get_name_UUID("scylladb"));
+    test_data.emplace_back(utils::UUID_gen::get_name_UUID("lakshminarayanansreethar"));
+
+    // generate few random uuids
+    std::function<data_value(utils::UUID&&)> create_data_value = [] (utils::UUID&& time_uuid) {
+        return data_value(std::move(time_uuid));
+    };
+    for (auto i = 0; i < 500; i++) {
+        // Generate a random msb with version set to 4
+        test_uuid_and_flipped_uuid(
+                utils::UUID(msb_with_version(tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()), 4),
+                        tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max())),
+                test_data, create_data_value);
+    }
+
     byte_comparable_test(std::move(test_data));
 }

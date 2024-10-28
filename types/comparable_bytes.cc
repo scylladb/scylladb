@@ -28,6 +28,21 @@ static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_re
     return read_fragmented(view, bytes_to_read, out);
 }
 
+template<std::integral T, std::size_t array_size>
+static std::array<T, array_size> read_fragmented_into_array(managed_bytes_view& view) {
+    std::array<T, array_size> buffer;
+    constexpr auto bytes_to_read = array_size * sizeof(T);
+    read_fragmented(view, bytes_to_read, reinterpret_cast<bytes::value_type*>(buffer.data()));
+    return buffer;
+}
+
+// Write the given integer array to the bytes stream without changing its endianness.
+template<std::integral T, std::size_t array_size>
+static void write_native_int_array(bytes_ostream& out, std::array<T, array_size>& buffer) {
+    constexpr auto bytes_to_write = array_size * sizeof(T);
+    out.write(bytes_view(reinterpret_cast<const signed char*>(buffer.data()), bytes_to_write));
+}
+
 template <std::integral T>
 static void write_native_int(bytes_ostream& out, T value) {
     out.write(bytes_view(reinterpret_cast<const signed char*>(&value), sizeof(T)));
@@ -339,6 +354,89 @@ static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& o
     write_native_int<uint_t>(out, value_be ^ (negative_value ? uint_t(-1) : sign_mask_be));
 }
 
+// Reorder the given timeuuid msb and make it byte comparable
+// Scylla and Cassandra use a standard UUID memory layout for MSB:
+// 4 bytes    2 bytes    2 bytes
+// time_low - time_mid - time_hi_and_version
+// It is reordered as the following to make it byte comparable :
+// time_hi_and_version - time_mid - time_low
+static inline uint64_t timeuuid_msb_to_comparable_bytes(uint64_t msb) {
+    return (msb <<  48)
+            | ((msb <<  16) & 0xFFFF00000000L)
+            |  (msb >> 32);
+}
+
+// Reconstruct timeuuid msb from the byte comparable value
+static inline uint64_t timeuuid_msb_from_comparable_bytes(uint64_t byte_comparable_msb) {
+    return (byte_comparable_msb << 32)
+            | ((byte_comparable_msb >> 16) & 0xFFFF0000L)
+            | (byte_comparable_msb >> 48);
+}
+
+// Encode decode for timeuuids.
+// Pull the version digit to the beginning and rearrange the other bits
+// to maintain time-based ordering in byte-comparable form.
+// Additionally, invert the sign bits of all bytes in the lower bits to
+// preserve Cassandra's legacy comparison order, which compared individual
+// bytes as signed values.
+template <bool perform_encode>
+static void convert_timeuuid(managed_bytes_view& src, bytes_ostream& out) {
+    // Read the uuid's msb and lsb into a uint64_t array
+    auto buffer = read_fragmented_into_array<uint64_t, 2>(src);
+    // The values are still in big endian order, so swap the msb to host order before applying any transformations
+    if constexpr (perform_encode) {
+        buffer[0] = seastar::cpu_to_be(timeuuid_msb_to_comparable_bytes(seastar::be_to_cpu(buffer[0])));
+    } else {
+        buffer[0] = seastar::cpu_to_be(timeuuid_msb_from_comparable_bytes(seastar::be_to_cpu(buffer[0])));
+    }
+    // Flip first bit of every byte - doesn't matter that they are still in big endian order
+    buffer[1] ^= 0x8080808080808080L;
+
+    // Write out the encoded value
+    write_native_int_array(out, buffer);
+}
+
+// UUIDs are fixed-length unsigned integers, where the UUID version/type
+// has to be compared first, so pull the version digit first for a byte
+// comparable representation.
+//
+// For time-based UUIDs (version 1), additional reordering is required
+// to maintain time-based ordering in byte-comparable form.
+static void encode_uuid_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    // Read the uuid's high and low bits into a uint64_t array
+    auto buffer = read_fragmented_into_array<uint64_t, 2>(serialized_bytes_view);
+    // The values are still in big endian order, so swap the msb to host order before applying any transformations
+    uint64_t high_bits = seastar::be_to_cpu(buffer[0]);
+    auto version = ((high_bits >> 12) & 0xf);
+    if (version == 1) {
+        // This is a time-based UUID and the msb needs to be rearranged to make it byte comparable
+        buffer[0] = seastar::cpu_to_be(timeuuid_msb_to_comparable_bytes(high_bits));
+    } else {
+        // For non-time UUIDs, write the msb after shifting the version bits to the beginning
+        buffer[0] = seastar::cpu_to_be((version << 60) | ((high_bits >> 4) & 0x0FFFFFFFFFFFF000L) | (high_bits & 0xFFFL));
+    }
+
+    // Write out the encoded value
+    write_native_int_array(out, buffer);
+}
+
+static void decode_uuid_type(managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    // Read the uuid's high and low bits into a uint64_t array
+    auto buffer = read_fragmented_into_array<uint64_t, 2>(comparable_bytes_view);
+    uint64_t high_bits = seastar::be_to_cpu(buffer[0]);
+    auto version = (high_bits >> 60) & 0xF;
+    if (version == 1) {
+        // This is a time-based UUID and the msb needs to be reshuffled
+        buffer[0] = seastar::cpu_to_be(timeuuid_msb_from_comparable_bytes(high_bits));
+    } else {
+        // For non-time UUIDs, the only thing that's needed is to put the version bits back where they were originally.
+        buffer[0] = seastar::cpu_to_be(((high_bits << 4) & 0xFFFFFFFFFFFF0000L) | version << 12 | (high_bits & 0x0000000000000FFFL));
+    }
+
+    // Write out the decoded, serialized value
+    write_native_int_array(out, buffer);
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -383,6 +481,15 @@ struct to_comparable_bytes_visitor {
     // timestamp_type is encoded as fixed length signed integer
     void operator()(const timestamp_type_impl&) {
         convert_signed_fixed_length_integer<db_clock::rep>(serialized_bytes_view, out);
+    }
+
+    void operator()(const uuid_type_impl&) {
+        encode_uuid_type(serialized_bytes_view, out);
+    }
+
+    // Encode timeuuid
+    void operator()(const timeuuid_type_impl&) {
+        convert_timeuuid<true>(serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -450,6 +557,14 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const timestamp_type_impl&) {
         convert_signed_fixed_length_integer<db_clock::rep>(comparable_bytes_view, out);
+    }
+
+    void operator()(const uuid_type_impl&) {
+        decode_uuid_type(comparable_bytes_view, out);
+    }
+
+    void operator()(const timeuuid_type_impl&) {
+        convert_timeuuid<false>(comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
