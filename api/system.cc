@@ -10,7 +10,7 @@
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
 #include "replica/database.hh"
-#include "sstables/sstables_manager.hh"
+#include "db/sstables-format-selector.hh"
 
 #include <rapidjson/document.h>
 #include <seastar/core/reactor.hh>
@@ -183,11 +183,18 @@ void set_system(http_context& ctx, routes& r) {
         apilog.info("Profile dumped to {}", profile_dest);
         return make_ready_future<json::json_return_type>(json::json_return_type(json::json_void()));
     }) ;
+}
 
-    hs::get_highest_supported_sstable_version.set(r, [&ctx] (const_req req) {
-        auto& table = ctx.db.local().find_column_family("system", "local");
-        return seastar::to_sstring(table.get_sstables_manager().get_highest_supported_format());
+void set_format_selector(http_context& ctx, routes& r, db::sstables_format_selector& sel) {
+    hs::get_highest_supported_sstable_version.set(r, [&sel] (std::unique_ptr<request> req) {
+        return smp::submit_to(0, [&sel] {
+            return make_ready_future<json::json_return_type>(seastar::to_sstring(sel.selected_format()));
+        });
     });
+}
+
+void unset_format_selector(http_context& ctx, routes& r) {
+    hs::get_highest_supported_sstable_version.unset(r);
 }
 
 }

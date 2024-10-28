@@ -51,6 +51,7 @@ namespace cql_transport { class controller; }
 namespace db {
 class snapshot_ctl;
 class config;
+class sstables_format_selector;
 namespace view {
 class view_builder;
 }
@@ -135,6 +136,8 @@ future<> set_server_raft(http_context&, sharded<service::raft_group_registry>&);
 future<> unset_server_raft(http_context&);
 future<> set_load_meter(http_context& ctx, service::load_meter& lm);
 future<> unset_load_meter(http_context& ctx);
+future<> set_format_selector(http_context& ctx, db::sstables_format_selector& sel);
+future<> unset_format_selector(http_context& ctx);
 future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_server_cql_server_test(http_context& ctx);
 future<> set_server_commitlog(http_context& ctx, sharded<replica::database>&);
