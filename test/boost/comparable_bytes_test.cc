@@ -16,6 +16,8 @@
 #include "utils/assert.hh"
 #include "utils/comparable_bytes.hh"
 #include "utils/multiprecision_int.hh"
+#include "utils/UUID.hh"
+#include "utils/UUID_gen.hh"
 
 BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_data_value(data_value::make_null(int32_type)) == comparable_bytes_opt());
@@ -241,4 +243,68 @@ BOOST_AUTO_TEST_CASE(test_varint) {
     };
 
     byte_comparable_test(multiprecision_test_data_generator());
+}
+
+struct uuid_test_data_generator : test_data_generator {
+    void generate_timeuuids(bool create_timeuuid_native_type) {
+        std::function<data_value(utils::UUID&&)> create_data_value;
+        if (create_timeuuid_native_type) {
+            // create data_value for timeuuid data type
+            create_data_value = [] (utils::UUID&& time_uuid) { return data_value(timeuuid_native_type(std::move(time_uuid))); };
+        } else {
+            // create data_value for uuid data type
+            create_data_value = [] (utils::UUID&& time_uuid) { return data_value(std::move(time_uuid)); };
+        }
+
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        // timestamp in timeuuid should fit within 60 bits and rest is reserved for version, so use int32 to generate them
+        std::uniform_int_distribution<int32_t> dist(std::numeric_limits<int32_t>::min());
+
+        // test uuids with same timestamp but random clock sequences
+        auto timestamp = std::chrono::milliseconds{dist(gen)};
+        for (auto i = 0; i < 20; i++) {
+            _test_data.push_back(create_data_value(utils::UUID_gen::get_random_time_UUID_from_micros(timestamp)));
+        }
+
+        // test uuids with random timestamp but same clock sequence
+        for (auto i = 0; i < 20; i++) {
+            _test_data.push_back(create_data_value(utils::UUID_gen::get_time_UUID(std::chrono::milliseconds{dist(gen)}, 28051990)));
+        }
+
+        // test uuids with random timestamp and clock sequences
+        for (auto i = 0; i < 20; i++) {
+            _test_data.push_back(create_data_value(
+                utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::milliseconds{dist(gen)})));
+        }
+    }
+
+    void generate_uuids() {
+        // test few edge cases
+        _test_data.emplace_back(utils::null_uuid());
+        _test_data.emplace_back(utils::UUID(std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max()));
+        _test_data.emplace_back(utils::UUID(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min()));
+        _test_data.emplace_back(utils::UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"));
+        // test name based, type 3 uuids
+        _test_data.emplace_back(utils::UUID_gen::get_name_UUID("scylladb"));
+        _test_data.emplace_back(utils::UUID_gen::get_name_UUID("lakshminarayanansreethar"));
+
+        // generate few random uuids
+        for (auto i = 0; i < 50; i++) {
+            _test_data.emplace_back(utils::make_random_uuid());
+        }
+    }
+};
+
+BOOST_AUTO_TEST_CASE(test_timeuuid) {
+    uuid_test_data_generator tdg;
+    tdg.generate_timeuuids(true);
+    byte_comparable_test(std::move(tdg));
+}
+
+BOOST_AUTO_TEST_CASE(test_uuid) {
+    uuid_test_data_generator tdg;
+    tdg.generate_uuids();
+    tdg.generate_timeuuids(false);
+    byte_comparable_test(std::move(tdg));
 }

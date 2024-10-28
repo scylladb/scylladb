@@ -211,6 +211,25 @@ static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& o
     }
 }
 
+// Reorder the given timeuuid msb and make it byte comparable
+// Scylla and Cassandra use a standard UUID memory layout for MSB:
+// 4 bytes    2 bytes    2 bytes
+// time_low - time_mid - time_hi_and_version
+// It is reordered as the following to make it byte comparable :
+// time_hi_and_version - time_mid - time_low
+static uint64_t timeuuid_msb_to_comparable_bytes(uint64_t msb) {
+    return (msb <<  48)
+            | ((msb <<  16) & 0xFFFF00000000L)
+            |  (msb >> 32);
+}
+
+// Reconstruct timeuuid msb from the byte comparable value
+static uint64_t timeuuid_msb_from_comparable_bytes(uint64_t byte_comparable_msb) {
+    return (byte_comparable_msb << 32)
+            | ((byte_comparable_msb >> 16) & 0xFFFF0000L)
+            | (byte_comparable_msb >> 48);
+}
+
 // Extract and return a prefix of the specified length from the
 // managed_bytes_view, advancing the original view past the extracted prefix.
 static managed_bytes_view consume_prefix(managed_bytes_view& mbv, size_t length) {
@@ -314,6 +333,38 @@ struct to_comparable_bytes_visitor {
         convert_signed_fixed_length_integer<db_clock::rep>(serialized_bytes_view, out);
     }
 
+    // UUIDs are fixed-length unsigned integers, where the UUID version/type
+    // has to be compared first, so pull the version digit first for a byte
+    // comparable representation.
+    //
+    // For time-based UUIDs (version 1), additional reordering is required
+    // to maintain time-based ordering in byte-comparable form.
+    void operator()(const uuid_type_impl&) {
+        uint64_t msb = read_simple<uint64_t>(serialized_bytes_view);
+        auto version = ((msb >> 12) & 0xf);
+        if (version == 1) {
+            // This is a time-based UUID and the msb needs to be rearranged to make it byte comparable
+            out.write<uint64_t>(timeuuid_msb_to_comparable_bytes(msb));
+        } else {
+            // For non-time UUIDs, write the msb after shifting the version bits to the beginning
+            out.write<uint64_t>((version << 60) | ((msb >> 4) & 0x0FFFFFFFFFFFF000L) | (msb & 0xFFFL));
+        }
+
+        // Write the lsb
+        out.write(serialized_bytes_view, sizeof(uint64_t));
+    }
+
+    // Time based UUIDS. Similar to above, pull the version digit to the
+    // beginning and rearrange the other bits to maintain time-based ordering
+    // in byte-comparable form.
+    // Additionally, invert the sign bits of all bytes in the lower bits to
+    // preserve Cassandra's legacy comparison order, which compared individual
+    // bytes as signed values.
+    void operator()(const timeuuid_type_impl&) {
+        out.write<uint64_t>(timeuuid_msb_to_comparable_bytes(read_simple<uint64_t>(serialized_bytes_view)));
+        out.write<uint64_t>(read_simple<uint64_t>(serialized_bytes_view) ^ 0x8080808080808080L);
+    }
+
     // TODO: Handle other types
 
     void operator()(const abstract_type& type) {
@@ -404,6 +455,26 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const timestamp_type_impl&) {
         convert_signed_fixed_length_integer<db_clock::rep>(comparable_bytes_view, out);
+    }
+
+    void operator()(const uuid_type_impl&) {
+        uint64_t hi_bits = read_simple<uint64_t>(comparable_bytes_view);
+        auto version = (hi_bits >> 60) & 0xF;
+        if (version == 1) {
+            // This is a time-based UUID and the msb needs to be reshuffled
+            out.write<uint64_t>(timeuuid_msb_from_comparable_bytes(hi_bits));
+        } else {
+            // For non-time UUIDs, the only thing that's needed is to put the version bits back where they were originally.
+            out.write<uint64_t>(((hi_bits << 4) & 0xFFFFFFFFFFFF0000L) | version << 12 | (hi_bits & 0x0000000000000FFFL));
+        }
+
+        // Write the lsb
+        out.write(comparable_bytes_view, sizeof(uint64_t));
+    }
+
+    void operator()(const timeuuid_type_impl&) {
+        out.write<uint64_t>(timeuuid_msb_from_comparable_bytes(read_simple<uint64_t>(comparable_bytes_view)));
+        out.write<uint64_t>(read_simple<uint64_t>(comparable_bytes_view) ^ 0x8080808080808080L);
     }
 
     // TODO: Handle other types
