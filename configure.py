@@ -2787,6 +2787,7 @@ def configure_using_cmake(args):
 
 if __name__ == '__main__':
     if args.use_cmake:
+        prepare_advanced_optimizations(modes=modes, build_modes=build_modes, args=args)
         configure_using_cmake(args)
     else:
         create_build_system(args)
