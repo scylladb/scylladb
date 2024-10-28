@@ -13,6 +13,7 @@
 #include "index_target.hh"
 #include "index/secondary_index.hh"
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 namespace cql3 {
 

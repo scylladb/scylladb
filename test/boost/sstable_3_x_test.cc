@@ -5133,7 +5133,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t row_size, uint64_t range_tombstones, uint64_t dead_rows,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
-        BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
+        BOOST_REQUIRE(std::ranges::equal(pk.components(s), partition_key.to_partition_key(s).components(s)));
         BOOST_REQUIRE_LT(i, expected.size());
         BOOST_REQUIRE_GT(row_size, threshold);
         BOOST_REQUIRE_EQUAL(range_tombstones, 0);
@@ -5187,7 +5187,7 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
                      const clustering_key_prefix* clustering_key, uint64_t row_size, uint64_t range_tombstones, uint64_t dead_rows,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_TEST_MESSAGE(format("i={} ck={} cell_size={} threshold={}", i, clustering_key ? format("{}", *clustering_key) : "null", cell_size, threshold));
-        BOOST_REQUIRE_EQUAL(pk.components(s), partition_key.to_partition_key(s).components(s));
+        BOOST_REQUIRE(std::ranges::equal(pk.components(s), partition_key.to_partition_key(s).components(s)));
         BOOST_REQUIRE_LT(i, expected.size());
         BOOST_REQUIRE_GT(cell_size, threshold);
         BOOST_REQUIRE_EQUAL(range_tombstones, 0);
@@ -5256,7 +5256,7 @@ static void test_sstable_log_too_many_rows_f(int rows, int range_tombstones, uin
                      const clustering_key_prefix* clustering_key, uint64_t rows_count, uint64_t range_tombstones_count, uint64_t dead_rows,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(rows_count, threshold);
-        BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
+        BOOST_REQUIRE(std::ranges::equal(pk.components(sc), partition_key.to_partition_key(sc).components(sc)));
         BOOST_REQUIRE_EQUAL(dead_rows, 0);
 
         // Inserting one range tombstone creates two range tombstone marker rows
@@ -5374,7 +5374,7 @@ static void test_sstable_log_too_many_dead_rows_f(int rows, uint64_t threshold, 
         BOOST_REQUIRE_EQUAL(rows_count, rows);
         BOOST_REQUIRE_EQUAL(dead_rows, expected_dead_rows + expected_expired_rows + expected_rows_with_dead_cell);
         BOOST_REQUIRE_EQUAL(range_tombstones, expected_range_tombstones);
-        BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
+        BOOST_REQUIRE(std::ranges::equal(pk.components(sc), partition_key.to_partition_key(sc).components(sc)));
         logged = true;
     };
 
@@ -5423,7 +5423,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
                      const clustering_key_prefix* clustering_key, uint64_t rows_count, uint64_t range_tombstones, uint64_t dead_rows,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(collection_elements, threshold);
-        BOOST_REQUIRE_EQUAL(pk.components(sc), partition_key.to_partition_key(sc).components(sc));
+        BOOST_REQUIRE(std::ranges::equal(pk.components(sc), partition_key.to_partition_key(sc).components(sc)));
         BOOST_REQUIRE_EQUAL(range_tombstones, 0);
         BOOST_REQUIRE_EQUAL(dead_rows, 0);
         logged = true;
