@@ -5615,7 +5615,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             break;
             case raft_topology_cmd::command::stream_ranges: {
                 co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
-                    const auto& rs = _topology_state_machine._topology.find(id)->second;
+                    const auto rs = _topology_state_machine._topology.find(id)->second;
                     auto tstate = _topology_state_machine._topology.tstate;
                     if (!rs.ring || rs.ring->tokens.empty()) {
                         rtlogger.warn("got {} request but the node does not own any tokens and is in the {} state", cmd.cmd, rs.state);
