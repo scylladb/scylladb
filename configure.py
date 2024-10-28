@@ -1538,8 +1538,6 @@ def get_warning_options(cxx):
         '-Wno-unsupported-friend',
         '-Wno-missing-field-initializers',
         '-Wno-deprecated-copy',
-        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
-        '-Wno-psabi',
         '-Wno-enum-constexpr-conversion',
     ]
 
