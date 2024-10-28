@@ -65,7 +65,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
     replace_cfg = ReplaceConfig(replaced_id = server_to_replace.server_id, reuse_ip_addr = False, use_host_id = True)
     replace_task = asyncio.create_task(manager.server_add(replace_cfg))
 
-    await coord_log.wait_for('tablet_transition_updates: start', from_mark=coord_mark)
+    await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark)
 
     if server_to_down.server_id != server_to_replace.server_id:
         await manager.server_stop(server_to_down.server_id)

@@ -51,7 +51,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the keyspace-rf-change request")
     leader_log_file = await manager.server_open_log(servers[0].server_id)
-    await leader_log_file.wait_for("wait-after-topology-coordinator-gets-event injection hit", timeout=10)
+    await leader_log_file.wait_for("wait-after-topology-coordinator-gets-event: waiting", timeout=10)
 
     logger.info(f"dropping KS from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                 f"wakes up with the drop applied")
@@ -106,7 +106,7 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the keyspace-rf-change request")
     leader_log_file = await manager.server_open_log(servers[0].server_id)
-    await leader_log_file.wait_for("wait-before-committing-rf-change-event injection hit", timeout=10)
+    await leader_log_file.wait_for("wait-before-committing-rf-change-event: waiting", timeout=10)
 
     logger.info(f"creating another keyspace from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                 f"wakes up with a changed schema")
