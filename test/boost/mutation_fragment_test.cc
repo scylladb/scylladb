@@ -29,7 +29,6 @@
 #include "test/lib/fragment_scatterer.hh"
 #include "test/lib/test_utils.hh"
 
-#include <boost/range/algorithm/transform.hpp>
 #include "readers/from_mutations_v2.hh"
 
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
@@ -86,7 +85,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
         auto create_ck = [&] (std::vector<int> v) {
             std::vector<bytes> vs;
-            boost::transform(v, std::back_inserter(vs), [] (int x) { return int32_type->decompose(x); });
+            std::ranges::transform(v, std::back_inserter(vs), [] (int x) { return int32_type->decompose(x); });
             return clustering_key_prefix::from_exploded(*s, std::move(vs));
         };
 

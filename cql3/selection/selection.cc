@@ -560,7 +560,7 @@ void result_set_builder::add_collection(const column_definition& def, bytes_view
 
 void result_set_builder::update_last_group() {
     _group_began = true;
-    boost::transform(_group_by_cell_indices, _last_group.begin(), [this](size_t i) { return current[i]; });
+    std::ranges::transform(_group_by_cell_indices, _last_group.begin(), [this](size_t i) { return current[i]; });
 }
 
 bool result_set_builder::last_group_ended() const {
