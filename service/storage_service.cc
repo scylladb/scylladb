@@ -5509,7 +5509,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             break;
             case raft_topology_cmd::command::stream_ranges: {
                 co_await with_scheduling_group(_db.local().get_streaming_scheduling_group(), coroutine::lambda([&] () -> future<> {
+<<<<<<< HEAD
                     const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
+=======
+                    const auto rs = _topology_state_machine._topology.find(id)->second;
+>>>>>>> fb38bfa35d (topology coordinator: take a copy of a replication state in raft_topology_cmd_handler)
                     auto tstate = _topology_state_machine._topology.tstate;
                     if (!rs.ring ||
                         (tstate != topology::transition_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
