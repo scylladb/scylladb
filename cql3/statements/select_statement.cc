@@ -308,7 +308,7 @@ select_statement::make_partition_slice(const query_options& options) const
 }
 
 select_statement::get_limit_result select_statement::get_limit(
-    const query_options& options, const std::optional<expr::expression>& limit) const
+    const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit) const
 {
     if (!limit.has_value()) {
         return bo::success(query::max_rows);
@@ -320,7 +320,8 @@ select_statement::get_limit_result select_statement::get_limit(
         }
         auto l = val.view().validate_and_deserialize<int32_t>(*int32_type);
         if (l <= 0) {
-            return bo::failure(exceptions::invalid_request_exception("LIMIT must be strictly positive"));
+            auto msg = is_per_partition_limit ? "PER PARTITION LIMIT must be strictly positive" : "LIMIT must be strictly positive";
+            return bo::failure(exceptions::invalid_request_exception(msg));
         }
         return bo::success(l);
     } catch (const marshal_exception& e) {
