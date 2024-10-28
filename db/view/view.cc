@@ -2549,7 +2549,11 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
 }
 
 future<> view_builder::do_build_step() {
-    return seastar::async([this] {
+    // Run the view building in the streaming scheduling group
+    // so that it doesn't impact other tasks with higher priority.
+    seastar::thread_attributes attr;
+    attr.sched_group = _db.get_streaming_scheduling_group();
+    return seastar::async(std::move(attr), [this] {
         exponential_backoff_retry r(1s, 1min);
         while (!_base_to_build_step.empty() && !_as.abort_requested()) {
             auto units = get_units(_sem, 1).get();
