@@ -33,17 +33,23 @@ namespace sstables {
 class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
     std::optional<size_t> _promoted_index_block_size;
+    bool _correct_pi_block_width = true;
 public:
     virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
         auto ret = sstables_manager::configure_writer(std::move(origin));
         if (_promoted_index_block_size) {
             ret.promoted_index_block_size = *_promoted_index_block_size;
         }
+        ret.correct_pi_block_width = _correct_pi_block_width;
         return ret;
     }
 
     void set_promoted_index_block_size(size_t promoted_index_block_size) {
         _promoted_index_block_size = promoted_index_block_size;
+    }
+
+    void set_correct_pi_block_width(bool value) {
+        _correct_pi_block_width = value;
     }
 
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable *sst) {

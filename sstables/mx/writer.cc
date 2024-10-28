@@ -1436,10 +1436,22 @@ stop_iteration writer::consume_end_of_partition() {
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
 
-    write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
+    auto write_end_of_partition = [&] {
+        write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
+    };
 
-    if (_pi_write_m.promoted_index_size && _pi_write_m.first_clustering) {
-        add_pi_block();
+    auto maybe_add_pi_block = [&] {
+        if (_pi_write_m.promoted_index_size && _pi_write_m.first_clustering) {
+            add_pi_block();
+        }
+    };
+
+    if (_features.is_enabled(CorrectLastPiBlockWidth)) [[likely]] {
+        maybe_add_pi_block();
+        write_end_of_partition();
+    } else {
+        write_end_of_partition();
+        maybe_add_pi_block();
     }
 
     write_promoted_index();
@@ -1483,7 +1495,6 @@ void writer::consume_end_of_stream() {
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
-    auto features = sstable_enabled_features::all();
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {
@@ -1497,7 +1508,7 @@ void writer::consume_end_of_stream() {
     std::optional<scylla_metadata::ext_timestamp_stats> ts_stats(scylla_metadata::ext_timestamp_stats{
         .map = _collector.get_ext_timestamp_stats()
     });
-    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), std::move(ts_stats));
+    _sst.write_scylla_metadata(_shard, _features, std::move(identifier), std::move(ld_stats), std::move(ts_stats));
     _sst.seal_sstable(_cfg.backup).get();
 }
 

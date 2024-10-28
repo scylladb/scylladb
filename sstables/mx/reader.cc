@@ -1507,16 +1507,43 @@ private:
         if (is_initialized()) {
             co_return true;
         }
+
+        _will_likely_slice = will_likely_slice(_slice);
+
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
             const auto& key = dht::ring_position_view(_pr.start()->value());
-            position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
-            const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key, pos);
+
+            const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key);
 
             if (!present) {
                 _sst->get_filter_tracker().add_false_positive();
                 co_return false;
             }
+
+            if (_will_likely_slice && !reversed()) {
+                // Warm up the clustered cursor using lower bound so that later upper bound lookup
+                // works on a populated cached_promoted_index.
+                // We use lower bound so that we read the same blocks as later lower-bound slicing would,
+                // so that we don't incur extra IO for cases where looking up upper bound is not worth it, that
+                // is when upper bound is far from the lower bound. If upper bound is near lower bound, then
+                // warming up using lower bound will populate cached_promoted_index with blocks which will
+                // allow us to locate the upper bound block accurately.
+                // This is especially important for single-row reads, where the bounds are around the same key.
+                // In this case we want to read the data file range which belongs to a single promoted index block.
+                // It doesn't matter that the upper bound is not exactly the same. They both will likely lie in the
+                // same block, and if not, binary search will bring adjacent blocks into cache.
+                // Even if upper bound is not near, the binary search will populate the cache with blocks
+                // which can be used to narrow down the data file range somewhat.
+                position_in_partition_view lb = get_slice_lower_bound(*_schema, _slice, key);
+                clustered_index_cursor *cur = _index_reader->current_clustered_cursor();
+                if (cur) {
+                    co_await cur->advance_to(lb);
+                }
+            }
+
+            position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
+            co_await _index_reader->advance_upper_past(pos);
 
             _sst->get_filter_tracker().add_true_positive();
             if (reversed()) {
@@ -1529,6 +1556,8 @@ private:
 
         auto [begin, end] = _index_reader->data_file_positions();
         SCYLLA_ASSERT(end);
+
+        sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
@@ -1549,7 +1578,6 @@ private:
 
         _monitor.on_read_started(_context->reader_position());
         _index_in_current_partition = true;
-        _will_likely_slice = will_likely_slice(_slice);
         co_return true;
     }
     future<> skip_to(indexable_element el, uint64_t begin) {
