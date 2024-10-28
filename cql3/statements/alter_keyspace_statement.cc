@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <boost/range/algorithm.hpp>
 #include <fmt/format.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -229,7 +228,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             service::topology_change change{{builder.build()}};
 
             auto topo_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-            boost::transform(change.mutations, std::back_inserter(muts), [topo_schema] (const canonical_mutation& cm) {
+            std::ranges::transform(change.mutations, std::back_inserter(muts), [topo_schema] (const canonical_mutation& cm) {
                 return cm.to_mutation(topo_schema);
             });
 
@@ -239,7 +238,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             service::topology_change req_change{{rtbuilder.build()}};
 
             auto topo_req_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-            boost::transform(req_change.mutations, std::back_inserter(muts), [topo_req_schema] (const canonical_mutation& cm) {
+            std::ranges::transform(req_change.mutations, std::back_inserter(muts), [topo_req_schema] (const canonical_mutation& cm) {
                 return cm.to_mutation(topo_req_schema);
             });
         } else {

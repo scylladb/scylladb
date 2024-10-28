@@ -9,7 +9,6 @@
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 
 #include <seastar/core/coroutine.hh>
-#include <boost/range/algorithm/transform.hpp>
 
 #include "api/api-doc/cql_server_test.json.hh"
 #include "cql_server_test.hh"
@@ -50,7 +49,7 @@ void set_cql_server_test(http_context& ctx, seastar::httpd::routes& r, cql_trans
         auto sl_params = co_await ctl.get_connections_service_level_params();
 
         std::vector<connection_sl_params> result;
-        boost::transform(std::move(sl_params), std::back_inserter(result), [] (const cql_transport::connection_service_level_params& params) {
+        std::ranges::transform(std::move(sl_params), std::back_inserter(result), [] (const cql_transport::connection_service_level_params& params) {
             auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(params.timeout_config.read_timeout).count();
             return connection_sl_params(
                     std::move(params.role_name), 

@@ -33,7 +33,7 @@ tm::task_status make_status(tasks::task_status status) {
     ::gmtime_r(&start_time, &st);
 
     std::vector<tm::task_identity> tis{status.children.size()};
-    boost::transform(status.children, tis.begin(), [] (const auto& child) {
+    std::ranges::transform(status.children, tis.begin(), [] (const auto& child) {
         tm::task_identity ident;
         ident.task_id = child.task_id.to_sstring();
         ident.node = fmt::format("{}", child.node);

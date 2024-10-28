@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/range/algorithm/transform.hpp>
 #include <iterator>
 #include <random>
 #include <seastar/core/thread.hh>
@@ -1068,7 +1067,7 @@ public:
         using cql3::statements::batch_statement;
         using cql3::statements::modification_statement;
         std::vector<batch_statement::single_statement> modifications;
-        boost::transform(queries, back_inserter(modifications), [this](const auto& query) {
+        std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
             auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
             if (!dynamic_cast<modification_statement*>(stmt->statement.get())) {
                 throw exceptions::invalid_request_exception(
