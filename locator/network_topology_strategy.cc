@@ -353,8 +353,9 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
     tablet_logger.debug("Allocating tablets for {}.{} ({}): dc_rep_factor={} tablet_count={}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets.tablet_count());
 
     for (tablet_id tb : tablets.tablet_ids()) {
-        auto replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
-        tablets.set_tablet(tb, tablet_info{std::move(replicas)});
+        auto tinfo = tablets.get_tablet_info(tb);
+        tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
+        tablets.set_tablet(tb, std::move(tinfo));
     }
 
     tablet_logger.debug("Allocated tablets for {}.{} ({}): dc_rep_factor={}: {}", s->ks_name(), s->cf_name(), s->id(), _dc_rep_factor, tablets);
