@@ -92,12 +92,11 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
     const auto& feat = qp.proxy().features();
-    const auto& cfg = qp.db().get_config();
     std::vector<mutation> m;
     std::vector<sstring> warnings;
 
     try {
-        auto ksm = _attrs->as_ks_metadata(_name, tm, feat, cfg);
+        auto ksm = _attrs->as_ks_metadata(_name, tm, feat);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
@@ -279,9 +278,9 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
     });
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat) {
     _attrs->validate();
-    return _attrs->as_ks_metadata(_name, tm, feat, cfg);
+    return _attrs->as_ks_metadata(_name, tm, feat);
 }
 
 ::shared_ptr<schema_altering_statement::event_t> create_keyspace_statement::created_event() const {

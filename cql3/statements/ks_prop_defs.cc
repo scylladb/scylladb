@@ -16,7 +16,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
-#include "db/config.hh"
 
 namespace cql3 {
 
@@ -186,11 +185,10 @@ bool ks_prop_defs::get_durable_writes() const {
     return get_boolean(KW_DURABLE_WRITES, true);
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat) {
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0 for N.T.S. only
-    auto enable_tablets = feat.tablets && cfg.enable_tablets();
-    auto initial_tablets = get_initial_tablets(enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy" ? std::optional<unsigned>(0) : std::nullopt);
+    auto initial_tablets = get_initial_tablets(feat.tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy" ? std::optional<unsigned>(0) : std::nullopt);
     auto options = prepare_options(sc, tm, get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
