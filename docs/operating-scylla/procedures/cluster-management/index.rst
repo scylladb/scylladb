@@ -26,6 +26,8 @@ Cluster Management Procedures
    Safely Restart Your Cluster <safe-start>
    Handling Membership Change Failures <handling-membership-change-failures>
    repair-based-node-operation
+   Prevent Quorum Loss in Symmetrical Multi-DC Clusters <arbiter-dc>
+
 
 .. panel-box::
   :title: Cluster and DC Creation
@@ -83,6 +85,8 @@ Cluster Management Procedures
   * :ref:`Add Bigger Nodes to a Cluster <add-bigger-nodes-to-a-cluster>`
 
   * :doc:`Repair Based Node Operations (RBNO) </operating-scylla/procedures/cluster-management/repair-based-node-operation>`
+
+  * :doc:`Preventing Quorum Loss in Symmetrical Multi-DC Clusters <arbiter-dc>`
 
 .. panel-box::
   :title: Topology Changes

@@ -12,6 +12,7 @@ ScyllaDB Architecture
    SSTable <sstable/index/>
    Compaction Strategies <compaction/compaction-strategies>
    Raft Consensus Algorithm in ScyllaDB </architecture/raft>
+   Zero-token Nodes </architecture/zero-token-nodes>
    
               
 * :doc:`Data Distribution with Tablets </architecture/tablets/>` - Tablets in ScyllaDB
@@ -22,5 +23,6 @@ ScyllaDB Architecture
 * :doc:`SSTable </architecture/sstable/index/>` - ScyllaDB SSTable 2.0 and 3.0 Format Information
 * :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>` - High-level analysis of different compaction strategies
 * :doc:`Raft Consensus Algorithm in ScyllaDB </architecture/raft>` - Overview of how Raft is implemented in ScyllaDB.
+* :doc:`Zero-token Nodes </architecture/zero-token-nodes>` - Nodes that do not replicate any data.
 
 Learn more about these topics in the `ScyllaDB University: Architecture lesson <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/>`_.
