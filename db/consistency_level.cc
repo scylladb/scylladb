@@ -36,7 +36,7 @@ size_t quorum_for(const locator::effective_replication_map& erm) {
 size_t local_quorum_for(const locator::effective_replication_map& erm, const sstring& dc) {
     using namespace locator;
 
-    auto& rs = erm.get_replication_strategy();
+    const auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nrs =
@@ -65,7 +65,7 @@ size_t block_for_local_serial(const locator::effective_replication_map& erm) {
 size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
     using namespace locator;
 
-    auto& rs = erm.get_replication_strategy();
+    const auto& rs = erm.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nrs =
@@ -260,7 +260,7 @@ filter_for_query(consistency_level cl,
     size_t bf = block_for(erm, cl);
 
     if (read_repair == read_repair_decision::DC_LOCAL) {
-        bf = std::max(block_for(erm, cl), local_count);
+        bf = std::max(bf, local_count);
     }
 
     if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
