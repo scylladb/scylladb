@@ -1114,8 +1114,8 @@ class client::do_upload_file : private multipart_upload {
         if (_tag) {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
-        req.write_body("bin", len, [f = std::move(f), &progress = _progress] (output_stream<char>&& out_) mutable {
-            auto input = make_file_input_stream(std::move(f), input_stream_options());
+        req.write_body("bin", len, [f = std::move(f), &progress = _progress] (output_stream<char>&& out_) {
+            auto input = make_file_input_stream(f, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
