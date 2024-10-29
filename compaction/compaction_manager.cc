@@ -2243,7 +2243,15 @@ bool compaction_manager::has_table_ongoing_compaction(const table_state& t) cons
 };
 
 bool compaction_manager::compaction_disabled(table_state& t) const {
-    return _compaction_state.contains(&t) && _compaction_state.at(&t).compaction_disabled();
+    if (auto it = _compaction_state.find(&t); it != _compaction_state.end()) {
+        return it->second.compaction_disabled();
+    } else {
+        cmlog.debug("compaction_disabled: {}:{} not in compaction_state", t.schema()->id(), t.get_group_id());
+        // Compaction is not strictly disabled, but it is not enabled either.
+        // The callers actually care about if it's enabled or not, not about the actual state of
+        // compaction_state::compaction_disabled()
+        return true;
+    }
 }
 
 future<> compaction_manager::stop_compaction(sstring type, table_state* table) {
