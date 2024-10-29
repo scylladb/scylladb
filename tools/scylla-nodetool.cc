@@ -2088,6 +2088,9 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         const auto ep = sstring(rjson::to_string_view(te["value"]));
          // We are not printing the actual tokens, so it is enough just to count them.
         ++endpoint_tokens[ep];
+    }
+
+    for (const auto& [ep, host_id] : endpoint_host_id) {
         if (endpoint_rack.contains(ep)) {
             continue;
         }
@@ -2135,7 +2138,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
                     fmt::format("{}{}", status, state),
                     address,
                     load,
-                    token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.at(ep)),
+                    token_count_unknown ? "?" : fmt::to_string(endpoint_tokens.contains(ep) ? endpoint_tokens.at(ep) : 0),
                     !is_effective_ownership_unknown ? format("{:.1f}%", endpoint_ownership.at(ep) * 100) : "?",
                     endpoint_host_id.contains(ep) ? endpoint_host_id.at(ep) : "?",
                     endpoint_rack.at(ep));
