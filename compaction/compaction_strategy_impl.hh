@@ -70,6 +70,18 @@ public:
 
     virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const;
 
+    /// Creates a decorated consumer that adds processing steps before the final consumer
+    ///
+    /// This factory function takes an end consumer functor and returns a new functor that
+    /// extends the processing pipeline. The returned functor "interposes" (inserts) additional
+    /// processing steps before delegating to the original end consumer. This enables building
+    /// layered processing pipelines where each layer can transform or filter the mutation
+    /// fragments before they reach their final destination.
+    ///
+    /// @param end_consumer The final consumer functor that processes mutation fragments
+    /// @return A new functor that wraps the end consumer with additional processing capabilities
+    /// @note The returned functor preserves the original consumer's semantics while allowing
+    ///       preprocessing of data
     virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
 
     virtual bool use_interposer_consumer() const {
