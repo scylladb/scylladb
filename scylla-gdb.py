@@ -62,6 +62,13 @@ def get_field_offset(gdb_type, name):
         if field.name == name:
             return int(field.bitpos / 8)
 
+@functools.cache
+def size_t():
+    return gdb.lookup_type('size_t')
+
+@functools.cache
+def _vptr_type():
+    return gdb.lookup_type('uintptr_t').pointer()
 
 # Defer initialization to first use
 # Don't prevent loading `scylla-gdb.py` due to any problem in the init code.
@@ -119,12 +126,6 @@ def downcast_vptr(ptr):
 
 
 class intrusive_list:
-    @classmethod
-    @property
-    @functools.cache
-    def size_t(cls):
-        return gdb.lookup_type('size_t')
-
     def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
@@ -141,7 +142,7 @@ class intrusive_list:
             if not member_hook:
                 member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
             if member_hook:
-                self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+                self.link_offset = member_hook.template_argument(2).cast(size_t())
             else:
                 self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::list_base_hook")
                 if self.link_offset is None:
@@ -150,7 +151,7 @@ class intrusive_list:
     def __iter__(self):
         hook = self.root['next_']
         while hook and hook != self.root.address:
-            node_ptr = hook.cast(self.size_t) - self.link_offset
+            node_ptr = hook.cast(size_t()) - self.link_offset
             yield node_ptr.cast(self.node_type.pointer()).dereference()
             hook = hook['next_']
 
@@ -165,12 +166,6 @@ class intrusive_list:
 
 
 class intrusive_slist:
-    @classmethod
-    @property
-    @functools.cache
-    def size_t(cls):
-        return gdb.lookup_type('size_t')
-
     def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
@@ -182,7 +177,7 @@ class intrusive_slist:
         else:
             member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
             if member_hook:
-                self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+                self.link_offset = member_hook.template_argument(2).cast(size_t())
             else:
                 self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::slist_base_hook")
                 if self.link_offset is None:
@@ -191,7 +186,7 @@ class intrusive_slist:
     def __iter__(self):
         hook = self.root['next_']
         while hook != self.root.address:
-            node_ptr = hook.cast(self.size_t) - self.link_offset
+            node_ptr = hook.cast(size_t()) - self.link_offset
             yield node_ptr.cast(self.node_type.pointer()).dereference()
             hook = hook['next_']
 
@@ -243,12 +238,6 @@ class std_tuple:
 
 
 class intrusive_set:
-    @classmethod
-    @property
-    @functools.cache
-    def size_t(cls):
-        return gdb.lookup_type('size_t')
-
     def __init__(self, ref, link=None):
         container_type = ref.type.strip_typedefs()
         self.node_type = container_type.template_argument(0)
@@ -258,7 +247,7 @@ class intrusive_set:
             member_hook = get_template_arg_with_prefix(container_type, "boost::intrusive::member_hook")
             if not member_hook:
                 raise Exception('Expected member_hook<> option not found in container\'s template parameters')
-            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+            self.link_offset = member_hook.template_argument(2).cast(size_t())
         self.root = ref['holder']['root']['parent_']
 
     def __visit(self, node):
@@ -266,7 +255,7 @@ class intrusive_set:
             for n in self.__visit(node['left_']):
                 yield n
 
-            node_ptr = node.cast(self.size_t) - self.link_offset
+            node_ptr = node.cast(size_t()) - self.link_offset
             yield node_ptr.cast(self.node_type.pointer()).dereference()
 
             for n in self.__visit(node['right_']):
@@ -435,12 +424,6 @@ class std_variant:
 
 
 class std_map:
-    @classmethod
-    @property
-    @functools.cache
-    def size_t(cls):
-        return gdb.lookup_type('size_t')
-
     def __init__(self, ref):
         container_type = ref.type.strip_typedefs()
         kt = container_type.template_argument(0)
@@ -3906,12 +3889,6 @@ class scylla_fiber(gdb.Command):
     Invoke `scylla fiber --help` for more information on usage.
     """
 
-    @classmethod
-    @property
-    @functools.cache
-    def _vptr_type(cls):
-        return gdb.lookup_type('uintptr_t').pointer()
-
     def __init__(self):
         gdb.Command.__init__(self, 'scylla fiber', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
         self._task_symbol_matcher = task_symbol_matcher()
@@ -3941,7 +3918,7 @@ class scylla_fiber(gdb.Command):
             ptr_meta = None
 
         try:
-            maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
+            maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(_vptr_type()).dereference())
             self._maybe_log("\t-> 0x{:016x}\n".format(maybe_vptr), verbose)
         except gdb.MemoryError:
             self._maybe_log("\tNot a pointer\n", verbose)
@@ -3963,7 +3940,7 @@ class scylla_fiber(gdb.Command):
         # So if the task is a coroutine, we should be able to find the resume function via offsetting by -2.
         # AFAIK both major compilers respect this convention.
         if resolved_symbol.startswith('vtable for seastar::internal::coroutine_traits_base'):
-            if block := gdb.block_for_pc((gdb.Value(ptr).cast(self._vptr_type) - 2).dereference()):
+            if block := gdb.block_for_pc((gdb.Value(ptr).cast(_vptr_type()) - 2).dereference()):
                 resume = block.function
                 resolved_symbol += f" ({resume.print_name} at {resume.symtab.filename}:{resume.line})"
             else:
@@ -3998,13 +3975,13 @@ class scylla_fiber(gdb.Command):
             region_start = pr.address
             region_end = region_start + pr.type.sizeof
         else:
-            region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
-            region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
+            region_start = ptr + _vptr_type().sizeof # ignore our own vtable
+            region_end = region_start + (ptr_meta.size - ptr_meta.size % _vptr_type().sizeof)
 
         self._maybe_log("Scanning task #{} @ 0x{:016x}: {}\n".format(i, ptr, str(ptr_meta)), verbose)
 
-        for it in range(region_start, region_end, self._vptr_type.sizeof):
-            maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
+        for it in range(region_start, region_end, _vptr_type().sizeof):
+            maybe_tptr = int(gdb.Value(it).reinterpret_cast(_vptr_type()).dereference())
             self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}\n".format(ptr, it - ptr, maybe_tptr), verbose)
 
             res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
@@ -4032,7 +4009,7 @@ class scylla_fiber(gdb.Command):
             self._maybe_log("Current task is a thread, trying to find the thread_wake_task on its stack: 0x{:x}\n".format(stack_ptr), verbose)
             stack_meta = scylla_ptr.analyze(stack_ptr)
             # stack grows downwards, so walk from end of buffer towards the beginning
-            for maybe_tptr in range(stack_ptr + stack_meta.size - self._vptr_type.sizeof, stack_ptr - self._vptr_type.sizeof, -self._vptr_type.sizeof):
+            for maybe_tptr in range(stack_ptr + stack_meta.size - _vptr_type().sizeof, stack_ptr - _vptr_type().sizeof, -_vptr_type().sizeof):
                 res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
                 if res is not None and 'thread_wake_task' in res[2]:
                     return res
@@ -4056,7 +4033,7 @@ class scylla_fiber(gdb.Command):
             # Casts to templates with lambda template arguments just don't work.
             # We know the offset of the message queue reference in
             # async_work_item (first field) so we calculate and cast a pointer to it.
-            q_ptr = align_up(int(ptr_meta.ptr) + work_item_type.sizeof, self._vptr_type.sizeof)
+            q_ptr = align_up(int(ptr_meta.ptr) + work_item_type.sizeof, _vptr_type().sizeof)
             q = gdb.Value(q_ptr).reinterpret_cast(smp_mmessage_queue_ptr_type.pointer()).dereference()
             shard = int(q['_pending']['remote']['_id'])
             self._maybe_log("Deduced shard is {} (message queue 0x{:x} @ 0x{:x} + {})\n".format(shard, int(q), int(ptr_meta.ptr), q_ptr - int(ptr_meta.ptr)), verbose)
@@ -4195,11 +4172,6 @@ class scylla_find(gdb.Command):
       thread 1, small (size <= 512), live (0x6000000f3800 +48)
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
-    @classmethod
-    @property
-    @functools.cache
-    def _vptr_type(cls):
-        return gdb.lookup_type('uintptr_t').pointer()
 
     _size_char_to_size = {
         'b': 8,
@@ -4281,7 +4253,7 @@ class scylla_find(gdb.Command):
             else:
                 formatted_offset = ""
             if args.resolve:
-                maybe_vptr = int(gdb.Value(ptr_meta.obj_ptr).reinterpret_cast(scylla_find._vptr_type).dereference())
+                maybe_vptr = int(gdb.Value(ptr_meta.obj_ptr).reinterpret_cast(_vptr_type()).dereference())
                 symbol = resolve(maybe_vptr, cache=False)
                 if symbol is None:
                     gdb.write('{}{}\n'.format(formatted_offset, ptr_meta))
@@ -5008,7 +4980,6 @@ class scylla_small_objects(gdb.Command):
             self._resolve_symbols = resolve_symbols
 
             self._text_ranges = get_text_ranges()
-            self._vptr_type = gdb.lookup_type('uintptr_t').pointer()
             self._free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
             self._free_in_pool = set()
@@ -5058,7 +5029,7 @@ class scylla_small_objects(gdb.Command):
                 obj = self._next_obj()
 
             if self._resolve_symbols:
-                addr = gdb.Value(obj).reinterpret_cast(self._vptr_type).dereference()
+                addr = gdb.Value(obj).reinterpret_cast(_vptr_type()).dereference()
                 if addr_in_ranges(self._text_ranges, addr):
                     return (obj, resolve(addr))
                 else:
