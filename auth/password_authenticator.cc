@@ -201,7 +201,7 @@ bool password_authenticator::require_authentication() const {
 }
 
 authentication_option_set password_authenticator::supported_options() const {
-    return authentication_option_set{authentication_option::password, authentication_option::salted_hash};
+    return authentication_option_set{authentication_option::password, authentication_option::hashed_password};
 }
 
 authentication_option_set password_authenticator::alterable_options() const {
@@ -242,19 +242,19 @@ future<authenticated_user> password_authenticator::authenticate(
 future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
     // When creating a role with the usual `CREATE ROLE` statement, turns the underlying `PASSWORD`
     // into the corresponding hash.
-    // When creating a role with `CREATE ROLE WITH SALTED HASH`, simply extracts the `SALTED HASH`.
+    // When creating a role with `CREATE ROLE WITH HASHED PASSWORD`, simply extracts the `HASHED PASSWORD`.
     auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
         return std::visit(make_visitor(
                 [&] (const password_option& opt) {
                     return passwords::hash(opt.password, rng_for_salt);
                 },
-                [] (const salted_hash_option& opt) {
-                    return opt.salted_hash;
+                [] (const hashed_password_option& opt) {
+                    return opt.hashed_password;
                 }
         ), creds);
     });
 
-    // Neither `PASSWORD`, nor `SALTED HASH` has been specified.
+    // Neither `PASSWORD`, nor `HASHED PASSWORD` has been specified.
     if (!maybe_hash) {
         co_return;
     }

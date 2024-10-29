@@ -559,9 +559,9 @@ future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe
 }
 
 // SCHEMA DESCRIBE STATEMENT
-schema_describe_statement::schema_describe_statement(bool full_schema, bool with_salted_hashes, bool with_internals)
+schema_describe_statement::schema_describe_statement(bool full_schema, bool with_hashed_passwords, bool with_internals)
     : describe_statement()
-    , _config(schema_desc{.full_schema = full_schema, .with_salted_hashes = with_salted_hashes})
+    , _config(schema_desc{.full_schema = full_schema, .with_hashed_passwords = with_hashed_passwords})
     , _with_internals(with_internals) {}
 
 schema_describe_statement::schema_describe_statement(std::optional<sstring> keyspace, bool only, bool with_internals)
@@ -580,7 +580,7 @@ future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(
         [&] (const schema_desc& config) -> future<std::vector<description>> {
             auto& auth_service = *client_state.get_auth_service();
 
-            if (config.with_salted_hashes) {
+            if (config.with_hashed_passwords) {
                 const auto maybe_user = client_state.user();
                 if (!maybe_user || !co_await auth::has_superuser(auth_service, *maybe_user)) {
                     co_await coroutine::return_exception(exceptions::unauthorized_exception(
@@ -602,7 +602,7 @@ future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(
             if (_with_internals) {
                 // The order is important here. We need to first restore auth
                 // because we can only attach a service level to an existing role.
-                auto auth_descs = co_await auth_service.describe_auth(config.with_salted_hashes);
+                auto auth_descs = co_await auth_service.describe_auth(config.with_hashed_passwords);
                 auto service_level_descs = co_await client_state.get_service_level_controller().describe_service_levels();
 
                 schema_result.insert(schema_result.end(), std::make_move_iterator(auth_descs.begin()),
@@ -784,15 +784,15 @@ using ds = describe_statement;
 
 describe_statement::describe_statement(ds::describe_config config) : _config(std::move(config)), _with_internals(false) {}
 
-void describe_statement::with_internals_details(bool with_salted_hashes) {
+void describe_statement::with_internals_details(bool with_hashed_passwords) {
     _with_internals = internals(true);
 
-    if (with_salted_hashes && !std::holds_alternative<describe_schema>(_config)) {
+    if (with_hashed_passwords && !std::holds_alternative<describe_schema>(_config)) {
         throw exceptions::invalid_request_exception{"Option WITH PASSWORDS is only allowed with DESC SCHEMA"};
     }
 
     if (std::holds_alternative<describe_schema>(_config)) {
-        std::get<describe_schema>(_config).with_salted_hashes = with_salted_hashes;
+        std::get<describe_schema>(_config).with_hashed_passwords = with_hashed_passwords;
     }
 }
 
@@ -803,7 +803,7 @@ std::unique_ptr<prepared_statement> describe_statement::prepare(data_dictionary:
             return ::make_shared<cluster_describe_statement>();
         },
         [&] (const describe_schema& cfg) -> ::shared_ptr<statements::describe_statement> {
-            return ::make_shared<schema_describe_statement>(cfg.full_schema, cfg.with_salted_hashes, internals);
+            return ::make_shared<schema_describe_statement>(cfg.full_schema, cfg.with_hashed_passwords, internals);
         },
         [&] (const describe_keyspace& cfg) -> ::shared_ptr<statements::describe_statement> {
             return ::make_shared<schema_describe_statement>(std::move(cfg.keyspace), cfg.only_keyspace, internals);

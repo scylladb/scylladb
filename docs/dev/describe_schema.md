@@ -83,10 +83,10 @@ Taking all of this into consideration is crucial when designing the semantics of
 that is unused in the output of the statement, like permission grants? Or should we not?
 
 The conclusion we reached is to rely on the current configuration and on it only. That means that if some data cannot be accessed
-via the API, it won't be included. For example, if we use `AllowAllAuthenticator`, no salted hashes will be printed
-when executing `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS` because salted hashes are not used by the authenticator.
+via the API, it won't be included. For example, if we use `AllowAllAuthenticator`, no hashed passwords will be printed
+when executing `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS` because hashed passwords are not used by the authenticator.
 
-The rationale for that decision is the fact that we want to backup the current state of Scylla. Restoring salted hashes, permission grants, etc.
+The rationale for that decision is the fact that we want to backup the current state of Scylla. Restoring hashed passwords, permission grants, etc.
 would require changing the configuration to be even able to insert the data. That's something we want to avoid.
 
 For that reason, the user should be aware of this fact and make sure they are prepared for possible "data loss".
@@ -104,7 +104,7 @@ Scylla doesn't store the passwords of the roles; instead, it stores salted hashe
 To restore a role with its password, we want utilize that salted hash. We introduce a new form of the `CREATE ROLE` statement:
 
 ```sql
-CREATE ROLE [ IF NOT EXISTS ] `role_name` WITH SALTED HASH = '`salted_hash`' ( AND `role_option` )*
+CREATE ROLE [ IF NOT EXISTS ] `role_name` WITH HASHED PASSWORD = '`hashed_password`' ( AND `role_option` )*
 ```
 
 where
@@ -114,7 +114,7 @@ role_option: LOGIN '=' `string`
            :| SUPERUSER '=' `boolean`
 ```
 
-Performing that query will result in creating a new role whose salted hash stored in the database is exactly the same as the one provided by the user. If the specified role already exists, the query will fail and no side effect will be observed—in short, we follow the semantics of the "normal" version of `CREATE ROLE`.
+Performing that query will result in creating a new role whose hashed password stored in the database is exactly the same as the one provided by the user. If the specified role already exists, the query will fail and no side effect will be observed—in short, we follow the semantics of the "normal" version of `CREATE ROLE`.
 
 The user executing that statement is required to be a superuser.
 

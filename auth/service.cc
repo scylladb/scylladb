@@ -334,7 +334,7 @@ static void validate_authentication_options_are_supported(
     if (options.credentials) {
         std::visit(make_visitor(
             [&] (const password_option&) { check(authentication_option::password); },
-            [&] (const salted_hash_option&) { check(authentication_option::salted_hash); }
+            [&] (const hashed_password_option&) { check(authentication_option::hashed_password); }
         ), *options.credentials);
     }
 
@@ -430,7 +430,7 @@ future<bool> service::exists(const resource& r) const {
     return make_ready_future<bool>(false);
 }
 
-future<std::vector<cql3::description>> service::describe_roles(bool with_salted_hashes) {
+future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_passwords) {
     std::vector<cql3::description> result{};
 
     const auto roles = co_await _role_manager->query_all();
@@ -438,30 +438,30 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_salted_
 
     const bool authenticator_uses_password_hashes = _authenticator->uses_password_hashes();
 
-    auto produce_create_statement = [with_salted_hashes] (const sstring& formatted_role_name,
-            const std::optional<sstring>& maybe_salted_hash, bool can_login, bool is_superuser) {
+    auto produce_create_statement = [with_hashed_passwords] (const sstring& formatted_role_name,
+            const std::optional<sstring>& maybe_hashed_password, bool can_login, bool is_superuser) {
         // Even after applying formatting to a role, `formatted_role_name` can only equal `meta::DEFAULT_SUPER_NAME`
         // if the original identifier was equal to it.
         const sstring role_part = formatted_role_name == meta::DEFAULT_SUPERUSER_NAME
                 ? seastar::format("IF NOT EXISTS {}", formatted_role_name)
                 : formatted_role_name;
 
-        const sstring with_salted_hash_part = with_salted_hashes && maybe_salted_hash
+        const sstring with_hashed_password_part = with_hashed_passwords && maybe_hashed_password
                 // `K_PASSWORD` in Scylla's CQL grammar requires that passwords be quoted
                 // with single quotation marks.
-                ? seastar::format("WITH SALTED HASH = {} AND", cql3::util::single_quote(*maybe_salted_hash))
+                ? seastar::format("WITH HASHED PASSWORD = {} AND", cql3::util::single_quote(*maybe_hashed_password))
                 : "WITH";
 
         return seastar::format("CREATE ROLE {} {} LOGIN = {} AND SUPERUSER = {};",
-                role_part, with_salted_hash_part, can_login, is_superuser);
+                role_part, with_hashed_password_part, can_login, is_superuser);
     };
 
     for (const auto& role : roles) {
         const sstring formatted_role_name = cql3::util::maybe_quote(role);
 
-        std::optional<sstring> maybe_salted_hash;
+        std::optional<sstring> maybe_hashed_password;
         if (authenticator_uses_password_hashes) {
-            maybe_salted_hash = co_await _authenticator->get_password_hash(role);
+            maybe_hashed_password = co_await _authenticator->get_password_hash(role);
         }
 
         const bool can_login = co_await _role_manager->can_login(role);
@@ -472,7 +472,7 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_salted_
             .keyspace = std::nullopt,
             .type = "role",
             .name = role,
-            .create_statement = produce_create_statement(formatted_role_name, maybe_salted_hash, can_login, is_superuser)
+            .create_statement = produce_create_statement(formatted_role_name, maybe_hashed_password, can_login, is_superuser)
         });
     }
 
@@ -632,8 +632,8 @@ future<std::vector<cql3::description>> service::describe_permissions() const {
     co_return result;
 }
 
-future<std::vector<cql3::description>> service::describe_auth(bool with_salted_hashes) {
-    auto role_descs = co_await describe_roles(with_salted_hashes);
+future<std::vector<cql3::description>> service::describe_auth(bool with_hashed_passwords) {
+    auto role_descs = co_await describe_roles(with_hashed_passwords);
     auto role_grant_descs = co_await _role_manager->describe_role_grants();
     auto permission_descs = co_await describe_permissions();
 
