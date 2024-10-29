@@ -44,7 +44,7 @@ private:
     struct describe_cluster {};
     struct describe_schema {
         bool full_schema = false;
-        bool with_salted_hashes = false;
+        bool with_hashed_passwords = false;
     };
     struct describe_keyspace {
         std::optional<sstring> keyspace;
@@ -77,7 +77,7 @@ private:
 
 public:
     explicit describe_statement(describe_config config);
-    void with_internals_details(bool with_salted_hashes);
+    void with_internals_details(bool with_hashed_passwords);
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 

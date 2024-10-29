@@ -181,7 +181,7 @@ public:
     /// Produces descriptions that can be used to restore the state of auth. That encompasses
     /// roles, role grants, and permission grants.
     ///
-    future<std::vector<cql3::description>> describe_auth(bool with_salted_hashes);
+    future<std::vector<cql3::description>> describe_auth(bool with_hashed_passwords);
 
     authenticator& underlying_authenticator() const {
         return *_authenticator;
@@ -207,7 +207,7 @@ private:
     future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
     future<bool> has_superuser(std::string_view role_name, const role_set& roles) const;
 
-    future<std::vector<cql3::description>> describe_roles(bool with_salted_hashes);
+    future<std::vector<cql3::description>> describe_roles(bool with_hashed_passwords);
     future<std::vector<cql3::description>> describe_permissions() const;
 };
 

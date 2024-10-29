@@ -416,6 +416,6 @@ For more details, check [Service Levels docs](https://github.com/scylladb/scylla
 
 We extended the semantics of `DESCRIBE SCHEMA WITH INTERNALS`: aside from describing the elements of the schema,
 it also describes authentication/authorization and service levels. Additionally, we introduced a new tier of the
-statement: `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`, which also includes the information about salted hashes of the roles.
+statement: `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`, which also includes the information about hashed passwords of the roles.
 
 For more details, see [the article on DESCRIBE SCHEMA](./describe-schema.rst).

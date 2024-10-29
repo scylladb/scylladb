@@ -1340,7 +1340,7 @@ roleOptions[cql3::role_options& opts]
 
 roleOption[cql3::role_options& opts]
     : K_PASSWORD '=' v=STRING_LITERAL { opts.password = $v.text; }
-    | K_SALTED K_HASH '=' v=STRING_LITERAL { opts.salted_hash = $v.text; }
+    | K_HASHED K_PASSWORD '=' v=STRING_LITERAL { opts.hashed_password = $v.text; }
     | K_OPTIONS '=' m=mapLiteral { opts.options = convert_property_map(m); }
     | K_SUPERUSER '=' b=BOOLEAN { opts.is_superuser = convert_boolean_literal($b.text); }
     | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
@@ -1470,7 +1470,7 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
         bool only = false;
         std::optional<sstring> keyspace;
         sstring generic_name = "";
-        bool with_salted_hashes = false;
+        bool with_hashed_passwords = false;
     }
     : ( K_DESCRIBE | K_DESC )
     ( (K_CLUSTER) => K_CLUSTER                      { $stmt = cql3::statements::raw::describe_statement::cluster();                }
@@ -1497,8 +1497,8 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
         | tK=unreserved_keyword                     { generic_name = tK; } )
                                                     { $stmt = cql3::statements::raw::describe_statement::generic(keyspace, generic_name); }
     )
-    ( K_WITH K_INTERNALS (K_AND K_PASSWORDS { with_salted_hashes = true; })?
-        { $stmt->with_internals_details(with_salted_hashes); } )?
+    ( K_WITH K_INTERNALS (K_AND K_PASSWORDS { with_hashed_passwords = true; })?
+        { $stmt->with_internals_details(with_hashed_passwords); } )?
     ;
 
 /** DEFINITIONS **/
@@ -2075,8 +2075,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_OPTIONS
         | K_PASSWORD
         | K_PASSWORDS
-        | K_SALTED
-        | K_HASH
+        | K_HASHED
         | K_EXISTS
         | K_CUSTOM
         | K_TRIGGER
@@ -2238,8 +2237,7 @@ K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
 K_PASSWORD:    P A S S W O R D;
 K_PASSWORDS:   P A S S W O R D S;
-K_SALTED:      S A L T E D;
-K_HASH:        H A S H;
+K_HASHED:      H A S H E D;
 K_LOGIN:       L O G I N;
 K_NOLOGIN:     N O L O G I N;
 K_OPTIONS:     O P T I O N S;

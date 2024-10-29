@@ -23,7 +23,7 @@ namespace auth {
 
 enum class authentication_option {
     password,
-    salted_hash,
+    hashed_password,
     options
 };
 
@@ -37,8 +37,8 @@ struct fmt::formatter<auth::authentication_option> : fmt::formatter<string_view>
         switch (a) {
         case password:
             return formatter<string_view>::format("PASSWORD", ctx);
-        case salted_hash:
-            return formatter<string_view>::format("SALTED HASH", ctx);
+        case hashed_password:
+            return formatter<string_view>::format("HASHED PASSWORD", ctx);
         case options:
             return formatter<string_view>::format("OPTIONS", ctx);
         }
@@ -57,12 +57,12 @@ struct password_option {
 };
 
 /// Used exclusively for restoring roles.
-struct salted_hash_option {
-    sstring salted_hash;
+struct hashed_password_option {
+    sstring hashed_password;
 };
 
 struct authentication_options final {
-    std::optional<std::variant<password_option, salted_hash_option>> credentials;
+    std::optional<std::variant<password_option, hashed_password_option>> credentials;
     std::optional<custom_options> options;
 };
 

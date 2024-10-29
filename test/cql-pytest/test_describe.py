@@ -12,7 +12,7 @@ import random
 import re
 import textwrap
 from contextlib import contextmanager, ExitStack
-from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix, new_user, new_session
+from util import is_scylla, new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql, keyspace_has_tablets, unique_name_prefix, new_user, new_session
 from cassandra.protocol import InvalidRequest, Unauthorized
 from collections.abc import Iterable
 from typing import Any
@@ -1243,7 +1243,7 @@ def new_random_type(cql, keyspace, udts=[]):
 #                                                                              #
 # We want to test the following features related to the issue:                 #
 #                                                                              #
-# 1. Creating roles when providing `SALTED HASH`,                              #
+# 1. Creating roles when providing `HASHED PASSWORD`,                          #
 # 2. The behavior of `DESC SCHEMA WITH INTERNALS (AND PASSWORDS)` and          #
 #    the correctness of statements that it produces and which are related      #
 #    to the referenced issue: auth and service levels.                         #
@@ -1273,8 +1273,8 @@ def new_random_type(cql, keyspace, udts=[]):
 #    is termined with a semicolon.                                             #
 #                                                                              #
 # 2. `CREATE ROLE` statements always preserve the following order of options:  #
-#        `SALTED HASH`, `LOGIN`, `SUPERUSER`                                   #
-#    Aside from `SALTED HASH`, which only appears when executing               #
+#        `HASHED PASSWORD`, `LOGIN`, `SUPERUSER`                               #
+#    Aside from `HASHED PASSWORD`, which only appears when executing           #
 #        `DESC SCHEMA WITH INTERNALS AND PASSWORDS`                            #
 #    the parameters are always present.                                        #
 #                                                                              #
@@ -1288,7 +1288,7 @@ def new_random_type(cql, keyspace, udts=[]):
 #                                                                              #
 #    (i)   the `WORKLOAD_TYPE` option when creating a service level,           #
 #    (ii)  the `PASSWORD` option when creating a role,                         #
-#    (iii) the `SALTED HASH` option when creating a role.                      #
+#    (iii) the `HASHED PASSWORD` option when creating a role.                  #
 #                                                                              #
 #    The exceptions are enforced by the CQL grammar used in Scylla.            #
 #                                                                              #
@@ -1340,16 +1340,17 @@ class AuthSLContext:
         if self.ks:
             self.cql.execute(f"DROP KEYSPACE {self.ks}")
 
-        roles_iter = self.cql.execute(f"SELECT role FROM system.roles")
+        roles_iter = self.cql.execute("LIST ROLES")
         roles_iter = filter(lambda record: record.role != DEFAULT_SUPERUSER, roles_iter)
         roles = [record.role for record in roles_iter]
         for role in roles:
             self.cql.execute(f"DROP ROLE {make_identifier(role, quotation_mark='"')}")
 
-        service_levels_iter = self.cql.execute("LIST ALL SERVICE LEVELS")
-        service_levels = [record.service_level for record in service_levels_iter]
-        for sl in service_levels:
-            self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+        if is_scylla(self.cql):
+            service_levels_iter = self.cql.execute("LIST ALL SERVICE LEVELS")
+            service_levels = [record.service_level for record in service_levels_iter]
+            for sl in service_levels:
+                self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
 
 class ServiceLevel:
     def __init__(self, name: str, timeout: int|None = None, wl_type: str|None = None):
@@ -1372,52 +1373,55 @@ class ServiceLevel:
 
 ###
 
-def test_create_role_with_salted_hash(cql):
+def test_create_role_with_hashed_password(cql):
     """
-    Verify that creating a role with a salted hash works correctly, i.e. that the salted hash
+    Verify that creating a role with a hashed password works correctly, i.e. that the hashed password
     present in `system.roles` is the same as the one we provide.
     """
 
     with AuthSLContext(cql):
         role = "andrew"
-        # Arbitrary salted hash. Could be anything.
-        # We don't use characters that won't be generated, i.e.:
+        # This could be anything, but we stick to the jBCrypt format to be compliant with Cassandra's policy
+        # (it only accepts hashed passwords in that format). We don't use characters that won't be generated
+        # by Scylla, i.e.:
         #    `:`, `;`, `*`, `!`, and `\`,
-        # but Scylla should technically accept them too.
-        salted_hash = "@#$%^&()`,./{}[]abcdefghijklmnopqrstuwvxyzABCDEFGHIJKLMNOPQRSTUWVXYZ123456789~-_=+|"
-        cql.execute(f"CREATE ROLE {role} WITH SALTED HASH = '{sanitize_password(salted_hash)}'")
+        # but in practice it should accept them too.
+        hashed_password = "$2a$10$JSJEMFm6GeaW9XxT5JIheuEtPvat6i7uKbnTcxX3c1wshIIsGyUtG"
+        cql.execute(f"CREATE ROLE {role} WITH HASHED PASSWORD = '{sanitize_password(hashed_password)}'")
 
-        [result] = cql.execute(f"SELECT salted_hash FROM system.roles WHERE role = '{role}'")
-        assert salted_hash == result.salted_hash
+        table = "system.roles" if is_scylla(cql) else "system_auth.roles"
+        [result] = cql.execute(f"SELECT salted_hash FROM {table} WHERE role = '{role}'")
+        assert hashed_password == result.salted_hash
 
 
-def test_create_role_with_salted_hash_authorization(cql):
+def test_create_role_with_hashed_password_authorization(cql):
     """
-    Verify that roles that aren't superusers cannot perform `CREATE ROLE WITH SALTED HASH`.
+    Verify that roles that aren't superusers cannot perform `CREATE ROLE WITH HASHED PASSWORD`.
     """
 
     with AuthSLContext(cql):
-        def try_create_role_with_salted_hash(role):
+        def try_create_role_with_hashed_password(role):
             with new_session(cql, role) as ncql:
                 with pytest.raises(Unauthorized):
-                    ncql.execute("CREATE ROLE some_unused_name WITH SALTED HASH = 'somesaltedhash'")
+                    ncql.execute("CREATE ROLE some_unused_name WITH HASHED PASSWORD = '$2a$10$JSJEMFm6GeaW9XxT5JIheuEtPvat6i7uKbnTcxX3c1wshIIsGyUtG'")
 
         # List of form (role name, list of permission grants to the role)
         r1 = "andrew"
         r2 = "jane"
-
-        with new_user(cql, r1), new_user(cql, r2):
-            # This also grants access to system tables.
-            cql.execute(f"GRANT ALL ON ALL KEYSPACES TO {r2}")
-
-            try_create_role_with_salted_hash(r1)
-            try_create_role_with_salted_hash(r2)
-
         r3 = "bob"
 
-        with new_user(cql, r3, with_superuser_privileges=True):
-            with new_session(cql, r3) as ncql:
-                ncql.execute("CREATE ROLE some_unused_name WITH SALTED HASH = 'somesaltedhash'")
+        for r in [r1, r2]:
+            cql.execute(f"CREATE ROLE {r} WITH PASSWORD = '{r}' AND LOGIN = true")
+        cql.execute(f"CREATE ROLE {r3} WITH PASSWORD = '{r3}' AND SUPERUSER = true AND LOGIN = true")
+
+        # This also grants access to system tables.
+        cql.execute(f"GRANT ALL ON ALL KEYSPACES TO {r2}")
+
+        try_create_role_with_hashed_password(r1)
+        try_create_role_with_hashed_password(r2)
+
+        with new_session(cql, r3) as ncql:
+            ncql.execute("CREATE ROLE some_unused_name WITH HASHED PASSWORD = '$2a$10$JSJEMFm6GeaW9XxT5JIheuEtPvat6i7uKbnTcxX3c1wshIIsGyUtG'")
 
 ###
 
@@ -1474,18 +1478,18 @@ def test_desc_roles_quotation_marks(cql):
         andrew_raw = "andrew \" 'the great'"
         jane_raw = "jane ' \"the wise\""
 
-        andrew_salted_hash_raw = "my \" 'salted hash'"
-        jane_salted_hash_raw = "my ' \"other salted hash\""
+        andrew_hashed_password_raw = "my \" 'hashed password'"
+        jane_hashed_password_raw = "my ' \"other hashed password\""
 
         andrew_single_quote = make_identifier(andrew_raw, quotation_mark="'")
         andrew_double_quote = make_identifier(andrew_raw, quotation_mark='"')
         jane_double_quote = make_identifier(jane_raw, quotation_mark='"')
 
-        andrew_salted_hash = make_identifier(andrew_salted_hash_raw, quotation_mark="'")
-        jane_salted_hash = make_identifier(jane_salted_hash_raw, quotation_mark="'")
+        andrew_hashed_password = make_identifier(andrew_hashed_password_raw, quotation_mark="'")
+        jane_hashed_password = make_identifier(jane_hashed_password_raw, quotation_mark="'")
 
-        cql.execute(f"CREATE ROLE {andrew_single_quote} WITH SALTED HASH = {andrew_salted_hash}")
-        cql.execute(f"CREATE ROLE {jane_double_quote} WITH SALTED HASH = {jane_salted_hash}")
+        cql.execute(f"CREATE ROLE {andrew_single_quote} WITH HASHED PASSWORD = {andrew_hashed_password}")
+        cql.execute(f"CREATE ROLE {jane_double_quote} WITH HASHED PASSWORD = {jane_hashed_password}")
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS")
         desc_iter = filter_roles(desc_iter)
@@ -1499,8 +1503,8 @@ def test_desc_roles_quotation_marks(cql):
         desc_iter = extract_create_statements(desc_elements)
 
         expected_result = {
-            f"CREATE ROLE {andrew_double_quote} WITH SALTED HASH = {andrew_salted_hash} AND LOGIN = false AND SUPERUSER = false;",
-            f"CREATE ROLE {jane_double_quote} WITH SALTED HASH = {jane_salted_hash} AND LOGIN = false AND SUPERUSER = false;"
+            f"CREATE ROLE {andrew_double_quote} WITH HASHED PASSWORD = {andrew_hashed_password} AND LOGIN = false AND SUPERUSER = false;",
+            f"CREATE ROLE {jane_double_quote} WITH HASHED PASSWORD = {jane_hashed_password} AND LOGIN = false AND SUPERUSER = false;"
         }
 
         assert set(desc_iter) == expected_result
@@ -1603,16 +1607,16 @@ def test_desc_roles_with_passwords(cql):
         role_with_pass = "alice"
 
         create_stmt_without_pass = f"CREATE ROLE {role_without_pass} WITH LOGIN = false AND SUPERUSER = false;"
-        create_stmt_with_pass = f"CREATE ROLE {role_with_pass} WITH PASSWORD = 'some_funky_password'"
+        create_stmt_with_pass = f"CREATE ROLE {role_with_pass} WITH PASSWORD = 'some_password'"
 
         cql.execute(create_stmt_without_pass)
         cql.execute(create_stmt_with_pass)
 
         [salted_hash_result] = cql.execute(f"SELECT salted_hash FROM system.roles WHERE role = '{role_with_pass}'")
-        salted_hash = salted_hash_result.salted_hash
-        create_stmt_with_salted_hash = f"CREATE ROLE {role_with_pass} WITH SALTED HASH = '{sanitize_password(salted_hash)}' AND LOGIN = false AND SUPERUSER = false;"
+        hashed_password = salted_hash_result.salted_hash
+        create_stmt_with_hashed_password = f"CREATE ROLE {role_with_pass} WITH HASHED PASSWORD = '{sanitize_password(hashed_password)}' AND LOGIN = false AND SUPERUSER = false;"
 
-        stmts = [create_stmt_without_pass, create_stmt_with_salted_hash]
+        stmts = [create_stmt_without_pass, create_stmt_with_hashed_password]
 
         desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS")
         desc_iter = filter_roles(desc_iter)

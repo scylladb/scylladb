@@ -358,32 +358,32 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
     }, auth_on(false));
 }
 
-SEASTAR_TEST_CASE(test_try_to_create_role_with_salted_hash_and_password) {
+SEASTAR_TEST_CASE(test_try_to_create_role_with_hashed_password_and_password) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         BOOST_REQUIRE_THROW(
-            env.execute_cql("CREATE ROLE jane WITH SALTED HASH = 'something' AND PASSWORD = 'something'").get(),
+            env.execute_cql("CREATE ROLE jane WITH HASHED PASSWORD = 'something' AND PASSWORD = 'something'").get(),
             exceptions::syntax_exception);
     }, auth_on(false));
 }
 
-SEASTAR_TEST_CASE(test_try_to_create_role_with_password_and_salted_hash) {
+SEASTAR_TEST_CASE(test_try_to_create_role_with_password_and_hashed_password) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         BOOST_REQUIRE_THROW(
-            env.execute_cql("CREATE ROLE jane WITH PASSWORD = 'something' AND SALTED HASH = 'something'").get(),
+            env.execute_cql("CREATE ROLE jane WITH PASSWORD = 'something' AND HASHED PASSWORD = 'something'").get(),
             exceptions::syntax_exception);
     }, auth_on(false));
 }
 
-SEASTAR_TEST_CASE(test_try_create_role_with_salted_hash_as_anonymous_user) {
+SEASTAR_TEST_CASE(test_try_create_role_with_hashed_password_as_anonymous_user) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         env.local_client_state().set_login(auth::anonymous_user());
         env.refresh_client_state().get();
         BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));
-        BOOST_REQUIRE_THROW(env.execute_cql("CREATE ROLE my_new_role WITH SALTED HASH = 'myhash'").get(), exceptions::unauthorized_exception);
+        BOOST_REQUIRE_THROW(env.execute_cql("CREATE ROLE my_new_role WITH HASHED PASSWORD = 'myhash'").get(), exceptions::unauthorized_exception);
     }, auth_on(true));
 }
 
-SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_salted_hash) {
+SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_hashed_password) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         // Note: crypt(5) specifies:
         //
@@ -391,8 +391,8 @@ SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_salted_hash) {
         //     or the characters `:`, `;`, `*`, `!`, or `\`.   (These  characters  are
         //     used as delimiters and special markers in the passwd(5) and shadow(5) files.)"
 
-        env.execute_cql("CREATE ROLE invalid_role WITH SALTED HASH = ';' AND LOGIN = true").get();
-        env.execute_cql("CREATE ROLE valid_role WITH SALTED HASH = 'salted_hash' AND LOGIN = true").get();
+        env.execute_cql("CREATE ROLE invalid_role WITH HASHED PASSWORD = ';' AND LOGIN = true").get();
+        env.execute_cql("CREATE ROLE valid_role WITH HASHED PASSWORD = 'hashed_password' AND LOGIN = true").get();
         BOOST_REQUIRE_EXCEPTION(authenticate(env, "invalid_role", "pwd").get(), exceptions::authentication_exception,
                 exception_predicate::message_equals("Could not verify password"));
         BOOST_REQUIRE_EXCEPTION(authenticate(env, "valid_role", "pwd").get(), exceptions::authentication_exception,

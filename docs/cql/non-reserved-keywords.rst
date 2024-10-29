@@ -30,7 +30,7 @@ Non-reserved keywords only have meaning in their particular area of context and 
 * FROZEN	
 * FUNCTION	
 * FUNCTIONS	
-* HASH
+* HASHED
 * INET	
 * INITCOND	
 * INPUT	
@@ -53,7 +53,6 @@ Non-reserved keywords only have meaning in their particular area of context and 
 * RETURNS	
 * ROLE	
 * ROLES	
-* SALTED
 * SFUNC	
 * SMALLINT	
 * STATIC	

@@ -30,7 +30,7 @@ Syntax and semantics
 
 * ``DESCRIBE [FULL] SCHEMA WITH INTERNALS AND PASSWORDS``: aside from the information retrieved as part of the
   previous tier, the statements corresponding to restoring roles *do* contain information about their
-  passwords; namely—their salted hashes. For more information regarding salted hashes, see the relevant section
+  passwords; namely—their hashed passwords. For more information regarding hashed passwords, see the relevant section
   below.
 
 Instead of ``DESCRIBE``, you can use its shortened form: ``DESC``.
@@ -64,7 +64,7 @@ Relation to authentication and authorization
 
 It's important to note that the information returned by ``DESCRIBE [FULL] SCHEMA WITH INTERNALS [AND PASSWORDS]``
 depends on the currently used authenticator and authorizer. If the used authenticator doesn't use passwords to
-authenticate a role, the salted hashes won't be returned even if they're present in the database. That scenario
+authenticate a role, the hashed passwords won't be returned even if they're present in the database. That scenario
 may happen if, for example, you start using `AllowAllAuthenticator`.
 
 Similarly, permission grants may not be returned if they're not used, e.g. when ScyllaDB is configured to use
@@ -95,17 +95,17 @@ cqlsh support
     | ``DESCRIBE [FULL] SCHEMA WITH INTERNALS AND PASSWORDS`` | 6.0.23                    |
     +---------------------------------------------------------+---------------------------+
 
-Appendix I, salted hashes
--------------------------
+Appendix I, hashed passwords
+----------------------------
 
-A salted hash is an encrypted form of a password stored by ScyllaDB to authenticate roles. The statements returned
+A hashed password is an encrypted form of a password stored by ScyllaDB to authenticate roles. The statements returned
 by ``DESCRIBE [FULL] SCHEMA WITH INTERNALS AND PASSWORDS`` corresponding to recreating the roles will be of the
 following form:
 
 .. code-block:: cql
 
-    CREATE ROLE [IF NOT EXISTS] <role_name> WITH SALTED HASH = '<salted_hash>' AND LOGIN = <boolean> AND SUPERUSER = <boolean>
+    CREATE ROLE [IF NOT EXISTS] <role_name> WITH HASHED PASSWORD = '<hashed_password>' AND LOGIN = <boolean> AND SUPERUSER = <boolean>
 
 The semantics of this statement is analogous to the regular ``CREATE ROLE`` statement except that it circumvents
-the encryption phase of the execution and inserts the salted hash directly into ``system.roles``. You should not use
+the encryption phase of the execution and inserts the hashed password directly into ``system.roles``. You should not use
 this statement unless it was returned by ``DESCRIBE SCHEMA``.
