@@ -27,6 +27,7 @@ def parse_version(version):
 def s3_download(s3, bucket, object_key, out):
     print(f'Downloading {object_key}... ', end='')
     if not sys.stdout.isatty():
+        sys.stdout.flush() # show the "Downloading" message at least
         bucket.download_file(object_key, out)
     else:
         # When interactive, show download progress:
