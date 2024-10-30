@@ -517,7 +517,7 @@ private:
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id, std::optional<locator::host_id> host_id);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client_with_ignored_topology(msg_addr id);
     void remove_rpc_client(msg_addr id);

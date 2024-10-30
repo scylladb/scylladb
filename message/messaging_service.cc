@@ -445,7 +445,11 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
         _connection_index_for_tenant.push_back({tenant_cfg.sched_group, i, tenant_cfg.enabled});
     }
 
-    register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id) {
+    register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id,
+                    rpc::optional<std::optional<utils::UUID>> dst_host_id) {
+        if (dst_host_id && *dst_host_id && **dst_host_id != _cfg.id.uuid()) {
+            ci.server.abort_connection(ci.conn_id);
+        }
         if (host_id) {
             auto peer_host_id = locator::host_id(*host_id);
             if (is_host_banned(peer_host_id)) {
@@ -838,7 +842,7 @@ gms::inet_address messaging_service::get_public_endpoint_for(const gms::inet_add
     return i != _preferred_to_endpoint.end() ? i->second : ip;
 }
 
-shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
+shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id, std::optional<locator::host_id> host_id) {
     SCYLLA_ASSERT(!_shutting_down);
     if (_cfg.maintenance_mode) {
         on_internal_error(mlogger, "This node is in maintenance mode, it shouldn't contact other nodes");
@@ -962,9 +966,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
     (void)_rpc->make_client<
-            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID)>(messaging_verb::CLIENT_ID)(
+            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>)>(messaging_verb::CLIENT_ID)(
                 *it->second.rpc_client, broadcast_address, src_cpu_id,
-                query::result_memory_limiter::maximum_result_size, my_host_id.uuid())
+                query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt)
             .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
@@ -1033,7 +1037,7 @@ messaging_service::make_sink_and_source_for_stream_mutation_fragments(table_sche
     if (is_shutting_down()) {
         return make_exception_future<value_type>(rpc::closed_error());
     }
-    auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
+    auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id, std::nullopt);
     return rpc_client->make_stream_sink<netw::serializer, frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>().then([this, session, plan_id, schema_id, cf_id, estimated_partitions, reason, rpc_client] (rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> sink) mutable {
         auto rpc_handler = rpc()->make_client<rpc::source<int32_t> (streaming::plan_id, table_schema_version, table_id, uint64_t, streaming::stream_reason, rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, service::session_id)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
         return rpc_handler(*rpc_client , plan_id, schema_id, cf_id, estimated_partitions, reason, sink, session).then_wrapped([sink, rpc_client] (future<rpc::source<int32_t>> source) mutable {
@@ -1078,7 +1082,7 @@ messaging_service::make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(
     if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>>(rpc::closed_error());
     }
-    auto rpc_client = get_rpc_client(verb, id);
+    auto rpc_client = get_rpc_client(verb, id, std::nullopt);
     return do_make_sink_source<repair_hash_with_cmd, repair_row_on_wire_with_cmd>(verb, repair_meta_id, dst_cpu_id, std::move(rpc_client), rpc());
 }
 
@@ -1100,7 +1104,7 @@ messaging_service::make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(
     if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>(rpc::closed_error());
     }
-    auto rpc_client = get_rpc_client(verb, id);
+    auto rpc_client = get_rpc_client(verb, id, std::nullopt);
     return do_make_sink_source<repair_row_on_wire_with_cmd, repair_stream_cmd>(verb, repair_meta_id, dst_cpu_id, std::move(rpc_client), rpc());
 }
 
@@ -1122,7 +1126,7 @@ messaging_service::make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_
     if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>(rpc::closed_error());
     }
-    auto rpc_client = get_rpc_client(verb, id);
+    auto rpc_client = get_rpc_client(verb, id, std::nullopt);
     return do_make_sink_source<repair_stream_cmd, repair_hash_with_cmd>(verb, repair_meta_id, dst_cpu_id, std::move(rpc_client), rpc());
 }
 
