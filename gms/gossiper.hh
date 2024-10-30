@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include "locator/host_id.hh"
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "gms/generation-number.hh"
@@ -516,6 +517,8 @@ private:
 
 public:
     bool is_alive(inet_address ep) const;
+    bool is_alive(locator::host_id id) const;
+
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);

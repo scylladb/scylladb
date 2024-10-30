@@ -2410,6 +2410,30 @@ bool gossiper::is_alive(inet_address ep) const {
     return is_alive;
 }
 
+bool gossiper::is_alive(locator::host_id id) const {
+    auto ip_opt = _address_map.find(id);
+
+    if (!ip_opt) {
+        // if host ID is not in the gossiper state (and hence not in the address map) it is dead
+        return false;
+    }
+
+    auto ep = get_endpoint_state_ptr(*ip_opt);
+    if (!ep) {
+        // _address_map may have stale entry since we rely on gc to remove entries there
+        // FIXME: add function to address_map to remove immediately
+        return false;
+    }
+
+    if (id != ep->get_host_id()) {
+        // If IDs do not match it means that the node with provided ID was replaced
+        // with a new node with same IP address and hence it is dead
+        return false;
+    }
+
+    return is_alive(*ip_opt);
+}
+
 future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
     return wait_alive([nodes = std::move(nodes)] { return nodes; }, timeout);
 }
