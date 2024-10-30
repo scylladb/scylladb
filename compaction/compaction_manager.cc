@@ -2122,20 +2122,19 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
     }
     std::vector<sstables::shared_sstable> ret;
 
-        // FIXME: indentation.
-        auto gate = get_compaction_state(&t).gate.hold();
-        sstables::compaction_progress_monitor monitor;
-        sstables::compaction_data info = create_compaction_data();
-        sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-        desc.creator = [&t] (shard_id _) {
-            return t.make_sstable();
-        };
-        desc.replacer = [&] (sstables::compaction_completion_desc d) {
-            std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
-        };
+    auto gate = get_compaction_state(&t).gate.hold();
+    sstables::compaction_progress_monitor monitor;
+    sstables::compaction_data info = create_compaction_data();
+    sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
+    desc.creator = [&t] (shard_id _) {
+        return t.make_sstable();
+    };
+    desc.replacer = [&] (sstables::compaction_completion_desc d) {
+        std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
+    };
 
-        co_await sstables::compact_sstables(std::move(desc), info, t, monitor);
-        co_await sst->unlink();
+    co_await sstables::compact_sstables(std::move(desc), info, t, monitor);
+    co_await sst->unlink();
 
     co_return ret;
 }
