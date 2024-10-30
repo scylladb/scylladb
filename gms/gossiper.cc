@@ -2354,7 +2354,15 @@ future<> gossiper::do_stop_gossiping() {
     // Take the semaphore makes sure existing gossip loop is finished
     auto units = co_await get_units(_callback_running, 1);
     co_await container().invoke_on_all([] (auto& g) {
-        return std::move(g._failure_detector_loop_done);
+        // #21159
+        // gossiper::shutdown can be called from more than once place - both 
+        // storage_service::isolate and normal gossip service stop. The former is
+        // waited for in storage_service::stop, but if we, as was done in cql_test_env,
+        // call shutdown independently, we could still end up here twite, and not hit 
+        // the _enabled guard (because we do waiting things before setting it, and setting it
+        // is also waiting). However, making sure we don't leave an invalid future 
+        // here should ensure even if we reenter this method in such as way, we don't crash.
+        return std::exchange(g._failure_detector_loop_done, make_ready_future<>());
     });
     logger.info("Gossip is now stopped");
 }
