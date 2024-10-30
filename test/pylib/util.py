@@ -276,3 +276,11 @@ def get_configured_modes():
     # debug release dev
     return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
+def get_modes_to_run(session) -> list[str]:
+    modes = session.config.getoption('modes')
+    if not modes:
+        modes = get_configured_modes(root_dir=pathlib.Path(session.config.rootpath).parent)
+    if not modes:
+        raise RuntimeError('No modes configured. Please run ./configure.py first')
+    return modes
