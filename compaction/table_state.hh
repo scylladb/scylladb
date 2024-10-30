@@ -46,7 +46,7 @@ public:
     virtual compaction_strategy_state& get_compaction_strategy_state() noexcept = 0;
     virtual reader_permit make_compaction_reader_permit() const = 0;
     virtual sstables::sstables_manager& get_sstables_manager() noexcept = 0;
-    virtual sstables::shared_sstable make_sstable() const = 0;
+    virtual sstables::shared_sstable make_sstable(storage_hints) const = 0;
     virtual sstables::sstable_writer_config configure_writer(sstring origin) const = 0;
     virtual api::timestamp_type min_memtable_timestamp() const = 0;
     virtual api::timestamp_type min_memtable_live_timestamp() const = 0;

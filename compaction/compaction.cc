@@ -653,7 +653,9 @@ protected:
     }
 
     compaction_writer create_gc_compaction_writer(run_id gc_run) const {
-        auto sst = _sstable_creator(this_shard_id());
+        // we don't put the temporary sstables created for garbage collected
+        // data in tiered storage.
+        auto sst = _sstable_creator(this_shard_id(), storage_hints{});
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
@@ -835,15 +837,18 @@ private:
     // compacting_reader. It's useful for allowing data from different buckets
     // to be compacted together.
     future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
-        auto consumer = make_interposer_consumer([this] (mutation_reader reader) mutable {
-            return seastar::async([this, reader = std::move(reader)] () mutable {
+        auto consumer = make_interposer_consumer([this] (mutation_reader reader, storage_hints hints) mutable {
+            return seastar::async([this, reader = std::move(reader), hints = std::move(hints)] () mutable {
                 auto close_reader = deferred_close(reader);
-                auto cfc = get_compacted_fragments_writer();
+                auto cfc = get_compacted_fragments_writer(hints);
                 reader.consume_in_thread(std::move(cfc));
             });
         });
         const auto& gc_state = get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        // NOTE: in general, the storage_hints passed to "consumer" is not used
+        // passed to the sstable creator. it's the interposer consumer who sends
+        // the storage_hints based on their needs.
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state), storage_hints{});
     }
 
     future<> consume() {
@@ -854,9 +859,9 @@ private:
         if (!enable_garbage_collected_sstable_writer() && use_interposer_consumer()) {
             return consume_without_gc_writer(now);
         }
-        auto consumer = make_interposer_consumer([this, now] (mutation_reader reader) mutable
+        auto consumer = make_interposer_consumer([this, now] (mutation_reader reader, storage_hints hints) mutable
         {
-            return seastar::async([this, reader = std::move(reader), now] () mutable {
+            return seastar::async([this, reader = std::move(reader), hints = std::move(hints), now] () mutable {
                 auto close_reader = deferred_close(reader);
 
                 if (enable_garbage_collected_sstable_writer()) {
@@ -864,7 +869,7 @@ private:
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
                         get_tombstone_gc_state(),
-                        get_compacted_fragments_writer(),
+                        get_compacted_fragments_writer(hints),
                         get_gc_compacted_fragments_writer());
 
                     reader.consume_in_thread(std::move(cfc));
@@ -874,12 +879,28 @@ private:
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
                     get_tombstone_gc_state(),
-                    get_compacted_fragments_writer(),
+                    get_compacted_fragments_writer(hints),
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        return consumer(setup_sstable_reader());
+        // Storage hint handling in the compaction pipeline:
+        //
+        // 1. Top level: An empty storage hint is provided at the outermost caller.
+        //    the outermost caller also provides the end consumer.
+        //
+        // 2. Compaction layer: The concrete compaction implementation determines
+        //    and sets its own storage hints based on internal optimization logic,
+        //    ignoring any hints passed from above.
+        //
+        // 3. End consumer: While our end consumer implementation accepts storage
+        //    hints via descriptor.creator, these hints will be overridden by
+        //    the compaction layer's choices if the creator respects storage hints.
+        //
+        // 4. descriptor.creator: The concrete compaction set the creator for each
+        //    batch of compaction. Along with the shard_id, the overriden hints are
+        //    passed to this creator for creating sstables.
+        return consumer(setup_sstable_reader(), storage_hints{});
     }
 
     virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
@@ -945,13 +966,13 @@ private:
     virtual void on_end_of_compaction() {};
 
     // create a writer based on decorated key.
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, storage_hints) = 0;
     // stop current writer
     virtual void stop_sstable_writer(compaction_writer* writer) = 0;
 
-    compacted_fragments_writer get_compacted_fragments_writer() {
+    compacted_fragments_writer get_compacted_fragments_writer(storage_hints hints) {
         return compacted_fragments_writer(*this,
-            [this] (const dht::decorated_key& dk) { return create_compaction_writer(dk); },
+            [this, hints] (const dht::decorated_key& dk) { return create_compaction_writer(dk, hints); },
             [this] (compaction_writer* cw) { stop_sstable_writer(cw); });
     }
 
@@ -1171,8 +1192,8 @@ public:
         return "Compacted";
     }
 
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto sst = _sstable_creator(this_shard_id());
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, storage_hints hints) override {
+        auto sst = _sstable_creator(this_shard_id(), hints);
         setup_new_sstable(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
@@ -1318,8 +1339,9 @@ public:
         return "Reshaped";
     }
 
-    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto sst = _sstable_creator(this_shard_id());
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk, storage_hints hints) override {
+        // reshape compaction does not support tiered storage
+        auto sst = _sstable_creator(this_shard_id(), hints);
         setup_new_sstable(sst);
 
         sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
@@ -1370,7 +1392,8 @@ public:
     }
 
     reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
-        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
+        // split compaction does not support tierd storage
+        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader, storage_hints) mutable -> future<> {
             return mutation_writer::segregate_by_token_group(std::move(reader),
                     _options.classifier,
                     _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer)));
@@ -1652,12 +1675,13 @@ public:
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
-        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
+        // scrub compaction does not support tiered storage.
+        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader, storage_hints) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{memory::stats().total_memory() / 10};
             return mutation_writer::segregate_by_partition(std::move(reader), cfg,
-                    [consumer = std::move(end_consumer), this] (mutation_reader rd) {
+                    [consumer = std::move(end_consumer), this] (mutation_reader rd, storage_hints) {
                 ++_bucket_count;
-                return consumer(std::move(rd));
+                return consumer(std::move(rd), storage_hints{});
             });
         };
     }
@@ -1744,7 +1768,8 @@ public:
     }
 
     reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
-        return [end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
+        // resharding compaction does not support tiered storage
+        return [end_consumer = std::move(end_consumer)] (mutation_reader reader, storage_hints) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };
     }
@@ -1761,14 +1786,14 @@ public:
         return "Resharded";
     }
 
-    compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+    compaction_writer create_compaction_writer(const dht::decorated_key& dk, storage_hints hints) override {
         auto shards = _sharder->shard_for_writes(dk.token());
         if (shards.size() != 1) {
             // Resharding is not supposed to run on tablets, so this case does not have to be supported.
             on_internal_error(clogger, fmt::format("Got {} shards for token {} in table {}.{}", shards.size(), dk.token(), _schema->ks_name(), _schema->cf_name()));
         }
         auto shard = shards[0];
-        auto sst = _sstable_creator(shard);
+        auto sst = _sstable_creator(shard, hints);
         setup_new_sstable(sst);
 
         auto cfg = make_sstable_writer_config(compaction_type::Reshard);

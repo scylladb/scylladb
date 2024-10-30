@@ -1523,7 +1523,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
         }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
+        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader, storage_hints) mutable -> future<> {
           std::exception_ptr ex;
           try {
             sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
@@ -1546,7 +1546,8 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
         auto f = consumer(old->make_flush_reader(
             old->schema(),
-            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})),
+                          storage_hints{});
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
@@ -2230,7 +2231,7 @@ public:
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _t.get_sstables_manager();
     }
-    sstables::shared_sstable make_sstable() const override {
+    sstables::shared_sstable make_sstable(storage_hints) const override {
         return _t.make_sstable();
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {

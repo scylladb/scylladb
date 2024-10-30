@@ -31,7 +31,8 @@ private:
 
     inline void allocate_new_writer_if_needed() {
         if (!_current_writer) [[unlikely]] {
-            _current_writer = bucket_writer_v2(_schema, _permit, _consumer);
+            // split compaction does not support tiered storage
+            _current_writer = bucket_writer_v2(_schema, _permit, _consumer, storage_hints{});
         }
     }
 

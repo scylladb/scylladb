@@ -408,8 +408,8 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
-    descriptor.creator = [&t] (shard_id) {
-        return t.make_sstable();
+    descriptor.creator = [&t] (shard_id, storage_hints hints) {
+        return t.make_sstable(hints);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (sstables::compaction_completion_desc desc) {
         t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
@@ -2128,8 +2128,8 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_stat
     sstables::compaction_progress_monitor monitor;
     sstables::compaction_data info = create_compaction_data();
     sstables::compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
+    desc.creator = [&t] (shard_id, storage_hints hints) {
+        return t.make_sstable(hints);
     };
     desc.replacer = [&] (sstables::compaction_completion_desc d) {
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));

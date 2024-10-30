@@ -41,7 +41,8 @@ public:
     future<> consume(partition_start&& ps) {
         _current_shard = dht::static_shard_of(*_schema, ps.key().token()); // FIXME: Use table sharder
         if (!_shards[_current_shard]) {
-            _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
+            // resharding compaction does not support tiered storage
+            _shards[_current_shard] = shard_writer(_schema, _permit, _consumer, storage_hints{});
         }
         return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(ps)));
     }

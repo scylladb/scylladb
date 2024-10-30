@@ -41,7 +41,8 @@ private:
     }
 
     future<> flush_memtable() {
-        co_await _consumer(_memtable->make_flush_reader(_schema, _permit));
+        // scrub compaction does not support tiered storage
+        co_await _consumer(_memtable->make_flush_reader(_schema, _permit), storage_hints{});
         _memtable = make_lw_shared<replica::memtable>(_schema);
     }
 
@@ -76,7 +77,8 @@ public:
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
         , _max_memory(cfg.max_memory)
-        , _bucket_writer(_schema, _permit, _consumer)
+        // scrub compaction does not support tiered storage
+        , _bucket_writer(_schema, _permit, _consumer, storage_hints{})
         , _memtable(make_lw_shared<replica::memtable>(_schema))
         , _last_pos(position_in_partition::for_partition_start())
     { }

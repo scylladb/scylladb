@@ -100,8 +100,8 @@ class timestamp_based_splitting_mutation_writer {
         bool _has_current_partition = false;
 
     public:
-        timestamp_bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer)
-            : bucket_writer_v2(schema, std::move(permit), consumer) {
+        timestamp_bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer, storage_hints hints)
+            : bucket_writer_v2(schema, std::move(permit), consumer, std::move(hints)) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;
@@ -170,7 +170,11 @@ public:
 };
 
 future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bucket, mutation_fragment_v2&& mf) {
-    auto it = _buckets.try_emplace(bucket, _schema, _permit, _consumer).first;
+    // NOTE: The storage hints used to construct the bucket writer are NOT
+    // derived from compaction::consume()'s parameters. Those hints are intentionally
+    // ignored. Instead, we use storage hints that are deduced from the destination
+    // bucket where the sstable will be created
+    auto it = _buckets.try_emplace(bucket, _schema, _permit, _consumer, storage_hints{bucket}).first;
 
     auto& writer = it->second;
 

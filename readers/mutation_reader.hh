@@ -760,7 +760,10 @@ future<> consume_partitions(mutation_reader& reader, Consumer consumer) {
     });
 }
 
+struct storage_hints {
+    int64_t bucket_id = -1;
+};
 /// A consumer function that is passed a mutation_reader to be consumed from
 /// and returns a future<> resolved when the reader is fully consumed, and closed.
 /// Note: the function assumes ownership of the reader and must close it in all cases.
-using reader_consumer_v2 = std::function<future<> (mutation_reader)>;
+using reader_consumer_v2 = std::function<future<> (mutation_reader, storage_hints)>;

@@ -110,7 +110,7 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
 future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
     auto& table_s = t.as_table_state();
-    descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
+    descriptor.creator = [creator = std::move(creator)] (shard_id dummy, storage_hints) mutable {
         return creator();
     };
     descriptor.replacer = std::move(replacer);

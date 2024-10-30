@@ -3116,7 +3116,7 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
     mutation_writer::segregate_by_partition(
             make_scrubbing_reader(make_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)), sstables::compaction_type_options::scrub::mode::segregate, validation_errors),
             mutation_writer::segregate_config{100000},
-            [&schema, &segregated_fragment_streams] (mutation_reader rd) {
+            [&schema, &segregated_fragment_streams] (mutation_reader rd, storage_hints) {
         return async([&schema, &segregated_fragment_streams, rd = std::move(rd)] () mutable {
             auto close = deferred_close(rd);
             auto& fragments = segregated_fragment_streams.emplace_back();

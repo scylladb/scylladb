@@ -187,7 +187,9 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         sharded_gen.start(highest_generation ? highest_generation.as_int() : 0).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
-        auto make_sstable = [&] (shard_id shard) {
+        // we don't load from sstables from upload dir and put them in the
+        // tiered storage yet.
+        auto make_sstable = [&] (shard_id shard, storage_hints) {
             auto& sstm = global_table->get_sstables_manager();
             bool uuid_sstable_identifiers = sstm.uuid_sstable_identifiers();
             auto generation = sharded_gen.invoke_on(shard, [uuid_sstable_identifiers] (auto& gen) {
@@ -400,7 +402,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
     auto state = directory.local().state();
     dblog.debug("Populating {}/{}/{} state={}", _ks, _cf, _global_table->get_storage_options(), state);
 
-    co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
+    co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard, storage_hints) mutable {
         auto gen = smp::submit_to(shard, [this] () {
             return _global_table->calculate_generation_for_new_table();
         }).get();
@@ -420,7 +422,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
         return sst->get_origin() != sstables::repair_origin;
     };
 
-    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard) {
+    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard, storage_hints) {
         auto gen = _global_table->calculate_generation_for_new_table();
         return make_sstable(*_global_table, state, gen, _highest_version);
     }, eligible_for_reshape_on_boot);
