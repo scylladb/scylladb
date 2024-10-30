@@ -270,12 +270,15 @@ def ninja(target):
 
 
 @cache
-def get_configured_modes():
+def get_configured_modes(root_dir=None):
+    if root_dir:
+        os.chdir(root_dir)
     out = ninja('mode_list')
     # [1/1] List configured modes
     # debug release dev
     return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
 
 def get_modes_to_run(session) -> list[str]:
     modes = session.config.getoption('modes')

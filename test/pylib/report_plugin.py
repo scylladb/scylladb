@@ -17,7 +17,7 @@ class ReportPlugin:
 
     # Pytest hook to modify test name to include mode and run_id
     def pytest_configure(self, config):
-        # getting build_mode is needed for the cases when there will be no mode provided
+        # getting build_mode in two steps is needed for the cases when no mode parameter is provided
         self.build_mode = config.getoption("modes")
         if self.build_mode:
             self.build_mode = self.build_mode[0]

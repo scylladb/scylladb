@@ -32,6 +32,7 @@ import pytest
 from _pytest._code.code import TerminalRepr, ReprFileLocation
 from _pytest._io import TerminalWriter
 
+from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
 from test.pylib.cpp.facade import CppTestFailure, CppTestFailureList, CppTestFacade
 
 
@@ -140,7 +141,7 @@ class CppFile(pytest.File):
             executable = Path(f'{self.project_root}/build/{mode}/test/{self.path.parent.name}/{test_name}')
             combined, tests = self.facade.list_tests(executable, self.no_parallel_run)
             if combined:
-                executable = executable.parent / 'combined_tests'
+                executable = executable.parent / COMBINED_TESTS.stem
             for test_name in tests:
                 if '/' in test_name:
                     test_name = test_name.replace('/', '_')
