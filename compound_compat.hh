@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <ranges>
 #include <compare>
 #include "compound.hh"
@@ -443,12 +441,12 @@ public:
         return iterator(iterator::end_iterator_tag());
     }
 
-    boost::iterator_range<iterator> components() const & {
+    std::ranges::subrange<iterator> components() const & {
         return { begin(), end() };
     }
 
     auto values() const & {
-        return components() | boost::adaptors::transformed([](auto&& c) { return c.first; });
+        return components() | std::views::transform(&component_view::first);
     }
 
     std::vector<component> components() const && {
@@ -461,7 +459,7 @@ public:
 
     std::vector<bytes> values() const && {
         std::vector<bytes> result;
-        boost::copy(components() | boost::adaptors::transformed([](auto&& c) { return to_bytes(c.first); }), std::back_inserter(result));
+        std::ranges::copy(components() | std::views::transform([](auto&& c) { return to_bytes(c.first); }), std::back_inserter(result));
         return result;
     }
 
@@ -586,7 +584,7 @@ public:
         return composite::iterator(composite::iterator::end_iterator_tag());
     }
 
-    boost::iterator_range<composite::iterator> components() const {
+    std::ranges::subrange<composite::iterator> components() const {
         return { begin(), end() };
     }
 
@@ -600,7 +598,7 @@ public:
     }
 
     auto values() const {
-        return components() | boost::adaptors::transformed([](auto&& c) { return c.first; });
+        return components() | std::views::transform(&composite::component_view::first);
     }
 
     size_t size() const {

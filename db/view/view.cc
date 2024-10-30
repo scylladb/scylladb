@@ -20,6 +20,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/range/algorithm/copy.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
 

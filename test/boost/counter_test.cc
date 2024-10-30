@@ -14,6 +14,8 @@
 #include <seastar/core/thread.hh>
 #include <seastar/testing/random.hh>
 
+#include <boost/range/adaptor/transformed.hpp>
+
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "schema/schema_builder.hh"

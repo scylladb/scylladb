@@ -15,6 +15,8 @@
 #include "sstables/mx/types.hh"
 #include "mutation/position_in_partition.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+
 namespace sstables {
 namespace mc {
 

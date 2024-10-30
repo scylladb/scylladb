@@ -12,6 +12,7 @@
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
 #include <boost/algorithm/string.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 logging::logger klog("keys");
 

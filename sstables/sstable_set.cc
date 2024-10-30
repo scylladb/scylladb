@@ -14,6 +14,7 @@
 #include <boost/icl/interval_map.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
+#include <boost/range/algorithm/copy.hpp>
 
 #include "sstables.hh"
 

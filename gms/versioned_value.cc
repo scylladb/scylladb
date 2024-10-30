@@ -12,6 +12,7 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <charconv>
 
 namespace gms {

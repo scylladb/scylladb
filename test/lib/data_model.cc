@@ -12,6 +12,7 @@
 #include "test/lib/data_model.hh"
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 #include "schema/schema_builder.hh"
 #include "concrete_types.hh"
