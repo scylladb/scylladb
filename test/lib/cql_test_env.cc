@@ -968,7 +968,11 @@ private:
             }).get();
 
             auto deinit_storage_service_server = defer([this] {
-                _gossiper.invoke_on_all(&gms::gossiper::shutdown).get();
+                // #21159 don't shutdown gossip here - we don't in main.cc, and we should
+                // strive to keep the two paths aligned. Doing a gossip::shutdown here
+                // can, if we've provoked a storage_manager::isolate, cause parallel 
+                // double execution of the shutdown method, which causes waiting for 
+                // an invalid future if we're unlucky.
                 _auth_service.stop().get();
             });
 
