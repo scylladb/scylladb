@@ -10,7 +10,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <compare>
 #include "compound.hh"
 #include "schema/schema.hh"
@@ -346,8 +346,9 @@ public:
     static composite serialize_static(const schema& s, RangeOfSerializedComponents&& values) {
         // FIXME: Optimize
         auto b = bytes(size_t(2), bytes::value_type(0xff));
-        std::vector<bytes_view> sv(s.clustering_key_size());
-        b += composite::serialize_value(boost::range::join(sv, std::forward<RangeOfSerializedComponents>(values)), true).release_bytes();
+        std::vector<bytes_view> sv(s.clustering_key_size() + std::ranges::distance(values));
+        std::ranges::copy(values, sv.begin() + s.clustering_key_size());
+        b += composite::serialize_value(sv, true).release_bytes();
         return composite(std::move(b));
     }
 
