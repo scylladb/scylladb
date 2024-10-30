@@ -507,11 +507,12 @@ void test_env_compaction_manager::propagate_replacement(compaction::table_state&
 
 // Test version of compaction_manager::perform_compaction<>()
 future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::compaction_task_executor> task) {
-    _cm._tasks.push_back(task);
-    auto unregister_task = defer([this, task] {
-        if (_cm._tasks.remove(task) == 0) {
+    _cm._tasks.push_back(*task);
+    auto unregister_task = defer([task] {
+        if (!task->is_linked()) {
             testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
         }
+        task->unlink();
         task->switch_state(compaction_task_executor::state::none);
     });
     co_await task->run_compaction();

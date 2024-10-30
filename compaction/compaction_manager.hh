@@ -93,8 +93,13 @@ public:
 
 private:
     shared_ptr<compaction::task_manager_module> _task_manager_module;
+
+    using compaction_task_executor_list_type = bi::list<
+            compaction_task_executor,
+            bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
+            bi::constant_time_size<false>>;
     // compaction manager may have N fibers to allow parallel compaction per shard.
-    std::list<shared_ptr<compaction::compaction_task_executor>> _tasks;
+    compaction_task_executor_list_type _tasks;
 
     // Possible states in which the compaction manager can be found.
     //
@@ -467,7 +472,9 @@ public:
 
 namespace compaction {
 
-class compaction_task_executor : public enable_shared_from_this<compaction_task_executor> {
+class compaction_task_executor
+    : public enable_shared_from_this<compaction_task_executor>
+    , public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
 public:
     enum class state {
         none,       // initial and final state
