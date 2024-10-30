@@ -1075,6 +1075,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_e
         t->stop_compaction(reason);
     }
     co_await coroutine::parallel_for_each(tasks, [] (auto& task) -> future<> {
+        auto unlink_task = deferred_action([task] { task->unlink(); });
         try {
             co_await task->compaction_done();
         } catch (sstables::compaction_stopped_exception&) {
