@@ -206,6 +206,9 @@ class MinioServer:
                 self.ENV_ACCESS_KEY,
                 self.ENV_SECRET_KEY]
 
+    def get_envs_settings(self):
+        return {key: os.environ[key] for key in self._get_environs()}
+
     def _unset_environ(self):
         for env in self._get_environs():
             if value := self.old_env.get(env):
