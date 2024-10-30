@@ -48,7 +48,7 @@ row_assertion::matches(const query::result_set_row& row) const {
 
 sstring
 row_assertion::describe(schema_ptr schema) const {
-    return seastar::format("{{{}}}", fmt::join(_expected_values | boost::adaptors::transformed([&schema] (auto&& e) {
+    return seastar::format("{{{}}}", fmt::join(_expected_values | std::views::transform([&schema] (auto&& e) {
         auto&& name = e.first;
         auto&& value = e.second;
         const column_definition* def = schema->get_column_definition(name);

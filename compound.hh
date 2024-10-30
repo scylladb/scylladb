@@ -12,8 +12,7 @@
 #include <algorithm>
 #include <vector>
 #include <span>
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/adaptor/transformed.hpp>
+#include <ranges>
 #include "utils/assert.hh"
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
@@ -95,10 +94,10 @@ private:
     }
 public:
     managed_bytes serialize_single(const managed_bytes& v) const {
-        return serialize_value(boost::make_iterator_range(&v, 1+&v));
+        return serialize_value(std::ranges::subrange(&v, 1+&v));
     }
     managed_bytes serialize_single(const bytes& v) const {
-        return serialize_value(boost::make_iterator_range(&v, 1+&v));
+        return serialize_value(std::ranges::subrange(&v, 1+&v));
     }
     template<typename RangeOfSerializedComponents>
     static managed_bytes serialize_value(RangeOfSerializedComponents&& values) {
@@ -112,10 +111,10 @@ public:
     }
     template<typename T>
     static managed_bytes serialize_value(std::initializer_list<T> values) {
-        return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
+        return serialize_value(std::span(values));
     }
     managed_bytes serialize_optionals(std::span<const bytes_opt> values) const {
-        return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
+        return serialize_value(values | std::views::transform([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
             }
@@ -123,7 +122,7 @@ public:
         }));
     }
     managed_bytes serialize_optionals(std::span<const managed_bytes_opt> values) const {
-        return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const managed_bytes_opt& bo) -> managed_bytes_view {
+        return serialize_value(values | std::views::transform([] (const managed_bytes_opt& bo) -> managed_bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
             }
@@ -146,11 +145,10 @@ public:
     }
     class iterator {
     public:
-        using iterator_category = std::input_iterator_tag;
+        using iterator_category = std::forward_iterator_tag;
+        using iterator_concept = std::forward_iterator_tag;
         using value_type = const managed_bytes_view;
         using difference_type = std::ptrdiff_t;
-        using pointer = const value_type*;
-        using reference = const value_type&;
     private:
         managed_bytes_view _v;
         managed_bytes_view _current;
@@ -187,8 +185,7 @@ public:
             ++(*this);
             return i;
         }
-        const value_type& operator*() const { return _current; }
-        const value_type* operator->() const { return &_current; }
+        value_type operator*() const { return _current; }
         bool operator==(const iterator& i) const { return _remaining == i._remaining; }
     };
     static iterator begin(managed_bytes_view v) {
@@ -197,8 +194,8 @@ public:
     static iterator end(managed_bytes_view v) {
         return iterator(typename iterator::end_iterator_tag(), v);
     }
-    static boost::iterator_range<iterator> components(managed_bytes_view v) {
-        return { begin(v), end(v) };
+    static std::ranges::subrange<iterator> components(managed_bytes_view v) {
+        return std::ranges::subrange(begin(v), end(v));
     }
     value_type deserialize_value(managed_bytes_view v) const {
         std::vector<bytes> result;
