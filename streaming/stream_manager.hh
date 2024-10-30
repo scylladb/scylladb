@@ -168,7 +168,7 @@ public:
 
     shared_ptr<stream_session> get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
 
-    std::function<future<>(mutation_reader)> make_streaming_consumer(
+    reader_consumer_v2 make_streaming_consumer(
             uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard);
 public:
     virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
