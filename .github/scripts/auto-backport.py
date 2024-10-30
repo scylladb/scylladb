@@ -97,7 +97,7 @@ def backport(repo, pr, version, commits, backport_base_branch, user):
             repo_local.git.checkout(b=new_branch_name)
             try:
                 fork_repo = pr.user.get_repo(repo.name)
-            except Exception as e:
+            except GithubException as e:
                 print(f"Error retrieving repository: {e}")
                 # Since Scylla core repo was modified a few years ago to ScyllaDB,
                 # some developers may have forks based on the original name `scylla`
