@@ -42,7 +42,7 @@ from test.pylib.pool import Pool
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher, get_resource_gather
-from test.pylib.util import LogPrefixAdapter
+from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
@@ -165,15 +165,6 @@ def path_to(mode, *components):
         *dir_components, basename = components
         return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
     return os.path.join(build_dir, mode, *components)
-
-
-def ninja(target):
-    """Build specified target using ninja"""
-    build_dir = 'build'
-    args = ['ninja', target]
-    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        args = ['ninja', '-C', build_dir, target]
-    return subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0].decode()
 
 
 class TestSuite(ABC):
@@ -1786,11 +1777,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.modes:
         try:
-            out = ninja('mode_list')
-            # [1/1] List configured modes
-            # debug release dev
-            args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
-                                out, count=1, flags=re.DOTALL).split("\n")[-1].split(' ')
+            args.modes = get_configured_modes()
         except Exception:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise
