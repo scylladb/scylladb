@@ -220,12 +220,23 @@ class S3ProxyServer:
         self.server.socket.settimeout(10000)
         self.server.socket.listen(1000)
         self.is_running = False
-        os.environ['PROXY_S3_SERVER_PORT'] = f'{port}'
-        os.environ['PROXY_S3_SERVER_HOST'] = host
+        self.envs = {'PROXY_S3_SERVER_PORT': f'{port}', 'PROXY_S3_SERVER_HOST': f'{host}'}
+
+    def _set_environ(self):
+        for key, value in self.envs.items():
+            os.environ[key] = value
+
+    def _unset_environ(self):
+        for key in self.envs.keys():
+            del os.environ[key]
+
+    def get_envs_settings(self):
+        return self.envs
 
     async def start(self):
         if not self.is_running:
             self.logger.info('Starting S3 proxy server on %s', self.server.server_address)
+            self._set_environ()
             loop = asyncio.get_running_loop()
             self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
             self.is_running = True
@@ -233,6 +244,7 @@ class S3ProxyServer:
     async def stop(self):
         if self.is_running:
             self.logger.info('Stopping S3 proxy server')
+            self._unset_environ()
             self.server.shutdown()
             await self.server_thread
             self.is_running = False
