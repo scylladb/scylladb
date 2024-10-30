@@ -4359,3 +4359,267 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
         reader().get();
     });
 }
+
+class evicting_semaphore_factory : public test_reader_lifecycle_policy::semaphore_factory {
+    std::vector<lw_shared_ptr<reader_concurrency_semaphore>>& _registry;
+public:
+    explicit evicting_semaphore_factory(std::vector<lw_shared_ptr<reader_concurrency_semaphore>>& registry) : _registry(registry) { }
+    virtual lw_shared_ptr<reader_concurrency_semaphore> create(sstring name) override {
+        // Create with no memory, so all inactive reads are immediately evicted.
+        auto semaphore = make_lw_shared<reader_concurrency_semaphore>(reader_concurrency_semaphore::for_tests{}, std::move(name), 1, 0);
+        _registry.at(this_shard_id()) = semaphore;
+        return semaphore;
+    }
+    virtual future<> stop(reader_concurrency_semaphore& semaphore) override {
+        _registry.at(this_shard_id()) = {};
+        return semaphore.stop();
+    }
+};
+
+SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        simple_schema ss;
+        const auto& schema = ss.schema();
+        const sstring value(1024, 'v');
+        const size_t num_rows = 200;
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        const auto pkeys_by_tokens = ss.make_pkeys(2 * smp::count)
+            | std::views::transform([] (const dht::decorated_key& dk) { return std::pair(dk.token(), dk); })
+            | std::ranges::to<std::map<dht::token, dht::decorated_key>>();
+        std::vector<std::vector<frozen_mutation>> frozen_muts(smp::count, std::vector<frozen_mutation>{});
+        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(smp::count, nullptr);
+
+        unsigned i = 0;
+        for (const auto& [token, dk] : pkeys_by_tokens) {
+            mutation mut(schema, dk);
+
+            for (uint32_t ck = 0; ck < num_rows; ++ck) {
+                ss.add_row(mut, ss.make_ckey(ck), value);
+            }
+
+            frozen_muts[i++ % smp::count].emplace_back(mut);
+        }
+
+        size_t partition_size{0};
+        size_t partition_start_size{0};
+        size_t row_size{0};
+        size_t partition_end_size{0};
+        size_t range_tombstone_size{0};
+        {
+            auto reader = make_mutation_reader_from_mutations_v2(schema, semaphore.make_permit(), frozen_muts.front().front().unfreeze(schema), schema->full_slice());
+            auto close_reader = deferred_close(reader);
+            reader.set_max_buffer_size(1024*1024);
+            reader.fill_buffer().get();
+            partition_size = reader.buffer_size();
+
+            const auto buf = reader.detach_buffer();
+            BOOST_REQUIRE_GT(buf.size(), 2);
+            BOOST_REQUIRE(buf[0].is_partition_start());
+            BOOST_REQUIRE(buf[1].is_clustering_row());
+            BOOST_REQUIRE(buf.back().is_end_of_partition());
+            BOOST_REQUIRE(reader.is_end_of_stream());
+
+            partition_start_size = buf[0].memory_usage();
+            row_size = buf[1].memory_usage();
+            partition_end_size = buf.back().memory_usage();
+
+            auto rtc = mutation_fragment_v2(*schema, semaphore.make_permit(), range_tombstone_change(ss.make_ckey(0), tombstone()));
+            range_tombstone_size = rtc.memory_usage();
+        }
+
+        std::vector<std::vector<size_t>> data_per_shard(smp::count, std::vector<size_t>{});
+        size_t total_data{0};
+        for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+            for (const auto& _ : frozen_muts.at(shard_id)) {
+                data_per_shard.at(shard_id).push_back(partition_size);
+                total_data += partition_size;
+            }
+        }
+
+        auto sharder = std::make_unique<dummy_sharder>(schema->get_sharder(), std::move(pkeys_by_tokens));
+
+        const auto reader_factory = [frozen_muts] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range&,
+                const query::partition_slice& ps,
+                tracing::trace_state_ptr,
+                mutation_reader::forwarding) {
+            auto muts = frozen_muts.at(this_shard_id())
+                    | std::views::transform([schema] (const frozen_mutation& fm) { return fm.unfreeze(schema); })
+                    | std::ranges::to<std::vector<mutation>>();
+            return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(muts), ps);
+        };
+
+        auto run_test = [&] (size_t buffer_size, multishard_reader_buffer_hint buffer_hint,
+                seastar::compat::source_location sl = seastar::compat::source_location::current()) {
+            testlog.info("run_test(): buffer_size: {}, buffer_hint: {} @ {}:{}", buffer_size, bool(buffer_hint), sl.file_name(), sl.line());
+
+            auto reader = make_multishard_combining_reader_v2_for_tests(
+                    *sharder,
+                    seastar::make_shared<test_reader_lifecycle_policy>(reader_factory, std::make_unique<evicting_semaphore_factory>(semaphore_registry)),
+                    schema,
+                    semaphore.make_permit(),
+                    query::full_partition_range,
+                    schema->full_slice(),
+                    {},
+                    mutation_reader::forwarding::no,
+                    buffer_hint,
+                    read_ahead::no);
+            reader.set_max_buffer_size(buffer_size);
+            auto close_reader = deferred_close(reader);
+
+            reader.fill_buffer().get();
+
+            // simulate the expected read algorithm to calculate the amount each shard should have read
+            std::vector<size_t> buffer_fill_calls_per_shard(smp::count, 0);
+            size_t shards_visited{0};
+            {
+                size_t to_read = buffer_size;
+                size_t data_left = total_data;
+                auto shard_data_left = data_per_shard;
+                const auto shard_reader_buffer_size = buffer_hint ? buffer_size : mutation_reader::default_max_buffer_size_in_bytes();
+                while (to_read > 0 && data_left > 0) {
+                    for (unsigned shard_id = 0; shard_id != smp::count && to_read > 0 && data_left > 0; ++shard_id) {
+                        auto& shard_data = shard_data_left[shard_id];
+                        BOOST_REQUIRE(!shard_data.empty());
+
+                        size_t current_buffer_size{0};
+                        auto* current_partition = &shard_data.back();
+                        bool stop_on_full_buffer = false;
+                        while (to_read > 0 && data_left > 0) {
+                            const auto fragment_size = *current_partition == partition_size
+                                    ? partition_start_size
+                                    : (*current_partition == partition_end_size ? partition_end_size : row_size);
+
+                            current_buffer_size += fragment_size;
+                            testlog.trace("fill buffer loop for shard#{}: to_read={}, current_partition={}, fragment_size={}, current_buffer_size={}", shard_id, to_read, *current_partition, fragment_size, current_buffer_size);
+                            if (current_buffer_size >= shard_reader_buffer_size) {
+                                ++buffer_fill_calls_per_shard.at(shard_id);
+                                testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
+                                // After each eviction, the evictable reader will
+                                // emit a range tombstone change resetting the
+                                // current tombstone.
+                                current_buffer_size = range_tombstone_size;
+                                if (stop_on_full_buffer) {
+                                    break;
+                                }
+                            }
+                            *current_partition -= fragment_size;
+                            to_read -= std::min(to_read, fragment_size);
+                            data_left -= fragment_size;
+
+                            if (!*current_partition) {
+                                if (buffer_hint) {
+                                    break;
+                                } else {
+                                    shard_data.pop_back();
+                                    current_partition = &shard_data.back();
+                                    stop_on_full_buffer = true;
+                                }
+                            }
+                        }
+                        if (current_buffer_size > range_tombstone_size) {
+                            ++buffer_fill_calls_per_shard.at(shard_id);
+                            testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
+                        }
+
+                        if (!shard_data.back()) {
+                            shard_data.pop_back();
+                        }
+                        ++shards_visited;
+                    }
+                }
+            }
+
+            for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+                testlog.trace("shard#{}", shard_id);
+
+                if (shards_visited > shard_id) {
+                    const auto reads_from_shard = buffer_fill_calls_per_shard.at(shard_id);
+
+                    auto& shard_semaphore = semaphore_registry.at(shard_id);
+                    BOOST_REQUIRE(bool(shard_semaphore));
+                    BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().reads_admitted, reads_from_shard);
+                    BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().permit_based_evictions, reads_from_shard);
+                } else {
+                    BOOST_REQUIRE(!semaphore_registry.at(shard_id));
+                }
+            }
+        };
+
+        run_test(mutation_reader::default_max_buffer_size_in_bytes(), multishard_reader_buffer_hint::no);
+        run_test(100 * 1024, multishard_reader_buffer_hint::no);
+        run_test(100 * 1024, multishard_reader_buffer_hint::yes);
+        run_test(200 * 1024, multishard_reader_buffer_hint::no);
+        run_test(200 * 1024, multishard_reader_buffer_hint::yes);
+        run_test(400 * 1024, multishard_reader_buffer_hint::no);
+        run_test(400 * 1024, multishard_reader_buffer_hint::yes);
+    });
+}
+
+SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        simple_schema ss;
+        const auto& schema = ss.schema();
+        const sstring value(128, 'v');
+        const size_t num_rows = 2;
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        const auto pkeys_by_tokens = ss.make_pkeys(64 * smp::count)
+            | std::views::transform([] (const dht::decorated_key& dk) { return std::pair(dk.token(), dk); })
+            | std::ranges::to<std::map<dht::token, dht::decorated_key>>();
+        std::vector<std::vector<frozen_mutation>> frozen_muts(smp::count, std::vector<frozen_mutation>{});
+        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(smp::count, nullptr);
+
+        unsigned i = 0;
+        for (const auto& [token, dk] : pkeys_by_tokens) {
+            mutation mut(schema, dk);
+
+            for (uint32_t ck = 0; ck < num_rows; ++ck) {
+                ss.add_row(mut, ss.make_ckey(ck), value);
+            }
+            frozen_muts[i++ % smp::count].emplace_back(mut);
+        }
+
+        auto sharder = std::make_unique<dummy_sharder>(schema->get_sharder(), std::move(pkeys_by_tokens));
+
+        const auto reader_factory = [frozen_muts] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range&,
+                const query::partition_slice& ps,
+                tracing::trace_state_ptr,
+                mutation_reader::forwarding) {
+            auto muts = frozen_muts.at(this_shard_id())
+                    | std::views::transform([schema] (const frozen_mutation& fm) { return fm.unfreeze(schema); })
+                    | std::ranges::to<std::vector<mutation>>();
+            return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(muts), ps);
+        };
+
+        auto reader = make_multishard_combining_reader_v2_for_tests(
+                *sharder,
+                seastar::make_shared<test_reader_lifecycle_policy>(reader_factory, std::make_unique<evicting_semaphore_factory>(semaphore_registry)),
+                schema,
+                semaphore.make_permit(),
+                query::full_partition_range,
+                schema->full_slice(),
+                {},
+                mutation_reader::forwarding::no,
+                multishard_reader_buffer_hint::yes,
+                read_ahead::no);
+        auto close_reader = deferred_close(reader);
+
+        reader.fill_buffer().get();
+
+        for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+            const auto reads_from_shard = 1;
+
+            auto& shard_semaphore = semaphore_registry.at(shard_id);
+            BOOST_REQUIRE(bool(shard_semaphore));
+            BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().reads_admitted, reads_from_shard);
+            BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().permit_based_evictions, reads_from_shard);
+        }
+    });
+}
