@@ -77,22 +77,6 @@ public:
     std::vector<cell> _cells;
     collection_mutation_description _cm;
 
-    struct range_tombstone_start {
-        clustering_key_prefix ck;
-        bound_kind kind;
-        tombstone tomb;
-
-        position_in_partition_view position() const {
-            return position_in_partition_view(position_in_partition_view::range_tag_t{}, bound_view(ck, kind));
-        }
-    };
-
-    inline friend std::ostream& operator<<(std::ostream& o, const mp_row_consumer_m::range_tombstone_start& rt_start) {
-        fmt::print(o, "{{ clustering: {}, kind: {}, tombstone: {}}}",
-                   rt_start.ck, rt_start.kind, rt_start.tomb);
-        return o;
-    }
-
     data_consumer::proceed consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
         sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
         if (_mf_filter->current_tombstone()) {
