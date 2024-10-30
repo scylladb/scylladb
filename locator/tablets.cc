@@ -1171,17 +1171,17 @@ bool locator::tablet_task_info::is_valid() const {
     return request_type != locator::tablet_task_type::none;
 }
 
-bool locator::tablet_task_info::is_user_request() const {
+bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_auto_request() {
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_request() {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};

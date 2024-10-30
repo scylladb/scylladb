@@ -89,12 +89,12 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
                 .task_id = task_id,
                 .type = locator::tablet_task_type_to_string(info.repair_task_info.request_type),
                 .kind = tasks::task_kind::cluster,
-                .scope = info.repair_task_info.is_user_request() ? "table" : "tablet",
+                .scope = info.repair_task_info.is_user_repair_request() ? "table" : "tablet",
                 .state = tasks::task_manager::task_state::running,
                 .keyspace = schema->ks_name(),
                 .table = schema->cf_name()
             };
-            if (info.repair_task_info.is_user_request()) {
+            if (info.repair_task_info.is_user_repair_request()) {
                 // User requested repair may encompass more that one tablet.
                 user_requests[task_id] = std::move(stats);
                 sched_num_sum[task_id] += info.repair_task_info.sched_nr;
@@ -133,7 +133,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
         if (info.repair_task_info.tablet_task_id.uuid() == id.uuid()) {
             sched_nr += info.repair_task_info.sched_nr;
             res.type = locator::tablet_task_type_to_string(info.repair_task_info.request_type);
-            res.scope = info.repair_task_info.is_user_request() ? "table" : "tablet";
+            res.scope = info.repair_task_info.is_user_repair_request() ? "table" : "tablet";
             res.start_time = info.repair_task_info.request_time;
             tablets.push_back(tid);
         }

@@ -160,9 +160,9 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
-    bool is_user_request() const;
-    static tablet_task_info make_user_request();
-    static tablet_task_info make_auto_request();
+    bool is_user_repair_request() const;
+    static tablet_task_info make_user_repair_request();
+    static tablet_task_info make_auto_repair_request();
 };
 
 /// Stores information about a single tablet.
