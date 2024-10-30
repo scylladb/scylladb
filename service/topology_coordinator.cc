@@ -1249,8 +1249,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         auto& info = tmap.get_tablet_info(gid.tablet);
         auto repair_task_info = info.repair_task_info;
-        if (!repair_task_info.is_user_request()) {
-            repair_task_info = locator::tablet_task_info::make_auto_request();
+        if (!repair_task_info.is_user_repair_request()) {
+            repair_task_info = locator::tablet_task_info::make_auto_repair_request();
         }
         repair_task_info.sched_nr++;
         repair_task_info.sched_time = db_clock::now();
