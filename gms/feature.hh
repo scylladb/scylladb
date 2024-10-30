@@ -10,11 +10,13 @@
 
 #include <any>
 
-#include <boost/signals2.hpp>
+#include <boost/signals2/connection.hpp>
+#include <boost/signals2/signal_type.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
-#include <seastar/core/shared_future.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 
 using namespace seastar;
 

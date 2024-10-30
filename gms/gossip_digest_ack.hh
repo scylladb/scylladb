@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"

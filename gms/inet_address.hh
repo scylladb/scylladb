@@ -8,16 +8,13 @@
 
 #pragma once
 
-#include <fmt/ostream.h>
-
 #include <seastar/net/ipv4_address.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/socket_defs.hh>
-#include <iosfwd>
 #include <optional>
 #include <functional>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace gms {
 

@@ -12,7 +12,6 @@
 
 #include <seastar/core/sstring.hh>
 #include <fmt/core.h>
-#include "utils/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/UUID.hh"

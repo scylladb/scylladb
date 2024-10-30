@@ -46,7 +46,6 @@
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
-#include "utils/to_string.hh"
 #include "idl/gossip.dist.hh"
 #include <csignal>
 

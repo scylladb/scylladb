@@ -10,7 +10,6 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/shared_future.hh>
 #include <seastar/core/sharded.hh>
 #include <unordered_map>
 #include <functional>

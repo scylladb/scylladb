@@ -10,12 +10,9 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/print.hh>
 #include <seastar/rpc/rpc_types.hh>
-#include <seastar/util/source_location-compat.hh>
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "gms/generation-number.hh"
@@ -30,7 +27,6 @@
 #include <optional>
 #include <chrono>
 #include <set>
-#include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/scheduling.hh>
