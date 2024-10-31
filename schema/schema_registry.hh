@@ -14,7 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
-#include "replica/database.hh"
+#include "replica/database_fwd.hh"
 
 namespace db {
 class schema_ctxt;

@@ -31,6 +31,8 @@
 
 #include "readers/from_mutations_v2.hh"
 
+#include <boost/range/join.hpp>
+
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;

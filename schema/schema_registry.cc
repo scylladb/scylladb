@@ -13,6 +13,7 @@
 #include "utils/log.hh"
 #include "db/schema_tables.hh"
 #include "view_info.hh"
+#include "replica/database.hh"
 
 static logging::logger slogger("schema_registry");
 
