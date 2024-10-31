@@ -12,6 +12,7 @@
 #include <seastar/json/json_elements.hh>
 #include "api/api_init.hh"
 #include "db/data_listeners.hh"
+#include "compaction/compaction_descriptor.hh"
 
 namespace cql_transport { class controller; }
 namespace db {

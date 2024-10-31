@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <boost/range/adaptor/transformed.hpp>
 #include "frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_partition.hh"

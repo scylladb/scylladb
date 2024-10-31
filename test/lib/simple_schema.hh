@@ -23,6 +23,8 @@
 #include "test/lib/key_utils.hh"
 #include "mutation/atomic_cell_or_collection.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+
 // Helper for working with the following table:
 //
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
