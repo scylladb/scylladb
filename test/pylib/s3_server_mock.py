@@ -182,7 +182,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # pytest kicks in. In addition, it is possible just to start this server using another script - `start_mock.py` to
 # run it locally to provide mocking functionality for tests executed during development process
 class MockS3Server:
-    def __init__(self, host, port, logger=None):
+    def __init__(self, host, port, logger):
         self.req_states = LRUCache(10000)
         handler = partial(InjectingHandler, self.req_states, logger)
         self.server = ThreadingHTTPServer((host, port), handler)
@@ -191,20 +191,21 @@ class MockS3Server:
         self.server.timeout = 10000
         self.server.socket.settimeout(10000)
         self.server.socket.listen(1000)
+        self.logger = logger
         self.is_running = False
         os.environ['MOCK_S3_SERVER_PORT'] = f'{port}'
         os.environ['MOCK_S3_SERVER_HOST'] = host
 
     async def start(self):
         if not self.is_running:
-            print(f'Starting S3 mock server on {self.server.server_address}')
+            self.logger.info('Starting S3 mock server on %s', self.server.server_address)
             loop = asyncio.get_running_loop()
             self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
             self.is_running = True
 
     async def stop(self):
         if self.is_running:
-            print('Stopping S3 mock server')
+            self.logger.info('Stopping S3 mock server')
             self.server.shutdown()
             await self.server_thread
             self.is_running = False
@@ -215,5 +216,5 @@ class MockS3Server:
             while self.is_running:
                 await asyncio.sleep(1)
         except Exception as e:
-            print(f"Server error: {e}")
+            self.logger.error("Server error: %s", e)
             await self.stop()
