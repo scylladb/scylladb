@@ -37,13 +37,11 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
     for commit in commits:
         pr_body += f'- (cherry picked from commit {commit})\n\n'
     pr_body += f'Parent PR: #{pr.number}'
-    if is_draft:
-        new_branch_name = f'{pr.user.login}:{new_branch_name}'
     try:
         backport_pr = repo.create_pull(
             title=backport_pr_title,
             body=pr_body,
-            head=new_branch_name,
+            head=f'scylladbbot:{new_branch_name}',
             base=base_branch_name,
             draft=is_draft
         )
@@ -88,47 +86,7 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     return commits
 
 
-def backport(repo, pr, version, commits, backport_base_branch, user):
-    with (tempfile.TemporaryDirectory() as local_repo_path):
-        try:
-            new_branch_name = f'backport/{pr.number}/to-{version}'
-            backport_pr_title = f'[Backport {version}] {pr.title}'
-            repo_local = Repo.clone_from(f'https://{user.login}:{github_token}@github.com/{repo.full_name}.git', local_repo_path, branch=backport_base_branch)
-            repo_local.git.checkout(b=new_branch_name)
-            try:
-                fork_repo = pr.user.get_repo(repo.name)
-            except GithubException as e:
-                print(f"Error retrieving repository: {e}")
-                # Since Scylla core repo was modified a few years ago to ScyllaDB,
-                # some developers may have forks based on the original name `scylla`
-                print(f"{pr.user.login} fork repo is not {repo.full_name}, trying {repo.organization.login}/scylla")
-                fork_repo = pr.user.get_repo('scylla')
-            fork_repo_url = f'https://{user.login}:{github_token}@github.com/{fork_repo.full_name}.git'
-            repo_local.create_remote('fork', fork_repo_url)
-            remote = 'origin'
-            is_draft = False
-            for commit in commits:
-                try:
-                    repo_local.git.cherry_pick(commit, '-m1', '-x')
-                except GitCommandError as e:
-                    logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
-                    remote = 'fork'
-                    is_draft = True
-                    repo_local.git.add(A=True)
-                    repo_local.git.cherry_pick('--continue')
-            repo_local.git.push(remote, new_branch_name, force=True)
-            create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                is_draft=is_draft)
-
-        except GitCommandError as e:
-            logging.warning(f"GitCommandError: {e}")
-
-
-def create_pr_comment_and_remove_label(pr):
-    comment_body = f':warning:  @{pr.user.login} PR body does not contain a valid reference to an issue '
-    comment_body += ' based on [linking-a-pull-request-to-an-issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)'
-    comment_body += ' and can not be backported\n\n'
-    comment_body += 'The following labels were removed:\n'
+def create_pr_comment_and_remove_label(pr, comment_body):
     labels = pr.get_labels()
     pattern = re.compile(r"backport/\d+\.\d+$")
     for label in labels:
@@ -136,8 +94,39 @@ def create_pr_comment_and_remove_label(pr):
             print(f"Removing label: {label.name}")
             comment_body += f'- {label.name}\n'
             pr.remove_from_labels(label)
-    comment_body += f'\nPlease add the relevant backport labels after PR body is fixed'
     pr.create_issue_comment(comment_body)
+
+
+def backport(repo, pr, version, commits, backport_base_branch):
+    new_branch_name = f'backport/{pr.number}/to-{version}'
+    backport_pr_title = f'[Backport {version}] {pr.title}'
+    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
+    with (tempfile.TemporaryDirectory() as local_repo_path):
+        try:
+            repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
+            repo_local.git.checkout(b=new_branch_name)
+            is_draft = False
+            for commit in commits:
+                try:
+                    repo_local.git.cherry_pick(commit, '-m1', '-x')
+                except GitCommandError as e:
+                    logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
+                    is_draft = True
+                    repo_local.git.add(A=True)
+                    repo_local.git.cherry_pick('--continue')
+            if not repo.private and not repo.has_in_collaborators(pr.user.login):
+                repo.add_to_collaborators(pr.user.login, permission="push")
+                comment = f':warning:  @{pr.user.login} you have been added as collaborator to scylladbbot fork '
+                comment += f'Please check your inbox and approve the invitation, once it is done, please add the backport labels again'
+                create_pr_comment_and_remove_label(pr, comment)
+                return
+            repo_local.git.push(fork_repo, new_branch_name, force=True)
+            create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
+                                is_draft=is_draft)
+
+        except GitCommandError as e:
+            logging.warning(f"GitCommandError: {e}")
 
 
 def main():
@@ -154,7 +143,6 @@ def main():
 
     g = Github(github_token)
     repo = g.get_repo(repo_name)
-    user = g.get_user()
     closed_prs = []
     start_commit = None
 
@@ -183,7 +171,7 @@ def main():
         for backport_label in backport_labels:
             version = backport_label.replace('backport/', '')
             backport_base_branch = backport_label.replace('backport/', backport_branch)
-            backport(repo, pr, version, commits, backport_base_branch, user)
+            backport(repo, pr, version, commits, backport_base_branch)
 
 
 if __name__ == "__main__":
