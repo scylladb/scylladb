@@ -18,7 +18,7 @@
 #include "utils/fragment_range.hh"
 #include <variant>
 
-#include <boost/type.hpp>
+#include <type_traits>
 
 namespace ser {
 
@@ -259,12 +259,12 @@ inline void serialize(Output& out, const std::reference_wrapper<T> v) {
 }
 
 template<typename T, typename Input>
-inline auto deserialize(Input& in, boost::type<T> t) {
+inline auto deserialize(Input& in, std::type_identity<T> t) {
     return serializer<T>::read(in);
 }
 
 template<typename T, typename Input>
-inline void skip(Input& v, boost::type<T>) {
+inline void skip(Input& v, std::type_identity<T>) {
     return serializer<T>::skip(v);
 }
 
@@ -281,19 +281,19 @@ template<typename Buffer, typename T>
 Buffer serialize_to_buffer(const T& v, size_t head_space = 0);
 
 template<typename T, typename Buffer>
-T deserialize_from_buffer(const Buffer&, boost::type<T>, size_t head_space = 0);
+T deserialize_from_buffer(const Buffer&, std::type_identity<T>, size_t head_space = 0);
 
 template<typename Output, typename ...T>
 void serialize(Output& out, const boost::variant<T...>& v);
 
 template<typename Input, typename ...T>
-boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>);
+boost::variant<T...> deserialize(Input& in, std::type_identity<boost::variant<T...>>);
 
 template<typename Output, typename ...T>
 void serialize(Output& out, const std::variant<T...>& v);
 
 template<typename Input, typename ...T>
-std::variant<T...> deserialize(Input& in, boost::type<std::variant<T...>>);
+std::variant<T...> deserialize(Input& in, std::type_identity<std::variant<T...>>);
 
 struct unknown_variant_type {
     size_type index;
@@ -304,7 +304,7 @@ template<typename Output>
 void serialize(Output& out, const unknown_variant_type& v);
 
 template<typename Input>
-unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>);
+unknown_variant_type deserialize(Input& in, std::type_identity<unknown_variant_type>);
 
 template <typename T>
 struct normalize {

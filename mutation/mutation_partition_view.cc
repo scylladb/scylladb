@@ -188,7 +188,7 @@ template<typename Visitor>
 requires MutationViewVisitor<Visitor>
 void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visitor) const {
     auto in = _in;
-    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
 
     visitor.accept_partition_tombstone(mpv.tomb());
 
@@ -230,7 +230,7 @@ template<typename Visitor>
 requires MutationViewVisitor<Visitor>
 future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Visitor& visitor) const {
     auto in = _in;
-    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
 
     visitor.accept_partition_tombstone(mpv.tomb());
 
@@ -275,7 +275,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
 template <bool is_preemptible>
 mutation_partition_view::accept_ordered_result mutation_partition_view::do_accept_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor, accept_ordered_cookie cookie) const {
     auto in = _in;
-    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
     const column_mapping& cm = s.get_column_mapping();
 
     if (!cookie.accepted_partition_tombstone) {
@@ -419,7 +419,7 @@ future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutatio
 std::optional<clustering_key> mutation_partition_view::first_row_key() const
 {
     auto in = _in;
-    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
     auto rows = mpv.rows();
     if (rows.empty()) {
         return { };
@@ -430,7 +430,7 @@ std::optional<clustering_key> mutation_partition_view::first_row_key() const
 std::optional<clustering_key> mutation_partition_view::last_row_key() const
 {
     auto in = _in;
-    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
     auto rows = mpv.rows();
     if (rows.empty()) {
         return { };
@@ -451,7 +451,7 @@ mutation_partition_view mutation_partition_view::from_view(ser::mutation_partiti
 mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s, reader_permit permit)
 {
     auto in = ser::as_input_stream(_bytes);
-    auto view = ser::deserialize(in, boost::type<ser::mutation_fragment_view>());
+    auto view = ser::deserialize(in, std::type_identity<ser::mutation_fragment_view>());
     return seastar::visit(view.fragment(),
         [&] (ser::clustering_row_view crv) {
             class clustering_row_builder {

@@ -38,9 +38,9 @@ template<>
 struct serializer<gms::inet_address> {
     template<typename Input>
     static gms::inet_address read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         if (sz == std::numeric_limits<uint32_t>::max()) {
-            seastar::net::ipv6_address addr(deserialize(in, boost::type<net::ipv6_address::ipv6_bytes>()));
+            seastar::net::ipv6_address addr(deserialize(in, std::type_identity<net::ipv6_address::ipv6_bytes>()));
             return gms::inet_address(addr);
         }
         return gms::inet_address(sz);

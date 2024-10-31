@@ -32,7 +32,7 @@ using namespace db;
 
 ser::mutation_view frozen_mutation::mutation_view() const {
     auto in = ser::as_input_stream(_bytes);
-    return ser::deserialize(in, boost::type<ser::mutation_view>());
+    return ser::deserialize(in, std::type_identity<ser::mutation_view>());
 }
 
 table_id

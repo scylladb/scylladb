@@ -182,12 +182,12 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
 
     auto bv1 = buf1.linearize();
     auto in1 = ser::as_input_stream(bv1);
-    auto deser_sc = ser::deserialize(in1, boost::type<simple_compound>());
+    auto deser_sc = ser::deserialize(in1, std::type_identity<simple_compound>());
     BOOST_REQUIRE_EQUAL(sc, deser_sc);
 
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
-    auto sc_view = ser::deserialize(in2, boost::type<ser::writable_simple_compound_view>());
+    auto sc_view = ser::deserialize(in2, std::type_identity<ser::writable_simple_compound_view>());
     BOOST_REQUIRE_EQUAL(sc.foo, sc_view.foo());
     BOOST_REQUIRE_EQUAL(sc.bar, sc_view.bar());
 }
@@ -229,13 +229,13 @@ BOOST_AUTO_TEST_CASE(test_vector)
 
     auto bv1 = buf1.linearize();
     auto in1 = ser::as_input_stream(bv1);
-    auto deser_voc = ser::deserialize(in1, boost::type<vectors_of_compounds>());
+    auto deser_voc = ser::deserialize(in1, std::type_identity<vectors_of_compounds>());
     BOOST_REQUIRE_EQUAL(voc.first, deser_voc.first);
     BOOST_REQUIRE_EQUAL(voc.second, deser_voc.second);
 
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
-    auto voc_view = ser::deserialize(in2, boost::type<ser::writable_vectors_of_compounds_view>());
+    auto voc_view = ser::deserialize(in2, std::type_identity<ser::writable_vectors_of_compounds_view>());
 
     auto first_range = voc_view.first();
     auto first_view = std::vector<ser::writable_simple_compound_view>(first_range.begin(), first_range.end());
@@ -280,7 +280,7 @@ BOOST_AUTO_TEST_CASE(test_variant)
 
     auto bv = buf.linearize();
     auto in = ser::as_input_stream(bv);
-    auto wv_view = ser::deserialize(in, boost::type<ser::writable_variants_view>());
+    auto wv_view = ser::deserialize(in, std::type_identity<ser::writable_variants_view>());
     BOOST_REQUIRE_EQUAL(wv_view.id(), 17);
 
     struct expect_compound : boost::static_visitor<simple_compound> {
@@ -353,7 +353,7 @@ BOOST_AUTO_TEST_CASE(test_compound_with_optional)
 
     auto bv1 = buf1.linearize();
     seastar::simple_input_stream in1(reinterpret_cast<const char*>(bv1.data()), bv1.size());
-    auto deser_one = ser::deserialize(in1, boost::type<compound_with_optional>());
+    auto deser_one = ser::deserialize(in1, std::type_identity<compound_with_optional>());
     BOOST_REQUIRE_EQUAL(one, deser_one);
 
     compound_with_optional two = { {}, foo };
@@ -364,7 +364,7 @@ BOOST_AUTO_TEST_CASE(test_compound_with_optional)
 
     auto bv2 = buf2.linearize();
     seastar::simple_input_stream in2(reinterpret_cast<const char*>(bv2.data()), bv2.size());
-    auto deser_two = ser::deserialize(in2, boost::type<compound_with_optional>());
+    auto deser_two = ser::deserialize(in2, std::type_identity<compound_with_optional>());
     BOOST_REQUIRE_EQUAL(two, deser_two);
 }
 
@@ -379,7 +379,7 @@ BOOST_AUTO_TEST_CASE(test_skip_does_not_deserialize)
         auto in = ser::as_input_stream(buf.linearize());
         auto prev = non_final_composite_test_object::construction_count;
 
-        ser::skip(in, boost::type<non_final_composite_test_object>());
+        ser::skip(in, std::type_identity<non_final_composite_test_object>());
 
         BOOST_REQUIRE(prev == non_final_composite_test_object::construction_count);
     }
@@ -393,7 +393,7 @@ BOOST_AUTO_TEST_CASE(test_skip_does_not_deserialize)
         auto in = ser::as_input_stream(buf.linearize());
         auto prev = final_composite_test_object::construction_count;
 
-        ser::skip(in, boost::type<final_composite_test_object>());
+        ser::skip(in, std::type_identity<final_composite_test_object>());
 
         BOOST_REQUIRE(prev == final_composite_test_object::construction_count);
     }
@@ -405,13 +405,13 @@ BOOST_AUTO_TEST_CASE(test_empty_struct)
     ser::serialize(buf1, empty_struct());
 
     auto in1 = ser::as_input_stream(buf1.linearize());
-    ser::deserialize(in1, boost::type<empty_struct>());
+    ser::deserialize(in1, std::type_identity<empty_struct>());
 
     bytes_ostream buf2;
     ser::serialize(buf2, empty_final_struct());
 
     auto in2 = ser::as_input_stream(buf2.linearize());
-    ser::deserialize(in2, boost::type<empty_final_struct>());
+    ser::deserialize(in2, std::type_identity<empty_final_struct>());
 }
 
 BOOST_AUTO_TEST_CASE(test_just_a_variant)
@@ -425,7 +425,7 @@ BOOST_AUTO_TEST_CASE(test_just_a_variant)
     .end_just_a_variant();
 
     auto in = ser::as_input_stream(buf);
-    auto view = ser::deserialize(in, boost::type<ser::just_a_variant_view>());
+    auto view = ser::deserialize(in, std::type_identity<ser::just_a_variant_view>());
     bool fired = false;
     seastar::visit(view.variant(), [&] (ser::writable_simple_compound_view v) {
             fired = true;
@@ -443,7 +443,7 @@ BOOST_AUTO_TEST_CASE(test_just_a_variant)
     .end_just_a_variant();
 
     in = ser::as_input_stream(buf);
-    view = ser::deserialize(in, boost::type<ser::just_a_variant_view>());
+    view = ser::deserialize(in, std::type_identity<ser::just_a_variant_view>());
     fired = false;
     seastar::visit(view.variant(), [&] (simple_compound v) {
             fired = true;
@@ -462,7 +462,7 @@ BOOST_AUTO_TEST_CASE(test_fragmented_write)
         bytes_ostream buf;
         ser::serialize_fragmented(buf, fragment_generator(fragment_count, fragment_size));
         auto in = ser::as_input_stream(buf);
-        bytes deserialized = ser::deserialize(in, boost::type<bytes>());
+        bytes deserialized = ser::deserialize(in, std::type_identity<bytes>());
         BOOST_CHECK_EQUAL(deserialized, fragment_generator(fragment_count, fragment_size).to_bytes());
     }
 }
@@ -481,6 +481,6 @@ BOOST_AUTO_TEST_CASE(test_const_template_arg)
     BOOST_REQUIRE_EQUAL(buf.size(), 40);
 
     auto in = ser::as_input_stream(buf);
-    auto deser_obj = ser::deserialize(in, boost::type<const_template_arg_test_object>());
+    auto deser_obj = ser::deserialize(in, std::type_identity<const_template_arg_test_object>());
     BOOST_REQUIRE(obj == deser_obj);
 }

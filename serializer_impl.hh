@@ -196,7 +196,7 @@ struct deserialize_array_helper<false, T> {
     static void doit(Input& in, Container& v, size_t sz) {
         typename container_traits<Container>::back_emplacer be(v);
         while (sz--) {
-            be(deserialize(in, boost::type<T>()));
+            be(deserialize(in, std::type_identity<T>()));
         }
     }
     template<typename Input>
@@ -224,7 +224,7 @@ struct vector_serializer {
     using value_type = typename Vector::value_type;
     template<typename Input>
     static Vector read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         Vector v;
         v.reserve(sz);
         deserialize_array<value_type>(in, v, sz);
@@ -237,7 +237,7 @@ struct vector_serializer {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         skip_array<value_type>(in, sz);
     }
 };
@@ -248,7 +248,7 @@ template<typename T>
 struct serializer<std::list<T>> {
     template<typename Input>
     static std::list<T> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         std::list<T> v;
         deserialize_array_helper<false, T>::doit(in, v, sz);
         return v;
@@ -260,7 +260,7 @@ struct serializer<std::list<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         skip_array<T>(in, sz);
     }
 };
@@ -269,7 +269,7 @@ template<typename T>
 struct serializer<absl::btree_set<T>> {
     template<typename Input>
     static absl::btree_set<T> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         absl::btree_set<T> v;
         deserialize_array_helper<false, T>::doit(in, v, sz);
         return v;
@@ -281,7 +281,7 @@ struct serializer<absl::btree_set<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         skip_array<T>(in, sz);
     }
 };
@@ -290,7 +290,7 @@ template<typename T, typename... Args>
 struct serializer<std::unordered_set<T, Args...>> {
     template<typename Input>
     static std::unordered_set<T, Args...> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         std::unordered_set<T, Args...> v;
         v.reserve(sz);
         deserialize_array_helper<false, T>::doit(in, v, sz);
@@ -303,7 +303,7 @@ struct serializer<std::unordered_set<T, Args...>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         skip_array<T>(in, sz);
     }
 };
@@ -327,7 +327,7 @@ template<typename T, typename Ratio>
 struct serializer<std::chrono::duration<T, Ratio>> {
     template<typename Input>
     static std::chrono::duration<T, Ratio> read(Input& in) {
-        return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
+        return std::chrono::duration<T, Ratio>(deserialize(in, std::type_identity<T>()));
     }
     template<typename Output>
     static void write(Output& out, const std::chrono::duration<T, Ratio>& d) {
@@ -345,7 +345,7 @@ struct serializer<std::chrono::time_point<Clock, Duration>> {
 
     template<typename Input>
     static value_type read(Input& in) {
-        return typename Clock::time_point(Duration(deserialize(in, boost::type<uint64_t>())));
+        return typename Clock::time_point(Duration(deserialize(in, std::type_identity<uint64_t>())));
     }
     template<typename Output>
     static void write(Output& out, const value_type& v) {
@@ -379,11 +379,11 @@ template<typename K, typename V>
 struct serializer<std::map<K, V>> {
     template<typename Input>
     static std::map<K, V> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         std::map<K, V> m;
         while (sz--) {
-            K k = deserialize(in, boost::type<K>());
-            V v = deserialize(in, boost::type<V>());
+            K k = deserialize(in, std::type_identity<K>());
+            V v = deserialize(in, std::type_identity<V>());
             m[k] = v;
         }
         return m;
@@ -398,7 +398,7 @@ struct serializer<std::map<K, V>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         while (sz--) {
             serializer<K>::skip(in);
             serializer<V>::skip(in);
@@ -410,12 +410,12 @@ template<typename K, typename V>
 struct serializer<std::unordered_map<K, V>> {
     template<typename Input>
     static std::unordered_map<K, V> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         std::unordered_map<K, V> m;
         m.reserve(sz);
         while (sz--) {
-            auto k = deserialize(in, boost::type<K>());
-            auto v = deserialize(in, boost::type<V>());
+            auto k = deserialize(in, std::type_identity<K>());
+            auto v = deserialize(in, std::type_identity<V>());
             m.emplace(std::move(k), std::move(v));
         }
         return m;
@@ -430,7 +430,7 @@ struct serializer<std::unordered_map<K, V>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         while (sz--) {
             serializer<K>::skip(in);
             serializer<V>::skip(in);
@@ -442,7 +442,7 @@ template<typename Tag>
 struct serializer<bool_class<Tag>> {
     template<typename Input>
     static bool_class<Tag> read(Input& in) {
-        return bool_class<Tag>(deserialize(in, boost::type<bool>()));
+        return bool_class<Tag>(deserialize(in, std::type_identity<bool>()));
     }
 
     template<typename Output>
@@ -519,7 +519,7 @@ template<>
 struct serializer<temporary_buffer<char>> {
     template<typename Input>
     static temporary_buffer<char> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
 		auto v = temporary_buffer<char>(sz);
         in.read(reinterpret_cast<char*>(v.get_write()), sz);
         return v;
@@ -531,7 +531,7 @@ struct serializer<temporary_buffer<char>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         in.skip(sz);
     }
 };
@@ -541,7 +541,7 @@ template<>
 struct serializer<bytes> {
     template<typename Input>
     static deserialized_bytes_proxy<Input> read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         return deserialized_bytes_proxy<Input>(in.read_substream(sz));
     }
     template<typename Output>
@@ -577,7 +577,7 @@ struct serializer<bytes> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         in.skip(sz);
     }
 };
@@ -595,7 +595,7 @@ void serialize(Output& out, const bytes_ostream& v) {
     serializer<bytes>::write(out, v);
 }
 template<typename Input>
-bytes_ostream deserialize(Input& in, boost::type<bytes_ostream>) {
+bytes_ostream deserialize(Input& in, std::type_identity<bytes_ostream>) {
     return serializer<bytes>::read(in);
 }
 template<typename Output, typename FragmentedBuffer>
@@ -609,9 +609,9 @@ struct serializer<std::optional<T>> {
     template<typename Input>
     static std::optional<T> read(Input& in) {
         std::optional<T> v;
-        auto b = deserialize(in, boost::type<bool>());
+        auto b = deserialize(in, std::type_identity<bool>());
         if (b) {
-            v.emplace(deserialize(in, boost::type<T>()));
+            v.emplace(deserialize(in, std::type_identity<T>()));
         }
         return v;
     }
@@ -624,7 +624,7 @@ struct serializer<std::optional<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto present = deserialize(in, boost::type<bool>());
+        auto present = deserialize(in, std::type_identity<bool>());
         if (present) {
             serializer<T>::skip(in);
         }
@@ -638,7 +638,7 @@ template<typename T>
 struct serializer<seastar::lw_shared_ptr<T>> {
     template<typename Input>
     static seastar::lw_shared_ptr<T> read(Input& in) {
-        return seastar::make_lw_shared<T>(deserialize(in, boost::type<T>()));
+        return seastar::make_lw_shared<T>(deserialize(in, std::type_identity<T>()));
     }
     template<typename Output>
     static void write(Output& out, const seastar::lw_shared_ptr<T>& v) {
@@ -657,7 +657,7 @@ template<>
 struct serializer<sstring> {
     template<typename Input>
     static sstring read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
         sstring v = uninitialized_string(sz);
         in.read(v.data(), sz);
         return v;
@@ -669,7 +669,7 @@ struct serializer<sstring> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        in.skip(deserialize(in, boost::type<size_type>()));
+        in.skip(deserialize(in, std::type_identity<size_type>()));
     }
 };
 
@@ -678,9 +678,9 @@ struct serializer<std::unique_ptr<T>> {
     template<typename Input>
     static std::unique_ptr<T> read(Input& in) {
         std::unique_ptr<T> v;
-        auto b = deserialize(in, boost::type<bool>());
+        auto b = deserialize(in, std::type_identity<bool>());
         if (b) {
-            v = std::make_unique<T>(deserialize(in, boost::type<T>()));
+            v = std::make_unique<T>(deserialize(in, std::type_identity<T>()));
         }
         return v;
     }
@@ -693,7 +693,7 @@ struct serializer<std::unique_ptr<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto present = deserialize(in, boost::type<bool>());
+        auto present = deserialize(in, std::type_identity<bool>());
         if (present) {
             serializer<T>::skip(in);
         }
@@ -704,7 +704,7 @@ template<typename Enum>
 struct serializer<enum_set<Enum>> {
     template<typename Input>
     static enum_set<Enum> read(Input& in) {
-        return enum_set<Enum>::from_mask(deserialize(in, boost::type<uint64_t>()));
+        return enum_set<Enum>::from_mask(deserialize(in, std::type_identity<uint64_t>()));
     }
     template<typename Output>
     static void write(Output& out, enum_set<Enum> v) {
@@ -751,7 +751,7 @@ Buffer serialize_to_buffer(const T& v, size_t head_space) {
 }
 
 template<typename T, typename Buffer>
-T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_space) {
+T deserialize_from_buffer(const Buffer& buf, std::type_identity<T> type, size_t head_space) {
     seastar::simple_input_stream in(reinterpret_cast<const char*>(buf.begin() + head_space), buf.size() - head_space);
     return deserialize(in, std::move(type));
 }
@@ -773,7 +773,7 @@ template<typename Output, typename ...T>
 void serialize(Output& out, const boost::variant<T...>& v) {}
 
 template<typename Input, typename ...T>
-boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>) {
+boost::variant<T...> deserialize(Input& in, std::type_identity<boost::variant<T...>>) {
     return boost::variant<T...>();
 }
 
@@ -788,15 +788,15 @@ void serialize(Output& out, const std::variant<T...>& v) {
 }
 
 template<typename Input, typename T, size_t... I>
-T deserialize_std_variant(Input& in, boost::type<T> t,  size_t idx, std::index_sequence<I...>) {
+T deserialize_std_variant(Input& in, std::type_identity<T> t,  size_t idx, std::index_sequence<I...>) {
     T v;
-    (void)((I == idx ? v.template emplace<I>(deserialize(in, boost::type<std::variant_alternative_t<I, T>>())), true : false) || ...);
+    (void)((I == idx ? v.template emplace<I>(deserialize(in, std::type_identity<std::variant_alternative_t<I, T>>())), true : false) || ...);
     return v;
 }
 
 template<typename Input, typename ...T>
-std::variant<T...> deserialize(Input& in, boost::type<std::variant<T...>> v) {
-    size_t idx = deserialize(in, boost::type<uint8_t>());
+std::variant<T...> deserialize(Input& in, std::type_identity<std::variant<T...>> v) {
+    size_t idx = deserialize(in, std::type_identity<uint8_t>());
     return deserialize_std_variant(in, v, idx, std::make_index_sequence<sizeof...(T)>());
 }
 
@@ -805,10 +805,10 @@ void serialize(Output& out, const unknown_variant_type& v) {
     out.write(v.data.begin(), v.data.size());
 }
 template<typename Input>
-unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
+unknown_variant_type deserialize(Input& in, std::type_identity<unknown_variant_type>) {
     return seastar::with_serialized_stream(in, [] (auto& in) {
-        auto size = deserialize(in, boost::type<size_type>());
-        auto index = deserialize(in, boost::type<size_type>());
+        auto size = deserialize(in, std::type_identity<size_type>());
+        auto index = deserialize(in, std::type_identity<size_type>());
         auto sz = size - sizeof(size_type) * 2;
         sstring v = uninitialized_string(sz);
         in.read(v.data(), sz);
@@ -849,7 +849,7 @@ private:
             serializer<T>::skip(_in);
         }
         value_type deserialize_next() {
-            return deserialize(_in, boost::type<T>());
+            return deserialize(_in, std::type_identity<T>());
         }
     };
     struct reverse_iterator_data {
@@ -860,7 +860,7 @@ private:
         value_type deserialize_next() {
             input_stream is = *_substream_it;
             ++_substream_it;
-            return deserialize(is, boost::type<T>());
+            return deserialize(is, std::type_identity<T>());
         }
     };
 
@@ -873,7 +873,7 @@ public:
 
     explicit vector_deserializer(input_stream in)
         : _in(std::move(in))
-        , _size(deserialize(_in, boost::type<uint32_t>()))
+        , _size(deserialize(_in, std::type_identity<uint32_t>()))
     {
         if constexpr (!IsForward) {
             fill_substreams();

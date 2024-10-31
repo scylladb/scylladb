@@ -144,7 +144,7 @@ inline
 T reserialize(const T& v) {
     auto buf = ser::serialize_to_buffer<bytes>(v);
     auto in = ser::as_input_stream(buf);
-    return ser::deserialize(in, boost::type<T>());
+    return ser::deserialize(in, std::type_identity<T>());
 }
 
 BOOST_AUTO_TEST_CASE(test_serialization) {

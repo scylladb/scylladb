@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/type.hpp>
+#include <type_traits>
 #include <random>
 #include <unordered_set>
 #include <algorithm>

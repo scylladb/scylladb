@@ -106,7 +106,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
         auto raw_data = row.get_blob("data");
         auto in = ser::as_input_stream(raw_data);
         using data_variant_type = decltype(raft::log_entry::data);
-        data_variant_type data = ser::deserialize(in, boost::type<data_variant_type>());
+        data_variant_type data = ser::deserialize(in, std::type_identity<data_variant_type>());
 
         log.emplace_back(make_lw_shared<const raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(data)}));

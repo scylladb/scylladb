@@ -74,7 +74,7 @@ inline frame<bytes_ostream> start_frame(bytes_ostream& out) {
 
 template<typename Input>
 size_type read_frame_size(Input& in) {
-    auto sz = deserialize(in, boost::type<size_type>());
+    auto sz = deserialize(in, std::type_identity<size_type>());
     if (sz < sizeof(size_type)) {
         throw std::runtime_error(fmt::format("IDL frame truncated: expected to have at least {} bytes, got {}", sizeof(size_type), sz));
     }

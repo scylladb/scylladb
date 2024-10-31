@@ -177,7 +177,7 @@ BOOST_AUTO_TEST_CASE(inet_address) {
         BOOST_CHECK(ip.addr().is_ipv4());
         auto buf = ser::serialize_to_buffer<bytes>(ip);
         BOOST_CHECK_EQUAL(buf.size(), sizeof(uint32_t));
-        auto res = ser::deserialize_from_buffer(buf, boost::type<gms::inet_address>{});
+        auto res = ser::deserialize_from_buffer(buf, std::type_identity<gms::inet_address>{});
         uint32_t rip = res.addr().as_ipv4_address().ip;
         BOOST_CHECK_EQUAL(hip, rip);
     }
@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(inet_address) {
         gms::inet_address ip("2001:6b0:8:2::232");
         BOOST_CHECK(ip.addr().is_ipv6());
         auto buf = ser::serialize_to_buffer<bytes>(ip);
-        auto res = ser::deserialize_from_buffer(buf, boost::type<gms::inet_address>{});
+        auto res = ser::deserialize_from_buffer(buf, std::type_identity<gms::inet_address>{});
         BOOST_CHECK_EQUAL(res, ip);
     }
 

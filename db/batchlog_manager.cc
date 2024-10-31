@@ -193,7 +193,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
         auto in = ser::as_input_stream(data);
         while (in.size()) {
-            fms->emplace_back(ser::deserialize(in, boost::type<canonical_mutation>()));
+            fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
         }
 
         auto size = data.size();

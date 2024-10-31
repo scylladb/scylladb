@@ -32,7 +32,7 @@ public:
         return ser::serialize_to_buffer<bytes>(_options.to_map());
     }
     static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
-        return ser::deserialize_from_buffer(buffer, boost::type<std::map<sstring, sstring>>());
+        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
     }
     const per_partition_rate_limit_options& get_options() const {
         return _options;

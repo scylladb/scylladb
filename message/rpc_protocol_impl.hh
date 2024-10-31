@@ -20,7 +20,7 @@ void write(serializer, Output& out, const T& data) {
     ser::serialize(out, data);
 }
 template <typename T, typename Input>
-T read(serializer, Input& in, boost::type<T> type) {
+T read(serializer, Input& in, std::type_identity<T> type) {
     return ser::deserialize(in, type);
 }
 
@@ -29,8 +29,8 @@ void write(serializer s, Output& out, const foreign_ptr<T>& v) {
     return write(s, out, *v);
 }
 template <typename Input, typename T>
-foreign_ptr<T> read(serializer s, Input& in, boost::type<foreign_ptr<T>>) {
-    return make_foreign(read(s, in, boost::type<T>()));
+foreign_ptr<T> read(serializer s, Input& in, std::type_identity<foreign_ptr<T>>) {
+    return make_foreign(read(s, in, std::type_identity<T>()));
 }
 
 template <typename Output, typename T>
@@ -38,8 +38,8 @@ void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
     return write(s, out, *v);
 }
 template <typename Input, typename T>
-lw_shared_ptr<T> read(serializer s, Input& in, boost::type<lw_shared_ptr<T>>) {
-    return make_lw_shared<T>(read(s, in, boost::type<T>()));
+lw_shared_ptr<T> read(serializer s, Input& in, std::type_identity<lw_shared_ptr<T>>) {
+    return make_lw_shared<T>(read(s, in, std::type_identity<T>()));
 }
 
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
