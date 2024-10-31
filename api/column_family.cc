@@ -63,14 +63,6 @@ table_id get_uuid(const sstring& name, const replica::database& db) {
     return get_uuid(ks, cf, db);
 }
 
-future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f) {
-    auto uuid = get_uuid(name, ctx.db.local());
-
-    return ctx.db.invoke_on_all([f, uuid](replica::database& db) {
-        f(db.find_column_family(uuid));
-    });
-}
-
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(ctx, name, int64_t(0), [f](const replica::column_family& cf) {
@@ -1058,12 +1050,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
-        return foreach_column_family(ctx, req->get_path_param("name"), [strategy](replica::column_family& cf) {
+        return set_tables(ctx, ks, {std::move(cf)}, [strategy] (replica::table& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
-        }).then([] {
-                return make_ready_future<json::json_return_type>(json_void());
+            return make_ready_future<>();
         });
     });
 
