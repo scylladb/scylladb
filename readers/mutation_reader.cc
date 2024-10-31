@@ -8,6 +8,8 @@
 
 #include <seastar/util/lazy.hh>
 
+#include <boost/range/adaptor/transformed.hpp>
+
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "schema_upgrader.hh"

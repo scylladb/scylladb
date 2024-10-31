@@ -9,6 +9,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include <boost/range/adaptor/transformed.hpp>
+
 #include "mutation_partition.hh"
 #include "clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"

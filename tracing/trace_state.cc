@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <chrono>
+#include <boost/range/adaptor/transformed.hpp>
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
 #include "timestamp.hh"

@@ -18,6 +18,8 @@
 #include "schema/schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+
 static std::vector<managed_bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<managed_bytes> result;
     for (auto&& v : values) {

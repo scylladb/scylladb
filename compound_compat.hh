@@ -8,9 +8,7 @@
 
 #pragma once
 
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <compare>
 #include "compound.hh"
 #include "schema/schema.hh"
@@ -346,8 +344,9 @@ public:
     static composite serialize_static(const schema& s, RangeOfSerializedComponents&& values) {
         // FIXME: Optimize
         auto b = bytes(size_t(2), bytes::value_type(0xff));
-        std::vector<bytes_view> sv(s.clustering_key_size());
-        b += composite::serialize_value(boost::range::join(sv, std::forward<RangeOfSerializedComponents>(values)), true).release_bytes();
+        std::vector<bytes_view> sv(s.clustering_key_size() + std::ranges::distance(values));
+        std::ranges::copy(values, sv.begin() + s.clustering_key_size());
+        b += composite::serialize_value(sv, true).release_bytes();
         return composite(std::move(b));
     }
 
@@ -442,12 +441,12 @@ public:
         return iterator(iterator::end_iterator_tag());
     }
 
-    boost::iterator_range<iterator> components() const & {
+    std::ranges::subrange<iterator> components() const & {
         return { begin(), end() };
     }
 
     auto values() const & {
-        return components() | boost::adaptors::transformed([](auto&& c) { return c.first; });
+        return components() | std::views::transform(&component_view::first);
     }
 
     std::vector<component> components() const && {
@@ -460,7 +459,7 @@ public:
 
     std::vector<bytes> values() const && {
         std::vector<bytes> result;
-        boost::copy(components() | boost::adaptors::transformed([](auto&& c) { return to_bytes(c.first); }), std::back_inserter(result));
+        std::ranges::copy(components() | std::views::transform([](auto&& c) { return to_bytes(c.first); }), std::back_inserter(result));
         return result;
     }
 
@@ -585,7 +584,7 @@ public:
         return composite::iterator(composite::iterator::end_iterator_tag());
     }
 
-    boost::iterator_range<composite::iterator> components() const {
+    std::ranges::subrange<composite::iterator> components() const {
         return { begin(), end() };
     }
 
@@ -599,7 +598,7 @@ public:
     }
 
     auto values() const {
-        return components() | boost::adaptors::transformed([](auto&& c) { return c.first; });
+        return components() | std::views::transform(&composite::component_view::first);
     }
 
     size_t size() const {
