@@ -15,6 +15,7 @@
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
 
 #include "cql3/description.hh"

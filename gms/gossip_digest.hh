@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <seastar/core/sstring.hh>
 #include <fmt/core.h>
 #include "gms/inet_address.hh"
 #include "gms/generation-number.hh"

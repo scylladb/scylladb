@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <seastar/core/distributed.hh>
 #include "utils/assert.hh"
 #include "replica/database_fwd.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
