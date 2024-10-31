@@ -70,7 +70,7 @@ future<> apply_gently(mutation& target, const mutation& m) {
 
 future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) {
     auto in = ser::as_input_stream(cm.representation());
-    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    auto mv = ser::deserialize(in, std::type_identity<ser::canonical_mutation_view>());
 
     auto cf_id = mv.table_id();
     if (s->id() != cf_id) {

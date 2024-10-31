@@ -37,7 +37,7 @@ void commitlog_entry_writer::write(ostream& out) const {
 commitlog_entry_reader::commitlog_entry_reader(const fragmented_temporary_buffer& buffer)
     : _ce([&] {
     auto in = seastar::fragmented_memory_input_stream(fragmented_temporary_buffer::view(buffer).begin(), buffer.size_bytes());
-    return ser::deserialize(in, boost::type<commitlog_entry>());
+    return ser::deserialize(in, std::type_identity<commitlog_entry>());
 }())
 {
 }

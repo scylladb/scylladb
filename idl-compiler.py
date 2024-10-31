@@ -193,7 +193,7 @@ void serializer<{name}>::write(Output& buf, const {name}& v) {{
 {self.template_declaration}
 template<typename Input>
 {name} serializer<{name}>::read(Input& buf) {{
-  return static_cast<{name}>(deserialize(buf, boost::type<{self.underlying_type}>()));
+  return static_cast<{name}>(deserialize(buf, std::type_identity<{self.underlying_type}>()));
 }}""")
 
 
@@ -327,10 +327,10 @@ template <typename Input>
  return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.members:
             if not self.final:
-                fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+                fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, std::type_identity<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
         elif not self.final:
-            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, std::type_identity<{SIZETYPE}>());
   auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
         else:
             fprintln(cout, """  auto& in = buf;""")
@@ -348,9 +348,9 @@ template <typename Input>
                 if deflt in local_names:
                     deflt = local_names[deflt]
                 fprintln(cout, f"""  auto {local_param} = (in.size()>0) ?
-    {DESERIALIZER}(in, boost::type<{param_type(param.type)}>()) : {deflt};""")
+    {DESERIALIZER}(in, std::type_identity<{param_type(param.type)}>()) : {deflt};""")
             else:
-                fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
+                fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, std::type_identity<{param_type(param.type)}>());""")
             params.append("std::move(" + local_param + ")")
         fprintln(cout, f"""
   {name}{self.template_param_names_str} res {{{", ".join(params)}}};
@@ -368,12 +368,12 @@ template <typename Input>
 void serializer<{name}{self.template_param_names_str}>::skip(Input& buf) {{
  seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.final:
-            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, std::type_identity<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
         else:
             for m in get_members(self):
                 full_type = param_view_type(m.type)
-                fprintln(cout, f"  ser::skip(buf, boost::type<{full_type}>());")
+                fprintln(cout, f"  ser::skip(buf, std::type_identity<{full_type}>());")
         fprintln(cout, """ });\n}""")
 
 
@@ -1416,28 +1416,28 @@ def add_variant_read_size(hout, typ):
     read_sizes.add(t)
     fprintln(hout, f"""
 template<typename Input>
-inline void skip(Input& v, boost::type<{t}>) {{
+inline void skip(Input& v, std::type_identity<{t}>) {{
   return seastar::with_serialized_stream(v, [] (auto& v) {{
-    size_type ln = deserialize(v, boost::type<size_type>());
+    size_type ln = deserialize(v, std::type_identity<size_type>());
     v.skip(ln - sizeof(size_type));
   }});
 }}""")
 
     fprintln(hout, f"""
 template<typename Input>
-{t} deserialize(Input& v, boost::type<{t}>) {{
+{t} deserialize(Input& v, std::type_identity<{t}>) {{
   return seastar::with_serialized_stream(v, [] (auto& v) {{
     auto in = v;
-    deserialize(in, boost::type<size_type>());
-    size_type o = deserialize(in, boost::type<size_type>());
+    deserialize(in, std::type_identity<size_type>());
+    size_type o = deserialize(in, std::type_identity<size_type>());
     """)
     for index, param in enumerate(typ.template_parameters):
         fprintln(hout, f"""
     if (o == {index}) {{
         v.skip(sizeof(size_type)*2);
-        return {t}(deserialize(v, boost::type<{param_view_type(param)}>()));
+        return {t}(deserialize(v, std::type_identity<{param_view_type(param)}>()));
     }}""")
-    fprintln(hout, f'    return {t}(deserialize(v, boost::type<unknown_variant_type>()));\n  }});\n}}')
+    fprintln(hout, f'    return {t}(deserialize(v, std::type_identity<unknown_variant_type>()));\n  }});\n}}')
 
 
 def add_view(cout, cls):
@@ -1453,11 +1453,11 @@ def add_view(cout, cls):
         fprintln(cout, reindent(4, f"""
             operator {cls.name}() const {{
                auto in = v;
-               return deserialize(in, boost::type<{cls.name}>());
+               return deserialize(in, std::type_identity<{cls.name}>());
             }}
         """))
 
-    skip = "" if cls.final else "ser::skip(in, boost::type<size_type>());"
+    skip = "" if cls.final else "ser::skip(in, std::type_identity<size_type>());"
     local_names = {}
     for m in members:
         name = get_member_name(m.name)
@@ -1467,9 +1467,9 @@ def add_view(cout, cls):
             deflt = m.default_value if m.default_value else param_type(m.type) + "()"
             if deflt in local_names:
                 deflt = local_names[deflt]
-            deser = f"(in.size()>0) ? {DESERIALIZER}(in, boost::type<{full_type}>()) : {deflt}"
+            deser = f"(in.size()>0) ? {DESERIALIZER}(in, std::type_identity<{full_type}>()) : {deflt}"
         else:
-            deser = f"{DESERIALIZER}(in, boost::type<{full_type}>())"
+            deser = f"{DESERIALIZER}(in, std::type_identity<{full_type}>())"
 
         if is_vector(m.type):
             elem_type = element_type(m.type)
@@ -1485,7 +1485,7 @@ def add_view(cout, cls):
         else:
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
-                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
+                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
                    std::ignore = this;
                    auto in = v;
                    {skip}
@@ -1494,7 +1494,7 @@ def add_view(cout, cls):
                 }}
             """).format(f=DESERIALIZER, **locals()))
 
-        skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
+        skip = skip + f"\n       ser::skip(in, std::type_identity<{full_type}>());"
 
     fprintln(cout, "};")
     skip_impl = "auto& in = v;\n       " + skip if cls.final else "v.skip(read_frame_size(v));"

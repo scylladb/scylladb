@@ -866,10 +866,10 @@ struct serializer<blob_header> {
     template <typename Input>
     static blob_header read(Input& in) {
         blob_header head;
-        head.size = ser::deserialize(in, boost::type<int>{});
-        head.includes_pk = ser::deserialize(in, boost::type<bool>{});
-        head.has_ck = ser::deserialize(in, boost::type<bool>{});
-        head.includes_ck = ser::deserialize(in, boost::type<bool>{});
+        head.size = ser::deserialize(in, std::type_identity<int>{});
+        head.includes_pk = ser::deserialize(in, std::type_identity<bool>{});
+        head.has_ck = ser::deserialize(in, std::type_identity<bool>{});
+        head.includes_ck = ser::deserialize(in, std::type_identity<bool>{});
         return head;
     }
     template <typename Output>
@@ -881,10 +881,10 @@ struct serializer<blob_header> {
     }
     template <typename Input>
     static void skip(Input& in) {
-        ser::skip(in, boost::type<int>{});
-        ser::skip(in, boost::type<bool>{});
-        ser::skip(in, boost::type<bool>{});
-        ser::skip(in, boost::type<bool>{});
+        ser::skip(in, std::type_identity<int>{});
+        ser::skip(in, std::type_identity<bool>{});
+        ser::skip(in, std::type_identity<bool>{});
+        ser::skip(in, std::type_identity<bool>{});
     }
 };
 

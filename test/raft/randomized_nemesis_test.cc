@@ -136,8 +136,8 @@ public:
                 _gate.check();
 
                 auto is = ser::as_input_stream(cref);
-                auto cmd_id = ser::deserialize(is, boost::type<cmd_id_t>{});
-                auto input = ser::deserialize(is, boost::type<typename M::input_t>{});
+                auto cmd_id = ser::deserialize(is, std::type_identity<cmd_id_t>{});
+                auto input = ser::deserialize(is, std::type_identity<typename M::input_t>{});
                 auto [new_state, output] = M::delta(std::move(_val), std::move(input));
                 _val = std::move(new_state);
 

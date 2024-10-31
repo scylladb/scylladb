@@ -35,19 +35,19 @@ canonical_mutation::canonical_mutation(const mutation& m)
 
 table_id canonical_mutation::column_family_id() const {
     auto in = ser::as_input_stream(_data);
-    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    auto mv = ser::deserialize(in, std::type_identity<ser::canonical_mutation_view>());
     return mv.table_id();
 }
 
 partition_key canonical_mutation::key() const {
     auto in = ser::as_input_stream(_data);
-    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    auto mv = ser::deserialize(in, std::type_identity<ser::canonical_mutation_view>());
     return mv.key();
 }
 
 mutation canonical_mutation::to_mutation(schema_ptr s) const {
     auto in = ser::as_input_stream(_data);
-    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    auto mv = ser::deserialize(in, std::type_identity<ser::canonical_mutation_view>());
 
     auto cf_id = mv.table_id();
     if (s->id() != cf_id) {
@@ -83,7 +83,7 @@ auto fmt::formatter<canonical_mutation>::format(const canonical_mutation& cm, fm
         -> decltype(ctx.out()) {
     auto out = ctx.out();
     auto in = ser::as_input_stream(cm._data);
-    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    auto mv = ser::deserialize(in, std::type_identity<ser::canonical_mutation_view>());
     column_mapping mapping = mv.mapping();
     auto partition_view = mutation_partition_view::from_view(mv.partition());
     out = fmt::format_to(out, "{{canonical_mutation: ");

@@ -259,7 +259,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 
     for (auto&& c : command) {
         auto is = ser::as_input_stream(c);
-        auto cmd = ser::deserialize(is, boost::type<group0_command>{});
+        auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         // Ensure that the schema of the mutations is a group0 schema.

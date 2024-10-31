@@ -34,7 +34,7 @@ public:
         return ser::serialize_to_buffer<bytes>(_cdc_options.to_map());
     }
     static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
-        return ser::deserialize_from_buffer(buffer, boost::type<std::map<sstring, sstring>>());
+        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
     }
     const options& get_options() const {
         return _cdc_options;

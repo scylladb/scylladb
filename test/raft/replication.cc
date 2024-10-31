@@ -65,7 +65,7 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
-        int n = ser::deserialize(is, boost::type<int>());
+        int n = ser::deserialize(is, std::type_identity<int>());
         if (n != dummy_command) {
             entries++;
             hasher->update(n);      // running hash (values and snapshots)

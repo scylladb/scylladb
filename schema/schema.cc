@@ -765,7 +765,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
 std::string schema_extension::options_to_string() const {
     std::ostringstream ss;
     ss << '{';
-    map_as_cql_param(ss, ser::deserialize_from_buffer(serialize(), boost::type<default_map_type>(), 0));
+    map_as_cql_param(ss, ser::deserialize_from_buffer(serialize(), std::type_identity<default_map_type>(), 0));
     ss << '}';
     return ss.str();
 }
