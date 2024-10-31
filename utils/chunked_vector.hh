@@ -374,9 +374,7 @@ chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Ite
 
 template <typename T, size_t max_contiguous_allocation>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::initializer_list<T> x)
-        : chunked_vector() {
-    reserve(x.size());
-    std::copy(x.begin(), x.end(), std::back_inserter(*this));
+        : chunked_vector(std::begin(x), std::end(x)) {
 }
 
 template <typename T, size_t max_contiguous_allocation>
