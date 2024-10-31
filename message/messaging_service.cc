@@ -500,17 +500,17 @@ future<> messaging_service::stop_nontls_server() {
 }
 
 future<> messaging_service::stop_client() {
-    return parallel_for_each(_clients, [] (auto& m) {
-        return parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) {
-            mlogger.info("Stopping client for address: {}", c.first);
-            return c.second.rpc_client->stop().then([addr = c.first] {
-                mlogger.info("Stopping client for address: {} - Done", addr);
-            });
-        }).finally([&m] {
+    co_await coroutine::parallel_for_each(_clients, [] (auto& m) -> future<> {
+        auto d = defer([&m] {
             // no new clients should be added by get_rpc_client(), as it
             // asserts that _shutting_down is true
             m.clear();
             mlogger.info("Stopped clients");
+        });
+        co_await coroutine::parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) -> future<> {
+            mlogger.info("Stopping client for address: {}", c.first);
+            co_await c.second.rpc_client->stop();
+            mlogger.info("Stopping client for address: {} - Done", c.first);
         });
     });
 }
