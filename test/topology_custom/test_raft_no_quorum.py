@@ -105,8 +105,7 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
 
     logger.info(f"waiting for the leader node {servers[0]} to start handling the join request")
     log_file = await manager.server_open_log(servers[0].server_id)
-    await log_file.wait_for("join-node-before-add-entry injection hit",
-                            timeout=60)
+    await log_file.wait_for("join-node-before-add-entry: waiting", timeout=60)
 
     logger.info("stopping the second node")
     await manager.server_stop_gracefully(servers[1].server_id)
@@ -153,7 +152,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 
     logger.info(f"waiting for the third node {servers[2]} to hit join-node-response_handler-before-read-barrier")
     log_file = await manager.server_open_log(servers[2].server_id)
-    await log_file.wait_for("join-node-response_handler-before-read-barrier injection hit", timeout=60)
+    await log_file.wait_for("join-node-response_handler-before-read-barrier: waiting", timeout=60)
 
     logger.info("stopping the second node")
     await manager.server_stop_gracefully(servers[1].server_id)

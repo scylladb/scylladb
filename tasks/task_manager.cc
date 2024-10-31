@@ -158,8 +158,7 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
 }
 
 static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
-    co_await utils::get_local_injector().inject("tasks_abort_children",
-            [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+    co_await utils::get_local_injector().inject("tasks_abort_children", utils::wait_for_message(10s));
 
     auto entered = module->async_gate().try_enter();
     if (!entered) {

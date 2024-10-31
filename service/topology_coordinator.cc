@@ -842,11 +842,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.trace("do update {} reason {}", updates, reason);
             mixed_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
-            co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", [] (auto& handler) -> future<> {
-                rtlogger.info("wait-before-committing-rf-change-event injection hit");
-                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{30});
-                rtlogger.info("wait-before-committing-rf-change-event injection done");
-            });
+            co_await utils::get_local_injector().inject("wait-before-committing-rf-change-event", utils::wait_for_message(30s));
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
@@ -1332,11 +1328,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // which happens outside the topology coordinator.
         bool has_updates = !updates.empty();
         if (has_updates) {
-            co_await utils::get_local_injector().inject("tablet_transition_updates", [] (auto& handler) {
-                rtlogger.info("tablet_transition_updates: start");
-                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-            });
-
+            co_await utils::get_local_injector().inject("tablet_transition_updates", utils::wait_for_message(2min));
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_version(_topo_sm._topology.version + 1)
@@ -1665,12 +1657,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
                         co_await update_topology_state(std::move(guard_), {std::move(mutation), builder.build()}, reason);
 
-                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_updating_cdc_generation",
-                            [] (auto& handler) -> future<> {
-                                rtlogger.info("topology_coordinator_pause_after_updating_cdc_generation: wait for message for 5 minutes");
-                                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-                                rtlogger.info("topology_coordinator_pause_after_updating_cdc_generation: done");
-                            });
+                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_updating_cdc_generation", utils::wait_for_message(5min));
                     }
                         break;
                     case node_state::replacing: {
@@ -3010,8 +2997,7 @@ future<> topology_coordinator::run() {
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
-            co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog",
-                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
+            co_await utils::get_local_injector().inject("topology_coordinator_pause_before_processing_backlog", utils::wait_for_message(5min));
             auto guard = co_await cleanup_group0_config_if_needed(co_await start_operation());
 
             if (_rollback) {
@@ -3028,12 +3014,7 @@ future<> topology_coordinator::run() {
                 co_await await_event();
                 rtlogger.debug("topology coordinator fiber got an event");
             }
-            co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", [] (auto& handler) -> future<> {
-                rtlogger.info("wait-after-topology-coordinator-gets-event injection hit");
-                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{30});
-                rtlogger.info("wait-after-topology-coordinator-gets-event injection done");
-            });
-
+            co_await utils::get_local_injector().inject("wait-after-topology-coordinator-gets-event", utils::wait_for_message(30s));
         } catch (...) {
             sleep = handle_topology_coordinator_error(std::current_exception());
         }

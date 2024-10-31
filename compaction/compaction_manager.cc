@@ -459,12 +459,7 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
     if (_cm._sys_ks) {
         auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
 
-        co_await utils::get_local_injector().inject("update_history_wait", [](auto& handler) -> future<> {
-            cmlog.info("update_history_wait: waiting");
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{120});
-            cmlog.info("update_history_wait: released");
-        });
-
+        co_await utils::get_local_injector().inject("update_history_wait", utils::wait_for_message(120s));
         std::unordered_map<int32_t, int64_t> rows_merged;
         for (size_t id=0; id<res.stats.reader_statistics.rows_merged_histogram.size(); ++id) {
             if (res.stats.reader_statistics.rows_merged_histogram[id] <= 0) {
@@ -1251,8 +1246,7 @@ protected:
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!is_system_keyspace(_status.keyspace)) {
-            co_await utils::get_local_injector().inject("compaction_regular_compaction_task_executor_do_run",
-                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 10s); });
+            co_await utils::get_local_injector().inject("compaction_regular_compaction_task_executor_do_run", utils::wait_for_message(10s));
         }
 
         co_await coroutine::switch_to(_cm.compaction_sg());

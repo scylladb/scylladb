@@ -43,6 +43,14 @@ extern logging::logger errinj_logger;
 
 using error_injection_parameters = std::unordered_map<sstring, sstring>;
 
+// Wraps the argument to breakpoint injection (see the relevant inject() overload
+// in class error_injection below). The only parameter is the timeout after which
+// the pause is aborted
+struct wait_for_message {
+    std::chrono::milliseconds timeout;
+    wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
+};
+
 /**
  * Error injection class can be used to create and manage code injections
  * which trigger an error or a custom action in debug mode.
@@ -454,6 +462,18 @@ public:
         co_await func(handler);
     }
 
+    // \brief Inject "breakpoint"
+    // Injects a pause in the code execution that's woken up explicitly by the injector
+    // request
+    // \param wfm -- the wait_for_message instance that describes details of the pause
+    future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
+        co_await inject(name, [name, wfm] (injection_handler& handler) -> future<> {
+            errinj_logger.info("{}: waiting for message", name);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout);
+            errinj_logger.info("{}: message received", name);
+        });
+    }
+
     template <typename T = std::string_view>
     std::optional<T> inject_parameter(const std::string_view& name) {
         auto* data = get_data(name);
@@ -603,6 +623,12 @@ public:
     // \param func function returning a future and taking an injection handler
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, waiting_handler_fun func, bool share_messages = true) {
+        return make_ready_future<>();
+    }
+
+    // \brief Inject "breakpoint"
+    [[gnu::always_inline]]
+    future<> inject(const std::string_view& name, utils::wait_for_message wfm) {
         return make_ready_future<>();
     }
 

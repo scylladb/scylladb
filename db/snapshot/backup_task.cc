@@ -89,10 +89,7 @@ future<> backup_task_impl::do_backup() {
             }
         }).finally([gh = std::move(gh)] {});
         co_await coroutine::maybe_yield();
-        co_await utils::get_local_injector().inject("backup_task_pause", [] (auto& handler) {
-            snap_log.info("backup task: waiting");
-            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-        });
+        co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
         if (impl::_as.abort_requested()) {
             ex = impl::_as.abort_requested_exception_ptr();
             break;

@@ -5718,9 +5718,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::decommission, _decommission_result, coroutine::lambda([this] () -> future<> {
-                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run",
-                                [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 60s); });
-
+                            co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
                         }));
                         co_await task->done();
@@ -6671,11 +6669,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 format("raft topology: placing join request for {}", params.host_id));
 
-        co_await utils::get_local_injector().inject("join-node-before-add-entry", [] (auto& handler) -> future<> {
-            rtlogger.info("join-node-before-add-entry injection hit");
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-            rtlogger.info("join-node-before-add-entry injection done");
-        });
+        co_await utils::get_local_injector().inject("join-node-before-add-entry", utils::wait_for_message(5min));
 
         try {
             // Make replaced node and ignored nodes non voters earlier for better HA
@@ -6739,11 +6733,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                 // the replacing node that is alive.
                 co_await _gossiper.advertise_to_nodes({});
 
-                co_await utils::get_local_injector().inject("join-node-response_handler-before-read-barrier", [] (auto& handler) -> future<> {
-                    rtlogger.info("join-node-response_handler-before-read-barrier injection hit");
-                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-                    rtlogger.info("join-node-response_handler-before-read-barrier injection done");
-                });
+                co_await utils::get_local_injector().inject("join-node-response_handler-before-read-barrier", utils::wait_for_message(5min));
 
                 // Do a read barrier to read/initialize the topology state
                 co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});

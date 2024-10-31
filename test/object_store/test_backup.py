@@ -134,7 +134,7 @@ async def test_backup_is_abortable(manager: ManagerClient, s3_server):
     tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', s3_server.address, s3_server.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
-    await log.wait_for('backup task: waiting', from_mark=mark)
+    await log.wait_for('backup_task_pause: waiting', from_mark=mark)
     await manager.api.abort_task(server.ip_addr, tid)
     await manager.api.message_injection(server.ip_addr, "backup_task_pause")
     status = await manager.api.wait_task(server.ip_addr, tid)

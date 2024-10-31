@@ -1549,12 +1549,7 @@ future<> sstable::reload_reclaimed_components() {
         co_return;
     }
 
-    co_await utils::get_local_injector().inject("reload_reclaimed_components/pause", [] (auto& handler) {
-        sstlog.info("reload_reclaimed_components/pause init");
-        auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
-        sstlog.info("reload_reclaimed_components/pause done");
-        return ret;
-    });
+    co_await utils::get_local_injector().inject("reload_reclaimed_components/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
     co_await read_filter();
     _total_reclaimable_memory.reset();
@@ -1958,12 +1953,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     if (errors) {
         co_return errors;
     }
-    co_await utils::get_local_injector().inject("sstable_validate/pause", [] (auto& handler) {
-        sstlog.info("sstable_validate/pause init");
-        auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
-        sstlog.info("sstable_validate/pause done");
-        return ret;
-    });
+    co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
     if (_version >= sstable_version_types::mc) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
