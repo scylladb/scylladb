@@ -325,30 +325,30 @@ def test_storage_service_flush(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"{t0},no_such_table,{t1}"} )
                 assert resp.status_code == requests.codes.bad_request
 
+def verify_snapshot_details(rest_api, expected):
+    resp = rest_api.send("GET", "storage_service/snapshots")
+    found = False
+    for data in resp.json():
+        if data['key'] == expected['key']:
+            assert not found
+            found = True
+            sort_key = lambda v: f"{v['ks']}-{v['cf']}"
+            value = sorted([v for v in data['value'] if not v['ks'].startswith('system')], key=sort_key)
+            expected_value = sorted(expected['value'], key=sort_key)
+            assert len(value) == len(expected_value), f"length mismatch: expected {expected_value} but got {value}"
+            for i in range(len(value)):
+                v = value[i]
+                # normalize `total` and `live`
+                # since we care only if they are zero or not
+                v['total'] = 1 if v['total'] else 0
+                v['live'] = 1 if v['live'] else 0
+                ev = expected_value[i]
+                assert v == ev
+    assert found, f"key='{expected['key']}' not found in {resp.json()}"
+
 def test_storage_service_snapshot(cql, this_dc, rest_api):
     resp = rest_api.send("GET", "storage_service/snapshots")
     resp.raise_for_status()
-
-    def verify_snapshot_details(expected):
-        resp = rest_api.send("GET", "storage_service/snapshots")
-        found = False
-        for data in resp.json():
-            if data['key'] == expected['key']:
-                assert not found
-                found = True
-                sort_key = lambda v: f"{v['ks']}-{v['cf']}"
-                value = sorted([v for v in data['value'] if not v['ks'].startswith('system')], key=sort_key)
-                expected_value = sorted(expected['value'], key=sort_key)
-                assert len(value) == len(expected_value), f"length mismatch: expected {expected_value} but got {value}"
-                for i in range(len(value)):
-                    v = value[i]
-                    # normalize `total` and `live`
-                    # since we care only if they are zero or not
-                    v['total'] = 1 if v['total'] else 0
-                    v['live'] = 1 if v['live'] else 0
-                    ev = expected_value[i]
-                    assert v == ev
-        assert found, f"key='{expected['key']}' not found in {resp.json()}"
 
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace0:
         with new_test_table(cql, keyspace0, "p text PRIMARY KEY") as table00:
@@ -358,13 +358,13 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
 
             # single keyspace / table
             with new_test_snapshot(rest_api, ks0, cf00) as snapshot0:
-                verify_snapshot_details({
+                verify_snapshot_details(rest_api, {
                     'key': snapshot0,
                     'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
                 })
 
                 cql.execute(f"TRUNCATE {table00}")
-                verify_snapshot_details({
+                verify_snapshot_details(rest_api, {
                     'key': snapshot0,
                     'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 1}]
                 })
@@ -376,7 +376,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
 
                 # single keyspace / multiple tables
                 with new_test_snapshot(rest_api, ks0, [cf00, cf01]) as snapshot1:
-                    verify_snapshot_details({
+                    verify_snapshot_details(rest_api, {
                         'key': snapshot1,
                         'value': [
                             {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
@@ -390,7 +390,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
 
                         # multiple keyspaces
                         with new_test_snapshot(rest_api, [ks0, ks1]) as snapshot2:
-                            verify_snapshot_details({
+                            verify_snapshot_details(rest_api, {
                                 'key': snapshot2,
                                 'value': [
                                     {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
@@ -401,7 +401,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
 
                         # all keyspaces
                         with new_test_snapshot(rest_api, ) as snapshot3:
-                            verify_snapshot_details({
+                            verify_snapshot_details(rest_api, {
                                 'key': snapshot3,
                                 'value': [
                                     {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
@@ -410,7 +410,9 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                                 ]
                             })
 
-# Verify that snapshots of materialized views and secondary indexes are disallowed.
+
+# Verify that snapshots of materialized views and secondary indexes are allowed.
+# Also check that snapshotting a base table with views or indexes only snapshots it - not the views.
 def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
     resp = rest_api.send("GET", "storage_service/snapshots")
     resp.raise_for_status()
@@ -419,18 +421,29 @@ def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
         schema = 'p int, v text, primary key (p)'
         with new_test_table(cql, keyspace, schema) as table:
             with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
-                try:
-                    with new_test_snapshot(rest_api, keyspace, mv.split('.')[1]) as snap:
-                        pytest.fail(f"Snapshot of materialized view {mv} should have failed")
-                except requests.HTTPError:
-                    pass
+                with new_test_snapshot(rest_api, keyspace, mv.split('.')[1]) as snap:
+                    verify_snapshot_details(rest_api, {
+                        'key': snap,
+                        'value': [{'ks': keyspace, 'cf': mv.split('.')[1], 'total': 0, 'live': 0}]
+                    })
 
-            with new_secondary_index(cql, table, 'v') as si:
-                try:
-                    with new_test_snapshot(rest_api, keyspace, si.split('.')[1]) as snap:
-                        pytest.fail(f"Snapshot of secondary index {si} should have failed")
-                except requests.HTTPError:
-                    pass
+                with new_secondary_index(cql, table, 'v', 'si') as si:
+                    named_index_desc = cql.execute(f"DESC INDEX {si}").one()
+                    with new_test_snapshot(rest_api, keyspace, named_index_desc.name) as snap:
+                        verify_snapshot_details(rest_api, {
+                            'key': snap,
+                            'value': [{'ks': keyspace, 'cf': named_index_desc.name, 'total': 0, 'live': 0}]
+                        })
+
+                ks, cf = table.split('.')
+                with new_test_snapshot(rest_api, ks, cf) as snapshot:
+                    resp = rest_api.send("GET", "storage_service/snapshots")
+                    # Prior to #21433, taking a snapshot of the base table would result in a set of 3 column families
+                    # (CFs) being captured: the table itself, the view, and the secondary index. In this change, we
+                    # ensure that the snapshot includes only the base table.
+                    for data in resp.json():
+                        if data['key'] == snapshot:
+                            assert len([v for v in data['value'] if not v['ks'].startswith('system')]) == 1
 
 # ...but not when the snapshot is automatic (pre-scrub).
 def test_materialized_view_pre_scrub_snapshot(cql, this_dc, rest_api):

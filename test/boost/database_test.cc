@@ -47,6 +47,8 @@
 #include "transport/messages/result_message.hh"
 #include "compaction/compaction_manager.hh"
 #include "db/snapshot-ctl.hh"
+#include "db/system_keyspace.hh"
+#include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 
 using namespace std::chrono_literals;
@@ -528,15 +530,15 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 }
 
 // Snapshot tests and their helpers
-future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, shared_ptr<db::config> db_cfg_ptr = {}) {
-    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
+future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<> (cql_test_env& env)> func, bool create_mvs = false, shared_ptr<db::config> db_cfg_ptr = {}) {
+    return seastar::async([cf_names = std::move(cf_names), func = std::move(func), create_mvs,  db_cfg_ptr = std::move(db_cfg_ptr)] () mutable {
         lw_shared_ptr<tmpdir> tmpdir_for_data;
         if (!db_cfg_ptr) {
             tmpdir_for_data = make_lw_shared<tmpdir>();
             db_cfg_ptr = make_shared<db::config>();
             db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data->path().string() }));
         }
-        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func)] (cql_test_env& e) {
+        do_with_cql_env_and_compaction_groups([cf_names = std::move(cf_names), func = std::move(func), create_mvs] (cql_test_env& e) {
             for (const auto& cf_name : cf_names) {
                 e.create_table([&cf_name] (std::string_view ks_name) {
                     return *schema_builder(ks_name, cf_name)
@@ -552,6 +554,18 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
                 e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 4, 5, 6);", cf_name)).get();
                 e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 5, 5, 6);", cf_name)).get();
                 e.execute_cql(fmt::format("insert into {} (p1, c1, c2, r1) values ('key2', 6, 5, 6);", cf_name)).get();
+
+                if (create_mvs) {
+                    auto f1 = e.local_view_builder().wait_until_built("ks", seastar::format("view_{}", cf_name));
+                    e.execute_cql(seastar::format("create materialized view view_{0} as select * from {0} where p1 is not null and c1 is not null and c2 is "
+                                                  "not null primary key (p1, c1, c2)",
+                                                  cf_name))
+                        .get();
+                    f1.get();
+                    e.get_system_keyspace().local().load_built_views().get();
+
+                    e.execute_cql(seastar::format("CREATE INDEX index_{0} ON {0} (r1);", cf_name)).get();
+                }
             }
 
             func(e).get();
@@ -561,7 +575,7 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
 
 future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
     try {
-        co_await replica::database::snapshot_table_on_all_shards(db, ks_name, cf_name, snapshot_name, db::snapshot_ctl::snap_views::no, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(db, ks_name, cf_name, snapshot_name, skip_flush);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
                 ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
@@ -583,31 +597,47 @@ fs::path table_dir(const replica::column_family& cf) {
     return std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
 }
 
-SEASTAR_TEST_CASE(snapshot_works) {
-    return do_with_some_data({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e).get();
+static future<> snapshot_works(const std::string& table_name) {
+    return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
+        take_snapshot(e, "ks", table_name).get();
 
         std::set<sstring> expected = {
             "manifest.json",
+            "schema.cql"
         };
 
-        auto& cf = e.local_db().find_column_family("ks", "cf");
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
+        auto& cf = e.local_db().find_column_family("ks", table_name);
+        auto table_directory = table_dir(cf);
+        auto snapshot_dir = table_directory / sstables::snapshots_dir / "test";
+
+        lister::scan_dir(table_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
             expected.insert(de.name);
             return make_ready_future<>();
         }).get();
         // snapshot triggered a flush and wrote the data down.
-        BOOST_REQUIRE_GT(expected.size(), 1);
+        BOOST_REQUIRE_GE(expected.size(), 11);
 
         // all files were copied and manifest was generated
-        lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
+        lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
             expected.erase(de.name);
             return make_ready_future<>();
         }).get();
 
         BOOST_REQUIRE_EQUAL(expected.size(), 0);
         return make_ready_future<>();
-    });
+    }, true);
+}
+
+SEASTAR_TEST_CASE(table_snapshot_works) {
+    return snapshot_works("cf");
+}
+
+SEASTAR_TEST_CASE(view_snapshot_works) {
+    return snapshot_works("view_cf");
+}
+
+SEASTAR_TEST_CASE(index_snapshot_works) {
+    return snapshot_works(::secondary_index::index_table_name("index_cf"));
 }
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
@@ -1277,7 +1307,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
             });
         }
         BOOST_REQUIRE(found);
-    }, db_cfg_ptr);
+    }, false, db_cfg_ptr);
 
     // reload the table from tmpdir_for_data and
     // verify that all rows are still there
@@ -1404,7 +1434,7 @@ static future<> test_drop_table_with_auto_snapshot(bool auto_snapshot) {
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, auto_snapshot);
         co_return;
-    }, db_cfg_ptr);
+    }, false, db_cfg_ptr);
 }
 
 SEASTAR_TEST_CASE(drop_table_with_auto_snapshot_enabled) {
@@ -1438,7 +1468,7 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
 
     co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
         auto snapshot_tag = format("test-{}", db_clock::now().time_since_epoch().count());
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), ks_name, table_name, snapshot_tag, db::snapshot_ctl::snap_views::no, false);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), ks_name, table_name, snapshot_tag, false);
         auto cf_dir = table_dir(e.local_db().find_column_family(ks_name, table_name)).native();
 
         // With explicit snapshot and with_snapshot=false
