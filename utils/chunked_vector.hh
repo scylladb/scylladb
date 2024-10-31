@@ -354,12 +354,12 @@ template <typename T, size_t max_contiguous_allocation>
 template <typename Iterator>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Iterator end)
         : chunked_vector() {
-    auto is_random_access = std::is_base_of<std::random_access_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
-    if (is_random_access) {
+    auto is_forward = std::is_base_of<std::forward_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
+    if (is_forward) {
         reserve(std::distance(begin, end));
     }
     std::copy(begin, end, std::back_inserter(*this));
-    if (!is_random_access) {
+    if (!is_forward) {
         shrink_to_fit();
     }
 }
