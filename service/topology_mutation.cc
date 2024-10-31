@@ -14,6 +14,8 @@
 #include "types/set.hh"
 #include "types/map.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+
 namespace db {
     extern thread_local data_type cdc_generation_ts_id_type;
 }
