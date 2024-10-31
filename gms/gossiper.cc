@@ -984,12 +984,10 @@ future<> gossiper::failure_detector_loop() {
     logger.info("failure_detector_loop: Started main loop");
     while (is_enabled()) {
         try {
-            while (_live_endpoints.empty() && is_enabled()) {
+            if (_live_endpoints.empty()) {
                 logger.debug("failure_detector_loop: Wait until live_nodes={} is not empty", _live_endpoints);
                 co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
-            }
-            if (!is_enabled()) {
-                co_return;
+                continue;
             }
             auto nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
             auto live_endpoints_version = _live_endpoints_version;
