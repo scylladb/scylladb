@@ -293,13 +293,14 @@ def swap_exists():
     swaps = out('swapon --noheadings --raw')
     return True if swaps != '' else False
 
-def pkg_error_exit(pkg):
+def pkg_error_exit(pkg, offline_exit=True):
     print(f'Package "{pkg}" required.')
-    sys.exit(1)
+    if offline_exit:
+        sys.exit(1)
 
-def yum_install(pkg):
+def yum_install(pkg, offline_exit=True):
     if is_offline():
-        pkg_error_exit(pkg)
+        pkg_error_exit(pkg, offline_exit)
     return run(f'yum install -y {pkg}', shell=True, check=True)
 
 def apt_is_updated():
@@ -313,9 +314,9 @@ def apt_is_updated():
 
 APT_GET_UPDATE_NUM_RETRY = 30
 APT_GET_UPDATE_RETRY_INTERVAL = 10
-def apt_install(pkg):
+def apt_install(pkg, offline_exit=True):
     if is_offline():
-        pkg_error_exit(pkg)
+        pkg_error_exit(pkg, offline_exit)
 
     # The lock for update and install/remove are different, and
     # DPkg::Lock::Timeout will only wait for install/remove lock.
@@ -344,14 +345,14 @@ def apt_install(pkg):
     apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
     return run(f'apt-get -o DPkg::Lock::Timeout=300 install -y {pkg}', shell=True, check=True, env=apt_env)
 
-def emerge_install(pkg):
+def emerge_install(pkg, offline_exit=True):
     if is_offline():
-        pkg_error_exit(pkg)
+        pkg_error_exit(pkg, offline_exit)
     return run(f'emerge -uq {pkg}', shell=True, check=True)
 
-def zypper_install(pkg):
+def zypper_install(pkg, offline_exit=True):
     if is_offline():
-        pkg_error_exit(pkg)
+        pkg_error_exit(pkg, offline_exit)
     return run(f'zypper install -y {pkg}', shell=True, check=True)
 
 def pkg_distro():
@@ -365,17 +366,17 @@ def pkg_distro():
         return distro.id()
 
 pkg_xlat = {'cpupowerutils': {'debian': 'linux-cpupower', 'gentoo':'sys-power/cpupower', 'arch':'cpupower', 'suse': 'cpupower'}}
-def pkg_install(pkg):
+def pkg_install(pkg, offline_exit=True):
     if pkg in pkg_xlat and pkg_distro() in pkg_xlat[pkg]:
         pkg = pkg_xlat[pkg][pkg_distro()]
     if is_redhat_variant():
-        return yum_install(pkg)
+        return yum_install(pkg, offline_exit)
     elif is_debian_variant():
-        return apt_install(pkg)
+        return apt_install(pkg, offline_exit)
     elif is_gentoo():
-        return emerge_install(pkg)
+        return emerge_install(pkg, offline_exit)
     elif is_suse_variant():
-        return zypper_install(pkg)
+        return zypper_install(pkg, offline_exit)
     else:
         pkg_error_exit(pkg)
 
