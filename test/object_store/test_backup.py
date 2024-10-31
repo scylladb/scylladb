@@ -107,7 +107,7 @@ async def test_backup_to_non_existent_bucket(manager: ManagerClient, s3_server):
     assert status['state'] == 'failed'
 
 
-async def do_test_backup_abort(manager: ManagerClient, s3_server, 
+async def do_test_backup_abort(manager: ManagerClient, s3_server,
                                breakpoint_name, min_files, max_files = None):
     '''helper for backup abort testing'''
 
@@ -156,6 +156,37 @@ async def do_test_backup_abort(manager: ManagerClient, s3_server,
     # Parallelism is a pain.
     assert uploaded_count >= min_files and uploaded_count < len(files)
     assert max_files is None or uploaded_count < max_files
+
+@pytest.mark.asyncio
+async def test_backup_to_non_existent_snapshot(manager: ManagerClient, s3_server):
+    '''backup should fail if the snapshot does not exist'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    ks, cf = await prepare_snapshot_for_backup(manager, server)
+
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'nonexistent-snapshot',
+                                   s3_server.address, s3_server.bucket_name, prefix)
+    # The task is expected to fail immediately due to invalid snapshot name.
+    # However, since internal implementation details may change, we'll wait for
+    # task completion if immediate failure doesn't occur.
+    actual_state = None
+    for status_api in [manager.api.get_task_status,
+                       manager.api.wait_task]:
+        status = await status_api(server.ip_addr, tid)
+        assert status is not None
+        actual_state = status['state']
+        if actual_state == 'failed':
+            break
+    else:
+        assert actual_state == 'failed'
+
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
