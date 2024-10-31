@@ -12,9 +12,6 @@
 
 #include <vector>
 
-#include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-
 #include <seastar/core/sstring.hh>
 
 #include "cql3/column_identifier.hh"
