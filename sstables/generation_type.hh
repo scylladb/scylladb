@@ -14,11 +14,11 @@
 #include <cstdint>
 #include <compare>
 #include <limits>
+#include <ranges>
 #include <stdexcept>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
-#include <boost/range/adaptor/transformed.hpp>
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
@@ -108,16 +108,16 @@ constexpr generation_type generation_from_value(generation_type::int_t value) {
 
 template <std::ranges::range Range, typename Target = std::vector<sstables::generation_type>>
 Target generations_from_values(const Range& values) {
-    return boost::copy_range<Target>(values | boost::adaptors::transformed([] (auto value) {
+    return values | std::views::transform([] (auto value) {
         return generation_type(value);
-    }));
+    }) | std::ranges::to<Target>();
 }
 
 template <typename Target = std::vector<sstables::generation_type>>
 Target generations_from_values(std::initializer_list<generation_type::int_t> values) {
-    return boost::copy_range<Target>(values | boost::adaptors::transformed([] (auto value) {
+    return values | std::views::transform([] (auto value) {
         return generation_type(value);
-    }));
+    }) | std::ranges::to<Target>();
 }
 
 using uuid_identifiers = bool_class<struct uuid_identifiers_tag>;

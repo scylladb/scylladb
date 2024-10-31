@@ -9,6 +9,8 @@
 #include "db/system_keyspace.hh"
 #include "service/raft/group0_state_machine_merger.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+
 namespace service {
 
 static logging::logger slogger("group0_raft_sm_merger");
