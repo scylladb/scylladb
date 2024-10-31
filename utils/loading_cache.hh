@@ -658,11 +658,12 @@ private:
         // Future is waited on indirectly in `stop()` (via `_timer_reads_gate`).
         // FIXME: error handling
         (void)with_gate(_timer_reads_gate, [this] {
+            auto now = loading_cache_clock_type::now();
             auto to_reload = std::array<lru_list_type*, 2>({&_unprivileged_lru_list, &_lru_list})
                     | std::views::transform([] (auto* list_ptr) -> decltype(auto) { return *list_ptr; })
                     | std::views::join
-                    | std::views::filter([this] (ts_value_lru_entry& lru_entry) {
-                        return lru_entry.timestamped_value().loaded() + _cfg.refresh < loading_cache_clock_type::now();
+                    | std::views::filter([this, now] (ts_value_lru_entry& lru_entry) {
+                        return lru_entry.timestamped_value().loaded() + _cfg.refresh < now;
                     })
                     | std::views::transform([] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value_ptr();
