@@ -354,12 +354,20 @@ template <typename T, size_t max_contiguous_allocation>
 template <typename Iterator>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Iterator end)
         : chunked_vector() {
-    auto is_forward = std::is_base_of<std::forward_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
-    if (is_forward) {
-        reserve(std::distance(begin, end));
-    }
-    std::copy(begin, end, std::back_inserter(*this));
-    if (!is_forward) {
+    constexpr auto is_forward = std::is_base_of<std::forward_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
+    if constexpr (is_forward) {
+        size_t size = std::distance(begin, end);
+        reserve(size);
+        for (size_t i = 0; _size < size; ++i) {
+            T* dst = _chunks[i].get();
+            auto now = std::min(size - _size, max_chunk_capacity());
+            begin = std::ranges::uninitialized_copy_n(begin, now, dst, dst + now).in;
+            // Update _size incrementally to let the destructor
+            // know how much data to destroy on exception
+            _size += now;
+        }
+    } else {
+        std::copy(begin, end, std::back_inserter(*this));
         shrink_to_fit();
     }
 }
