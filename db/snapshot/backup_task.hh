@@ -10,9 +10,8 @@
 #pragma once
 
 #include <filesystem>
+#include "utils/s3/client_fwd.hh"
 #include "tasks/task_manager.hh"
-
-namespace s3 { class client; }
 
 namespace db {
 class snapshot_ctl;
@@ -25,6 +24,8 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
+    s3::upload_progress _progress = {};
+
     future<> do_backup();
 
 protected:
@@ -42,6 +43,7 @@ public:
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;
     virtual tasks::is_abortable is_abortable() const noexcept override;
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
 };
 
 } // snapshot namespace
