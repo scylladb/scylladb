@@ -178,6 +178,19 @@ BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety_range) {
+    auto checker = exception_safety_checker();
+    auto v = std::vector<exception_safe_class>(100, exception_safe_class(checker));
+    checker.set_countdown(5);
+    try {
+        auto u = utils::chunked_vector<exception_safe_class, 128>(std::from_range, v);
+        BOOST_REQUIRE(false);
+    } catch (...) {
+        v.clear();
+        BOOST_REQUIRE(checker.ok());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(tests_reserve_partial) {
     auto rand = std::default_random_engine();
     auto size_dist = std::uniform_int_distribution<unsigned>(1, 1 << 12);
@@ -427,6 +440,13 @@ BOOST_AUTO_TEST_CASE(test_initializer_list_ctor) {
         BOOST_REQUIRE(*it == *vit);
     }
     BOOST_REQUIRE(vit == vec.end());
+}
+
+
+BOOST_AUTO_TEST_CASE(test_range_ctor) {
+    auto range = std::views::iota(0, 12345);
+    auto vec = range | std::ranges::to<utils::chunked_vector<int, 512>>();
+    BOOST_REQUIRE(std::ranges::equal(range, vec));
 }
 
 BOOST_AUTO_TEST_CASE(test_value_default_init_ctor) {

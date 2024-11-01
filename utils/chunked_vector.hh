@@ -104,6 +104,11 @@ public:
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
+
+    template <std::ranges::range Range>
+    requires std::convertible_to<std::ranges::range_value_t<Range>, T>
+    chunked_vector(std::from_range_t, Range&& range);
+
     chunked_vector(std::initializer_list<T> x);
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
@@ -354,21 +359,49 @@ template <typename T, size_t max_contiguous_allocation>
 template <typename Iterator>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Iterator end)
         : chunked_vector() {
-    auto is_random_access = std::is_base_of<std::random_access_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
-    if (is_random_access) {
-        reserve(std::distance(begin, end));
-    }
-    std::copy(begin, end, std::back_inserter(*this));
-    if (!is_random_access) {
+    constexpr auto is_forward = std::is_base_of<std::forward_iterator_tag, typename std::iterator_traits<Iterator>::iterator_category>::value;
+    if constexpr (is_forward) {
+        size_t size = std::distance(begin, end);
+        reserve(size);
+        for (size_t i = 0; _size < size; ++i) {
+            T* dst = _chunks[i].get();
+            auto now = std::min(size - _size, max_chunk_capacity());
+            begin = std::ranges::uninitialized_copy_n(begin, now, dst, dst + now).in;
+            // Update _size incrementally to let the destructor
+            // know how much data to destroy on exception
+            _size += now;
+        }
+    } else {
+        std::copy(begin, end, std::back_inserter(*this));
         shrink_to_fit();
     }
 }
 
 template <typename T, size_t max_contiguous_allocation>
-chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::initializer_list<T> x)
+template <std::ranges::range Range>
+requires std::convertible_to<std::ranges::range_value_t<Range>, T>
+chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::from_range_t, Range&& range)
         : chunked_vector() {
-    reserve(x.size());
-    std::copy(x.begin(), x.end(), std::back_inserter(*this));
+    if constexpr (std::ranges::forward_range<Range>) {
+        size_t size = std::ranges::distance(range);
+        reserve(size);
+        auto begin = std::ranges::begin(range);
+        for (size_t i = 0; _size < size; ++i) {
+            T* dst = _chunks[i].get();
+            auto now = std::min(size - _size, max_chunk_capacity());
+            begin = std::ranges::uninitialized_copy_n(begin, now, dst, dst + now).in;
+            // Update _size incrementally to let the destructor
+            // know how much data to destroy on exception
+            _size += now;
+        }
+    } else {
+        std::ranges::copy(range, std::back_inserter(*this));
+    }
+}
+
+template <typename T, size_t max_contiguous_allocation>
+chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::initializer_list<T> x)
+        : chunked_vector(std::begin(x), std::end(x)) {
 }
 
 template <typename T, size_t max_contiguous_allocation>
