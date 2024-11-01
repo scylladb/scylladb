@@ -2788,6 +2788,16 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
         const auto muts = tests::generate_random_mutations(random_schema).get();
 
+        auto make_sstable = [&env, &permit, &muts] (schema_ptr schema, sstable_version_types version) {
+            auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
+            auto close_mr = deferred_close(mr);
+            auto sst = env.make_sstable(schema, version);
+            sstable_writer_config cfg = env.manager().configure_writer();
+            auto wr = sst->get_writer(*schema, 1, cfg, encoding_stats{});
+            mr.consume_in_thread(std::move(wr));
+            return sst;
+        };
+
         const std::map<sstring, sstring> no_compression_params = {};
         const std::map<sstring, sstring> lz4_compression_params = {{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}};
 
@@ -2796,16 +2806,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
             for (const auto& compression_params : {no_compression_params, lz4_compression_params}) {
                 testlog.info("compression={}", compression_params);
                 auto sst_schema = schema_builder(schema).set_compressor_params(compression_params).build();
-
-                auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
-                auto close_mr = deferred_close(mr);
-
-                auto sst = env.make_sstable(sst_schema, version);
-                sstable_writer_config cfg = env.manager().configure_writer();
-
-                auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{});
-                mr.consume_in_thread(std::move(wr));
-
+                auto sst = make_sstable(sst_schema, version);
                 sst->load(sst->get_schema()->get_sharder()).get();
 
                 validate_checksums_result res;
@@ -2830,7 +2831,16 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 res = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(res == validate_checksums_result::invalid);
 
-                testlog.info("Validating truncated {}", sst->get_filename());
+                testlog.info("Validating post-load minor truncation (last byte removed) on {}", sst->get_filename());
+
+                { // truncate the sstable
+                    sst_file.truncate(sst->ondisk_data_size() - 1).get();
+                }
+
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+
+                testlog.info("Validating post-load major truncation (half of data removed) on {}", sst->get_filename());
 
                 { // truncate the sstable
                     sst_file.truncate(sst->ondisk_data_size() / 2).get();
@@ -2844,6 +2854,36 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
                     auto res = sstables::validate_checksums(sst, permit).get();
                     BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                }
+
+                { // truncate the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating pre-load minor truncation (last byte removed) on {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    sst_file.truncate(sst_file.size().get() - 1).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                }
+
+                { // truncate the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating pre-load major truncation (half of data removed) on {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    sst_file.truncate(sst_file.size().get() / 2).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
                 }
             }
         }
