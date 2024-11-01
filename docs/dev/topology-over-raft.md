@@ -154,8 +154,20 @@ transition. An example of this is the `rebuilding` state which does not change
 the topology but requires streaming data.
 
 Separately from the per-node requests, there is also a 'global' request field
-for operations that don't affect any specific node but the entire cluster,
-such as `check_and_repair_cdc_streams`.
+for operations that don't affect any specific node but the entire cluster. These
+are the currently supported global topology operations:
+
+- `new_cdc_generation` aka `check_and_repair_cdc_streams`
+- `cleanup`
+- `keyspace_rf_change`
+- `truncate_table` Truncate for keyspaces with tablets is implemented as a topology
+   request in order to serialize it with other topology operations (migration, repair)
+   and avoid issues with data resurrection when truncate is executed during tablet
+   migrations. Truncate has only one implicit transition stage. When the topology
+   coordinator executes the truncate request, it issues truncate RPCs to nodes which
+   contain replicas of the table being truncated. It uses [sessions](#Topology guards)
+   to make sure that no stale RPCs are executed outside of the scope of the request.
+
 
 # Load balancing
 
@@ -591,8 +603,8 @@ There are also a few static columns for cluster-global properties:
 - `global_topology_request_id` - if set, contains global topology request's id, which is a new group0's state id
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
-- 'new_keyspace_rf_change_ks_name' - the name of the KS that is being the target of the scheduled ALTER KS statement 
-- 'new_keyspace_rf_change_data' - the KS options to be used when executing the scheduled ALTER KS statement
+- `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
+- `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
 
 # Join procedure
 
