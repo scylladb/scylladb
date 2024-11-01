@@ -2885,6 +2885,26 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     res = sstables::validate_checksums(sst, permit).get();
                     BOOST_REQUIRE(res == validate_checksums_result::invalid);
                 }
+
+                { // append data to the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating appended {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::rw).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), 2 * 64 * 1024);
+                    std::fill(buf.get_write(), buf.get_write() + buf.size(), 0xba);
+                    auto fsize = sst_file.size().get();
+                    auto wpos = align_down(fsize, sst_file.disk_write_dma_alignment());
+                    sst_file.dma_read<char>(wpos, buf.get_write(), fsize - wpos).get();
+                    sst_file.dma_write(wpos, buf.begin(), buf.size()).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                }
             }
         }
     });
