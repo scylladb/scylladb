@@ -47,6 +47,7 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
+        , _replay_cleanup_after_replays(config.replay_cleanup_after_replays)
         , _loop_done(batchlog_replay_loop())
 {
     namespace sm = seastar::metrics;
@@ -58,22 +59,26 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<> db::batchlog_manager::do_batch_log_replay() {
-    return container().invoke_on(0, [] (auto& bm) -> future<> {
+future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
+    return container().invoke_on(0, [cleanup] (auto& bm) -> future<> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
+        auto last_replay = gc_clock::now();
         if (dest == 0) {
-            co_await bm.replay_all_failed_batches();
+            co_await bm.replay_all_failed_batches(cleanup);
         } else {
-            co_await bm.container().invoke_on(dest, [] (auto& bm) {
-                return with_gate(bm._gate, [&bm] {
-                    return bm.replay_all_failed_batches();
+            co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup] {
+                    return bm.replay_all_failed_batches(cleanup);
                 });
             });
         }
+        co_await bm.container().invoke_on_all([last_replay] (auto& bm) {
+            bm._last_replay = last_replay;
+        });
         blogger.debug("Batchlog replay on shard {}: done", dest);
     });
 }
@@ -89,6 +94,7 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
         co_return;
     }
 
+    unsigned replay_counter = 0;
     auto delay = _delay;
     while (!_stop.abort_requested()) {
         try {
@@ -97,7 +103,12 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
             co_return;
         }
         try {
-            co_await do_batch_log_replay();
+            auto cleanup = post_replay_cleanup::no;
+            if (++replay_counter >= _replay_cleanup_after_replays) {
+                replay_counter = 0;
+                cleanup = post_replay_cleanup::yes;
+            }
+            co_await do_batch_log_replay(cleanup);
         } catch (seastar::broken_semaphore&) {
             if (_stop.abort_requested()) {
                 co_return;
@@ -145,7 +156,7 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
-future<> db::batchlog_manager::replay_all_failed_batches() {
+future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
     typedef db_clock::rep clock_type;
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -257,14 +268,18 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
     };
 
-    return seastar::with_gate(_gate, [this, batch = std::move(batch)] () mutable {
+    co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
-        return _qp.query_internal(
+        co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
+        co_await _qp.query_internal(
                 format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
                 db::consistency_level::ONE,
                 {},
                 page_size,
-                std::move(batch)).then([this] {
+                std::move(batch)).then([this, cleanup] {
+            if (cleanup == post_replay_cleanup::no) {
+                return make_ready_future<>();
+            }
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
             return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);

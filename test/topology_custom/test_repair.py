@@ -7,6 +7,7 @@
 import logging
 import pytest
 import time
+import asyncio
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -160,3 +161,63 @@ async def test_repair_succeeds_with_unitialized_bm(manager):
     await manager.api.enable_injection(servers[1].ip_addr, "repair_flush_hints_batchlog_handler_bm_uninitialized", True, {})
 
     await manager.api.repair(servers[0].ip_addr, "ks", "tbl")
+
+async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
+    """
+    Check that repair batchlog flush handler caches the flush request
+    """
+    nr_repairs_per_node = 3
+    nr_repairs = 2 * nr_repairs_per_node
+    total_repair_duration = 0
+
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace"]
+    node1 = await manager.server_add(cmdline=cmdline)
+    node2 = await manager.server_add(cmdline=cmdline)
+
+    cql = manager.get_cql()
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY) WITH tombstone_gc = {'mode': 'repair'}")
+
+    for node in (node1, node2):
+        await manager.api.enable_injection(node.ip_addr, "repair_flush_hints_batchlog_handler", one_shot=False)
+        await manager.api.enable_injection(node.ip_addr, "add_delay_to_batch_replay", one_shot=False)
+
+    for node in (node1, node2):
+        assert (await get_injection_params(manager, node.ip_addr, "repair_flush_hints_batchlog_handler")) == {}
+
+    async def do_repair(node):
+        await manager.api.repair(node.ip_addr, "ks", "tbl")
+
+    async def repair(label):
+        start = time.time()
+        await asyncio.gather(*(do_repair(node) for x in range(nr_repairs_per_node) for node in [node1, node2]))
+        duration = time.time() - start
+        params = await get_injection_params(manager, node1.ip_addr, "repair_flush_hints_batchlog_handler")
+        logger.debug(f"After {label} repair cache_time_in_ms={cache_time_in_ms} injection_params={params} repair_duration={duration}")
+        return (params, duration)
+
+    params, duration = await repair("First")
+    total_repair_duration += duration
+
+    await asyncio.sleep(1 + (cache_time_in_ms / 1000))
+
+    params, duration = await repair("Second")
+    total_repair_duration += duration
+
+    assert (int(params['issue_flush']) > 0)
+    if cache_time_in_ms > 0:
+        assert (int(params['skip_flush']) > 0)
+    else:
+        assert (not 'skip_flush' in params)
+
+    logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_batchlog_flush_in_repair_with_cache(manager):
+    await do_batchlog_flush_in_repair(manager, 5000);
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_batchlog_flush_in_repair_without_cache(manager):
+    await do_batchlog_flush_in_repair(manager, 0);

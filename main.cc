@@ -2052,6 +2052,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            bm_cfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
 
             bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {

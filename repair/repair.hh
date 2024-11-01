@@ -265,6 +265,7 @@ struct repair_flush_hints_batchlog_request {
 };
 
 struct repair_flush_hints_batchlog_response {
+    gc_clock::time_point flush_time;
 };
 
 struct tablet_repair_task_meta {

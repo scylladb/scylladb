@@ -304,6 +304,7 @@ public:
     named_value<uint32_t> max_hint_window_in_ms;
     named_value<uint32_t> max_hints_delivery_threads;
     named_value<uint32_t> batchlog_replay_throttle_in_kb;
+    named_value<uint32_t> batchlog_replay_cleanup_after_replays;
     named_value<sstring> request_scheduler;
     named_value<sstring> request_scheduler_id;
     named_value<string_map> request_scheduler_options;
@@ -340,6 +341,7 @@ public:
     named_value<bool> enable_compacting_data_for_streaming_and_repair;
     named_value<bool> enable_tombstone_gc_for_streaming_and_repair;
     named_value<double> repair_partition_count_estimation_ratio;
+    named_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms;
     named_value<uint32_t> ring_delay_ms;
     named_value<uint32_t> shadow_round_ms;
     named_value<uint32_t> fd_max_interval_ms;

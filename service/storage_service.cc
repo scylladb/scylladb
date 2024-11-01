@@ -4991,7 +4991,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
 
 future<> storage_service::unbootstrap() {
     slogger.info("Started batchlog replay for decommission");
-    co_await get_batchlog_manager().local().do_batch_log_replay();
+    co_await get_batchlog_manager().local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes);
     slogger.info("Finished batchlog replay for decommission");
 
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
