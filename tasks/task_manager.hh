@@ -272,7 +272,7 @@ public:
             static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id);
         public:
             virtual task_group get_group() const noexcept = 0;
-            virtual future<std::set<task_id>> get_ids() const = 0;
+            virtual future<bool> contains(tasks::task_id task_id) const = 0;
             module_ptr get_module() const noexcept;
             task_manager& get_task_manager() const noexcept;
             virtual future<tasks::is_abortable> is_abortable() const;
@@ -288,7 +288,7 @@ public:
     public:
         virtual_task(virtual_task_impl_ptr&& impl) noexcept;
 
-        future<std::set<task_id>> get_ids() const;
+        future<bool> contains(tasks::task_id task_id) const;
         module_ptr get_module() const noexcept;
         task_group get_group() const noexcept;
         future<tasks::is_abortable> is_abortable() const;

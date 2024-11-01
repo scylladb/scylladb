@@ -101,13 +101,21 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
     return tasks::task_manager::task_group::topology_change_group;
 }
 
-future<std::set<tasks::task_id>> node_ops_virtual_task::get_ids() const {
-    db::system_keyspace& sys_ks = _ss._sys_ks.local();
+future<bool> node_ops_virtual_task::contains(tasks::task_id task_id) const {
+    if (!task_id.uuid().is_timestamp()) {
+        // Task id of node ops operation is always a timestamp.
+        co_return false;
+    }
+
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return co_await get_entries(sys_ks, topology, get_task_manager().get_task_ttl())
-        | std::views::keys
-        | std::views::transform([](const utils::UUID& uuid) { return tasks::task_id(uuid); })
-        | std::ranges::to<std::set>();
+    for (auto& request : topology.requests) {
+        if (topology.find(request.first)->second.request_id == task_id.uuid()) {
+            co_return true;
+        }
+    }
+
+    auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(task_id.uuid(), false);
+    co_return bool(entry.id);
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable() const {
