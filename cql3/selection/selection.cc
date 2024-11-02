@@ -12,7 +12,6 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -256,7 +255,7 @@ public:
     }
 
     virtual bool is_reducible() const override {
-        return boost::algorithm::all_of(
+        return std::ranges::all_of(
                 _selectors,
                [] (const expr::expression& e) {
                     auto fc = expr::as_if<expr::function_call>(&e);
@@ -272,7 +271,7 @@ public:
                         return false;
                     }
                     // We only support transforming columns directly for parallel queries
-                    if (!boost::algorithm::all_of(fc->args, expr::is<expr::column_value>)) {
+                    if (!std::ranges::all_of(fc->args, expr::is<expr::column_value>)) {
                         return false;
                     }
                     return true;

@@ -51,7 +51,6 @@
 #include "replica/database.hh"
 #include "replica/mutation_dump.hh"
 
-#include <boost/algorithm/cxx11/all_of.hpp>
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
@@ -2033,7 +2032,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     prepared_attrs->fill_prepare_context(ctx);
 
     auto all_aggregates = [] (const std::vector<selection::prepared_selector>& prepared_selectors) {
-        return boost::algorithm::all_of(
+        return std::ranges::all_of(
             prepared_selectors | boost::adaptors::transformed(std::mem_fn(&selection::prepared_selector::expr)),
             [] (const expr::expression& e) {
                 auto fn_expr = expr::as_if<expr::function_call>(&e);
