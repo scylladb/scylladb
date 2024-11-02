@@ -12,7 +12,6 @@
 #include "row_cache.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <fmt/core.h>

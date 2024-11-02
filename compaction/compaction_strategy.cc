@@ -23,7 +23,6 @@
 #include "schema/schema.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "size_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"

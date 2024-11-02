@@ -21,7 +21,6 @@
 #include "db/tags/extension.hh"
 
 #include <boost/range/adaptor/map.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
 namespace secondary_index {

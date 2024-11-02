@@ -8,7 +8,6 @@
 
 #include "auth/roles-metadata.hh"
 
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <seastar/core/print.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -79,7 +78,7 @@ future<bool> any_nondefault_role_row_satisfies(
     }
     static const sstring col_name = sstring(meta::roles_table::role_col_name);
 
-    co_return boost::algorithm::any_of(*results, [&](const cql3::untyped_result_set_row& row) {
+    co_return std::ranges::any_of(*results, [&](const cql3::untyped_result_set_row& row) {
         auto superuser = rolename ? std::string_view(*rolename) : meta::DEFAULT_SUPERUSER_NAME;
         const bool is_nondefault = row.get_as<sstring>(col_name) != superuser;
         return is_nondefault && p(row);

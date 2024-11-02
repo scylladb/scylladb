@@ -18,8 +18,6 @@
 #include "bytes_ostream.hh"
 #include "types/types.hh"
 
-#include <boost/algorithm/cxx11/any_of.hpp>
-
 namespace cql3 {
 
 namespace functions {
@@ -52,7 +50,7 @@ public:
             if (i > 0) {
                 encoded_row.write(", ", 2);
             }
-            bool has_any_upper = boost::algorithm::any_of(_selector_names[i], [](unsigned char c) { return std::isupper(c); });
+            bool has_any_upper = std::ranges::any_of(_selector_names[i], [](unsigned char c) { return std::isupper(c); });
             encoded_row.write("\"", 1);
             if (has_any_upper) {
                 encoded_row.write("\\\"", 2);

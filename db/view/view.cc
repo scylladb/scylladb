@@ -21,8 +21,6 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm/copy.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/string/join.hpp>
 
 #include <fmt/ranges.h>
@@ -102,7 +100,7 @@ cql3::statements::select_statement& view_info::select_statement(data_dictionary:
            }
         }
 
-        if (legacy_token_column || boost::algorithm::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
+        if (legacy_token_column || std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
             auto real_columns = _schema.all_columns() | boost::adaptors::filtered([legacy_token_column] (const column_definition& cdef) {
                 return &cdef != legacy_token_column && !cdef.is_computed();
             });
@@ -3149,7 +3147,7 @@ update_backlog node_update_backlog::fetch_shard(unsigned shard) {
 future<bool> view_builder::check_view_build_ongoing(const locator::token_metadata& tm, const sstring& ks_name, const sstring& cf_name) {
     using view_statuses_type = std::unordered_map<locator::host_id, sstring>;
     return view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
-        return boost::algorithm::any_of(view_statuses, [&tm] (const view_statuses_type::value_type& view_status) {
+        return std::ranges::any_of(view_statuses, [&tm] (const view_statuses_type::value_type& view_status) {
             // Only consider status of known hosts.
             return view_status.second == "STARTED" && tm.get_endpoint_for_host_id_if_known(view_status.first);
         });

@@ -43,7 +43,6 @@
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "test/lib/select_statement_utils.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "utils/result_combinators.hh"
@@ -1944,7 +1943,7 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
 static
 bool
 group_by_references_clustering_keys(const selection::selection& sel, const std::vector<size_t>& group_by_cell_indices) {
-    return boost::algorithm::any_of(group_by_cell_indices, [&] (size_t idx) {
+    return std::ranges::any_of(group_by_cell_indices, [&] (size_t idx) {
         return sel.get_columns()[idx]->kind == column_kind::clustering_key;
     });
 }

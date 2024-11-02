@@ -11,7 +11,6 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/alloc_failure_injector.hh>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <seastar/util/closeable.hh>
 
 #include "test/lib/scylla_test_case.hh"
@@ -3407,7 +3406,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
                     auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
-                    if (!boost::algorithm::any_of(possible_versions, [&] (const mutation& m) {
+                    if (!std::ranges::any_of(possible_versions, [&] (const mutation& m) {
                         auto m2 = m.sliced(fwd_ranges);
                         if (reversed) {
                             m2 = reverse(std::move(m2));

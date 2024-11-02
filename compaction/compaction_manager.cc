@@ -27,7 +27,6 @@
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"
 #include <cmath>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
@@ -2026,7 +2025,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 
 future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t, tasks::task_info info) {
     auto check_for_cleanup = [this, &t] {
-        return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
+        return std::ranges::any_of(_tasks, [&t] (auto& task) {
             return task.compacting_table() == &t && task.compaction_type() == sstables::compaction_type::Cleanup;
         });
     };

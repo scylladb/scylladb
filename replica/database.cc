@@ -34,7 +34,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/range/adaptor/map.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>

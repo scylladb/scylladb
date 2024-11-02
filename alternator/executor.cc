@@ -37,7 +37,6 @@
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <seastar/json/json_elements.hh>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include "collection_mutation.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
@@ -2709,7 +2708,7 @@ static bool check_needs_read_before_write(const parsed::value& v) {
             return false;
         },
         [&] (const parsed::value::function_call& f) -> bool {
-            return boost::algorithm::any_of(f._parameters, [&] (const parsed::value& param) {
+            return std::ranges::any_of(f._parameters, [&] (const parsed::value& param) {
                 return check_needs_read_before_write(param);
             });
         },
@@ -2720,7 +2719,7 @@ static bool check_needs_read_before_write(const parsed::value& v) {
 }
 
 static bool check_needs_read_before_write(const attribute_path_map<parsed::update_expression::action>& update_expression) {
-    return boost::algorithm::any_of(update_expression, [](const auto& p) {
+    return std::ranges::any_of(update_expression, [](const auto& p) {
         if (!p.second.has_value()) {
             // If the action is not on the top-level attribute, we need to
             // read the old item: we change only a part of the top-level

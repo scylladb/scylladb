@@ -8,8 +8,6 @@
  */
 
 #include <algorithm>
-#include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -574,8 +572,8 @@ bool has_supporting_index(
         allow_local_index allow_local) {
     const auto indexes = index_manager.list_indexes();
     const auto support = std::bind(is_supported_by, std::ref(expr), std::placeholders::_1);
-    return allow_local ? boost::algorithm::any_of(indexes, support)
-            : boost::algorithm::any_of(
+    return allow_local ? std::ranges::any_of(indexes, support)
+            : std::ranges::any_of(
                     indexes | filtered([] (const secondary_index::index& i) { return !i.metadata().local(); }),
                     support);
 }
@@ -600,7 +598,7 @@ bool is_on_collection(const binary_operator& b) {
         return true;
     }
     if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
-        return boost::algorithm::any_of(tuple->elements, [] (const expression& v) { return expr::is<subscript>(v); });
+        return std::ranges::any_of(tuple->elements, [] (const expression& v) { return expr::is<subscript>(v); });
     }
     return false;
 }

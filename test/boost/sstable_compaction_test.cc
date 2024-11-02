@@ -4448,7 +4448,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 auto ret = get_reshaping_job(cs, sstables, s, mode);
                 BOOST_REQUIRE_EQUAL(ret.sstables.size(), uint64_t(s->max_compaction_threshold()));
                 // fail if any file doesn't belong to set of small files
-                bool has_big_sized_files = boost::algorithm::any_of(ret.sstables, [&] (const sstables::shared_sstable& sst) {
+                bool has_big_sized_files = std::ranges::any_of(ret.sstables, [&] (const sstables::shared_sstable& sst) {
                     return !generations_for_small_files.contains(sst->generation());
                 });
                 BOOST_REQUIRE(!has_big_sized_files);
