@@ -112,6 +112,9 @@ public:
                     _end_pos = actual_end;
                 }
             }
+            if (chunk_index >= _checksum.checksums.size()) {
+                throw malformed_sstable_exception(seastar::format("Chunk count mismatch between CRC and Data.db: expected {} but data file has more", _checksum.checksums.size()));
+            }
             auto expected_checksum = _checksum.checksums[chunk_index];
             auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
             if (expected_checksum != actual_checksum) {
