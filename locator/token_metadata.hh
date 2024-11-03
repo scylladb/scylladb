@@ -135,6 +135,7 @@ public:
 class tokens_iterator {
 public:
     using iterator_category = std::input_iterator_tag;
+    using iterator_concept = std::input_iterator_tag;
     using value_type = token;
     using difference_type = std::ptrdiff_t;
     using pointer = token*;
@@ -145,6 +146,11 @@ public:
     bool operator==(const tokens_iterator& it) const;
     const token& operator*() const;
     tokens_iterator& operator++();
+    tokens_iterator operator++(int) {
+        auto tmp = *this;
+        ++*this;
+        return tmp;
+    }
 private:
     std::vector<token>::const_iterator _cur_it;
     size_t _remaining = 0;
