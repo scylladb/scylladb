@@ -14,9 +14,27 @@
  * Allows for bypassing storage proxy entirely when querying local (system) tables.
  */
 
-#include "replica/database.hh"
+#include "seastarx.hh"
+
+#include "dht/i_partitioner_fwd.hh"
+#include "db/timeout_clock.hh"
+#include "schema/schema_fwd.hh"
+#include "query-result.hh"
+
+#include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sharded.hh>
+
+class reconcilable_result;
+
+
+namespace query {
+class partition_slice;
+}
 
 namespace replica {
+
+class database;
 
 /// Reads the specified range and slice of the given table, from the local replica.
 ///
