@@ -63,14 +63,6 @@ table_id get_uuid(const sstring& name, const replica::database& db) {
     return get_uuid(ks, cf, db);
 }
 
-future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f) {
-    auto uuid = get_uuid(name, ctx.db.local());
-
-    return ctx.db.invoke_on_all([f, uuid](replica::database& db) {
-        f(db.find_column_family(uuid));
-    });
-}
-
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(ctx, name, int64_t(0), [f](const replica::column_family& cf) {
@@ -85,7 +77,7 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type> set_tables(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
+static future<json::json_return_type> for_tables_on_all_shards(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
     if (tables.empty()) {
         tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
     }
@@ -125,7 +117,7 @@ static future<json::json_return_type> set_tables_autocompaction(http_context& ct
 
     return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
         auto g = autocompaction_toggle_guard(db);
-        return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
+        return for_tables_on_all_shards(ctx, keyspace, tables, [enabled] (replica::table& cf) {
             if (enabled) {
                 cf.enable_auto_compaction();
             } else {
@@ -138,7 +130,7 @@ static future<json::json_return_type> set_tables_autocompaction(http_context& ct
 
 static future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     apilog.info("set_tables_tombstone_gc: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-    return set_tables(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
+    return for_tables_on_all_shards(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
         t.set_tombstone_gc_enabled(enabled);
         return make_ready_future<>();
     });
@@ -1058,12 +1050,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
-        return foreach_column_family(ctx, req->get_path_param("name"), [strategy](replica::column_family& cf) {
+        return for_tables_on_all_shards(ctx, ks, {std::move(cf)}, [strategy] (replica::table& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
-        }).then([] {
-                return make_ready_future<json::json_return_type>(json_void());
+            return make_ready_future<>();
         });
     });
 
