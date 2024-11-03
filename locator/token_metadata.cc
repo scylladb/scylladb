@@ -310,21 +310,21 @@ public:
 
 thread_local long token_metadata_impl::_static_ring_version;
 
-token_metadata::tokens_iterator::tokens_iterator(const token& start, const token_metadata_impl* token_metadata)
+tokens_iterator::tokens_iterator(const token& start, const token_metadata_impl* token_metadata)
     : _token_metadata(token_metadata) {
     _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
     _remaining = _token_metadata->sorted_tokens().size();
 }
 
-bool token_metadata::tokens_iterator::operator==(const tokens_iterator& it) const {
+bool tokens_iterator::operator==(const tokens_iterator& it) const {
     return _remaining == it._remaining;
 }
 
-const token& token_metadata::tokens_iterator::operator*() const {
+const token& tokens_iterator::operator*() const {
     return *_cur_it;
 }
 
-token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
+tokens_iterator& tokens_iterator::operator++() {
     ++_cur_it;
     if (_cur_it == _token_metadata->sorted_tokens().end()) {
         _cur_it = _token_metadata->sorted_tokens().begin();

@@ -132,31 +132,32 @@ public:
     }
 };
 
+class tokens_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = token;
+    using difference_type = std::ptrdiff_t;
+    using pointer = token*;
+    using reference = token&;
+public:
+    tokens_iterator() = default;
+    tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
+    bool operator==(const tokens_iterator& it) const;
+    const token& operator*() const;
+    tokens_iterator& operator++();
+private:
+    std::vector<token>::const_iterator _cur_it;
+    size_t _remaining = 0;
+    const token_metadata_impl* _token_metadata = nullptr;
+
+    friend class token_metadata_impl;
+};
+
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 private:
     friend class token_metadata_ring_splitter;
-    class tokens_iterator {
-    public:
-        using iterator_category = std::input_iterator_tag;
-        using value_type = token;
-        using difference_type = std::ptrdiff_t;
-        using pointer = token*;
-        using reference = token&;
-    public:
-        tokens_iterator() = default;
-        tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
-        bool operator==(const tokens_iterator& it) const;
-        const token& operator*() const;
-        tokens_iterator& operator++();
-    private:
-        std::vector<token>::const_iterator _cur_it;
-        size_t _remaining = 0;
-        const token_metadata_impl* _token_metadata = nullptr;
-
-        friend class token_metadata_impl;
-    };
-
+    using tokens_iterator = locator::tokens_iterator;
 public:
     struct config {
         topology::config topo_cfg;
