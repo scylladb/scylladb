@@ -127,9 +127,9 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<token_metadata::tokens_iterator> ring_range(const token& start) const;
+    std::ranges::subrange<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
-    boost::iterator_range<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
+    std::ranges::subrange<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
 
     topology& get_topology() {
         return _topology;
@@ -338,11 +338,11 @@ host_id token_metadata::get_my_id() const {
 }
 
 inline
-boost::iterator_range<token_metadata::tokens_iterator>
+std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {
     auto begin = token_metadata::tokens_iterator(start, this);
     auto end = token_metadata::tokens_iterator();
-    return boost::make_iterator_range(begin, end);
+    return std::ranges::subrange(begin, end);
 }
 
 future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_async() const noexcept {
@@ -590,7 +590,7 @@ void token_metadata_impl::add_bootstrap_token(token t, host_id endpoint) {
     add_bootstrap_tokens(tokens, endpoint);
 }
 
-boost::iterator_range<token_metadata::tokens_iterator>
+std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const dht::ring_position_view start) const {
     return ring_range(start.token());
 }
@@ -962,24 +962,24 @@ token_metadata::update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_
     _impl->update_topology(ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
 }
 
-boost::iterator_range<token_metadata::tokens_iterator>
+std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata::ring_range(const token& start) const {
     return _impl->ring_range(start);
 }
 
-boost::iterator_range<token_metadata::tokens_iterator>
+std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata::ring_range(dht::ring_position_view start) const {
     return _impl->ring_range(start);
 }
 
 class token_metadata_ring_splitter : public locator::token_range_splitter {
     token_metadata_ptr _tmptr;
-    boost::iterator_range<token_metadata::tokens_iterator> _range;
+    std::ranges::subrange<token_metadata::tokens_iterator> _range;
 public:
     token_metadata_ring_splitter(token_metadata_ptr tmptr)
         : _tmptr(std::move(tmptr))
         , _range(_tmptr->sorted_tokens().empty() // ring_range() throws if the ring is empty
-                ? boost::make_iterator_range(token_metadata::tokens_iterator(), token_metadata::tokens_iterator())
+                ? std::ranges::subrange(token_metadata::tokens_iterator(), token_metadata::tokens_iterator())
                 : _tmptr->ring_range(dht::minimum_token()))
     { }
 
@@ -992,7 +992,7 @@ public:
             return std::nullopt;
         }
         auto t = *_range.begin();
-        _range.drop_front();
+        _range.advance(1);
         return t;
     }
 };

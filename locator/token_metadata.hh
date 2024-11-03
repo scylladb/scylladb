@@ -16,7 +16,6 @@
 #include "dht/ring_position.hh"
 #include <optional>
 #include <memory>
-#include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include "interval.hh"
 #include <seastar/core/shared_future.hh>
@@ -210,12 +209,12 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
+    std::ranges::subrange<tokens_iterator> ring_range(const token& start) const;
 
     /**
      * Returns a range of tokens such that the first token t satisfies dht::ring_position_view::ending_at(t) >= start.
      */
-    boost::iterator_range<tokens_iterator> ring_range(dht::ring_position_view start) const;
+    std::ranges::subrange<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
     topology& get_topology();
     const topology& get_topology() const;
