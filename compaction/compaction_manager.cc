@@ -1131,8 +1131,8 @@ future<> compaction_manager::stop() {
     if (auto cm = std::exchange(_task_manager_module, nullptr)) {
         co_await cm->stop();
     }
-    if (_state != state::none) {
-        co_return co_await std::move(*_stop_future);
+    if (_stop_future) {
+        co_await std::exchange(*_stop_future, make_ready_future());
     }
 }
 
