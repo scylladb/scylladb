@@ -18,7 +18,6 @@
 #include "utils/fragment_range.hh"
 #include <variant>
 
-#include <boost/range/algorithm/for_each.hpp>
 #include <boost/type.hpp>
 
 namespace ser {
@@ -155,11 +154,10 @@ public:
 
     bytes linearize() const {
         bytes b(bytes::initialized_later(), size_bytes());
-        using boost::range::for_each;
         auto dst = b.begin();
-        for_each(*this, [&] (bytes_view fragment) {
+        for (bytes_view fragment : *this) {
             dst = std::copy(fragment.begin(), fragment.end(), dst);
-        });
+        }
         return b;
     }
 

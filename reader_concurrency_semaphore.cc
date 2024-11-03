@@ -25,6 +25,8 @@
 #include "utils/human_readable.hh"
 #include "utils/memory_limit_reached.hh"
 
+#include <boost/range/algorithm/for_each.hpp>
+
 logger rcslog("reader_concurrency_semaphore");
 
 struct reader_concurrency_semaphore::inactive_read {

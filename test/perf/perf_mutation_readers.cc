@@ -13,6 +13,7 @@
 
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/strided.hpp>
+#include <boost/range/algorithm/for_each.hpp>
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/simple_position_reader_queue.hh"
