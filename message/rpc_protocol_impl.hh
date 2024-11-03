@@ -131,11 +131,15 @@ auto send_message(messaging_service* ms, messaging_verb verb, std::optional<loca
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
     auto& rpc_client = *rpc_client_ptr;
-    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
+    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
         if (try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
-            ms->remove_error_rpc_client(verb, id);
+            if (host_id) {
+                ms->remove_error_rpc_client(verb, *host_id);
+            } else {
+                ms->remove_error_rpc_client(verb, id);
+            }
             return futurator::make_exception_future(std::move(eptr));
         } else {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
@@ -165,11 +169,15 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, std::optio
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
     auto& rpc_client = *rpc_client_ptr;
-    return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
+    return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
         if (try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
-            ms->remove_error_rpc_client(verb, id);
+            if (host_id) {
+                ms->remove_error_rpc_client(verb, *host_id);
+            } else {
+                ms->remove_error_rpc_client(verb, id);
+            }
             return futurator::make_exception_future(std::move(eptr));
         } else {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
@@ -212,11 +220,15 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
         return futurator::make_exception_future(abort_requested_exception{});
     }
 
-    return rpc_handler(rpc_client, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
+    return rpc_handler(rpc_client, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
         if (try_catch<rpc::closed_error>(eptr)) {
             // This is a transport error
-            ms->remove_error_rpc_client(verb, id);
+            if (host_id) {
+                ms->remove_error_rpc_client(verb, *host_id);
+            } else {
+                ms->remove_error_rpc_client(verb, id);
+            }
             return futurator::make_exception_future(std::move(eptr));
         } else if (try_catch<rpc::canceled_error>(eptr)) {
             // Translate low-level canceled_error into high-level abort_requested_exception.

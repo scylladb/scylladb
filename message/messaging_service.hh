@@ -245,6 +245,7 @@ public:
     using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
     using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
+    using clients_map_host_id = std::unordered_map<locator::host_id, shard_info>;
 
     // This should change only if serialization format changes
     static constexpr int32_t current_version = 0;
@@ -340,6 +341,7 @@ private:
     std::unique_ptr<seastar::tls::credentials_builder> _credentials_builder;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::vector<clients_map> _clients;
+    std::vector<clients_map_host_id> _clients_with_host_id;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
     connection_drop_signal_t _connection_dropped;
@@ -502,9 +504,11 @@ public:
 
     msg_addr addr_for_host_id(locator::host_id hid);
 private:
-    template <typename Fn>
-    requires std::is_invocable_r_v<bool, Fn, const shard_info&>
-    void find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter);
+    template <typename Fn, typename Map>
+    requires (std::is_invocable_r_v<bool, Fn, const shard_info&> &&
+            (std::is_same_v<typename Map::key_type, msg_addr> || std::is_same_v<typename Map::key_type, locator::host_id>))
+    void find_and_remove_client(Map& clients, typename Map::key_type id, Fn&& filter);
+
     void do_start_listen();
 
     bool topology_known_for(inet_address) const;
@@ -519,7 +523,8 @@ public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id, std::optional<locator::host_id> host_id);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
-    void remove_rpc_client_with_ignored_topology(msg_addr id);
+    void remove_error_rpc_client(messaging_verb verb, locator::host_id id);
+    void remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid);
     void remove_rpc_client(msg_addr id);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);

@@ -12,6 +12,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/all.hh>
 
 #include "message/messaging_service.hh"
 #include <seastar/core/distributed.hh>
@@ -429,6 +430,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(PER_SHARD_CONNECTION_COUNT + scfg.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT)
+    , _clients_with_host_id(PER_SHARD_CONNECTION_COUNT + scfg.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
     , _feature_service(feature_service)
@@ -506,19 +508,22 @@ future<> messaging_service::stop_nontls_server() {
 }
 
 future<> messaging_service::stop_client() {
-    co_await coroutine::parallel_for_each(_clients, [] (auto& m) -> future<> {
-        auto d = defer([&m] {
-            // no new clients should be added by get_rpc_client(), as it
-            // asserts that _shutting_down is true
-            m.clear();
-            mlogger.info("Stopped clients");
+    auto d = defer([] { mlogger.info("Stopped clients"); });
+    auto stop_clients = [] (auto& clients) ->future<> {
+        co_await coroutine::parallel_for_each(clients, [] (auto& m) -> future<> {
+            auto d = defer([&m] {
+                // no new clients should be added by get_rpc_client(), as it
+                // asserts that _shutting_down is true
+                m.clear();
+            });
+            co_await coroutine::parallel_for_each(m, [] (auto& c) -> future<> {
+                mlogger.info("Stopping client for address: {}", c.first);
+                co_await c.second.rpc_client->stop();
+                mlogger.info("Stopping client for address: {} - Done", c.first);
+            });
         });
-        co_await coroutine::parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) -> future<> {
-            mlogger.info("Stopping client for address: {}", c.first);
-            co_await c.second.rpc_client->stop();
-            mlogger.info("Stopping client for address: {} - Done", c.first);
-        });
-    });
+    };
+    co_await coroutine::all(std::bind(stop_clients, _clients), std::bind(stop_clients, _clients_with_host_id));
 }
 
 future<> messaging_service::shutdown() {
@@ -848,17 +853,31 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         on_internal_error(mlogger, "This node is in maintenance mode, it shouldn't contact other nodes");
     }
     auto idx = get_rpc_client_idx(verb);
-    auto it = _clients[idx].find(id);
+    auto find_existing = [idx, this] (auto& clients, auto hid) -> shared_ptr<rpc_protocol_client_wrapper> {
+        auto it = clients[idx].find(hid);
 
-    if (it != _clients[idx].end()) {
-        auto c = it->second.rpc_client;
-        if (!c->error()) {
-            return c;
+        if (it != clients[idx].end()) {
+            auto c = it->second.rpc_client;
+            if (!c->error()) {
+                return c;
+            }
+            // The 'dead_only' it should be true, because we're interested in
+            // dropping the errored socket, but since it's errored anyway (the
+            // above if) it's false to save unneeded second c->error() call
+            find_and_remove_client(clients[idx], hid, [] (const auto&) { return true; });
         }
-        // The 'dead_only' it should be true, because we're interested in
-        // dropping the errored socket, but since it's errored anyway (the
-        // above if) it's false to save unneeded second c->error() call
-        find_and_remove_client(_clients[idx], id, [] (const auto&) { return true; });
+        return nullptr;
+    };
+
+    shared_ptr<rpc_protocol_client_wrapper> client;
+    if (host_id) {
+        client = find_existing(_clients_with_host_id, *host_id);
+    } else {
+        client = find_existing(_clients, id);
+    }
+
+    if (client) {
+        return client;
     }
 
     auto my_host_id = _cfg.id;
@@ -947,7 +966,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
     SCYLLA_ASSERT(!must_encrypt || _credentials);
 
-    auto client = must_encrypt ?
+    client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr, laddr, _credentials) :
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
@@ -960,24 +979,33 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // are independent of topology, so there's no point in dropping it later after we learn
     // the topology (so we always set `topology_ignored` to `false` in that case).
     bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
-    auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
-    SCYLLA_ASSERT(res.second);
-    it = res.first;
+    if (host_id) {
+        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored));
+        SCYLLA_ASSERT(res.second);
+        auto it = res.first;
+        client = it->second.rpc_client;
+    } else {
+        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
+        SCYLLA_ASSERT(res.second);
+        auto it = res.first;
+        client = it->second.rpc_client;
+    }
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
     (void)_rpc->make_client<
             rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>)>(messaging_verb::CLIENT_ID)(
-                *it->second.rpc_client, broadcast_address, src_cpu_id,
+                *client, broadcast_address, src_cpu_id,
                 query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt)
             .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
-    return it->second.rpc_client;
+    return client;
 }
 
-template <typename Fn>
-requires std::is_invocable_r_v<bool, Fn, const messaging_service::shard_info&>
-void messaging_service::find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter) {
+template <typename Fn, typename Map>
+requires (std::is_invocable_r_v<bool, Fn, const messaging_service::shard_info&> &&
+        (std::is_same_v<typename Map::key_type, msg_addr> || std::is_same_v<typename Map::key_type, locator::host_id>))
+void messaging_service::find_and_remove_client(Map& clients, typename Map::key_type id, Fn&& filter) {
     if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
@@ -985,6 +1013,12 @@ void messaging_service::find_and_remove_client(clients_map& clients, msg_addr id
         return;
     }
 
+    gms::inet_address addr;
+    if constexpr (std::is_same_v<typename Map::key_type, msg_addr>) {
+        addr = id.addr;
+    } else {
+        addr = _address_map.find(id).value();
+    }
     auto it = clients.find(id);
     if (it != clients.end() && filter(it->second)) {
         auto client = std::move(it->second.rpc_client);
@@ -995,10 +1029,10 @@ void messaging_service::find_and_remove_client(clients_map& clients, msg_addr id
         // This will make sure messaging_service::stop() blocks until
         // client->stop() is over.
         //
-        (void)client->stop().finally([id, client, ms = shared_from_this()] {
-            mlogger.debug("dropped connection to {}", id.addr);
+        (void)client->stop().finally([addr, client, ms = shared_from_this()] {
+            mlogger.debug("dropped connection to {}", addr);
         }).discard_result();
-        _connection_dropped(id.addr);
+        _connection_dropped(addr);
     }
 }
 
@@ -1006,17 +1040,39 @@ void messaging_service::remove_error_rpc_client(messaging_verb verb, msg_addr id
     find_and_remove_client(_clients[get_rpc_client_idx(verb)], id, [] (const auto& s) { return s.rpc_client->error(); });
 }
 
+void messaging_service::remove_error_rpc_client(messaging_verb verb, locator::host_id id) {
+    find_and_remove_client(_clients_with_host_id[get_rpc_client_idx(verb)], id, [] (const auto& s) { return s.rpc_client->error(); });
+}
+
+// Removes client to id.addr in both _client and _clients_with_host_id
+// FIXME: make removing from _clients_with_host_id more efficient
 void messaging_service::remove_rpc_client(msg_addr id) {
     for (auto& c : _clients) {
         find_and_remove_client(c, id, [] (const auto&) { return true; });
     }
+    for (auto& c : _clients_with_host_id) {
+        for (auto it = c.begin(); it != c.end();) {
+            auto& [hid, _] = *it++;
+            if (id.addr == _address_map.find(hid).value()) {
+                find_and_remove_client(c, hid, [] (const auto&) { return true; });
+            }
+        }
+    }
 }
 
-void messaging_service::remove_rpc_client_with_ignored_topology(msg_addr id) {
+void messaging_service::remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid) {
     for (auto& c : _clients) {
         find_and_remove_client(c, id, [id] (const auto& s) {
             if (s.topology_ignored) {
                 mlogger.info("Dropping connection to {} because it was created without topology information", id.addr);
+            }
+            return s.topology_ignored;
+        });
+    }
+    for (auto& c : _clients_with_host_id) {
+        find_and_remove_client(c, hid, [hid] (const auto& s) {
+            if (s.topology_ignored) {
+                mlogger.info("Dropping connection to {} because it was created without topology information", hid);
             }
             return s.topology_ignored;
         });
