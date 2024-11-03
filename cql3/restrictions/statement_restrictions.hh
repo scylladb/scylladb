@@ -48,6 +48,12 @@ struct on_partition_key_token {
     bool operator==(const on_partition_key_token&) const = default;
 };
 
+struct on_clustering_key_prefix {
+    std::vector<const column_definition*> columns;
+
+    bool operator==(const on_clustering_key_prefix&) const = default;
+};
+
 // A predicate on a column or a combination of columns. The WHERE clause analyzer
 // will attempt to convert predicates (that return true or false for a particular row)
 // to solvers (that return the set of column values that satisfy the predicate) when possible.
@@ -60,7 +66,8 @@ struct predicate {
     // What column the predicate can be solved for
     std::variant<
             on_column,                     // solving for a single column: e.g. c1 = 3
-            on_partition_key_token         // solving for the token, e.g. token(pk1, pk2) >= :var
+            on_partition_key_token,        // solving for the token, e.g. token(pk1, pk2) >= :var
+            on_clustering_key_prefix       // solving for a clustering key prefix: e.g. (ck1, ck2) >= (3, 4)
     > on;
     // Whether the returned value_set will resolve to a single value.
     bool is_singleton = false;
@@ -167,7 +174,7 @@ private:
     ///   4.4 elements other than the last have only EQ or IN atoms
     ///   4.5 the last element has only EQ, IN, or is_slice() atoms
     /// 5. if multi-column, then each element is a binary_operator
-    std::vector<expr::expression> _clustering_prefix_restrictions;
+    std::vector<predicate> _clustering_prefix_restrictions;
 
     /// Like _clustering_prefix_restrictions, but for the indexing table (if this is an index-reading statement).
     /// Recall that the index-table CK is (token, PK, CK) of the base table for a global index and (indexed column,
@@ -176,7 +183,7 @@ private:
     /// Elements are conjunctions of single-column binary operators with the same LHS.
     /// Element order follows the indexing-table clustering key.
     /// In case of a global index the first element's (token restriction) RHS is a dummy value, it is filled later.
-    std::optional<std::vector<expr::expression>> _idx_tbl_ck_prefix;
+    std::optional<std::vector<predicate>> _idx_tbl_ck_prefix;
 
     /// Parts of _where defining the partition range.
     ///

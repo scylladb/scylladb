@@ -147,6 +147,9 @@ solve(const predicate& ac, const query_options& options) {
             [&] (const on_partition_key_token& pkt) {
                 return possible_partition_token_values(ac.filter, options, *pkt.schema);
             },
+            [&] (const on_clustering_key_prefix& ockp) -> value_set {
+                on_internal_error(rlogger, "asked to directly solve for clustering key prefix");
+            },
         },
         ac.on);
 }
@@ -182,6 +185,18 @@ struct intersection_visitor {
 
 value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
+}
+
+static
+managed_bytes
+value_set_to_singleton(const value_set& vs) {
+    if (std::holds_alternative<value_list>(vs)) {
+        const auto& vl = std::get<value_list>(vs);
+        if (vl.size() == 1) {
+            return vl.front();
+        }
+    }
+    throw std::logic_error("value_set_to_singleton: value_set is not a singleton");
 }
 
 template<std::ranges::forward_range Range>
@@ -254,6 +269,7 @@ type(const predicate& p) {
         overloaded_functor{
             [] (const on_column& oc) { return oc.column->type->without_reversed().shared_from_this(); },
             [] (const on_partition_key_token&) { return long_type; },
+            [] (const on_clustering_key_prefix&) -> data_type { on_internal_error(rlogger, "type: asked for clustering key prefix type"); },
         },
         p.on);
 }
@@ -527,6 +543,19 @@ interval<managed_bytes> to_range(const value_set& s) {
                 return interval<managed_bytes>::make_singular(lst[0]);
             },
         }, s);
+}
+
+/// Replaces every column_definition in an expression with this one.  Throws if any LHS is not a single
+/// column_value.
+static
+predicate
+replace_column_def(const predicate& a, const column_definition* col) {
+    return predicate{
+        .solve_for = a.solve_for,  // Note: does not replace and `col` embedded in the function
+        .filter = expr::replace_column_def(a.filter, col),
+        .on = on_column{col},
+        .is_singleton = a.is_singleton,
+    };
 }
 
 namespace {
@@ -1025,7 +1054,7 @@ static partition_range_restrictions extract_partition_range(
 /// Extracts where_clause atoms with clustering-column LHS and copies them to a vector.  These elements define the
 /// boundaries of any clustering slice that can possibly meet where_clause.  This vector can be calculated before
 /// binding expression markers, since LHS and operator are always known.
-static std::vector<expr::expression> extract_clustering_prefix_restrictions(
+static std::vector<predicate> extract_clustering_prefix_restrictions(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
 
@@ -1033,10 +1062,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     /// conjunction to combine subexpressions.
     struct visitor {
         schema_ptr table_schema;
-        std::vector<expression> multi; ///< All multi-column restrictions.
+        std::vector<predicate> multi; ///< All multi-column restrictions.
         /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
         /// conjunction of atoms.
-        std::unordered_map<const column_definition*, expression> single;
+        std::unordered_map<const column_definition*, predicate> single;
         const binary_operator* current_binary_operator = nullptr;
 
         void operator()(const conjunction& c) {
@@ -1053,13 +1082,21 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         }
 
         void operator()(const tuple_constructor& tc) {
+            std::vector<const column_definition*> prefix;
             for (auto& e : tc.elements) {
-                if (!expr::is<column_value>(e)) {
+                if (auto cv = expr::as_if<column_value>(&e)) {
+                    prefix.push_back(cv->col);
+                } else {
                     on_internal_error(rlogger, fmt::format("extract_clustering_prefix_restrictions: tuple of non-column_value: {}", tc));
                 }
             }
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
-                multi.push_back(b);
+                multi.push_back(predicate{
+                    .solve_for = nullptr, // FIXME: implement
+                    .filter = b,
+                    .on = on_clustering_key_prefix{prefix},
+                    .is_singleton = false,
+                });
             });
         }
 
@@ -1067,9 +1104,15 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_clustering_key()) {
-                    const auto [it, inserted] = single.try_emplace(s->col, b);
+                    auto a = predicate{
+                        .solve_for = std::bind_front(possible_column_values, s->col, b),
+                        .filter = b,
+                        .on  = on_column{s->col},
+                        .is_singleton = b.op == oper_t::EQ,
+                    };
+                    const auto [it, inserted] = single.try_emplace(s->col, std::move(a));
                     if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), b);
+                        it->second = make_conjunction(std::move(it->second), std::move(a));
                     }
                 }
             });
@@ -1080,9 +1123,15 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_clustering_key()) {
-                    const auto [it, inserted] = single.try_emplace(cval.col, b);
+                    auto a = predicate{
+                        .solve_for = std::bind_front(possible_column_values, cval.col, b),
+                        .filter = b,
+                        .on  = on_column{cval.col},
+                        .is_singleton = b.op == oper_t::EQ,
+                    };
+                    const auto [it, inserted] = single.try_emplace(cval.col, std::move(a));
                     if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), b);
+                        it->second = make_conjunction(std::move(it->second), std::move(a));
                     }
                 }
             });
@@ -1145,19 +1194,19 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         return std::move(v.multi);
     }
 
-    std::vector<expression> prefix;
+    std::vector<predicate> prefix;
     for (const auto& col : schema->clustering_key_columns()) {
         const auto found = v.single.find(&col);
         if (found == v.single.end()) { // Any further restrictions are skipping the CK order.
             break;
         }
-        if (find_needs_filtering(found->second)) { // This column's restriction doesn't define a clear bound.
+        if (find_needs_filtering(found->second.filter)) { // This column's restriction doesn't define a clear bound.
             // TODO: if this is a conjunction of filtering and non-filtering atoms, we could split them and add the
             // latter to the prefix.
             break;
         }
         prefix.push_back(found->second);
-        if (has_slice(found->second)) {
+        if (has_slice(found->second.filter)) {
             break;
         }
     }
@@ -2351,9 +2400,9 @@ struct multi_column_range_accumulator {
 std::vector<query::clustering_range> get_multi_column_clustering_bounds(
         const query_options& options,
         schema_ptr schema,
-        const std::vector<expression>& multi_column_restrictions) {
+        const std::vector<predicate>& multi_column_restrictions) {
     multi_column_range_accumulator acc{options, schema};
-    for (const auto& restr : multi_column_restrictions) {
+    for (const auto& restr : multi_column_restrictions | std::views::transform(&predicate::filter)) {
         expr::visit(acc, restr);
     }
     return acc.ranges;
@@ -2368,14 +2417,16 @@ query::clustering_range reverse_if_reqd(query::clustering_range r, const abstrac
 std::vector<query::clustering_range> get_single_column_clustering_bounds(
         const query_options& options,
         const schema& schema,
-        const std::vector<expression>& single_column_restrictions) {
+        const std::vector<predicate>& single_column_restrictions) {
     const size_t size_limit =
             options.get_cql_config().restrictions.clustering_key_restrictions_max_cartesian_product_size;
     size_t product_size = 1;
     std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
-        auto values = possible_column_values(
-                &schema.clustering_column_at(i), // This should be the LHS of restrictions[i].
+        if (&schema.clustering_column_at(i) != require_on_single_column(single_column_restrictions[i])) {
+            break;
+        }
+        auto values = solve(
                 single_column_restrictions[i],
                 options);
         if (auto list = std::get_if<value_list>(&values)) {
@@ -2442,7 +2493,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
 static std::vector<query::clustering_range> get_index_v1_token_range_clustering_bounds(
         const query_options& options,
         const column_definition& token_column,
-        const expression& token_restriction) {
+        const predicate& token_restriction) {
 
     // A workaround in order to make possible_column_values work properly.
     // possible_column_values looks at the column type and uses this type's comparator.
@@ -2453,10 +2504,10 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
     // and use this restriction to calculate possible lhs values.
     column_definition token_column_bigint = token_column;
     token_column_bigint.type = long_type;
-    expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
+    predicate new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
 
     std::variant<value_list, interval<managed_bytes>> values =
-        possible_column_values(&token_column_bigint, new_token_restrictions, options);
+        new_token_restrictions.solve_for(options);
 
     return std::visit(overloaded_functor {
         [](const value_list& list) {
@@ -2646,9 +2697,9 @@ std::vector<query::clustering_range> get_equivalent_ranges(
 
 /// Extracts raw multi-column bounds from exprs; last one wins.
 query::clustering_range range_from_raw_bounds(
-        const std::vector<expression>& exprs, const query_options& options, const schema& schema) {
+        const std::vector<predicate>& exprs, const query_options& options, const schema& schema) {
     opt_bound lb, ub;
-    for (const auto& e : exprs) {
+    for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
         if (auto b = find_clustering_order(e)) {
             cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
             if (tup_val.is_null()) {
@@ -2677,10 +2728,10 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
         return {query::clustering_range::make_open_ended_both_sides()};
       };
     }
-    if (find_binop(_clustering_prefix_restrictions[0], is_multi_column)) {
+    if (find_binop(_clustering_prefix_restrictions[0].filter, is_multi_column)) { // FIXME: adjust for solve_for
       return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
-        for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
+        for (auto& r : _clustering_prefix_restrictions | std::views::transform(&predicate::filter)) { // TODO: move to constructor, do only once.
             using namespace expr;
             const auto& binop = expr::as<binary_operator>(r);
             if (is_clustering_order(binop)) {
@@ -2826,45 +2877,89 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
-        _idx_tbl_ck_prefix = std::vector{std::move(token_restriction)};
+        _idx_tbl_ck_prefix = std::vector{predicate{
+            .solve_for = nullptr, // FIXME: adjust for solve_for
+            .filter = std::move(token_restriction),
+            .on = on_column{token_column},
+            .is_singleton = false, // FIXME: could be a singleton token. Not very important.
+        }};
 
         return;
     }
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size(), expr::conjunction({}));
+    _idx_tbl_ck_prefix = std::vector<predicate>(1 + _schema->partition_key_size(), predicate{
+        .solve_for = nullptr,  // FIXME: this is all overwritten later. Should be refactored.
+        .filter = expr::expression(expr::conjunction{}),
+        .on = on_column{nullptr}, // Illegal but will be overwritten
+        .is_singleton = false,
+    });
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_partition_range_restrictions);
     if (single_column_partition_key_restrictions) {
       for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
-        const auto col = expr::as<column_value>(find(e.filter, oper_t::EQ)->lhs).col;
+        const auto col = require_on_single_column(e);
         const auto pos = _schema->position(*col) + 1;
-        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e.filter, &idx_tbl_schema.clustering_column_at(pos));
+        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
       }
     }
 
-    if (std::ranges::any_of(*_idx_tbl_ck_prefix | std::views::drop(1), is_empty_restriction)) {
+    if (std::ranges::any_of(*_idx_tbl_ck_prefix | std::views::drop(1) | std::views::transform(&predicate::filter), is_empty_restriction)) {
         // If the partition key is not fully restricted, the index clustering key is of no use.
-        (*_idx_tbl_ck_prefix) = std::vector<expr::expression>();
+        (*_idx_tbl_ck_prefix) = std::vector<predicate>();
         return;
     }
 
     add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);
 
     auto pk_expressions = (*_idx_tbl_ck_prefix)
+            | std::views::transform(&predicate::filter)
             | std::views::drop(1)   // skip the token restriction
             | std::views::take(_schema->partition_key_size()) // take only the partition key restrictions
             | std::views::transform(expr::as<expr::binary_operator>) // we know it's an EQ
             | std::views::transform(std::mem_fn(&expr::binary_operator::rhs)) // "solve" for the column value
             | std::ranges::to<std::vector>();
 
+    auto pk_solvers = (*_idx_tbl_ck_prefix)
+            | std::views::drop(1) // skip the token restriction
+            | std::views::take(_schema->partition_key_size()) // take only the partition key restrictions
+            | std::views::transform(&predicate::solve_for)
+            | std::ranges::to<std::vector>();
+
+    auto is_singleton = std::ranges::all_of(
+            (*_idx_tbl_ck_prefix)
+            | std::views::drop(1)
+            | std::views::take(_schema->partition_key_size()),
+            &predicate::is_singleton);
+
+    if (!is_singleton) {
+        on_internal_error(rlogger, "Inconsistency in singleton calculation in indexed query");
+    }
+
     auto token_func = make_shared<cql3::functions::token_fct>(_schema);
 
-    (*_idx_tbl_ck_prefix)[0] = binary_operator(
+    auto token_expr = binary_operator(
             column_value(token_column),
             oper_t::EQ,
             expr::function_call{.func = std::move(token_func), .args = std::move(pk_expressions)});
+
+    auto token_solver = [this, pk_solvers = std::move(pk_solvers)] (const query_options& options) -> value_set {
+        auto pk_values = pk_solvers
+            | std::views::transform([&] (auto&& solver) { return solver(options); })
+            | std::views::transform(value_set_to_singleton)
+            | std::ranges::to<utils::small_vector<managed_bytes, 4>>();
+        auto pk = partition_key::from_exploded(pk_values);
+        auto tok = dht::get_token(*_schema, pk);
+        return value_list{managed_bytes(serialized(dht::token::to_int64(tok)))};
+    };
+
+    (*_idx_tbl_ck_prefix)[0] = predicate{
+        .solve_for = std::move(token_solver),
+        .filter = std::move(token_expr),
+        .on = on_column{token_column},
+        .is_singleton = is_singleton,
+    };
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
@@ -2873,7 +2968,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
     }
 
     // Local index clustering key is (indexed column, base clustering key)
-    _idx_tbl_ck_prefix = std::vector<expr::expression>();
+    _idx_tbl_ck_prefix = std::vector<predicate>();
     _idx_tbl_ck_prefix->reserve(1 + _clustering_prefix_restrictions.size());
 
     const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
@@ -2886,7 +2981,12 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
 
     // Translate the restriction to use column from the index schema and add it
     expr::expression replaced_idx_restriction = replace_column_def(idx_col_restriction_expr, &indexed_column);
-    _idx_tbl_ck_prefix->push_back(replaced_idx_restriction);
+    _idx_tbl_ck_prefix->push_back(predicate{
+        .solve_for = std::bind_front(possible_column_values, &indexed_column, replaced_idx_restriction),
+        .filter = replaced_idx_restriction,
+        .on = on_column{&indexed_column},
+        .is_singleton = false, // Could be true, but not important.
+    });
 
     // Add restrictions for the clustering key
     add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);
@@ -2894,16 +2994,24 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
 
 void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
     for (const auto& e : _clustering_prefix_restrictions) {
-        if (find_binop(_clustering_prefix_restrictions[0], is_multi_column)) {
+        if (find_binop(_clustering_prefix_restrictions[0].filter, is_multi_column)) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
-        const auto any_binop = find_binop(e, [] (auto&&) { return true; });
+        const auto any_binop = find_binop(e.filter, [] (auto&&) { return true; });
         if (!any_binop) {
             break;
         }
         const auto col = expr::as<column_value>(any_binop->lhs).col;
-        _idx_tbl_ck_prefix->push_back(replace_column_def(e, idx_tbl_schema.get_column_definition(col->name())));
+        auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
+        auto replaced = replace_column_def(e.filter, col_in_index);
+        auto a = predicate{
+            .solve_for = std::bind_front(possible_column_values, col_in_index, replaced),
+            .filter = replaced,
+            .on = on_column{col_in_index},
+            .is_singleton = false, // FIXME: could be a singleton token. Not very important.
+        };
+        _idx_tbl_ck_prefix->push_back(std::move(a));
     }
 }
 
@@ -3052,7 +3160,7 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
             validate_primary_key_restrictions(options, r.per_column_restrictions | std::views::transform(&predicate::filter));
         }
     }, _partition_range_restrictions);
-    validate_primary_key_restrictions(options, _clustering_prefix_restrictions);
+    validate_primary_key_restrictions(options, _clustering_prefix_restrictions | std::views::transform(&predicate::filter));
 }
 
 
