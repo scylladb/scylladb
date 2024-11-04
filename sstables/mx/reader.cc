@@ -1441,7 +1441,11 @@ private:
             }
             if (_will_likely_slice) {
                 return _index_reader->read_partition_data().then([this] {
-                    return read_from_index();
+                    if (_index_reader->partition_data_ready()) {
+                        return read_from_index();
+                    } else {
+                        return read_from_datafile();
+                    }
                 });
             }
         }
