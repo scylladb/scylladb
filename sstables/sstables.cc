@@ -1335,6 +1335,19 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
     return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 
+future<> sstable::init_trie_reader() {
+    sstlog.debug("init_trie_reader()");
+    sstlog.debug("init_trie_reader(): stat");
+    auto st = co_await _partition_index_file.stat();
+    sstlog.debug("init_trie_reader(): stat result: {}", st.st_size);
+    sstlog.debug("init_trie_reader(): read");
+    if (st.st_size > 0) {
+        auto p = co_await _partition_index_file.dma_read_exactly<char>(st.st_size - 8, 8);
+        _trie_root_offset = read_le<uint64_t>(p.get());
+        sstlog.debug("init_trie_reader: Trie root offset == {} for sstable {}", _trie_root_offset, this->index_filename());
+    }
+}
+
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
     co_await when_all_succeed(
         open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }),
@@ -1350,6 +1363,9 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
+    if (has_component(component_type::Partitions)) {
+        co_await init_trie_reader();
+    }
     co_await update_info_for_opened_data(cfg);
     SCYLLA_ASSERT(!_shards.empty());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();

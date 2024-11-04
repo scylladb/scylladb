@@ -544,6 +544,7 @@ public:
     seastar::shared_ptr<cached_file> _partition_index_file_cached;
     seastar::shared_ptr<cached_file> _row_index_file_cached;
 private:
+    uint64_t _trie_root_offset = 0;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
     uint64_t _data_file_size;
@@ -780,6 +781,7 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+    future<> init_trie_reader();
     // runs in async context (called from storage::open)
     void write_toc(file_writer w);
 public:
