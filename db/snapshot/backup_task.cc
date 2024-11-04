@@ -82,14 +82,16 @@ future<> backup_task_impl::do_backup() {
         auto component_name = _snapshot_dir / component_ent->name;
         auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, component_ent->name);
         snap_log.trace("Upload {} to {}", component_name.native(), destination);
+
+        // Pre-upload break point. For testing abort in actual s3 client usage.
+        co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
+
         // Start uploading in the background. The caller waits for these fibers
         // with the uploads gate.
         // Parallelism is implicitly controlled in two ways:
         //  - s3::client::claim_memory semaphore
         //  - http::client::max_connections limitation
-        // FIXME -- s3::client is not abortable yet, but when it will be, need to
-        // propagate impl::_as abort requests into upload_file's fibers
-        std::ignore = _client->upload_file(component_name, destination, _progress).handle_exception([comp = component_name, &ex] (std::exception_ptr e) {
+        std::ignore = _client->upload_file(component_name, destination, _progress, &_as).handle_exception([comp = component_name, &ex] (std::exception_ptr e) {
             snap_log.error("Error uploading {}: {}", comp.native(), e);
             // keep the first exception
             if (!ex) {
