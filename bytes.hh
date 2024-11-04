@@ -19,6 +19,7 @@
 #include "bytes_fwd.hh"
 #include "utils/mutable_view.hh"
 #include "utils/simple_hashers.hh"
+#include <span>
 
 using sstring_view = std::string_view;
 
@@ -35,8 +36,9 @@ inline bytes_view to_bytes_view(sstring_view view) {
 }
 
 struct fmt_hex {
-    const bytes_view& v;
-    fmt_hex(const bytes_view& v) noexcept : v(v) {}
+    std::span<const std::byte> v;
+    fmt_hex(bytes_view v) noexcept : v(reinterpret_cast<const std::byte*>(v.data()), v.size()) {}
+    fmt_hex(std::span<const std::byte> v) noexcept : v(v) {}
 };
 
 bytes from_hex(sstring_view s);
