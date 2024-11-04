@@ -180,10 +180,10 @@ inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s
 template<typename T>
 concept RowConsumer =
     requires(T t,
-                    const partition_key& pk,
+                    const dht::decorated_key& dk,
                     position_range cr) {
         { t.is_mutation_end() } -> std::same_as<bool>;
-        { t.setup_for_partition(pk) } -> std::same_as<void>;
+        { t.setup_for_partition(dk) } -> std::same_as<void>;
         { t.push_ready_fragments() } -> std::same_as<void>;
         { t.maybe_skip() } -> std::same_as<std::optional<position_in_partition_view>>;
         { t.fast_forward_to(std::move(cr)) } -> std::same_as<std::optional<position_in_partition_view>>;
