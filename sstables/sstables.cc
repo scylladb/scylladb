@@ -1386,6 +1386,18 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     _data_file_size = st.st_size;
     _data_file_write_time = db_clock::from_time_t(st.st_mtime);
 
+    if (has_component(component_type::Partitions)) {
+        _partition_index_file_cached = seastar::make_shared<cached_file>(_partition_index_file,
+                                                                _manager.get_cache_tracker().get_partition_index_file_cached_stats(),
+                                                                _manager.get_cache_tracker().get_lru(),
+                                                                _manager.get_cache_tracker().region(),
+                                                                co_await _partition_index_file.size());
+        _row_index_file_cached = seastar::make_shared<cached_file>(_row_index_file,
+                                                                _manager.get_cache_tracker().get_row_index_file_cached_stats(),
+                                                                _manager.get_cache_tracker().get_lru(),
+                                                                _manager.get_cache_tracker().region(),
+                                                                co_await _row_index_file.size());
+    }
     auto size = co_await _index_file.size();
     _index_file_size = size;
     SCYLLA_ASSERT(!_cached_index_file);
@@ -1609,6 +1621,11 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     _components = std::move(info.components);
     _data_file = make_checked_file(_read_error_handler, info.data.to_file());
     _index_file = make_checked_file(_read_error_handler, info.index.to_file());
+    if (info.trie_index) {
+        _partition_index_file = make_checked_file(_read_error_handler, info.trie_index->to_file());
+        _row_index_file = make_checked_file(_read_error_handler, info.row_index.value().to_file());
+        co_await init_trie_reader();
+    }
     _shards = std::move(info.owners);
     _metadata_size_on_disk = info.metadata_size_on_disk;
     validate_min_max_metadata();
@@ -1621,7 +1638,15 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
 
 future<foreign_sstable_open_info> sstable::get_open_info() & {
     return _components.copy().then([this] (auto c) mutable {
+        std::optional<seastar::file_handle> partition_index_handle;
+        std::optional<seastar::file_handle> row_index_handle;
+        if (_partition_index_file) {
+            assert(_row_index_file);
+            partition_index_handle = _partition_index_file.dup();
+            row_index_handle = _row_index_file.dup();
+        }
         return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
+            std::move(partition_index_handle), std::move(row_index_handle),
             _generation, _version, _format, data_size(), _metadata_size_on_disk};
     });
 }

@@ -56,6 +56,8 @@ struct foreign_sstable_open_info {
     std::vector<shard_id> owners;
     seastar::file_handle data;
     seastar::file_handle index;
+    std::optional<seastar::file_handle> trie_index;
+    std::optional<seastar::file_handle> row_index;
     generation_type generation;
     sstable_version_types version;
     sstable_format_types format;

@@ -540,6 +540,10 @@ private:
     file _index_file;
     file _partition_index_file;
     file _row_index_file;
+public:
+    seastar::shared_ptr<cached_file> _partition_index_file_cached;
+    seastar::shared_ptr<cached_file> _row_index_file_cached;
+private:
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
     uint64_t _data_file_size;
