@@ -87,8 +87,13 @@ public:
 
 private:
     shared_ptr<compaction::task_manager_module> _task_manager_module;
+
+    using compaction_task_executor_list_type = bi::list<
+            compaction_task_executor,
+            bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
+            bi::constant_time_size<false>>;
     // compaction manager may have N fibers to allow parallel compaction per shard.
-    std::list<shared_ptr<compaction::compaction_task_executor>> _tasks;
+    compaction_task_executor_list_type _tasks;
 
     // Possible states in which the compaction manager can be found.
     //
@@ -172,7 +177,7 @@ private:
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
+    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason) noexcept;
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -239,7 +244,7 @@ private:
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
-    future<> really_do_stop();
+    future<> really_do_stop() noexcept;
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
     void propagate_replacement(compaction::table_state& t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
@@ -464,7 +469,9 @@ public:
 
 namespace compaction {
 
-class compaction_task_executor : public enable_shared_from_this<compaction_task_executor> {
+class compaction_task_executor
+    : public enable_shared_from_this<compaction_task_executor>
+    , public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
 public:
     enum class state {
         none,       // initial and final state
@@ -610,7 +617,7 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
-    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason);
+    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept;
     friend sstables::test_env_compaction_manager;
 };
 

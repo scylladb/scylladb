@@ -5300,7 +5300,11 @@ class scylla_compaction_tasks(gdb.Command):
             pass
         task_hist = histogram(print_indicators=False)
 
-        task_list = list(std_list(cm['_tasks']))
+        try:
+            task_list = list(intrusive_list(cm['_tasks']))
+        except gdb.error: # 6.2 compatibility
+            task_list = list(std_list(cm['_tasks']))
+
         for task in task_list:
             task = seastar_shared_ptr(task).get().dereference()
             schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
