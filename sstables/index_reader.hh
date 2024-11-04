@@ -460,6 +460,7 @@ public:
     virtual future<> advance_to_next_partition() = 0;
     virtual indexable_element element_kind() const = 0;
     virtual future<> advance_to(dht::ring_position_view pos) = 0;
+    virtual future<> advance_after_existing(const dht::decorated_key& dk) = 0;
     virtual future<> advance_to(position_in_partition_view pos) = 0;
     virtual std::optional<sstables::deletion_time> partition_tombstone() = 0;
     virtual std::optional<partition_key> get_partition_key() = 0;

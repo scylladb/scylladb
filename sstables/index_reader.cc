@@ -646,6 +646,10 @@ public:
         return advance_to(_lower_bound, pos);
     }
 
+    future<> advance_after_existing(const dht::decorated_key& dk) override {
+        return advance_to(dht::ring_position_view::for_after_key(dk));
+    }
+
     // Returns positions in the data file of the cursor.
     // End position may be unset
     data_file_positions_range data_file_positions() const override {

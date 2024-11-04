@@ -779,6 +779,7 @@ public:
     virtual future<> advance_to_next_partition() override;
     virtual sstables::indexable_element element_kind() const override;
     virtual future<> advance_to(dht::ring_position_view pos) override;
+    virtual future<> advance_after_existing(const dht::decorated_key& dk) override;
     virtual future<> advance_to(position_in_partition_view pos) override;
     virtual std::optional<sstables::deletion_time> partition_tombstone() override;
     virtual std::optional<partition_key> get_partition_key() override;
@@ -1572,6 +1573,10 @@ sstables::indexable_element bti_index_reader::element_kind() const {
 future<> bti_index_reader::advance_to(dht::ring_position_view pos) {
     trie_logger.debug("bti_index_reader::advance_to(partition) this={} pos={}", fmt::ptr(this), pos);
     co_await _lower.set_before_partition(translate_key(pos));
+}
+future<> bti_index_reader::advance_after_existing(const dht::decorated_key& dk) {
+    trie_logger.debug("bti_index_reader::advance_to(partition) this={} pos={}", fmt::ptr(this), dk);
+    co_await _lower.set_after_partition(translate_key(dht::ring_position_view(dk.token(), &dk.key(), 0)));
 }
 future<> bti_index_reader::advance_to(position_in_partition_view pos) {
     trie_logger.debug("bti_index_reader::advance_to(row) this={} pos={}", fmt::ptr(this), pos);
