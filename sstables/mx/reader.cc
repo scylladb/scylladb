@@ -1215,6 +1215,24 @@ public:
         setup_columns(_static_row, _column_translation.static_columns());
     }
 
+    data_consume_rows_context_m(const schema& s,
+                                const shared_sstable& sst,
+                                Consumer& consumer,
+                                std::function<input_stream<char>(size_t, size_t)> input_recreator,
+                                uint64_t start,
+                                uint64_t maxlen)
+        : data_consumer::continuous_data_consumer<data_consume_rows_context_m<Consumer>>(consumer.permit(), std::move(input_recreator), start, maxlen)
+        , _consumer(consumer)
+        , _sst(sst)
+        , _header(sst->get_serialization_header())
+        , _column_translation(sst->get_column_translation(s, _header, sst->features()))
+        , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
+        , _gen(do_process_state())
+    {
+        setup_columns(_regular_row, _column_translation.regular_columns());
+        setup_columns(_static_row, _column_translation.static_columns());
+    }
+
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
         // filter and using a promoted index), we may be in FLAGS
@@ -1547,7 +1565,7 @@ private:
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, sstable::integrity_check::no);
+            _context = data_consume_rows_2<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, sstable::integrity_check::no);
         }
 
         _monitor.on_read_started(_context->reader_position());

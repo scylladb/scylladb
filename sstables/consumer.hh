@@ -490,6 +490,9 @@ class continuous_data_consumer : protected primitive_consumer {
         return static_cast<StateProcessor&>(*this);
     };
 protected:
+    std::function<input_stream<char>(size_t begin, size_t end)> _input_recreator = [] (size_t, size_t) -> input_stream<char> {
+        abort();
+    };
     input_stream<char> _input;
     sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
@@ -502,6 +505,13 @@ public:
     continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
             : primitive_consumer(std::move(permit))
             , _input(std::move(input))
+            , _stream_position(sstables::reader_position_tracker{start, maxlen})
+            , _remain(maxlen) {}
+
+    continuous_data_consumer(reader_permit permit, decltype(_input_recreator) recr, uint64_t start, uint64_t maxlen)
+            : primitive_consumer(std::move(permit))
+            , _input_recreator(std::move(recr))
+            , _input(_input_recreator(start, start+maxlen))
             , _stream_position(sstables::reader_position_tracker{start, maxlen})
             , _remain(maxlen) {}
 
@@ -625,16 +635,21 @@ public:
     }
 
     future<> fast_forward_to(size_t begin, size_t end) {
-        SCYLLA_ASSERT(begin >= _stream_position.position);
-        auto n = begin - _stream_position.position;
-        _stream_position.position = begin;
+        if (begin < _stream_position.position) {
+            co_await _input.close();
+            _input = _input_recreator(begin, end);
+        } else {
+            SCYLLA_ASSERT(begin >= _stream_position.position);
+            auto n = begin - _stream_position.position;
+            co_await _input.skip(n);
+        }
 
+        _stream_position.position = begin;
         SCYLLA_ASSERT(end >= _stream_position.position);
         _remain = end - _stream_position.position;
 
         primitive_consumer::reset();
         reader_permit::awaits_guard _{_permit};
-        co_await _input.skip(n);
     }
 
     future<> skip_to(size_t begin) {
