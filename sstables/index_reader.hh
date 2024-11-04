@@ -480,6 +480,7 @@ class index_reader {
     }
 
     future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {
+        assert(!bound.context || !_single_page_read);
         if (!bound.context) {
             bound.consumer = std::make_unique<index_consumer>(_region, _sstable->get_schema());
             bound.context = make_context(begin, end, *bound.consumer);
@@ -554,12 +555,6 @@ private:
                     }
                     if (ex) {
                         return make_exception_future<index_list>(std::move(ex));
-                    }
-                    if (_single_page_read) {
-                        // if the associated reader is forwarding despite having singular range, we prepare for that
-                        _single_page_read = false;
-                        auto& ctx = *bound.context;
-                        return ctx.close().then([bc = std::move(bound.context), &bound] { return std::move(bound.consumer->indexes); });
                     }
                     return make_ready_future<index_list>(std::move(bound.consumer->indexes));
                 });
@@ -670,7 +665,7 @@ private:
 
         auto& summary = _sstable->get_summary();
         bound.previous_summary_idx = std::distance(std::begin(summary.entries),
-            std::lower_bound(summary.entries.begin() + bound.previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
+            std::upper_bound(summary.entries.begin() + bound.previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
 
         if (bound.previous_summary_idx == 0) {
             sstlog.trace("index {}: first entry", fmt::ptr(this));
@@ -711,8 +706,13 @@ private:
             // i is valid until next allocation point
             auto& entries = bound.current_list->_entries;
             if (i == std::end(entries)) {
-                sstlog.trace("index {}: not found", fmt::ptr(this));
-                return advance_to_page(bound, summary_idx + 1);
+                if (_single_page_read) {
+                    sstlog.trace("index {}: not found in index page {}, returning eof because this is a single-partition read", summary_idx, fmt::ptr(this));
+                    return advance_to_end(bound);
+                } else {
+                    sstlog.trace("index {}: not found in index page {}, trying next index page", summary_idx, fmt::ptr(this));
+                    return advance_to_page(bound, summary_idx + 1);
+                }
             }
             bound.current_index_idx = std::distance(std::begin(entries), i);
             bound.current_pi_idx = 0;
