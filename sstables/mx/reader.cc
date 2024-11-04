@@ -1301,6 +1301,7 @@ public:
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
             , _integrity(integrity) {
+        sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1384,6 +1385,19 @@ private:
         _end_of_stream = true; // on_next_partition() will set it to true
         if (!_read_enabled) {
             sstlog.trace("reader {}: eof", fmt::ptr(this));
+            return make_ready_future<>();
+        }
+
+        if (_saved_partition_tombstone) {
+            // This is the special case where we ended reading last partition range
+            // only after parsing the partition key after the range,
+            // and then the reader was forwarded to that key.
+            // Since the parser can't be moved back, we serve the partition key
+            // and the tombstone that we saved after parsing.
+            auto tomb = *_saved_partition_tombstone;
+            _saved_partition_tombstone.reset();
+            sstlog.trace("reader {}: serving partition key {} due to _saved_partition_tombstone {}", fmt::ptr(this), *_current_partition_key, tomb);
+            on_next_partition(*_current_partition_key, tomb);
             return make_ready_future<>();
         }
 
@@ -1602,6 +1616,19 @@ public:
             _partition_finished = true;
         }
     }
+    // Advances the index to the first position
+    // which hasn't been crossed by the Data file parser yet.
+    future<> advance_index_until_unseen_partition() {
+        while (true) {
+            auto [start, end] = _index_reader->data_file_positions();
+            if (start >= _context->position()) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
+                co_return;
+            } else {
+                co_await _index_reader->advance_to_next_partition();
+            }
+        }
+    }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (reversed()) {
             // FIXME
@@ -1610,6 +1637,7 @@ public:
 
         return maybe_initialize().then([this, &pr] (bool initialized) {
             _pr = pr;
+            sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr);
             if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -1623,9 +1651,54 @@ public:
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
                     parse_assert(bool(end), _sst->get_filename());
+                    sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr, start, *end, _context->position());
+                    if (start < _context->position()) {
+                        sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
+                        // If we got here, the index returned a Data start which precedes
+                        // the data parser's position.
+                        // But by contract, fast_forward_to can only be used to move the reader forward.
+                        // The new range must lie after the old range.
+                        //
+                        // So there are two ways for this to happen:
+                        // 1. When reading the last range, the parser was advanced past the first
+                        // partition key lying after the range.
+                        // (This is signified by _saved_partition_tombstone).
+                        // And then, the reader was advanced to a new range that
+                        // to the best knowledge of the index, might contain that exact key.
+                        // In this case, we have to start reading from that key (which we have remembered).
+                        // 2. The parser was not advanced past the last range, but the inexact
+                        // index returned a start position for the new range which in reality
+                        // lies inside the old range. In this case, we should start reading
+                        // from the first partition with position greater or equal to the parser's position.
+
+                        // The index *could* be in the current position,
+                        // but setting `false` here is fine.
+                        // Worst case, the reader will forward the index to the current position again.
+                        // Lack of this optimization doesn't matter to a range read.
+                        _index_in_current_partition = false;
+                        if (_saved_partition_tombstone) {
+                            // Case 1 from the comment above.
+                            if (*end >= _context->position()) {
+                                _read_enabled = true;
+                                return _context->fast_forward_to(_context->position(), *end);
+                            } else {
+                                _read_enabled = false;
+                                return make_ready_future<>();
+                            }
+                        } else {
+                            // Case 2 from the comment above.
+                            return advance_index_until_unseen_partition().then([this] {
+                                auto [start, end] = _index_reader->data_file_positions();
+                                _read_enabled = true;
+                                _context->reset(indexable_element::partition);
+                                return _context->fast_forward_to(start, *end);
+                            });
+                        }
+                    }
                     if (start != *end) {
                         _read_enabled = true;
                         _index_in_current_partition = true;
+                        _saved_partition_tombstone.reset();
                         _context->reset(indexable_element::partition);
                         return _context->fast_forward_to(start, *end);
                     }
@@ -1753,7 +1826,11 @@ public:
             // The read is over. The new key and everything after it should be ignored.
             sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr);
             _end_of_stream = true;
-            _current_partition_key.reset();
+            // The read is over for now, but the reader can be later forwarded to the key we just read.
+            // The parser can't move backwards, so we have to remember the key and tombstone
+            // to handle that case.
+            _saved_partition_tombstone = tomb;
+            _current_partition_key = std::move(key);
             return data_consumer::proceed::no;
         } else {
             // This is the normal path.
