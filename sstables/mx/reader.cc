@@ -2114,7 +2114,7 @@ future<uint64_t> validate(
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
     auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, sstable::integrity_check::yes);
 
-    auto idx_reader = make_index_reader(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto idx_reader = make_index_reader(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false, true);
 
     try {
         monitor.on_read_started(context->reader_position());

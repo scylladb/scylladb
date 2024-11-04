@@ -790,7 +790,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
-    return ::make_index_reader(sst, std::move(permit));
+    return ::make_index_reader(sst, std::move(permit), nullptr, sstables::use_caching::yes, false, true);
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {

@@ -482,6 +482,7 @@ public:
 std::unique_ptr<index_reader> make_index_reader(shared_sstable sst, reader_permit permit,
                  tracing::trace_state_ptr trace_state = {},
                  use_caching caching = use_caching::yes,
-                 bool single_partition_read = false);
+                 bool single_partition_read = false,
+                 bool force_no_trie = false);
 
 }
