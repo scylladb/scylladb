@@ -105,6 +105,10 @@ private:
             SCYLLA_ASSERT(!_use_count);
         }
 
+        size_t pos() const {
+            return idx * page_size;
+        }
+
         void on_evicted() noexcept override;
 
         temporary_buffer<char> get_buf() {
@@ -123,6 +127,12 @@ private:
         // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
         char* begin() {
             return _lsa_buf.get();
+        }
+
+        // Returns a pointer to the contents of the page.
+        // The buffer can be invalidated when the page is evicted or when the owning LSA region invalidates references.
+        std::span<const std::byte> get_view() const {
+            return std::as_bytes(std::span<const char>(_lsa_buf.get(), _lsa_buf.size()));
         }
 
         size_t size_in_allocator() {
@@ -224,6 +234,16 @@ public:
                 , _size(size)
                 , _units(std::move(units))
         {}
+        page_view(const page_view& other) {
+            *this = other;
+        }
+        page_view& operator=(const page_view& other) {
+            _page = other._page->share();
+            _offset = other._offset;
+            _size = other._size;
+            _units = other._units ? other._units->permit().consume_memory(page_size) : decltype(_units)();
+            return *this;
+        }
 
         page_view(page_view&& o) noexcept
             : _page(std::move(o._page))
@@ -280,11 +300,20 @@ public:
             return share(0, _size);
         }
 
+        std::span<const std::byte> get_view() const {
+            return _page->get_view().subspan(_offset);
+        }
+
         page_view share(size_t pos, size_t len) {
             return page_view(_offset + pos, len, _page->share(), {});
         }
     };
 
+    using ptr_type = cached_page::ptr_type;
+
+    future<std::pair<ptr_type, bool>> get_page_view(size_t global_pos, tracing::trace_state_ptr trace_state) {
+        return get_page_ptr(global_pos / page_size, 1, trace_state);
+    }
     // Generator of subsequent pages of data reflecting the contents of the file.
     // Single-user.
     class stream {
