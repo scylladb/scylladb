@@ -18,6 +18,8 @@ const sstring sstable_version_constants::TEMPORARY_TOC_SUFFIX = "TOC.txt.tmp";
 sstable_version_constants::component_map_t sstable_version_constants::create_component_map() {
     return {
         { component_type::Index, "Index.db"},
+        { component_type::Partitions, "TrieIndex.db"},
+        { component_type::Rows, "Rows.db"},
         { component_type::CompressionInfo, "CompressionInfo.db" },
         { component_type::Data, "Data.db" },
         { component_type::TOC, TOC_SUFFIX },
