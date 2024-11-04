@@ -1846,6 +1846,47 @@ row_trie_writer make_row_trie_writer(bti_trie_sink& out) {
     return row_trie_writer(out);
 }
 
+void memcmp_comparable_form_inner(bytes_view linearized, std::vector<std::byte>& out, const data_type& type_outer) {
+    auto initial_size = out.size();
+    const auto& type = type_outer->is_reversed() ? type_outer->underlying_type() : type_outer;
+    if (type == bytes_type) {
+        for (size_t i = 0; i < linearized.size(); ++i) {
+            if (linearized[i] != 0) {
+                out.push_back(std::byte(linearized[i]));
+            } else {
+                out.push_back(std::byte(0));
+                ++i;
+                while (true) {
+                    if (i == linearized.size()) {
+                        out.push_back(std::byte(0xfe));
+                        out.push_back(std::byte(0x0));
+                        goto finish;
+                    } else if (linearized[i] == 0) {
+                        out.push_back(std::byte(0xfe));
+                        ++i;
+                    } else {
+                        out.push_back(std::byte(0xff));
+                        --i;
+                        break;
+                    }
+                }
+            }
+        }
+        out.push_back(std::byte(0x0));
+finish:
+    } else if (type == ascii_type || type == utf8_type) {
+        append_to_vector(out, const_bytes{reinterpret_cast<const std::byte*>(linearized.data()), linearized.size()});
+        out.push_back(std::byte(0x0));
+    } else if (type == long_type) {
+        append_to_vector(out, const_bytes{reinterpret_cast<const std::byte*>(linearized.data()), linearized.size()});
+    }
+    if (type_outer->is_reversed()) {
+        for (size_t i = initial_size; i < out.size(); ++i) {
+            out[i] = std::byte(~uint8_t(out[i]));
+        }
+    }
+}
+
 std::unique_ptr<sstables::index_reader> make_bti_index_reader(
     bti_trie_source in,
     bti_trie_source in_row,
