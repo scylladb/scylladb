@@ -13,6 +13,7 @@ import functools
 import operator
 import time
 import re
+from contextlib import asynccontextmanager, contextmanager
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
@@ -20,7 +21,6 @@ from cassandra.util import datetime_from_uuid1           # type: ignore # pylint
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier, get_available_host, unique_name
-from contextlib import asynccontextmanager
 
 
 logger = logging.getLogger(__name__)
@@ -446,3 +446,18 @@ async def new_materialized_view(cql, table, select, pk, where, extra=""):
         yield mv
     finally:
         await cql.run_async(f"DROP MATERIALIZED VIEW {mv}")
+
+
+@contextmanager
+def disable_schema_agreement_wait(cql: Session):
+    """
+    A context manager that temporarily disables the schema agreement wait
+    for the given cql session.
+    """
+    assert hasattr(cql.cluster, "max_schema_agreement_wait")
+    old_value = cql.cluster.max_schema_agreement_wait
+    cql.cluster.max_schema_agreement_wait = 0
+    try:
+        yield
+    finally:
+        cql.cluster.max_schema_agreement_wait = old_value
