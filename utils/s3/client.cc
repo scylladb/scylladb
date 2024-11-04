@@ -237,37 +237,50 @@ future<> map_s3_client_exception(std::exception_ptr ex) {
 
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
-    authorize(req);
-    auto& gc = find_or_create_client();
-    return gc.http.make_request(std::move(req), std::move(handle), expected).handle_exception([] (auto ex) {
-        return map_s3_client_exception(std::move(ex));
-    });
+future<> client::do_make_request(group_client& gc, http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected_opt, seastar::abort_source* as) {
+    // TODO: the http client does not check abort status on entry, and if 
+    // we're already aborted when we get here we will paradoxally not be 
+    // interrupted, because no registration etc will be done. So do a quick
+    // preemptive check already.
+    if (as && as->abort_requested()) {
+        return make_exception_future<>(as->abort_requested_exception_ptr());
+    }
+    auto expected = expected_opt.value_or(http::reply::status_type::ok);
+    return (as
+        ? gc.http.make_request(std::move(req), std::move(handle), *as, expected)
+        : gc.http.make_request(std::move(req), std::move(handle), expected)
+        ).handle_exception([] (auto ex) {
+            return map_s3_client_exception(std::move(ex));
+        });
 }
 
-future<> client::make_request(http::request req, reply_handler_ext handle_ex, http::reply::status_type expected) {
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    authorize(req);
+    auto& gc = find_or_create_client();
+    return do_make_request(gc, std::move(req), std::move(handle), expected, as);
+}
+
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     authorize(req);
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return gc.http.make_request(std::move(req), std::move(handle), expected).handle_exception([] (auto ex) {
-        return map_s3_client_exception(std::move(ex));
-    });
+    return do_make_request(gc, std::move(req), std::move(handle), expected, as);
 }
 
-future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
+future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
     s3l.trace("HEAD {}", object_name);
     auto req = http::request::make("HEAD", _host, object_name);
-    return make_request(std::move(req), std::move(handler));
+    return make_request(std::move(req), std::move(handler), std::nullopt, as);
 }
 
-future<uint64_t> client::get_object_size(sstring object_name) {
+future<uint64_t> client::get_object_size(sstring object_name, seastar::abort_source* as) {
     uint64_t len = 0;
     co_await get_object_header(std::move(object_name), [&len] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         len = rep.content_length;
         return make_ready_future<>(); // it's HEAD with no body
-    });
+    }, as);
     co_return len;
 }
 
@@ -284,13 +297,13 @@ static std::time_t parse_http_last_modified_time(const sstring& object_name, sst
     return std::mktime(&tm);
 }
 
-future<stats> client::get_object_stats(sstring object_name) {
+future<stats> client::get_object_stats(sstring object_name, seastar::abort_source* as) {
     struct stats st{};
     co_await get_object_header(object_name, [&] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         st.size = rep.content_length;
         st.last_modified = parse_http_last_modified_time(object_name, rep.get_header("Last-Modified"));
         return make_ready_future<>();
-    });
+    }, as);
     co_return st;
 }
 
@@ -333,7 +346,7 @@ static tag_set parse_tagging(sstring& body) {
     return tags;
 }
 
-future<tag_set> client::get_object_tagging(sstring object_name) {
+future<tag_set> client::get_object_tagging(sstring object_name, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectTagging.html
     auto req = http::request::make("GET", _host, object_name);
     req.query_parameters["tagging"] = "";
@@ -345,7 +358,7 @@ future<tag_set> client::get_object_tagging(sstring object_name) {
         auto input = std::move(in);
         auto body = co_await util::read_entire_stream_contiguous(input);
         retval = parse_tagging(body);
-    });
+    }, std::nullopt, as);
     co_return tags;
 }
 
@@ -356,7 +369,7 @@ static auto dump_tagging(const tag_set& tags) {
     return body;
 }
 
-future<> client::put_object_tagging(sstring object_name, tag_set tagging) {
+future<> client::put_object_tagging(sstring object_name, tag_set tagging, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
     auto req = http::request::make("PUT", _host, object_name);
     req.query_parameters["tagging"] = "";
@@ -377,18 +390,18 @@ future<> client::put_object_tagging(sstring object_name, tag_set tagging) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req));
+    co_await make_request(std::move(req), ignore_reply, std::nullopt, as);
 }
 
-future<> client::delete_object_tagging(sstring object_name) {
+future<> client::delete_object_tagging(sstring object_name, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjectTagging.html
     auto req = http::request::make("DELETE", _host, object_name);
     req.query_parameters["tagging"] = "";
     s3l.trace("DELETE {} tagging", object_name);
-    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
-future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range) {
+future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
     if (range) {
@@ -427,13 +440,13 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         }).then([&gc, &off, start] {
             gc.read_stats.update(off, s3_clock::now() - start);
         });
-    }, expected);
+    }, expected, as);
     ret->trim(off);
     s3l.trace("Consumed {} bytes of {}", off, object_name);
     co_return std::move(*ret);
 }
 
-future<> client::put_object(sstring object_name, temporary_buffer<char> buf) {
+future<> client::put_object(sstring object_name, temporary_buffer<char> buf, seastar::abort_source* as) {
     s3l.trace("PUT {}", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     auto len = buf.size();
@@ -454,10 +467,10 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf) {
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_stats.update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
-    });
+    }, std::nullopt, as);
 }
 
-future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs) {
+future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* as) {
     s3l.trace("PUT {} (buffers)", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     auto len = bufs.size();
@@ -480,13 +493,13 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_stats.update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
-    });
+    }, std::nullopt, as);
 }
 
-future<> client::delete_object(sstring object_name) {
+future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
-    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
 class client::multipart_upload {
@@ -497,6 +510,7 @@ protected:
     utils::chunked_vector<sstring> _part_etags;
     gate _bg_flushes;
     std::optional<tag> _tag;
+    seastar::abort_source* _as;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -508,10 +522,11 @@ protected:
         return !_upload_id.empty();
     }
 
-    multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
+    multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
         , _tag(std::move(tag))
+        , _as(as)
     {
     }
 
@@ -521,8 +536,8 @@ public:
 
 class client::upload_sink_base : public multipart_upload, public data_sink_impl {
 public:
-    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag)
-        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag))
+    upload_sink_base(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag), as)
     {
     }
 
@@ -633,7 +648,7 @@ future<> client::multipart_upload::start_upload() {
             co_await coroutine::return_exception(std::runtime_error("cannot initiate upload"));
         }
         s3l.trace("created uploads for {} -> id = {}", _object_name, _upload_id);
-    });
+    }, std::nullopt, _as);
 }
 
 future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
@@ -689,7 +704,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         _part_etags[part_number] = std::move(etag);
         gc.write_stats.update(size, s3_clock::now() - start);
         return make_ready_future<>();
-    }).handle_exception([this, part_number] (auto ex) {
+    }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
     }).finally([gh = std::move(gh)] {});
@@ -749,8 +764,8 @@ class client::upload_sink final : public client::upload_sink_base {
     }
 
 public:
-    upload_sink(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag = {})
-        : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag))
+    upload_sink(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag = {}, seastar::abort_source* as = nullptr)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag), as)
     {}
 
     virtual future<> put(temporary_buffer<char> buf) override {
@@ -827,7 +842,7 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
                     return make_ready_future<>();
                 });
             });
-        }).handle_exception([this, part_number] (auto ex) {
+        }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
             // ... the exact exception only remains in logs
             s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         });
@@ -856,8 +871,8 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     }
 
 public:
-    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece)
-        : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt)
+    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(aws_maximum_parts_in_piece))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
     {}
@@ -899,12 +914,12 @@ public:
     }
 };
 
-data_sink client::make_upload_sink(sstring object_name) {
-    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name)));
+data_sink client::make_upload_sink(sstring object_name, seastar::abort_source* as) {
+    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::nullopt, as));
 }
 
-data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece) {
-    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece));
+data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
+    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece, as));
 }
 
 // unlike upload_sink and upload_jumbo_sink, do_upload_file reads from the
@@ -983,7 +998,7 @@ class client::do_upload_file : private multipart_upload {
             _part_etags[part_number] = std::move(etag);
             gc.write_stats.update(part_size, s3_clock::now() - start);
             return make_ready_future();
-        }).handle_exception([this, part_number] (auto ex) {
+        }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         }).finally([gh = std::move(gh)] {});
     }
@@ -1050,7 +1065,7 @@ class client::do_upload_file : private multipart_upload {
         co_await _client->make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
             gc.write_stats.update(len, s3_clock::now() - start);
             return ignore_reply(rep, std::move(in));
-        });
+        }, std::nullopt, _as);
     }
 
 public:
@@ -1059,8 +1074,9 @@ public:
                    sstring object_name,
                    std::optional<tag> tag,
                    size_t part_size,
-                   upload_progress& up)
-        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag))
+                   upload_progress& up,
+                   seastar::abort_source* as)
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(tag), as)
         , _path{std::move(path)}
         , _part_size(part_size)
         , _progress(up)
@@ -1087,25 +1103,29 @@ public:
 
 future<> client::upload_file(std::filesystem::path path,
                               sstring object_name,
-                              upload_progress& up) {
+                              upload_progress& up,
+                              seastar::abort_source* as) {
     do_upload_file do_upload{shared_from_this(),
                              std::move(path),
                              std::move(object_name),
-                             {}, 0, up};
+                             {}, 0, up, as};
     co_await do_upload.upload();
 }
 
 future<> client::upload_file(std::filesystem::path path,
                               sstring object_name,
                               std::optional<tag> tag,
-                              std::optional<size_t> part_size) {
+                              std::optional<size_t> part_size,
+                              seastar::abort_source* as
+                              ) {
     upload_progress noop;
     do_upload_file do_upload{shared_from_this(),
                              std::move(path),
                              std::move(object_name),
                              std::move(tag),
                              part_size.value_or(0),
-                             noop};
+                             noop,
+                             as};
     co_await do_upload.upload();
 }
 

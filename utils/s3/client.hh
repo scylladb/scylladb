@@ -84,29 +84,30 @@ class client : public enable_shared_from_this<client> {
 
     void authorize(http::request&);
     group_client& find_or_create_client();
-    future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, http::reply::status_type expected = http::reply::status_type::ok);
+    future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
-    future<> make_request(http::request req, reply_handler_ext handle, http::reply::status_type expected = http::reply::status_type::ok);
+    future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
+    future<> do_make_request(group_client&, http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
 
-    future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
+    future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
     explicit client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
-    future<uint64_t> get_object_size(sstring object_name);
-    future<stats> get_object_stats(sstring object_name);
-    future<tag_set> get_object_tagging(sstring object_name);
-    future<> put_object_tagging(sstring object_name, tag_set tagging);
-    future<> delete_object_tagging(sstring object_name);
-    future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {});
-    future<> put_object(sstring object_name, temporary_buffer<char> buf);
-    future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs);
-    future<> delete_object(sstring object_name);
+    future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
+    future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
+    future<tag_set> get_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
+    future<> put_object_tagging(sstring object_name, tag_set tagging, seastar::abort_source* = nullptr);
+    future<> delete_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
+    future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {}, seastar::abort_source* = nullptr);
+    future<> put_object(sstring object_name, temporary_buffer<char> buf, seastar::abort_source* = nullptr);
+    future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* = nullptr);
+    future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
 
     file make_readable_file(sstring object_name);
-    data_sink make_upload_sink(sstring object_name);
-    data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {});
+    data_sink make_upload_sink(sstring object_name, seastar::abort_source* = nullptr);
+    data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3
     ///
     /// @param path the path to the file
@@ -116,10 +117,12 @@ public:
     future<> upload_file(std::filesystem::path path,
                          sstring object_name,
                          std::optional<tag> tag = {},
-                         std::optional<size_t> max_part_size = {});
+                         std::optional<size_t> max_part_size = {},
+                         seastar::abort_source* = nullptr);
     future<> upload_file(std::filesystem::path path,
                          sstring object_name,
-                         upload_progress& up);
+                         upload_progress& up,
+                         seastar::abort_source* = nullptr);
 
     void update_config(endpoint_config_ptr);
 
