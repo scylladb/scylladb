@@ -104,6 +104,10 @@ private:
             SCYLLA_ASSERT(!_use_count);
         }
 
+        size_t pos() const {
+            return idx * page_size;
+        }
+
         void on_evicted() noexcept override;
 
         temporary_buffer<char> get_buf() {
@@ -122,6 +126,12 @@ private:
         // The buffer is invalidated when the page is evicted or when the owning LSA region invalidates references.
         char* begin() {
             return _lsa_buf.get();
+        }
+
+        // Returns a pointer to the contents of the page.
+        // The buffer can be invalidated when the page is evicted or when the owning LSA region invalidates references.
+        std::span<const std::byte> get_view() const {
+            return std::as_bytes(std::span<const char>(_lsa_buf.get(), _lsa_buf.size()));
         }
 
         size_t size_in_allocator() {
@@ -162,6 +172,9 @@ public:
             , was_already_cached(cached)
         {}
     };
+    future<page_read_result> get_shared_page(size_t global_pos, tracing::trace_state_ptr trace_state) {
+        return get_page_ptr(global_pos / page_size, 1, trace_state);
+    }
 private:
     future<page_read_result> get_page_ptr(page_idx_type idx,
             page_count_type read_ahead,
