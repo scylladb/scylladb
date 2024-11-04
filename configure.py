@@ -592,6 +592,7 @@ scylla_tests = set([
     'test/boost/top_k_test',
     'test/boost/tracing_test',
     'test/boost/transport_test',
+    'test/boost/trie_serializer_test',
     'test/boost/trie_writer_test',
     'test/boost/types_test',
     'test/boost/user_function_test',

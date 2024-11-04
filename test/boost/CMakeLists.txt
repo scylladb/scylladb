@@ -338,6 +338,8 @@ add_scylla_test(tracing_test
   KIND SEASTAR)
 add_scylla_test(transport_test
   KIND SEASTAR)
+add_scylla_test(trie_serializer_test
+  KIND BOOST)
 add_scylla_test(trie_writer_test
   KIND BOOST)
 add_scylla_test(types_test
