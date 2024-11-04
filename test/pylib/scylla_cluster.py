@@ -1497,7 +1497,6 @@ class ScyllaClusterManager:
         # make ScyllaClusterManager not operatable from client side
         self.logger.error(" %s, test case {test} BROKE ScyllaClusterManager", reason)
         self.server_broken_event.set()
-        self._mark_dirty(None)
 
     async def _mark_dirty(self, _request) -> None:
         """Mark current cluster dirty"""
