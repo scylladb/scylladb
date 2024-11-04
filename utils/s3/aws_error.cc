@@ -76,38 +76,54 @@ std::optional<aws_error> aws_error::parse(seastar::sstring&& body) {
 
 aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code) {
     const auto& all_errors = get_errors();
+    aws_error ret_val;
     switch (http_code) {
     case seastar::http::reply::status_type::unauthorized:
-        return all_errors.at("HTTP_UNAUTHORIZED");
+        ret_val = all_errors.at("HTTP_UNAUTHORIZED");
+        break;
     case seastar::http::reply::status_type::forbidden:
-        return all_errors.at("HTTP_FORBIDDEN");
+        ret_val = all_errors.at("HTTP_FORBIDDEN");
+        break;
     case seastar::http::reply::status_type::not_found:
-        return all_errors.at("HTTP_NOT_FOUND");
+        ret_val = all_errors.at("HTTP_NOT_FOUND");
+        break;
     case seastar::http::reply::status_type::too_many_requests:
-        return all_errors.at("HTTP_TOO_MANY_REQUESTS");
+        ret_val = all_errors.at("HTTP_TOO_MANY_REQUESTS");
+        break;
     case seastar::http::reply::status_type::internal_server_error:
-        return all_errors.at("HTTP_INTERNAL_SERVER_ERROR");
+        ret_val = all_errors.at("HTTP_INTERNAL_SERVER_ERROR");
+        break;
     case seastar::http::reply::status_type::bandwidth_limit_exceeded:
-        return all_errors.at("HTTP_BANDWIDTH_LIMIT_EXCEEDED");
+        ret_val = all_errors.at("HTTP_BANDWIDTH_LIMIT_EXCEEDED");
+        break;
     case seastar::http::reply::status_type::service_unavailable:
-        return all_errors.at("HTTP_SERVICE_UNAVAILABLE");
+        ret_val = all_errors.at("HTTP_SERVICE_UNAVAILABLE");
+        break;
     case seastar::http::reply::status_type::request_timeout:
-        return all_errors.at("HTTP_REQUEST_TIMEOUT");
+        ret_val = all_errors.at("HTTP_REQUEST_TIMEOUT");
+        break;
     case seastar::http::reply::status_type::page_expired:
-        return all_errors.at("HTTP_PAGE_EXPIRED");
+        ret_val = all_errors.at("HTTP_PAGE_EXPIRED");
+        break;
     case seastar::http::reply::status_type::login_timeout:
-        return all_errors.at("HTTP_LOGIN_TIMEOUT");
+        ret_val = all_errors.at("HTTP_LOGIN_TIMEOUT");
+        break;
     case seastar::http::reply::status_type::gateway_timeout:
-        return all_errors.at("HTTP_GATEWAY_TIMEOUT");
+        ret_val = all_errors.at("HTTP_GATEWAY_TIMEOUT");
+        break;
     case seastar::http::reply::status_type::network_connect_timeout:
-        return all_errors.at("HTTP_NETWORK_CONNECT_TIMEOUT");
+        ret_val = all_errors.at("HTTP_NETWORK_CONNECT_TIMEOUT");
+        break;
     case seastar::http::reply::status_type::network_read_timeout:
-        return all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
+        ret_val = all_errors.at("HTTP_NETWORK_READ_TIMEOUT");
+        break;
     default:
-        return {aws_error_type::UNKNOWN,
-                "Unknown server error has been encountered",
-                retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
+        ret_val = {aws_error_type::UNKNOWN,
+                   "Unknown server error has been encountered.",
+                   retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
     }
+    ret_val._message = seastar::format("{} HTTP code: {}", ret_val._message, http_code);
+    return ret_val;
 }
 
 const aws_errors& aws_error::get_errors() {

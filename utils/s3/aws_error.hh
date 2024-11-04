@@ -112,3 +112,10 @@ public:
 };
 
 } // namespace aws
+
+template <>
+struct fmt::formatter<aws::aws_error_type> : fmt::formatter<string_view> {
+    auto format(const aws::aws_error_type& error_type, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", static_cast<unsigned>(error_type));
+    }
+};

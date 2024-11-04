@@ -109,7 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_1) {
     const size_t memory_size = part_size;
     BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NEVERENDING_RETRYABLE_FAILURE, total_size, memory_size),
             storage_io_error, [](const storage_io_error& e) {
-                return e.code().value() == EIO && e.what() == "S3 request failed. Reason: We encountered an internal error. Please try again."sv;
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
             });
 }
 
@@ -120,7 +120,7 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_2) {
     const size_t memory_size = part_size;
     BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE, total_size, memory_size), storage_io_error,
             [](const storage_io_error& e) {
-                return e.code().value() == EIO;
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
             });
 }
 
@@ -157,13 +157,13 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_retryable_success) {
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_failure_1) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NEVERENDING_RETRYABLE_FAILURE), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO && e.what() == "S3 request failed. Reason: We encountered an internal error. Please try again."sv;
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
     });
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_failure_2) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO && std::string_view(e.what()).contains("S3 request failed. Reason:");
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
 }
 
@@ -178,12 +178,12 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_retryable_success) {
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_1) {
     BOOST_REQUIRE_EXCEPTION(
             do_test_client_multipart_upload(failure_policy::NEVERENDING_RETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
-                return e.code().value() == EIO && e.what() == "S3 request failed. Reason: We encountered an internal error. Please try again."sv;
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
             });
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO && std::string_view(e.what()).contains("S3 request failed. Reason:");
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
 }

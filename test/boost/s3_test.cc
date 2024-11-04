@@ -31,6 +31,8 @@
 #include "sstables/checksum_utils.hh"
 #include "gc_clock.hh"
 
+using namespace std::string_view_literals;
+
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
 // permissive enough policy and then run the test with env set respectively
 // E.g. like this
@@ -532,4 +534,50 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_proxy) {
     client_list_objects_incomplete(make_proxy_client);
+}
+
+void client_broken_bucket(const client_maker_function& client_maker) {
+    const sstring name(fmt::format("/{}/testobject-{}", "NO_BUCKET", ::getpid()));
+    semaphore mem(16 << 20);
+    auto client = client_maker(mem);
+
+    auto close_client = deferred_close(*client);
+    auto data = sstring("1234567890ABCDEF").release();
+    BOOST_REQUIRE_EXCEPTION(client->put_object(name, std::move(data)).get(), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 100. Reason: The specified bucket is not valid."sv;
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_broken_bucket_minio) {
+    client_broken_bucket(make_minio_client);
+}
+
+void client_missing_prefix(const client_maker_function& client_maker) {
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+    semaphore mem(16 << 20);
+    auto client = client_maker(mem);
+
+    auto close_client = deferred_close(*client);
+    BOOST_REQUIRE_EXCEPTION(client->get_object_size(name).get(), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == ENOENT && e.what() == "S3 request failed. Code: 117. Reason:  HTTP code: 404 Not Found"sv;
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_missing_prefix_minio) {
+    client_missing_prefix(make_minio_client);
+}
+
+void client_access_missing_object(const client_maker_function& client_maker) {
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+    semaphore mem(16 << 20);
+    auto client = client_maker(mem);
+
+    auto close_client = deferred_close(*client);
+    BOOST_REQUIRE_EXCEPTION(client->get_object_tagging(name).get(), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == ENOENT && e.what() == "S3 request failed. Code: 133. Reason: The specified key does not exist."sv;
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_access_missing_object_minio) {
+    client_access_missing_object(make_minio_client);
 }

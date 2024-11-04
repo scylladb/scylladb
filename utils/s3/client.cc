@@ -217,6 +217,9 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
         switch (e.error().get_error_type()) {
         case aws::aws_error_type::HTTP_NOT_FOUND:
         case aws::aws_error_type::RESOURCE_NOT_FOUND:
+        case aws::aws_error_type::NO_SUCH_BUCKET:
+        case aws::aws_error_type::NO_SUCH_KEY:
+        case aws::aws_error_type::NO_SUCH_UPLOAD:
             error_code = ENOENT;
             break;
         case aws::aws_error_type::HTTP_FORBIDDEN:
@@ -227,7 +230,7 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
         default:
             error_code = EIO;
         }
-        return {error_code, format("S3 request failed. Reason: {}", e.what())};
+        return {error_code, format("S3 request failed. Code: {}. Reason: {}", e.error().get_error_type(), e.what())};
     } catch (const httpd::unexpected_status_error& e) {
         auto status = e.status();
 
