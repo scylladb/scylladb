@@ -99,8 +99,15 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     options.buffer_size = sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
-    return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
+    seastar::file f;
+    switch (type) {
+        case component_type::Data: f = std::move(sst._data_file); break;
+        case component_type::Index: f = std::move(sst._index_file); break;
+        case component_type::Partitions: f = std::move(sst._partition_index_file); break;
+        case component_type::Rows: f = std::move(sst._row_index_file); break;
+        default: abort(); break;
+    }
+    return make_file_data_sink(std::move(f), options);
 }
 
 future<data_sink> filesystem_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
@@ -589,7 +596,7 @@ future<file> s3_storage::open_component(const sstable& sst, component_type type,
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
-    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
+    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index || type == component_type::Partitions || type == component_type::Rows);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
 }

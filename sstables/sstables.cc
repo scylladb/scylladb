@@ -84,6 +84,8 @@
 #include "release.hh"
 #include "utils/build_id.hh"
 
+#include "trie.hh"
+
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
 
@@ -858,6 +860,10 @@ void sstable::generate_toc() {
     _recognized_components.insert(component_type::Index);
     _recognized_components.insert(component_type::Summary);
     _recognized_components.insert(component_type::Data);
+    if (_schema->partition_key_type()->has_memcmp_comparable_form()) {
+        _recognized_components.insert(component_type::Partitions);
+        _recognized_components.insert(component_type::Rows);
+    }
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
@@ -1330,10 +1336,16 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
 }
 
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
-    return when_all_succeed(
+    co_await when_all_succeed(
         open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }),
-        open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); })
-    ).discard_result();
+        open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); }),
+        has_component(component_type::Partitions)
+            ? open_file(component_type::Partitions, oflags, options).then([this] (file f) { _partition_index_file = std::move(f); })
+            : make_ready_future<>(),
+        has_component(component_type::Partitions)
+            ? open_file(component_type::Rows, oflags, options).then([this] (file f) { _row_index_file = std::move(f); })
+            : make_ready_future<>()
+    );
 }
 
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
@@ -2847,6 +2859,20 @@ future<> sstable::close_files() {
             general_disk_error();
         });
     }
+    auto partitions_closed = make_ready_future<>();
+    if (_partition_index_file) {
+        data_closed = _partition_index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+            sstlog.warn("sstable close partition_index_file failed: {}", ep);
+            general_disk_error();
+        });
+    }
+    auto rows_closed = make_ready_future<>();
+    if (_row_index_file) {
+        data_closed = _row_index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+            sstlog.warn("sstable close row_index_file failed: {}", ep);
+            general_disk_error();
+        });
+    }
 
     auto unlinked = make_ready_future<>();
     if (_marked_for_deletion != mark_for_deletion::none) {
@@ -2871,7 +2897,7 @@ future<> sstable::close_files() {
 
     _on_closed(*this);
 
-    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result().then([this, me = shared_from_this()] {
+    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(partitions_closed), std::move(rows_closed), std::move(unlinked)).discard_result().then([this, me = shared_from_this()] {
         if (_open_mode) {
             if (_open_mode.value() == open_flags::ro) {
                 _stats.on_close_for_reading();
@@ -3258,6 +3284,9 @@ sstable::sstable(schema_ptr schema,
     , _manager(manager)
 {
     manager.add(this);
+}
+
+sstable::~sstable() {
 }
 
 file sstable::uncached_index_file() {

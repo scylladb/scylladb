@@ -200,6 +200,7 @@ public:
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
     sstable(sstable&&) = delete;
+    ~sstable();
 
     // disk_read_range describes a byte ranges covering part of an sstable
     // row that we need to read from disk. Usually this is the whole byte
@@ -364,6 +365,12 @@ public:
     }
     file& index_file() {
         return _index_file;
+    }
+    file& trie_index_file() {
+        return _partition_index_file;
+    }
+    uint64_t trie_root_offset() {
+        return _trie_root_offset;
     }
     file uncached_index_file();
     // Returns size of bloom filter data.
@@ -531,6 +538,8 @@ private:
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
     std::set<generation_type> _compaction_ancestors;
     file _index_file;
+    file _partition_index_file;
+    file _row_index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
     uint64_t _data_file_size;
