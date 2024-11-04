@@ -109,7 +109,7 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     , _module(module)
 {
     // Child tasks of regular tasks do not need to subscribe to abort source because they will be aborted recursively by their parents.
-    if (!parent_id || _parent_kind == task_kind::cluster) {
+    if (!parent_id) {
         _shutdown_subscription = module->abort_source().subscribe([this] () noexcept {
             abort();
         });
@@ -208,6 +208,9 @@ future<std::vector<task_manager::task::task_essentials>> task_manager::task::imp
 
 void task_manager::task::impl::set_virtual_parent() noexcept {
     _parent_kind = task_kind::cluster;
+    _shutdown_subscription = _module->abort_source().subscribe([this] () noexcept {
+        abort();
+    });
 }
 
 void task_manager::task::impl::run_to_completion() {
@@ -607,12 +610,11 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
             co_return std::nullopt;
         }));
 
-        if (sequence_number) {
-            task->get_status().sequence_number = sequence_number.value();
-        } else { // Virtual task as a parent.
-            sequence_number = new_sequence_number();
+        if (!sequence_number) { // Virtual task as a parent.
             task->set_virtual_parent();
+            sequence_number = new_sequence_number();
         }
+        task->get_status().sequence_number = sequence_number.value();
     }
     if (abort) {
         task->abort();
