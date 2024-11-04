@@ -33,7 +33,7 @@ public:
         _permit.on_finish_sstable_read();
     }
 
-    void on_next_partition(dht::decorated_key, tombstone);
+    virtual data_consumer::proceed on_next_partition(dht::decorated_key, tombstone);
 };
 
 enum class row_processing_result {
@@ -298,7 +298,11 @@ public:
         auto pk = key.to_partition_key(*_schema);
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
-        _reader->on_next_partition(std::move(dk), tombstone(deltime));
+
+        auto should_proceed = _reader->on_next_partition(std::move(dk), tombstone(deltime));
+        if (should_proceed == data_consumer::proceed::no) {
+            return data_consumer::proceed::no;
+        }
         return data_consumer::proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
@@ -1719,6 +1723,44 @@ public:
             sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
         });
     }
+
+    data_consumer::proceed on_next_partition(dht::decorated_key key, tombstone tomb) override {
+        if (_pr.get().before(key, dht::ring_position_comparator(*_schema))) {
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr);
+            // If we got here, then the index returned a Data file range which
+            // includes some partitions before the queried range.
+            //
+            // A BTI index is inexact in general (it can return a Data file range
+            // which includes some partitions before and after the queried range),
+            // but it is guaranteed to return the exact position if it's queried
+            // for a key which is present in the sstable.
+            //
+            // So, for a single partition read, if we parsed a partition which is before
+            // the queried range, it means that the queried partition doesn't exist in the sstable.
+            // (I.e. the index gave us a false positive).
+            // In this case, the read is over. There's nothing to read.
+            //
+            // Otherwise, for range reads, we are going to skip this partition
+            // (i.e. advance the index to the range after `key`) and resume reading.
+            _end_of_stream = _single_partition_read;
+            _before_partition = false;
+            _partition_finished = true;
+            _current_partition_key = std::move(key);
+            return data_consumer::proceed::no;
+        } else if (_pr.get().after(key, dht::ring_position_comparator(*_schema))) {
+            // If we got here, then the index returned a Data file range which
+            // includes some partitions after the queried range.
+            // The read is over. The new key and everything after it should be ignored.
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr);
+            _end_of_stream = true;
+            _current_partition_key.reset();
+            return data_consumer::proceed::no;
+        } else {
+            // This is the normal path.
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr);
+            return mp_row_consumer_reader_mx::on_next_partition(std::move(key), tomb);
+        }
+    }
 };
 
 static mutation_reader make_reader(
@@ -1860,7 +1902,7 @@ mutation_reader make_full_scan_reader(
             std::move(trace_state), monitor, integrity);
 }
 
-void mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombstone tomb) {
+data_consumer::proceed mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombstone tomb) {
     _partition_finished = false;
     _before_partition = false;
     _end_of_stream = false;
@@ -1868,6 +1910,7 @@ void mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombst
     push_mutation_fragment(
             mutation_fragment_v2(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
     _sst->get_stats().on_partition_read();
+    return data_consumer::proceed::yes;
 }
 
 // A validating consumer implementing the Consumer concept of data_consume_rows_context_m.
