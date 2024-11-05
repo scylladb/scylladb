@@ -21,7 +21,6 @@
 #include "utils/updateable_value.hh"
 #include "utils/serialized_action.hh"
 #include <vector>
-#include <list>
 #include <functional>
 #include "compaction.hh"
 #include "compaction_backlog_manager.hh"
