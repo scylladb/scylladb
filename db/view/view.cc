@@ -1723,8 +1723,10 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 //
 // If the keyspace's replication strategy is a NetworkTopologyStrategy,
 // we pair only nodes in the same datacenter.
-// If one of the base replicas also happens to be a view replica, it is
-// paired with itself (with the other nodes paired by order in the list
+//
+// When use_legacy_self_pairing is enabled, if one of the base replicas
+// also happens to be a view replica, it is paired with itself
+// (with the other nodes paired by order in the list
 // after taking this node out).
 //
 // If the assumption that the given base token belongs to this replica
