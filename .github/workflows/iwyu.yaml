@@ -9,7 +9,9 @@ env:
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
-  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms
+  # the "idl" subdirectory does not contain C++ source code. the .hh files in it are
+  # supposed to be processed by idl-compiler.py, so we don't check them using the cleaner
+  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang
 
 permissions: {}
 
