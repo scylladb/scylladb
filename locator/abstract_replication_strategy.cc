@@ -66,7 +66,12 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
         for (auto&& item : params.options) {
             sstring key = item.first;
             if (!expected->contains(key)) {
-                 throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
+                if (strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+                    throw exceptions::configuration_exception(format("Unrecognized datacenter name {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
+                }
+                else {
+                    throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
+                }
             }
         }
     }
