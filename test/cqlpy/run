@@ -14,6 +14,23 @@ else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
 
+<<<<<<< HEAD
+=======
+# If the first option (TODO: improve the command line processing this up)
+# is "--release", download that release (see fetch_scylla.py for supported
+# release numbers), and use that.
+# The downloaded Scylla will be cached in the directory build/<release>,
+# where <release> is the specific release downloaded (e.g., if the user
+# asks "--release 2022.1" and the downloaded release is 2022.1.9, it
+# will be stored in build/2022.1.9.
+if len(sys.argv) > 1 and sys.argv[1] == '--release':
+    release = sys.argv[2]
+    exe = run.download_precompiled_scylla(release)
+    cmd = lambda pid, dir: run.run_precompiled_scylla_cmd(exe, pid, dir)
+    check_cql = run.check_cql
+    sys.argv = sys.argv[0:1] + sys.argv[3:]
+
+>>>>>>> 1fd7b797c7 (test/cqlpy: fix "run" script without any parameters)
 # If the "--vnodes" option is given, drop the "tablets" experimental
 # feature (turned on in run.py) so that all tests will be run with the
 # old vnode-based replication instead of tablets. This option only has
