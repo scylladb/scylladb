@@ -365,7 +365,9 @@ def pkg_distro():
     else:
         return distro.id()
 
-pkg_xlat = {'cpupowerutils': {'debian': 'linux-cpupower', 'gentoo':'sys-power/cpupower', 'arch':'cpupower', 'suse': 'cpupower'}}
+pkg_xlat = {'cpupowerutils': {'debian': 'linux-cpupower', 'gentoo':'sys-power/cpupower', 'arch':'cpupower', 'suse': 'cpupower'},
+            'policycoreutils-python-utils': {'amzn2': 'policycoreutils-python'}}
+
 def pkg_install(pkg, offline_exit=True):
     if pkg in pkg_xlat and pkg_distro() in pkg_xlat[pkg]:
         pkg = pkg_xlat[pkg][pkg_distro()]
