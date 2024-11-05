@@ -7,8 +7,8 @@ import sys
 import requests
 import time
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+# Use the util.py library from ../cqlpy:
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
 from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
 from test.rest_api.rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper
 

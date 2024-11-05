@@ -65,7 +65,7 @@ def is_scylla(cql):
 def keyspace_has_tablets(cql, keyspace):
     """ Return true if the keyspace was created with tablets.
 
-    We support running cql-pytest against an older version of scylla, so we do
+    We support running cqlpy against an older version of scylla, so we do
     the detection in a way that accounts for scylla possibly not even knowing
     what tablets is.
     For cassandra, this will always return no.
