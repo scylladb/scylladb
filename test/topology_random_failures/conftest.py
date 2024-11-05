@@ -6,9 +6,4 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 
-import pytest
-
-
-pytest_plugins = [
-    "test.topology.conftest",
-]
+from test.topology.conftest import *

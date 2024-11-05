@@ -247,10 +247,10 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
 @pytest.mark.asyncio
-async def test_saved_readers_tablet_migration(manager: ManagerClient, mode):
+async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode):
     cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
 
-    if mode != "release":
+    if build_mode != "release":
         cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
 
     servers = await manager.servers_add(2, config=cfg)

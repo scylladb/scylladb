@@ -233,7 +233,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
 
 @pytest.mark.asyncio
 @skip_mode('release', 'cql server testing REST API is not supported in release mode')
-async def test_connections_parameters_auto_update(manager: ManagerClient, mode):
+async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
     servers = await manager.servers_add(3)
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -247,15 +247,15 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, mode):
     await assert_connections_params(manager, hosts, {
         "r1": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(mode),
+            "timeout": default_timeout(build_mode),
         },
         "r2": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(mode),
+            "timeout": default_timeout(build_mode),
         },
         "r3": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(mode),
+            "timeout": default_timeout(build_mode),
         },
     })
 

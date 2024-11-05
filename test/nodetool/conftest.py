@@ -16,12 +16,9 @@ import requests.exceptions
 
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
-from test.pylib.report_plugin import ReportPlugin
 
 
 def pytest_addoption(parser):
-    parser.addoption('--mode', action='store', default='dev',
-                     help='Scylla build mode to use (default: %(default)s)')
     parser.addoption('--nodetool', action='store', choices=["scylla", "cassandra"], default="scylla",
                      help="Which nodetool implementation to run the tests against (default: %(default)s)")
     parser.addoption('--nodetool-path', action='store', default=None,
@@ -32,8 +29,6 @@ def pytest_addoption(parser):
                      help="Path to the jmx binary, only used with --nodetool=cassandra")
     parser.addoption('--run-within-unshare', action='store_true',
                      help="Setup the 'lo' network if launched with unshare(1)")
-    parser.addoption('--run_id', action='store', default=1,
-                     help='Run id for the test run (default: %(default)d)')
 
 
 class ServerAddress(NamedTuple):
@@ -173,10 +168,9 @@ def _path_to_scylla(mode):
 
 
 @pytest.fixture(scope="session")
-def nodetool_path(request):
+def nodetool_path(request, build_mode):
     if request.config.getoption("nodetool") == "scylla":
-        mode = request.config.getoption("mode")
-        return _path_to_scylla(mode)
+        return _path_to_scylla(build_mode)
 
     path = request.config.getoption("nodetool_path")
     if path is not None:
@@ -239,7 +233,3 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             return res
 
     return invoker
-
-
-def pytest_configure(config):
-    config.pluginmanager.register(ReportPlugin())
