@@ -515,6 +515,8 @@ private:
      */
     future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
 
+    template<typename ID>
+    future<> wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout);
 public:
     bool is_alive(inet_address ep) const;
     bool is_alive(locator::host_id id) const;
@@ -522,7 +524,8 @@ public:
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
-    future<> wait_alive(noncopyable_function<std::vector<gms::inet_address>()> get_nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);

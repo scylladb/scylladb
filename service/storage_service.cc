@@ -1776,12 +1776,11 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         // the joining node would wait for it to be UP, and wait_alive would time out. Recalculation fixes
         // this problem. Ref: #17526
         auto get_sync_nodes = [&] {
-            std::vector<gms::inet_address> sync_nodes;
+            std::vector<locator::host_id> sync_nodes;
             get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
-                auto ep = np->endpoint();
                 const auto& host_id = np->host_id();
                 if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
-                    sync_nodes.push_back(ep);
+                    sync_nodes.push_back(host_id);
                 }
             });
             return sync_nodes;
@@ -6916,44 +6915,10 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
                 // propagated through gossip. In order to reduce the chance of
                 // repair/streaming failure, wait here until we see normal nodes
                 // as UP (or the timeout elapses).
-                const auto& amap = _group0->address_map();
-                std::vector<gms::inet_address> sync_nodes;
-                // FIXME: https://github.com/scylladb/scylladb/issues/12279
-                // Keep trying to translate host IDs to IPs until all are available in gossip
-                // Ultimately, we should take this information from token_metadata
-                const auto sync_nodes_resolve_deadline = lowres_clock::now() + wait_for_live_nodes_timeout;
-                while (true) {
-                    sync_nodes.clear();
-                    std::vector<raft::server_id> untranslated_ids;
-                    for (const auto& [id, _] : _topology_state_machine._topology.normal_nodes) {
-                        if (ignored_ids.contains(id)) {
-                            continue;
-                        }
-                        if (auto ip = amap.find(locator::host_id{id.uuid()})) {
-                            sync_nodes.push_back(*ip);
-                        } else {
-                            untranslated_ids.push_back(id);
-                        }
-                    }
-
-                    if (!untranslated_ids.empty()) {
-                        if (lowres_clock::now() > sync_nodes_resolve_deadline) {
-                            throw std::runtime_error(fmt::format(
-                                    "Failed to obtain IP addresses of nodes that should be seen"
-                                    " as alive within {}s",
-                                    std::chrono::duration_cast<std::chrono::seconds>(wait_for_live_nodes_timeout).count()));
-                        }
-
-                        static logger::rate_limit rate_limit{std::chrono::seconds(1)};
-                        rtlogger.log(log_level::warn, rate_limit, "cannot map nodes {} to ips, retrying.",
-                                untranslated_ids);
-
-                        co_await sleep_abortable(std::chrono::milliseconds(5), _group0_as);
-                    } else {
-                        break;
-                    }
-                }
-
+                auto sync_nodes = _topology_state_machine._topology.normal_nodes | std::views::keys
+                             | std::ranges::views::filter([ignored_ids] (raft::server_id id) { return !ignored_ids.contains(id); })
+                             | std::views::transform([] (raft::server_id id) { return locator::host_id{id.uuid()}; })
+                             | std::ranges::to<std::vector<locator::host_id>>();
                 rtlogger.info("coordinator accepted request to join, "
                         "waiting for nodes {} to be alive before responding and continuing",
                         sync_nodes);

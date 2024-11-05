@@ -2436,15 +2436,12 @@ bool gossiper::is_alive(locator::host_id id) const {
     return is_alive(*ip_opt);
 }
 
-future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
-    return wait_alive([nodes = std::move(nodes)] { return nodes; }, timeout);
-}
-
-future<> gossiper::wait_alive(noncopyable_function<std::vector<gms::inet_address>()> get_nodes, std::chrono::milliseconds timeout) {
+template<typename ID>
+future<> gossiper::wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout) {
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
         auto nodes = get_nodes();
-        std::vector<gms::inet_address> live_nodes;
+        std::vector<ID> live_nodes;
         for (const auto& node: nodes) {
             size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
                 return g.is_alive(node) ? 1 : 0;
@@ -2464,6 +2461,19 @@ future<> gossiper::wait_alive(noncopyable_function<std::vector<gms::inet_address
         }
         co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
     }
+}
+
+// Needed for legacy (node_ops) mode only)
+future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+    return wait_alive_helper<gms::inet_address>([nodes = std::move(nodes)] { return nodes; }, timeout);
+}
+
+future<> gossiper::wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout) {
+    return wait_alive_helper<locator::host_id>([nodes = std::move(nodes)] { return nodes; }, timeout);
+}
+
+future<> gossiper::wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout) {
+    return wait_alive_helper(std::move(get_nodes), timeout);
 }
 
 future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
