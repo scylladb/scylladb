@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <boost/range/iterator_range.hpp>
-
 #include "bytes.hh"
 #include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
@@ -17,11 +15,13 @@
 #include <seastar/core/loop.hh>
 #include <bit>
 #include <concepts>
+#include <ranges>
 
 
 class bytes_ostream_fragment_iterator {
 public:
     using iterator_category = std::input_iterator_tag;
+    using iterator_concept = std::input_iterator_tag;
     using value_type = bytes_view;
     using difference_type = std::ptrdiff_t;
     using pointer = bytes_view*;
@@ -362,7 +362,7 @@ public:
 
     output_iterator write_begin() { return output_iterator(*this); }
 
-    boost::iterator_range<fragment_iterator> fragments() const {
+    std::ranges::subrange<fragment_iterator> fragments() const {
         return { begin(), end() };
     }
 
