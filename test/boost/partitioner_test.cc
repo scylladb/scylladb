@@ -8,7 +8,6 @@
 
 #include <limits>
 
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/combine.hpp>
 #include <boost/test/tools/old/interface.hpp>
 #include <fmt/ranges.h>

@@ -11,8 +11,6 @@
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptor/reversed.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -256,7 +254,7 @@ public:
     }
 
     virtual bool is_reducible() const override {
-        return boost::algorithm::all_of(
+        return std::ranges::all_of(
                 _selectors,
                [] (const expr::expression& e) {
                     auto fc = expr::as_if<expr::function_call>(&e);
@@ -272,7 +270,7 @@ public:
                         return false;
                     }
                     // We only support transforming columns directly for parallel queries
-                    if (!boost::algorithm::all_of(fc->args, expr::is<expr::column_value>)) {
+                    if (!std::ranges::all_of(fc->args, expr::is<expr::column_value>)) {
                         return false;
                     }
                     return true;
@@ -350,7 +348,7 @@ protected:
         explicit selectors_with_processing(const selection_with_processing& sel)
             : _sel(sel)
             , _temporaries(_sel._initial_values_for_temporaries)
-            , _requires_thread(boost::algorithm::any_of(sel._selectors, [] (const expr::expression& e) {
+            , _requires_thread(std::ranges::any_of(sel._selectors, [] (const expr::expression& e) {
                 return expr::find_in_expression<expr::function_call>(e, [] (const expr::function_call& fc) {
                     return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
                 });

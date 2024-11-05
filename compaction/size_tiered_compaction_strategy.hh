@@ -10,7 +10,6 @@
 
 #include "compaction_strategy_impl.hh"
 #include "sstables/shared_sstable.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 
 class size_tiered_backlog_tracker;
 
@@ -65,7 +64,7 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     }
 
     bool is_any_bucket_interesting(const std::vector<std::vector<sstables::shared_sstable>>& buckets, int min_threshold) const {
-        return boost::algorithm::any_of(buckets, [&] (const auto& bucket) {
+        return std::ranges::any_of(buckets, [&] (const auto& bucket) {
             return this->is_bucket_interesting(bucket, min_threshold);
         });
     }

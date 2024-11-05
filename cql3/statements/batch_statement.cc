@@ -19,8 +19,6 @@
 #include "service/storage_proxy.hh"
 #include "tracing/trace_state.hh"
 
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
 
 template<typename T = void>
@@ -50,7 +48,7 @@ batch_statement::batch_statement(int bound_terms, type type_,
     : cql_statement_opt_metadata(timeout_for_type(type_))
     , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
-    , _has_conditions(boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
+    , _has_conditions(std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
 {
     validate();
@@ -74,7 +72,7 @@ batch_statement::batch_statement(type type_,
 
 bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
 {
-    return boost::algorithm::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
+    return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
 }
 
 uint32_t batch_statement::get_bound_terms() const
@@ -109,12 +107,12 @@ void batch_statement::validate()
         }
     }
 
-    bool has_counters = boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
-    bool has_non_counters = !boost::algorithm::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_counters = std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_non_counters = !std::ranges::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
     if (timestamp_set && has_counters) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for a BATCH containing counters");
     }
-    if (timestamp_set && boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
+    if (timestamp_set && std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
         throw exceptions::invalid_request_exception("Timestamp must be set either on BATCH or individual statements");
     }
     if (_type == type::COUNTER && has_non_counters) {

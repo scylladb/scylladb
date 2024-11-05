@@ -15,8 +15,6 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include <stdexcept>
-#include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include "utils/overloaded_functor.hh"
 
 #include "expressions.hh"
@@ -743,9 +741,9 @@ bool verify_condition_expression(
             };
             switch (list.op) {
             case '&':
-                return boost::algorithm::all_of(list.conditions, verify_condition);
+                return std::ranges::all_of(list.conditions, verify_condition);
             case '|':
-                return boost::algorithm::any_of(list.conditions, verify_condition);
+                return std::ranges::any_of(list.conditions, verify_condition);
             default:
                 // Shouldn't happen unless we have a bug in the parser
                 throw std::logic_error("bad operator in condition_list");

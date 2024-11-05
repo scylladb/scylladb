@@ -57,7 +57,6 @@
 #include <ftw.h>
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
@@ -840,7 +839,7 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 1);
     BOOST_REQUIRE(candidate.sstables.size() == size_t(sstables_no-1));
-    BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [&] (auto& sst) {
+    BOOST_REQUIRE(std::ranges::all_of(candidate.sstables, [&] (auto& sst) {
         return expected.erase(sst);
     }));
     BOOST_REQUIRE(expected.empty());
@@ -883,7 +882,7 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
         BOOST_REQUIRE(candidate.sstables.size() == size_t(l0_sstables_no));
-        BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [&] (auto& sst) {
+        BOOST_REQUIRE(std::ranges::all_of(candidate.sstables, [&] (auto& sst) {
             return expected.erase(sst);
         }));
         BOOST_REQUIRE(expected.empty());
@@ -4449,7 +4448,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
                 auto ret = get_reshaping_job(cs, sstables, s, mode);
                 BOOST_REQUIRE_EQUAL(ret.sstables.size(), uint64_t(s->max_compaction_threshold()));
                 // fail if any file doesn't belong to set of small files
-                bool has_big_sized_files = boost::algorithm::any_of(ret.sstables, [&] (const sstables::shared_sstable& sst) {
+                bool has_big_sized_files = std::ranges::any_of(ret.sstables, [&] (const sstables::shared_sstable& sst) {
                     return !generations_for_small_files.contains(sst->generation());
                 });
                 BOOST_REQUIRE(!has_big_sized_files);
@@ -4708,7 +4707,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             // wait for submitted jobs to finish.
             auto end = [&cm, &tables, expected_after] {
                 return cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0
-                    && boost::algorithm::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
+                    && std::ranges::all_of(tables, [expected_after] (auto& t) { return t->sstables_count() == expected_after; });
             };
             while (!end()) {
                 if (!cm.get_stats().pending_tasks && !cm.get_stats().active_tasks) {

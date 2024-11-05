@@ -23,7 +23,6 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstable_set.hh"
 #include "db/view/view_update_checks.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "replica/database.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"

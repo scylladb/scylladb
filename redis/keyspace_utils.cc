@@ -26,7 +26,6 @@
 #include <seastar/core/print.hh>
 #include "db/config.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include <boost/algorithm/cxx11/all_of.hpp>
 
 using namespace seastar;
 
@@ -167,7 +166,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             auto check = [&] (table t) {
                 return db.has_schema(ks_name, t.name);
             };
-            return db.has_keyspace(ks_name) && boost::algorithm::all_of(tables, check);
+            return db.has_keyspace(ks_name) && std::ranges::all_of(tables, check);
         });
 
         if (schema_ok) {

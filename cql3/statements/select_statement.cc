@@ -43,7 +43,6 @@
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "test/lib/select_statement_utils.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "utils/result_combinators.hh"
@@ -51,7 +50,6 @@
 #include "replica/database.hh"
 #include "replica/mutation_dump.hh"
 
-#include <boost/algorithm/cxx11/all_of.hpp>
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
@@ -1945,7 +1943,7 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
 static
 bool
 group_by_references_clustering_keys(const selection::selection& sel, const std::vector<size_t>& group_by_cell_indices) {
-    return boost::algorithm::any_of(group_by_cell_indices, [&] (size_t idx) {
+    return std::ranges::any_of(group_by_cell_indices, [&] (size_t idx) {
         return sel.get_columns()[idx]->kind == column_kind::clustering_key;
     });
 }
@@ -2033,7 +2031,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     prepared_attrs->fill_prepare_context(ctx);
 
     auto all_aggregates = [] (const std::vector<selection::prepared_selector>& prepared_selectors) {
-        return boost::algorithm::all_of(
+        return std::ranges::all_of(
             prepared_selectors | boost::adaptors::transformed(std::mem_fn(&selection::prepared_selector::expr)),
             [] (const expr::expression& e) {
                 auto fn_expr = expr::as_if<expr::function_call>(&e);

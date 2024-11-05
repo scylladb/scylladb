@@ -14,7 +14,6 @@
 #include <string_view>
 #include <optional>
 
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <variant>

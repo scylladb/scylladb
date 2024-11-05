@@ -9,8 +9,6 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/range/irange.hpp>
 #include <vector>
 #include <random>
 #include <ranges>

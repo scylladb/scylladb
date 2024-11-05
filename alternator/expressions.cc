@@ -20,9 +20,6 @@
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>
 
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
-
 #include <functional>
 #include <unordered_map>
 

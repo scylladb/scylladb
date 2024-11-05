@@ -43,7 +43,6 @@
 #include <ftw.h>
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/icl/interval_map.hpp>
@@ -2057,7 +2056,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             SCYLLA_ASSERT(expected_owners.size() <= smp_count);
             auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
             auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
-            BOOST_REQUIRE(boost::algorithm::all_of(expected_owners, [&] (unsigned expected_owner) {
+            BOOST_REQUIRE(std::ranges::all_of(expected_owners, [&] (unsigned expected_owner) {
                 return owners.contains(expected_owner);
             }));
         };
