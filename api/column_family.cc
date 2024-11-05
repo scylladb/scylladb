@@ -988,11 +988,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         return set_tables_tombstone_gc(ctx, keyspace, tables, false);
     });
 
-    cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
+    cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto ks_cf = parse_fully_qualified_cf_name(req->get_path_param("name"));
         auto&& ks = std::get<0>(ks_cf);
         auto&& cf_name = std::get<1>(ks_cf);
-        return sys_ks.local().load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace_view_build_progress>& vb) mutable {
+        std::vector<db::system_keyspace_view_build_progress> vb = co_await sys_ks.local().load_view_build_progress();
             std::set<sstring> vp;
             for (auto b : vb) {
                 if (b.view.first == ks) {
@@ -1008,8 +1008,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
                     res.emplace_back(i.metadata().name());
                 }
             }
-            return make_ready_future<json::json_return_type>(res);
-        });
+        co_return res;
     });
 
     cf::get_compression_metadata_off_heap_memory_used.set(r, [](const_req) {
