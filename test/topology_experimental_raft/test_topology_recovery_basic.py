@@ -22,9 +22,9 @@ from test.topology.conftest import cluster_con
 
 @pytest.mark.asyncio
 @log_run_time
-async def test_topology_recovery_basic(request, mode: str, manager: ManagerClient):
+async def test_topology_recovery_basic(request, build_mode: str, manager: ManagerClient):
     # Increase ring delay to ensure nodes learn about CDC generations before they start operating.
-    ring_delay = 15000 if mode == 'debug' else 5000
+    ring_delay = 15000 if build_mode == 'debug' else 5000
     normal_cfg = {'ring_delay_ms': ring_delay}
     zero_token_cfg = {'ring_delay_ms': ring_delay, 'join_ring': False}
 

@@ -23,7 +23,6 @@ import random
 
 import sys
 sys.path.insert(1, sys.path[0] + '/../..')
-from test.pylib.report_plugin import ReportPlugin
 from util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla
 
 
@@ -45,10 +44,6 @@ def pytest_addoption(parser):
     # presence.
     parser.addoption('--omit-scylla-output', action='store_true',
         help='Omit scylla\'s output from the test output')
-    parser.addoption('--mode', action='store', default=None,
-                     help='Scylla build mode. Tests can use it to adjust their behavior.')
-    parser.addoption('--run_id', action='store', default=None,
-                     help='Run id for the test run')
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
@@ -269,7 +264,3 @@ def has_tablets(cql, this_dc):
 def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
-
-
-def pytest_configure(config):
-    config.pluginmanager.register(ReportPlugin())

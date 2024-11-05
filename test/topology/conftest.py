@@ -11,7 +11,6 @@ import platform
 from functools import partial
 from typing import List, Optional, Dict
 from test.pylib.random_tables import RandomTables
-from test.pylib.report_plugin import ReportPlugin
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
 from test.pylib.async_cql import event_loop, run_async
@@ -41,8 +40,6 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
-    parser.addoption('--mode', action='store', required=True,
-                     help='Scylla build mode. Tests can use it to adjust their behavior.')
     parser.addoption('--host', action='store', default='localhost',
                      help='CQL server host to connect to')
     parser.addoption('--port', action='store', default='9042',
@@ -53,13 +50,9 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
-    parser.addoption('--run_id', action='store', default=1,
-                     help='Run id for the test run')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
-    parser.addoption('--tmpdir', action='store', type=str, dest='tmpdir',
-                     help='Temporary directory where logs are stored')
 
 
 # This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
@@ -178,7 +171,7 @@ async def manager_internal(event_loop, request):
 
 
 @pytest.fixture(scope="function")
-async def manager(request, manager_internal, record_property, mode):
+async def manager(request, manager_internal, record_property, build_mode):
     """Per test fixture to notify Manager client object when tests begin so it can
     perform checks for cluster state.
     """
@@ -187,7 +180,7 @@ async def manager(request, manager_internal, record_property, mode):
     tmp_dir = pathlib.Path(request.config.getoption('tmpdir'))
     xml_path: pathlib.Path = pathlib.Path(request.config.getoption('xmlpath'))
     suite_testpy_log = (tmp_dir /
-                        mode /
+                        build_mode /
                         f"{pathlib.Path(xml_path.stem).stem}.log"
                         )
     test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
@@ -205,7 +198,7 @@ async def manager(request, manager_internal, record_property, mode):
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = tmp_dir / mode / "failed_test" / f"{test_case_name}"
+        failed_test_dir_path = tmp_dir / build_mode / "failed_test" / f"{test_case_name}"
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
         await manager_internal.gather_related_logs(
             failed_test_dir_path,
@@ -251,10 +244,6 @@ async def random_tables(request, manager):
     if not failed and not await manager.is_dirty():
         tables.drop_all()
 
-@pytest.fixture(scope="function")
-def mode(request):
-    return request.config.getoption('mode')
-
 skipped_funcs = {}
 # Can be used to mark a test to be skipped for a specific mode=[release, dev, debug]
 # The reason to skip a test should be specified, used as a comment only.
@@ -267,14 +256,10 @@ def skip_mode(mode: str, reason: str, platform_key: Optional[str]=None):
     return wrap
 
 @pytest.fixture(scope="function", autouse=True)
-def skip_mode_fixture(request, mode):
-    for reason, platform_key in skipped_funcs.get((request.function, mode), []):
+def skip_mode_fixture(request, build_mode):
+    for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
         if platform_key is None or platform_key in platform.platform():
             pytest.skip(f'{request.node.name} skipped, reason: {reason}')
-
-
-def pytest_configure(config):
-    config.pluginmanager.register(ReportPlugin())
 
 
 def pytest_collection_modifyitems(items, config):
