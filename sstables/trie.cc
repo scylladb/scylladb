@@ -30,6 +30,155 @@ namespace trie {
 
 using namespace trie;
 
+// Pimpl boilerplate
+bti_trie_sink::bti_trie_sink() = default;
+bti_trie_sink::~bti_trie_sink() = default;
+bti_trie_sink& bti_trie_sink::operator=(bti_trie_sink&&) = default;
+bti_trie_sink::bti_trie_sink(std::unique_ptr<bti_trie_sink_impl> x) : _impl(std::move(x)) {}
+
+static_assert(trie_writer_sink<bti_trie_sink_impl>);
+
+// The job of this class is to take a stream of partition keys and their index payloads
+// (Data.db or Rows.db position, and hash bits for filtering false positives out)
+// and translate it to a minimal trie which still allows for efficient queries.
+//
+// For that, each key in the trie is trimmed to the shortest length which still results
+// in a unique leaf.
+// For example, assume that keys ABCXYZ, ABDXYZ, ACXYZ are added to the trie.
+// A "naive" trie would look like this:
+//     A
+//     B---C
+//     C-D X
+//     X X Y
+//     Y Y Z
+//     Z Z
+//
+// This writer creates:
+//     A
+//     B---C
+//     C-D
+// 
+// Note: the trie-serialization format of partition keys is prefix-free,
+// which guarantees that only leaf nodes carry a payload. 
+// 
+// In practice, Output == trie_serializer.
+// But for testability reasons, we don't hardcode the output type.
+// (So that tests can test just the logic of this writer, without
+// roping in file I/O and the serialization format)
+// For performance reasons we don't want to make the output virtual,
+// so we instead make it a template parameter.
+template <trie_writer_sink Output>
+class partition_index_writer_impl {
+public:
+    partition_index_writer_impl(Output&);
+    void add(const_bytes key, int64_t data_file_pos, uint8_t hash_bits);
+    sink_pos finish();
+private:
+    // The lower trie-writing layer, oblivious to the semantics of the partition index.
+    trie_writer<Output> _wr;
+    // Counter of added keys.
+    size_t _added_keys = 0;
+
+    // We "buffer" one key in the writer. To write an entry to the trie_writer,
+    // we want to trim the key to the shortest prefix which is still enough
+    // to differentiate the key from its neighbours. For that, we need to see
+    // the *next* entry first.
+    //
+    // The first position in _last_key where it differs from its predecessor.
+    // After we see the next entry, we will also know the first position where it differs
+    // from the successor, and we will be able to determine the shortest unique prefix. 
+    size_t _last_key_mismatch = 0;
+    // The key added most recently.
+    std::vector<std::byte> _last_key;
+    // The payload of _last_key: the Data.db position and the hash bits. 
+    int64_t _last_data_file_pos;
+    uint8_t _last_hash_bits;
+};
+
+template <trie_writer_sink Output>
+partition_index_writer_impl<Output>::partition_index_writer_impl(Output& out)
+    : _wr(out) {
+}
+
+template <trie_writer_sink Output>
+void partition_index_writer_impl<Output>::add(const_bytes key, int64_t data_file_pos, uint8_t hash_bits) {
+    expensive_log("partition_index_writer_impl::add: this={} key={}, data_file_pos={}", fmt::ptr(this), fmt_hex(key), data_file_pos); 
+    if (_added_keys > 0) {
+        // First position where the new key differs from the last key.
+        size_t mismatch = std::ranges::mismatch(key, _last_key).in2 - _last_key.begin();
+        // From `_last_key_mismatch` (mismatch position between `_last_key` and its predecessor)
+        // and `mismatch` (mismatch position between `_last_key` and its successor),
+        // compute the minimal needed prefix of `_last_key`.
+        // FIXME: the std::min(..., _last_key.size()) isn't really needed, since a key can't be a prefix of another key.
+        size_t needed_prefix = std::min(std::max(_last_key_mismatch, mismatch) + 1, _last_key.size());
+        // The new nodes/characters we have to add to the trie.
+        auto tail = std::span(_last_key).subspan(_last_key_mismatch, needed_prefix - _last_key_mismatch);
+        // Serialize the payload.
+        std::array<std::byte, 9> payload_bytes;
+        payload_bytes[0] = std::byte(_last_hash_bits);
+        auto payload_bits = div_ceil(std::bit_width<uint64_t>(std::abs(_last_data_file_pos)) + 1, 8);
+        uint64_t pos_be = seastar::cpu_to_be(_last_data_file_pos << 8*(8 - payload_bits));
+        memcpy(&payload_bytes[1], &pos_be, 8);
+        // Pass the new node chain and its payload to the lower layer.
+        // Note: we pass (payload_bits | 0x8) because the additional 0x8 bit indicates that hash bits are present.
+        // (Even though currently they are always present, and the reader assumes so).
+        _wr.add(_last_key_mismatch, tail, trie_payload(payload_bits | 0x8, std::span(payload_bytes).subspan(0, payload_bits + 1)));
+        // Update _last_* variables with the new key.
+        _last_key_mismatch = mismatch;
+    }
+    _added_keys += 1;
+    // Update _last_* variables with the new key.
+    _last_key.assign(key.begin(), key.end());
+    _last_data_file_pos = data_file_pos;
+    _last_hash_bits = hash_bits;
+}
+template <trie_writer_sink Output>
+sink_pos partition_index_writer_impl<Output>::finish() {
+    if (_added_keys > 0) {
+        // Mostly duplicates the code from add(), except there is only one mismatch position to care about,
+        // not two which we have to take a max() of.
+        //
+        // FIXME: the std::min(..., _last_key.size()) isn't really needed, since a key can't be a prefix of another key.
+        //
+        // FIXME: maybe somehow get rid of the code duplication between here and add().
+        size_t needed_prefix = std::min(_last_key_mismatch + 1, _last_key.size());
+        // The new nodes/characters we have to add to the trie.
+        auto tail = std::span(_last_key).subspan(_last_key_mismatch, needed_prefix - _last_key_mismatch);
+        // Serialize the payload.
+        std::array<std::byte, 9> payload_bytes;
+        uint64_t pos_be = seastar::cpu_to_be(_last_data_file_pos);
+        payload_bytes[0] = std::byte(_last_hash_bits);
+        auto payload_bits = div_ceil(std::bit_width<uint64_t>(std::abs(_last_data_file_pos)) + 1, 8);
+        std::memcpy(&payload_bytes[1], (const char*)(&pos_be) + 8 - payload_bits, payload_bits);
+        // Pass the new node chain and its payload to the lower layer.
+        // Note: we pass (payload_bits | 0x8) because the additional 0x8 bit indicates that hash bits are present.
+        // (Even though currently they are always present, and the reader assumes so).
+        _wr.add(_last_key_mismatch, tail, trie_payload(payload_bits | 0x8, std::span(payload_bytes).subspan(0, payload_bits + 1)));
+    }
+    return _wr.finish();
+}
+
+// Instantiation of partition_index_writer_impl with `Output` == `bti_trie_sink_impl`.
+// This is the partition trie writer which is actually used in practice.
+// Other instantiations of partition_index_writer_impl are only for testing.
+class partition_trie_writer::impl : public partition_index_writer_impl<bti_trie_sink_impl> {
+    using partition_index_writer_impl::partition_index_writer_impl;
+};
+
+// Pimpl boilerplate
+partition_trie_writer::partition_trie_writer() = default;
+partition_trie_writer::~partition_trie_writer() = default;
+partition_trie_writer& partition_trie_writer::operator=(partition_trie_writer&&) = default;
+partition_trie_writer::partition_trie_writer(bti_trie_sink& out)
+    : _impl(std::make_unique<impl>(*out._impl)){
+}
+void partition_trie_writer::add(const_bytes key, int64_t data_file_pos, uint8_t hash_bits) {
+    _impl->add(key, data_file_pos, hash_bits);
+}
+int64_t partition_trie_writer::finish() {
+    return _impl->finish().value;
+}
+
 // A pointer (i.e. file position) to a node on disk, with some initial metadata parsed. 
 struct reader_node {
     struct page_ptr : cached_file::ptr_type {
@@ -782,6 +931,180 @@ void trie_cursor<Input>::reset() {
     _path.clear();
     _page.reset();
     check_invariants();
+}
+
+template <trie_writer_sink Output>
+class row_index_writer_impl {
+public:
+    row_index_writer_impl(Output&);
+    ~row_index_writer_impl();
+    void add(const_bytes first_ck, const_bytes last_ck, uint64_t data_file_pos, sstables::deletion_time);
+    sink_pos finish();
+    using buf = std::vector<std::byte>;
+
+    struct row_index_payload {
+        uint64_t data_file_pos;
+        sstables::deletion_time dt;
+    };
+
+private:
+    trie_writer<Output> _wr;
+    size_t _added_blocks = 0;
+    buf _last_separator;
+    buf _last_key;
+};
+
+template <trie_writer_sink Output>
+row_index_writer_impl<Output>::row_index_writer_impl(Output& out)
+    : _wr(out)
+{}
+template <trie_writer_sink Output>
+row_index_writer_impl<Output>::~row_index_writer_impl() {
+}
+
+[[gnu::target("avx2")]]
+size_t mismatch_idx(const std::byte* __restrict__ a, const std::byte* __restrict__ b, size_t n) {
+    size_t i;
+    for (i = 0; i + 32 <= n; i += 32) {
+        __m256i av, bv;
+        memcpy(&av, &a[i], 32);
+        memcpy(&bv, &b[i], 32);
+        __m256i pcmp = _mm256_cmpeq_epi32(av, bv);
+        unsigned bitmask = _mm256_movemask_epi8(pcmp);
+        if (bitmask != 0xffffffffU) {
+            break;
+        }
+    }
+    for (; i < n; ++i) {
+        if (a[i] != b[i]) {
+            break;
+        }
+    }
+    return i;
+}
+
+template <trie_writer_sink Output>
+void row_index_writer_impl<Output>::add(
+    const_bytes first_ck,
+    const_bytes last_ck,
+    uint64_t data_file_pos,
+    sstables::deletion_time dt
+) {
+    expensive_log("row_index_writer_impl::add() this={} first_ck={} last_ck={} data_file_pos={} dt={} _last_key={} _last_sep={}",
+        fmt::ptr(this),
+        fmt_hex(first_ck),
+        fmt_hex(last_ck),
+        data_file_pos,
+        dt,
+        fmt_hex(_last_key),
+        fmt_hex(_last_separator)
+    );
+    size_t n = std::min(first_ck.size(), _last_key.size());
+    size_t separator_mismatch = mismatch_idx(first_ck.data(), _last_key.data(), n);
+
+    // size_t separator_mismatch = std::ranges::mismatch(first_ck, _last_key).in2 - _last_key.begin();
+    expensive_assert(separator_mismatch < first_ck.size());
+    expensive_assert(separator_mismatch <= _last_key.size());
+    if (_added_blocks > 0) {
+        // For the first block, _last_key is empty.
+        // We leave it that way. The key we insert into the trie to represent the first block is empty.
+        //
+        // For later blocks, we need to insert some separator S which is greater than the last key (A) of the previous
+        // block and not smaller than the first key (B) of the current block.
+        //
+        // The choice of this separator affects the efficiency of lookups for range queries starting at any X within the keyless range (A, B).
+        // Such queries lie entirely after the previous block, so the optimal answer from the index is the current block.
+        // But whether the index returns the previous or the current block, can depend only on whether X is smaller or not smaller than the separator.
+        //
+        // For example, assume that A=0 and B=9.
+        // Imagine a query for the range (5, +∞). If S=1, then index will return the current block, which is optimal.
+        // If S=9, then index will return the previous block, and the reader will waste time scanning through it.
+        // 
+        // Therefore it is good to construct S to be as close as possible to A (not to B) as possible.
+        // In this regard, the optimal separator is A concatenated with a zero byte.
+        //
+        // But at the same time, we don't want to use a separator as long as a full key if much shorter possible separators exist.
+        //
+        // Therefore, as an arbitrary compromise, we use the optimal-distance separator in the set
+        // of optimal-length separators. Which means we just nudge the byte at the point of mismatch by 1.
+        _last_key.resize(separator_mismatch + 1);
+        // The byte at the point of mismatch must be greater in the next key than in the previous key.
+        // So the byte in the previous key can't possibly be 0xff.
+        expensive_assert(_last_key[separator_mismatch] != std::byte(0xff));
+        // Sanity check. Encoding of keys is supposed to be prefix-free.
+        expensive_assert(separator_mismatch < _last_key.size());
+        // The condition of this `if` is always true iff key encoding is prefix-free.
+        // (And in the BTI format, it is. The previous line asserts that).
+        // But with this `if` in place, the writer doesn't depend on a prefix-free encoding,
+        // so I left it in the code for posterity. 
+        if (separator_mismatch < _last_key.size()) {
+            _last_key[separator_mismatch] = std::byte(uint8_t(_last_key[separator_mismatch]) + 1);
+        }
+    }
+
+    // size_t needed_prefix = std::min(std::max(_last_sep_mismatch, mismatch) + 1, _last_separator.size());
+    size_t mismatch = std::ranges::mismatch(_last_key, _last_separator).in2 - _last_separator.begin();
+    auto tail = std::span(_last_key).subspan(mismatch, _last_key.size() - mismatch);
+
+    std::array<std::byte, 20> payload_bytes;
+    auto payload_bits = div_ceil(std::bit_width<uint64_t>(data_file_pos), 8);
+    std::byte* p = payload_bytes.data();
+    uint64_t offset_be = seastar::cpu_to_be(data_file_pos);
+    std::memcpy(p, (const char*)(&offset_be) + 8 - payload_bits, payload_bits);
+    p += payload_bits;
+    uint8_t has_tombstone_flag = 0;
+    if (!dt.live()) {
+        has_tombstone_flag = 0x8;
+        p = write_unaligned(p, seastar::cpu_to_be(dt.marked_for_delete_at));
+        p = write_unaligned(p, seastar::cpu_to_be(dt.local_deletion_time));
+    }
+
+    expensive_log("row_index_trie_writer::add(): _wr.add({}, {}, {}, {}, {:016x})", mismatch, fmt_hex(tail), fmt_hex(payload_bytes), payload_bits, data_file_pos);
+    _wr.add(mismatch, tail, trie_payload(has_tombstone_flag | payload_bits, {payload_bytes.data(), p}));
+
+    _added_blocks += 1;
+    std::swap(_last_separator, _last_key);
+    _last_key.assign(last_ck.begin(), last_ck.end());
+}
+
+template <trie_writer_sink Output>
+sink_pos row_index_writer_impl<Output>::finish() {
+    expensive_log("row_index_writer_impl::finish() this={}", fmt::ptr(this));
+    auto result = _wr.finish();
+    _added_blocks = 0;
+    _last_key.clear();
+    _last_separator.clear();
+    return result;
+}
+
+class row_trie_writer::impl : public row_index_writer_impl<bti_trie_sink_impl> {
+    using row_index_writer_impl::row_index_writer_impl;
+};
+
+// Pimpl boilerplate
+row_trie_writer::row_trie_writer() = default;
+row_trie_writer::~row_trie_writer() = default;
+row_trie_writer& row_trie_writer::operator=(row_trie_writer&&) = default;
+row_trie_writer::row_trie_writer(bti_trie_sink& out)
+    : _impl(std::make_unique<impl>(*out._impl)) {
+}
+void row_trie_writer::add(const_bytes first_ck, const_bytes last_ck, uint64_t data_file_pos, sstables::deletion_time dt) {
+    return _impl->add(first_ck, last_ck, data_file_pos, dt);
+}
+int64_t row_trie_writer::finish() {
+    return _impl->finish().value;
+}
+
+bti_trie_sink make_bti_trie_sink(sstables::file_writer& w, size_t page_size) {
+    return bti_trie_sink(std::make_unique<bti_trie_sink_impl>(w, page_size));
+}
+
+partition_trie_writer make_partition_trie_writer(bti_trie_sink& out) {
+    return partition_trie_writer(out);
+}
+
+row_trie_writer make_row_trie_writer(bti_trie_sink& out) {
+    return row_trie_writer(out);
 }
 
 } // namespace trie
