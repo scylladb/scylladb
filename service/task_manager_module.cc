@@ -12,6 +12,7 @@
 #include "service/task_manager_module.hh"
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 
 namespace service {
 

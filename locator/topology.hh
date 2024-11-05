@@ -17,7 +17,6 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/smp.hh>
 #include <seastar/util/bool_class.hh>
 
 #include "locator/types.hh"

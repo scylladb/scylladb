@@ -15,8 +15,6 @@
 #include "utils/extremum_tracking.hh"
 #include "utils/div_ceil.hh"
 
-#include <seastar/core/smp.hh>
-#include <seastar/coroutine/maybe_yield.hh>
 #include <absl/container/btree_set.h>
 
 #include <optional>

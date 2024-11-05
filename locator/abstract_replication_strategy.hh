@@ -11,7 +11,6 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
-#include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
 #include "locator/snitch_base.hh"
@@ -19,7 +18,6 @@
 #include "dht/token-sharding.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
-#include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
