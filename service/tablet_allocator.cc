@@ -771,11 +771,11 @@ public:
             }
         };
         // TODO: share code with make_plan()
-        topo.for_each_node([&] (const locator::node* node_ptr) {
-            bool is_drained = node_ptr->get_state() == locator::node::state::being_decommissioned
-                              || node_ptr->get_state() == locator::node::state::being_removed;
-            if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
-                ensure_node(node_ptr->host_id());
+        topo.for_each_node([&] (const locator::node& node) {
+            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+                              || node.get_state() == locator::node::state::being_removed;
+            if (node.get_state() == locator::node::state::normal || is_drained) {
+                ensure_node(node.host_id());
             }
         });
 

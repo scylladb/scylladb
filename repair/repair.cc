@@ -2038,10 +2038,10 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
         std::unordered_set<locator::host_id> all_live_nodes;
         std::unordered_map<sstring, std::unordered_set<locator::host_id>> live_nodes_per_dc;
         std::unordered_map<sstring, size_t> lost_nodes_per_dc;
-        topology.for_each_node([&] (const locator::node* node) {
-            const auto& host_id = node->host_id();
-            const auto& dc = node->dc_rack().dc;
-            if (node->is_this_node()) {
+        topology.for_each_node([&] (const locator::node& node) {
+            const auto& host_id = node.host_id();
+            const auto& dc = node.dc_rack().dc;
+            if (node.is_this_node()) {
                 // Count the rebuilt node as lost.
                 // For replace, we count the replaced_node below.
                 if (reason == streaming::stream_reason::rebuild) {

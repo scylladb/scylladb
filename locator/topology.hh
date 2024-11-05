@@ -10,6 +10,9 @@
 
 #pragma once
 
+#include <boost/functional/hash.hpp>
+#include <cstddef>
+#include <functional>
 #include <unordered_set>
 #include <unordered_map>
 #include <compare>
@@ -76,6 +79,10 @@ public:
 
     node(const node&) = delete;
     node(node&&) = delete;
+
+    bool operator==(const node& other) const noexcept {
+        return this == &other;
+    }
 
     const locator::topology* topology() const noexcept {
         return _topology;
@@ -202,13 +209,13 @@ public:
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
-    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state,
+    const node& add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state,
                          shard_id shard_count = 0);
 
     // Optionally updates node's current host_id, endpoint, or DC/rack.
     // Note: the host_id may be updated from null to non-null after a new node gets a new, random host_id,
     // or a peer node host_id may be updated when the node is replaced with another node using the same ip address.
-    const node* update_node(node* node,
+    void update_node(node& node,
                             std::optional<host_id> opt_id,
                             std::optional<inet_address> opt_ep,
                             std::optional<endpoint_dc_rack> opt_dr,
@@ -249,7 +256,7 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    const node* add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep,
+    const node& add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep,
                                        std::optional<endpoint_dc_rack> opt_dr = std::nullopt,
                                        std::optional<node::state> opt_st = std::nullopt,
                                        std::optional<shard_id> shard_count = std::nullopt);
@@ -268,12 +275,12 @@ public:
     }
 
     const std::unordered_map<sstring,
-                            std::unordered_set<const node*>>&
+                            std::unordered_set<std::reference_wrapper<const node>>>&
     get_datacenter_nodes() const {
         return _dc_nodes;
     }
 
-    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>>&
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>>>&
     get_datacenter_rack_nodes() const noexcept {
         return _dc_rack_nodes;
     }
@@ -356,10 +363,10 @@ public:
     void sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const;
 
     // Executes a function for each node in a state other than "none" and "left".
-    void for_each_node(std::function<void(const node*)> func) const;
+    void for_each_node(std::function<void(const node&)> func) const;
 
     // Returns pointers to all nodes in a state other than "none" and "left".
-    std::unordered_set<const node*> get_nodes() const;
+    std::unordered_set<std::reference_wrapper<const node>> get_nodes() const;
 
     // Returns addresses of all nodes in a state other than "none" and "left".
     std::unordered_set<gms::inet_address> get_all_ips() const;
@@ -386,14 +393,14 @@ public:
 
 private:
     bool is_configured_this_node(const node&) const;
-    const node* add_node(node_holder node);
-    void remove_node(const node* node);
+    const node& add_node(node_holder node);
+    void remove_node(const node& node);
 
     static std::string debug_format(const node*);
 
-    void index_node(const node* node);
-    void unindex_node(const node* node);
-    node_holder pop_node(const node* node);
+    void index_node(const node& node);
+    void unindex_node(const node& node);
+    node_holder pop_node(const node& node);
 
     static node* make_mutable(const node* nptr) {
         return const_cast<node*>(nptr);
@@ -415,11 +422,11 @@ private:
     config _cfg;
     const node* _this_node = nullptr;
     std::vector<node_holder> _nodes;
-    std::unordered_map<host_id, const node*> _nodes_by_host_id;
-    std::unordered_map<inet_address, const node*> _nodes_by_endpoint;
+    std::unordered_map<host_id, std::reference_wrapper<const node>> _nodes_by_host_id;
+    std::unordered_map<inet_address, std::reference_wrapper<const node>> _nodes_by_endpoint;
 
-    std::unordered_map<sstring, std::unordered_set<const node*>> _dc_nodes;
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>> _dc_rack_nodes;
+    std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> _dc_nodes;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>>> _dc_rack_nodes;
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
@@ -439,7 +446,7 @@ private:
 
     void calculate_datacenters();
 
-    const std::unordered_map<inet_address, const node*>& get_nodes_by_endpoint() const noexcept {
+    const std::unordered_map<inet_address, std::reference_wrapper<const node>>& get_nodes_by_endpoint() const noexcept {
         return _nodes_by_endpoint;
     };
 
@@ -451,6 +458,21 @@ public:
 } // namespace locator
 
 namespace std {
+
+template<>
+struct hash<std::reference_wrapper<const locator::node>> {
+    std::size_t operator()(const std::reference_wrapper<const locator::node>& ref) const {
+        return std::hash<const locator::node*>()(&ref.get());
+    }
+};
+
+template<>
+struct equal_to<std::reference_wrapper<const locator::node>> {
+    bool operator()(const std::reference_wrapper<const locator::node>& lhs,
+                    const std::reference_wrapper<const locator::node>& rhs) const {
+        return lhs.get() == rhs.get();
+    }
+};
 
 std::ostream& operator<<(std::ostream& out, const locator::node& node);
 std::ostream& operator<<(std::ostream& out, const locator::node::state& state);

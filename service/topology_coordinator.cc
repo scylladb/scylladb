@@ -2765,7 +2765,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
         locator::load_stats dc_stats;
         rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
-            auto dst = node->host_id();
+            auto dst = node.get().host_id();
 
             _as.check();
 
@@ -2931,13 +2931,13 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     std::set<sstring> enabled_features;
 
     // Build per-node state
-    for (const auto* node: tmptr->get_topology().get_nodes()) {
-        if (!node->is_member()) {
+    for (const auto& node: tmptr->get_topology().get_nodes()) {
+        if (!node.get().is_member()) {
             continue;
         }
 
-        const auto& host_id = node->host_id();
-        const auto& ep = node->endpoint();
+        const auto& host_id = node.get().host_id();
+        const auto& ep = node.get().endpoint();
         const auto eptr = _gossiper.get_endpoint_state_ptr(ep);
         if (!eptr) {
             throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, ep));

@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <functional>
 #include <unordered_set>
 #include <unordered_map>
 #include "gms/inet_address.hh"
@@ -343,11 +344,11 @@ public:
 
     // Returns the map: DC -> token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_set<const node*>> get_datacenter_token_owners_nodes() const;
+    std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> get_datacenter_token_owners_nodes() const;
 
     // Returns the map: DC -> (map: rack -> token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>>
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>>>
     get_datacenter_racks_token_owners_nodes() const;
 
     // Updates the read_new flag, switching read requests from

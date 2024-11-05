@@ -11,6 +11,7 @@
 
 #include <fmt/ranges.h>
 
+#include <functional>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/defer.hh>
 
@@ -48,10 +49,10 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
         set_abort_on_internal_error(true);
     });
 
-    std::unordered_set<const locator::node*> nodes;
+    std::unordered_set<std::reference_wrapper<const locator::node>> nodes;
 
-    nodes.insert(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal));
-    nodes.insert(topo.add_or_update_endpoint(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
+    nodes.insert(std::cref(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal)));
+    nodes.insert(std::cref(topo.add_or_update_endpoint(id1, ep1, endpoint_dc_rack::default_location, node::state::normal)));
 
     BOOST_REQUIRE_THROW(topo.add_node(id1, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
@@ -59,10 +60,10 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep3, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id3, ep3, endpoint_dc_rack{}, node::state::normal), std::runtime_error);
 
-    nodes.insert(topo.add_node(id3, ep3, endpoint_dc_rack::default_location, node::state::normal));
+    nodes.insert(std::cref(topo.add_node(id3, ep3, endpoint_dc_rack::default_location, node::state::normal)));
 
-    topo.for_each_node([&] (const locator::node* node) {
-        BOOST_REQUIRE(nodes.erase(node));
+    topo.for_each_node([&] (const locator::node& node) {
+        BOOST_REQUIRE(nodes.erase(std::cref(node)));
     });
     BOOST_REQUIRE(nodes.empty());
 
@@ -118,45 +119,43 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
 
     topo.add_or_update_endpoint(id1, std::nullopt, endpoint_dc_rack::default_location, node::state::normal);
 
-    auto node = topo.this_node();
-    auto mutable_node = const_cast<locator::node*>(node);
+    auto node = const_cast<class node*>(topo.this_node());
 
-    node = topo.update_node(mutable_node, std::nullopt, ep1, std::nullopt, std::nullopt);
+    topo.update_node(*node, std::nullopt, ep1, std::nullopt, std::nullopt);
+    
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
-    mutable_node = const_cast<locator::node*>(node);
 
-    BOOST_REQUIRE_THROW(topo.update_node(mutable_node, host_id::create_null_id(), std::nullopt, std::nullopt, std::nullopt), std::runtime_error);
-    BOOST_REQUIRE_THROW(topo.update_node(mutable_node, id2, std::nullopt, std::nullopt, std::nullopt), std::runtime_error);
+    BOOST_REQUIRE_THROW(topo.update_node(*node, host_id::create_null_id(), std::nullopt, std::nullopt, std::nullopt), std::runtime_error);
+    BOOST_REQUIRE_THROW(topo.update_node(*node, id2, std::nullopt, std::nullopt, std::nullopt), std::runtime_error);
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     BOOST_REQUIRE_EQUAL(topo.find_node(id2), nullptr);
 
-    node = topo.update_node(mutable_node, std::nullopt, ep2, std::nullopt, std::nullopt);
-    mutable_node = const_cast<locator::node*>(node);
+    topo.update_node(*node, std::nullopt, ep2, std::nullopt, std::nullopt);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), node);
 
     auto dc_rack1 = endpoint_dc_rack{"DC1", "RACK1"};
-    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack1, std::nullopt);
-    mutable_node = const_cast<locator::node*>(node);
+    topo.update_node(*node, std::nullopt, std::nullopt, dc_rack1, std::nullopt);
+
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack1);
     BOOST_REQUIRE(topo.get_location(ep1) == dc_rack1);
 
     auto dc_rack2 = endpoint_dc_rack{"DC2", "RACK2"};
-    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, dc_rack2, std::nullopt);
-    mutable_node = const_cast<locator::node*>(node);
+    topo.update_node(*node, std::nullopt, std::nullopt, dc_rack2, std::nullopt);
+
     BOOST_REQUIRE(topo.get_location(id1) == dc_rack2);
     BOOST_REQUIRE(topo.get_location(ep1) == dc_rack2);
 
     BOOST_REQUIRE_NE(node->get_state(), locator::node::state::being_decommissioned);
-    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::being_decommissioned);
-    mutable_node = const_cast<locator::node*>(node);
+    topo.update_node(*node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::being_decommissioned);
+    
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
     auto dc_rack3 = endpoint_dc_rack{"DC3", "RACK3"};
     // Note: engage state option, but keep node::state value the same
     // to reproduce #13502
-    node = topo.update_node(mutable_node, std::nullopt, ep3, dc_rack3, locator::node::state::being_decommissioned);
-    mutable_node = const_cast<locator::node*>(node);
+    topo.update_node(*node, std::nullopt, ep3, dc_rack3, locator::node::state::being_decommissioned);
+    
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), nullptr);
@@ -167,7 +166,7 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::being_decommissioned);
 
     // In state::left the node will remain indexed only by its host_id
-    node = topo.update_node(mutable_node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::left);
+    topo.update_node(*node, std::nullopt, std::nullopt, std::nullopt, locator::node::state::left);
     BOOST_REQUIRE_EQUAL(topo.find_node(id1), node);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep1), nullptr);
     BOOST_REQUIRE_EQUAL(topo.find_node(ep2), nullptr);
@@ -402,13 +401,13 @@ SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
         set_abort_on_internal_error(true);
     });
 
-    std::unordered_set<const locator::node*> nodes;
+    std::unordered_set<std::reference_wrapper<const locator::node>> nodes;
 
-    nodes.insert(topo.add_node(id2, ep2, dc_rack1, node::state::normal));
-    nodes.insert(topo.add_node(id3, ep3, dc_rack1, node::state::left));
+    nodes.insert(std::cref(topo.add_node(id2, ep2, dc_rack1, node::state::normal)));
+    nodes.insert(std::cref(topo.add_node(id3, ep3, dc_rack1, node::state::left)));
 
-    topo.for_each_node([&] (const locator::node* node) {
-        BOOST_REQUIRE(node->host_id() != id3);
+    topo.for_each_node([&] (const locator::node& node) {
+        BOOST_REQUIRE(node.host_id() != id3);
     });
 
     {
