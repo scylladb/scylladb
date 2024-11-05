@@ -153,7 +153,7 @@ def maybe_quote(identifier):
 # This is why we need authorized() and unauthorized() in tests below - these
 # functions will retry the operation until it's authorized or not authorized.
 # To make tests fast, the permissions_validity_in_ms parameter should
-# be configured (e.g. test/cql-pytest/run.py) to be as low as possible.
+# be configured (e.g. test/cqlpy/run.py) to be as low as possible.
 # But these tests should handle any configured value, as authorized() and
 # unauthorized() use exponential backoff until a long timeout.
 #
@@ -959,7 +959,7 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
 # Test that the ability to read from *any* system table through Alternator
 # requires permissions for this specific table. This is different from the
 # logic in CQL where a table like system_schema.tables is readable to any
-# user (see test/cql-pytest/test_permissions.py::test_select_system_table).
+# user (see test/cqlpy/test_permissions.py::test_select_system_table).
 # Allowing unprivileged users to read from arbitrary system tables could
 # have opened many risks, the most serious of which being the ability to
 # read system.roles which contains the secret key of other, possibly more

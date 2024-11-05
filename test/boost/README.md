@@ -20,7 +20,7 @@ type should be reserved to *white box* tests - tests where it is necessary
 to inspect or control Scylla internals that do not have user-facing APIs
 such as CQL. In contrast, black-box tests - tests that **can** be written
 only using user-facing APIs, should be written in one of newer test frameworks
-that we offer - such as test/cql-pytest or test/alternator (in Python, using
+that we offer - such as test/cqlpy or test/alternator (in Python, using
 the CQL or DynamoDB APIs respectively) or test/cql (using textual CQL
 commands), or - if more than one Scylla node is needed for a test - using
 the test/topology* framework.

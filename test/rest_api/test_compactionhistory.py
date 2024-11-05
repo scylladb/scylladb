@@ -7,8 +7,8 @@ import sys
 import time
 from collections import defaultdict
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+# Use the util.py library from ../cqlpy:
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
 from util import new_test_table, new_test_keyspace
 
 
