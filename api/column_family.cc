@@ -993,21 +993,21 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto&& ks = std::get<0>(ks_cf);
         auto&& cf_name = std::get<1>(ks_cf);
         std::vector<db::system_keyspace_view_build_progress> vb = co_await sys_ks.local().load_view_build_progress();
-            std::set<sstring> vp;
-            for (auto b : vb) {
-                if (b.view.first == ks) {
-                    vp.insert(b.view.second);
-                }
+        std::set<sstring> vp;
+        for (auto b : vb) {
+            if (b.view.first == ks) {
+                vp.insert(b.view.second);
             }
-            std::vector<sstring> res;
-            auto uuid = get_uuid(ks, cf_name, ctx.db.local());
-            replica::column_family& cf = ctx.db.local().find_column_family(uuid);
-            res.reserve(cf.get_index_manager().list_indexes().size());
-            for (auto&& i : cf.get_index_manager().list_indexes()) {
-                if (!vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
-                    res.emplace_back(i.metadata().name());
-                }
+        }
+        std::vector<sstring> res;
+        auto uuid = get_uuid(ks, cf_name, ctx.db.local());
+        replica::column_family& cf = ctx.db.local().find_column_family(uuid);
+        res.reserve(cf.get_index_manager().list_indexes().size());
+        for (auto&& i : cf.get_index_manager().list_indexes()) {
+            if (!vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
+                res.emplace_back(i.metadata().name());
             }
+        }
         co_return res;
     });
 
