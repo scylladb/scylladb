@@ -801,9 +801,9 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
     // will be up to date and reachable at the time of restart.
     const auto tmptr = get_token_metadata_ptr();
-    for (const auto* node : tmptr->get_topology().get_nodes()) {
-        const auto& host_id = node->host_id();
-        const auto& ep = node->endpoint();
+    for (const auto& node : tmptr->get_topology().get_nodes()) {
+        const auto& host_id = node.get().host_id();
+        const auto& ep = node.get().endpoint();
         if (is_me(host_id)) {
             continue;
         }
@@ -818,10 +818,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             gms::loaded_endpoint_state st;
             st.endpoint = ep;
             st.tokens = boost::copy_range<std::unordered_set<dht::token>>(tmptr->get_tokens(host_id));
-            st.opt_dc_rack = node->dc_rack();
+            st.opt_dc_rack = node.get().dc_rack();
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
-            if (node->is_this_node() && !st.tokens.empty()) {
+            if (node.get().is_this_node() && !st.tokens.empty()) {
                 st.opt_status = gms::versioned_value::normal(st.tokens);
             }
             co_await _gossiper.add_saved_endpoint(host_id, std::move(st), permit.id());
@@ -832,8 +832,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     // need to drop all its rpc connections with ignored_topology flag.
     {
         std::vector<future<>> futures;
-        tmptr->get_topology().for_each_node([&](const locator::node* n) {
-            const auto ep = n->endpoint();
+        tmptr->get_topology().for_each_node([&](const locator::node& n) {
+            const auto ep = n.endpoint();
             if (ep != inet_address{} && !saved_tmpr->get_topology().has_endpoint(ep)) {
                 futures.push_back(remove_rpc_client_with_ignored_topology(ep));
             }
@@ -1781,9 +1781,9 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         // this problem. Ref: #17526
         auto get_sync_nodes = [&] {
             std::vector<gms::inet_address> sync_nodes;
-            get_token_metadata().get_topology().for_each_node([&] (const locator::node* np) {
-                auto ep = np->endpoint();
-                const auto& host_id = np->host_id();
+            get_token_metadata().get_topology().for_each_node([&] (const locator::node& np) {
+                auto ep = np.endpoint();
+                const auto& host_id = np.host_id();
                 if (!ri || (host_id != ri->host_id && !ri->ignore_nodes.contains(host_id))) {
                     sync_nodes.push_back(ep);
                 }
