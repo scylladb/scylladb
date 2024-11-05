@@ -10,6 +10,7 @@
 
 #include "locator/gossiping_property_file_snitch.hh"
 
+#include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include "gms/versioned_value.hh"
 #include "gms/gossiper.hh"
