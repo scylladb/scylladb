@@ -45,6 +45,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "utils/sorting.hh"
