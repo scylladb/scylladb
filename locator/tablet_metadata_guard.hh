@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "replica/database.hh"
+#include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
 #include "locator/abstract_replication_strategy.hh"
 

@@ -16,6 +16,7 @@
 #include "compaction/task_manager_module.hh"
 #include "service/storage_service.hh"
 #include "tasks/task_manager.hh"
+#include "replica/database.hh"
 
 using namespace seastar::httpd;
 
