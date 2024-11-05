@@ -993,12 +993,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto&& ks = std::get<0>(ks_cf);
         auto&& cf_name = std::get<1>(ks_cf);
         std::vector<db::system_keyspace_view_build_progress> vb = co_await sys_ks.local().load_view_build_progress();
-        std::set<sstring> vp;
-        for (auto b : vb) {
-            if (b.view.first == ks) {
-                vp.insert(b.view.second);
-            }
-        }
+        std::set<sstring> vp = vb
+                | std::views::filter([&ks] (auto& b) { return b.view.first == ks; })
+                | std::views::transform([] (auto& b) { return b.view.second; })
+                | std::ranges::to<std::set>();
         std::vector<sstring> res;
         auto uuid = get_uuid(ks, cf_name, ctx.db.local());
         replica::column_family& cf = ctx.db.local().find_column_family(uuid);
