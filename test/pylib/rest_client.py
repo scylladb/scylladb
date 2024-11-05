@@ -162,7 +162,7 @@ class ScyllaRESTAPIClient():
     async def get_host_id_map(self, dst_server_ip: IPAddress) -> list[HostID]:
         """Retrieve the mapping of endpoint to host ID"""
         data = await self.client.get_json("/storage_service/host_id/", dst_server_ip)
-        assert(type(data) == list)
+        assert isinstance(data, list)
         return data
 
     async def get_ownership(self, dst_server_ip: IPAddress, keyspace: str = None, table: str = None) -> list:
@@ -179,7 +179,7 @@ class ScyllaRESTAPIClient():
     async def get_down_endpoints(self, node_ip: IPAddress) -> list[IPAddress]:
         """Retrieve down endpoints from gossiper's point of view """
         data = await self.client.get_json("/gossiper/endpoint/down/", node_ip)
-        assert(type(data) == list)
+        assert isinstance(data, list)
         return data
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
@@ -210,19 +210,19 @@ class ScyllaRESTAPIClient():
         """Get the current generation number of `target_ip` observed by `node_ip`."""
         data = await self.client.get_json(f"/gossiper/generation_number/{target_ip}",
                                           host = node_ip)
-        assert(type(data) == int)
+        assert isinstance(data, int)
         return data
 
     async def get_joining_nodes(self, node_ip: str) -> list:
         """Get the list of joining nodes according to `node_ip`."""
         data = await self.client.get_json(f"/storage_service/nodes/joining", host=node_ip)
-        assert(type(data) == list)
+        assert isinstance(data, list)
         return data
 
     async def get_alive_endpoints(self, node_ip: str) -> list:
         """Get the list of alive nodes according to `node_ip`."""
         data = await self.client.get_json(f"/gossiper/endpoint/live", host=node_ip)
-        assert(type(data) == list)
+        assert isinstance(data, list)
         return data
 
     async def enable_injection(self, node_ip: str, injection: str, one_shot: bool, parameters: dict[str, Any] = {}) -> None:
@@ -284,8 +284,8 @@ class ScyllaRESTAPIClient():
 
     async def get_enabled_injections(self, node_ip: str) -> list[str]:
         data = await self.client.get_json("/v2/error_injection/injection", host=node_ip)
-        assert(type(data) == list)
-        assert(type(e) == str for e in data)
+        assert isinstance(data, list)
+        assert all(isinstance(e, str) for e in data)
         return data
 
     async def message_injection(self, node_ip: str, injection: str) -> None:
@@ -383,7 +383,7 @@ class ScyllaRESTAPIClient():
     async def raft_topology_upgrade_status(self, node_ip: str) -> str:
         """Returns the current state of upgrade to raft topology"""
         data = await self.client.get_json("/storage_service/raft_topology/upgrade", host=node_ip)
-        assert(type(data) == str)
+        assert isinstance(data, str)
         return data
 
     async def get_raft_leader(self, node_ip: str, group_id: Optional[str] = None) -> HostID:
@@ -430,7 +430,7 @@ class ScyllaRESTAPIClient():
             url += f"?{'&'.join(params)}"
 
         data = await self.client.get_json(url, host=node_ip)
-        assert(type(data) == list)
+        assert isinstance(data, list)
         return data
 
     async def get_task_status(self, node_ip: str, task_id: str):
