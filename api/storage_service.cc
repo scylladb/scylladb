@@ -502,7 +502,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         // should use it for better performance
         rjson::value parsed = rjson::parse(req->content);
         if (!parsed.IsArray()) {
-            throw httpd::bad_param_exception("mulformatted sstables in body");
+            throw httpd::bad_param_exception("malformatted sstables in body");
         }
         auto sstables = parsed.GetArray() |
             std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
