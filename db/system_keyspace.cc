@@ -47,6 +47,7 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "replica/database.hh"
 
 #include <unordered_map>
 
