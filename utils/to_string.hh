@@ -9,7 +9,6 @@
 #pragma once
 
 #include <fmt/format.h>
-#include <fmt/ostream.h>
 #if FMT_VERSION >= 100000
 #include <fmt/std.h>
 #else
