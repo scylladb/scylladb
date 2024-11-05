@@ -14,8 +14,11 @@
 
 extern seastar::logger trie_logger;
 
+class reader_permit;
+class cached_file;
 
 namespace sstables {
+    class index_reader;
     class file_writer;
     class deletion_time;
 }
@@ -64,6 +67,18 @@ public:
 };
 partition_trie_writer make_partition_trie_writer(bti_trie_sink&);
 
+// Wraps a file into an interface that allows reading a trie node from a specified offset.
+struct bti_trie_source {
+    class impl;
+    std::unique_ptr<impl> _impl;
+    bti_trie_source();
+    ~bti_trie_source();
+    bti_trie_source& operator=(bti_trie_source&&);
+    bti_trie_source(bti_trie_source&&);
+    bti_trie_source(std::unique_ptr<impl>);
+};
+bti_trie_source make_bti_trie_source(cached_file&, reader_permit);
+
 // Transforms a stream of clustering index block entries
 // into a stream of trie nodes fed into bti_trie_sink.
 // Used to populate the Partitions.db file of the BTI format
@@ -86,5 +101,14 @@ public:
     operator bool() const { return bool(_impl); }
 };
 row_trie_writer make_row_trie_writer(bti_trie_sink&);
+
+// Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
+std::unique_ptr<sstables::index_reader> make_bti_index_reader(
+    bti_trie_source partitions_db,
+    bti_trie_source rows_db,
+    uint64_t partitions_db_root_pos,
+    uint64_t total_data_db_file_size,
+    schema_ptr,
+    reader_permit);
 
 } // namespace trie

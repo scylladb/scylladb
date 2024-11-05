@@ -215,6 +215,19 @@ struct reader_node {
     const_bytes raw(const_bytes page) const;
 };
 
+// Each row index trie in Rows.db is followed by a header containing some partition metadata.
+// The partition's entry in Partitions.db points into that header.
+struct row_index_header {
+    // The partiition key, in BIG serialization format (i.e. the same as in Data.db or Index.db).
+    sstables::key partition_key = bytes();
+    // The global position of the root node of this partition's row index within Rows.db.
+    uint64_t trie_root;
+    // The global position of the partition inside Data.db.
+    uint64_t data_file_offset;
+    // The partition tombstone of this partition.
+    tombstone partition_tombstone;
+};
+
 // For iterating over the trie, we need to keep a stack of those,
 // forming a path from the root to the current node.
 //
@@ -271,6 +284,172 @@ static reader_node pv_to_reader_node(size_t pos, const cached_file::ptr_type& pv
     return pv_to_reader_node(pos, pv->get_view());
 }
 
+enum class row_index_header_parser_state {
+    START,
+    KEY_SIZE,
+    KEY_BYTES,
+    DATA_FILE_POSITION,
+    OFFSET_FROM_TRIE_ROOT,
+    LOCAL_DELETION_TIME,
+    MARKED_FOR_DELETE_AT,
+    END,
+};
+
+inline std::string_view state_name(row_index_header_parser_state s) {
+    using enum row_index_header_parser_state;
+    switch (s) {
+    case START: return "START";
+    case KEY_SIZE: return "KEY_SIZE";
+    case KEY_BYTES: return "KEY_BYTES";
+    case DATA_FILE_POSITION: return "DATA_FILE_POSITION";
+    case OFFSET_FROM_TRIE_ROOT: return "OFFSET_TO_TRIE_ROOT";
+    case LOCAL_DELETION_TIME: return "LOCAL_DELETION_TIME";
+    case MARKED_FOR_DELETE_AT: return "MARKED_FOR_DELETE_AT";
+    case END: return "END";
+    default: abort();
+    }
+}
+
+} // namespace trie
+
+template <>
+struct fmt::formatter<trie::row_index_header_parser_state> : fmt::formatter<string_view> {
+    auto format(const trie::row_index_header_parser_state& r, fmt::format_context& ctx) const
+            -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{}", state_name(r));
+    }
+};
+
+namespace trie {
+
+// We use this to parse the row_index_header.
+// FIXME: I didn't look at the performance of this at all yet. Maybe it's very inefficient.
+struct row_index_header_parser : public data_consumer::continuous_data_consumer<row_index_header_parser> {
+    using processing_result = data_consumer::processing_result;
+    using proceed = data_consumer::proceed;
+    using state = row_index_header_parser_state;
+    state _state = state::START;
+    row_index_header _result;
+    uint64_t _position_offset;
+    temporary_buffer<char> _key;
+    void verify_end_state() {
+        if (_state != state::END) {
+            throw sstables::malformed_sstable_exception(fmt::format("row_index_header_parser: verify_end_state: expected END, got {}", _state));
+        }
+    }
+    bool non_consuming() const {
+        return ((_state == state::END) || (_state == state::START));
+    }
+    processing_result process_state(temporary_buffer<char>& data) {
+        auto current_pos = [&] { return this->position() - data.size(); };
+        switch (_state) {
+        // START comes first, to make the handling of the 0-quantity case simpler
+        case state::START:
+            expensive_log("{}: pos {} state {} - data.size()={}", fmt::ptr(this), current_pos(), state::START, data.size());
+            _state = state::KEY_SIZE;
+            break;
+        case state::KEY_SIZE:
+            expensive_log("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::KEY_SIZE);
+            if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
+                _state = state::KEY_BYTES;
+                break;
+            }
+            [[fallthrough]];
+        case state::KEY_BYTES:
+            expensive_log("{}: pos {} state {} - size={}", fmt::ptr(this), current_pos(), state::KEY_BYTES, this->_u16);
+            if (this->read_bytes_contiguous(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
+                _state = state::DATA_FILE_POSITION;
+                break;
+            }
+            [[fallthrough]];
+        case state::DATA_FILE_POSITION:
+            _result.partition_key = sstables::key(to_bytes(to_bytes_view(_key)));
+            _position_offset = current_pos();
+            expensive_log("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::DATA_FILE_POSITION);
+            if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
+                _state = state::OFFSET_FROM_TRIE_ROOT;
+                break;
+            }
+            [[fallthrough]];
+        case state::OFFSET_FROM_TRIE_ROOT:
+            expensive_log("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::OFFSET_FROM_TRIE_ROOT);
+            _result.data_file_offset = this->_u64;
+            if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
+                _state = state::LOCAL_DELETION_TIME;
+                break;
+            }
+            [[fallthrough]];
+        case state::LOCAL_DELETION_TIME: {
+            _result.trie_root = _position_offset - this->_u64;
+            expensive_log("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::LOCAL_DELETION_TIME);
+            if (this->read_32(data) != continuous_data_consumer::read_status::ready) {
+                _state = state::MARKED_FOR_DELETE_AT;
+                break;
+            }
+        }
+            [[fallthrough]];
+        case state::MARKED_FOR_DELETE_AT:
+            expensive_log("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::MARKED_FOR_DELETE_AT);
+            _result.partition_tombstone.deletion_time = gc_clock::time_point(gc_clock::duration(this->_u32));
+            if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
+                _state = state::END;
+                break;
+            }
+            [[fallthrough]];
+        case state::END: {
+            _state = row_index_header_parser_state::END;
+            _result.partition_tombstone.timestamp = this->_u64;
+        }
+        }
+        expensive_log("{}: exit pos {} state {}", fmt::ptr(this), current_pos(), _state);
+        return _state == state::END ? proceed::no : proceed::yes;
+    }
+public:
+    row_index_header_parser(reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+        : continuous_data_consumer(std::move(rp), std::move(input), start, maxlen)
+    {}
+};
+
+class bti_trie_source::impl {
+    cached_file& _f;
+    reader_permit _permit;
+public:
+    impl(cached_file& f, reader_permit p) : _f(f), _permit(p) {}
+    future<std::pair<cached_file::ptr_type, bool>> read_page(uint64_t pos) {
+        return _f.get_page_view(pos, nullptr);
+
+    }
+    // FIXME: I didn't look at the performance of this at all yet. Maybe it's very inefficient.
+    future<row_index_header> read_row_index_header(uint64_t pos, reader_permit rp) {
+        auto ctx = row_index_header_parser(
+            std::move(rp),
+            make_file_input_stream(file(make_shared<cached_file_impl>(_f)), pos, _f.size() - pos, {.buffer_size = 4096, .read_ahead = 0}),
+            pos,
+            _f.size() - pos);
+        std::exception_ptr ex;
+        try {
+            co_await ctx.consume_input();
+            co_await ctx.close();
+            expensive_log("read_row_index_header this={} result={}", fmt::ptr(this), ctx._result.data_file_offset);
+            co_return std::move(ctx._result);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await ctx.close();
+        std::rethrow_exception(ex);
+    }
+};
+
+// Pimpl boilerplate
+bti_trie_source::bti_trie_source() = default;
+bti_trie_source::bti_trie_source(bti_trie_source&&) = default;
+bti_trie_source::~bti_trie_source() = default;
+bti_trie_source& bti_trie_source::operator=(bti_trie_source&&) = default;
+bti_trie_source::bti_trie_source(std::unique_ptr<impl> x) : _impl(std::move(x)) {}
+
+bti_trie_source make_bti_trie_source(cached_file& f, reader_permit p) {
+    return std::make_unique<bti_trie_source::impl>(f, p);
+}
 
 enum class set_result {
     eof,
@@ -467,6 +646,154 @@ public:
     // Preconditions: none.
     // Postconditions: uninitialized.
     void reset();
+};
+
+// An index cursor which can be used to obtain the Data.db bounds
+// (and tombstones, where appropriate) for the given partition and row ranges.
+template <trie_reader_source Input>
+class index_cursor {
+    // A cursor into Partitions.db.
+    trie_cursor<Input> _partition_cursor;
+    // A cursor into Rows.db. Only initialized when the pointed-to partition has an entry in Rows.db.
+    trie_cursor<Input> _row_cursor;
+    // Holds the row index header for the current partition, iff the current partition has a row index.  
+    std::optional<row_index_header> _partition_metadata;
+    // _row_cursor reads the tries written in Rows.db.
+    // Rerefence wrapper to allow for copying the cursor.
+    std::reference_wrapper<Input> _in_row;
+    // Accounts the memory consumed by the cursor.
+    // FIXME: it actually doesn't do that, yet.
+    reader_permit _permit;
+private:
+    // If the current partition has a row index, reads its header.
+    future<> maybe_read_metadata();
+    // The colder part of set_after_row, just to hint at inlining the hotter part.
+    future<> set_after_row_cold(const_bytes);
+public:
+    index_cursor(Input& par, Input& row, reader_permit);
+    index_cursor& operator=(const index_cursor&) = default;
+    future<> init(uint64_t root_pos);
+    // Returns the data file position of the cursor. Can only be called on a set cursor.
+    //
+    // If the row cursor is set, returns the position of the pointed-to clustering key block.
+    // Otherwise, if the partition cursor is set to a partition, returns the position of the partition.
+    // Otherwise, if the partition cursor is set to EOF, returns `file_size`. (This part of the API is somewhat awkward)
+    uint64_t data_file_pos(uint64_t file_size) const;
+    // If the row index is set to a clustering key block, returns the range tombstone active at the start of the block.
+    // Otherwise returns an empty tombstone.
+    tombstone open_tombstone() const;
+    // Returns the current partition's row index header, if it has one.
+    const std::optional<row_index_header>& partition_metadata() const;
+    // Sets the partition cursor to *some* position smaller-or-equal to all entries greater-or-equal to K.
+    // See the comments at trie_cursor::set_before for more elaboration.
+    //
+    // Resets the row cursor.
+    future<set_result> set_before_partition(const_bytes K);
+    // Sets the partition cursor to *some* position strictly greater than all entries smaller-or-equal to K. 
+    // See the comments at trie_cursor::set_after for details.
+    //
+    // Resets the row cursor.
+    future<> set_after_partition(const_bytes K);
+    // Moves the partition cursor to the next position (next partition or eof).
+    // Resets the row cursor.
+    future<> next_partition();
+    // Sets the row cursor to *some* position (within the current partition)
+    // smaller-or-equal to all entries greater-or-equal to K.
+    // See the comments at trie_cursor::set_before for more elaboration.
+    future<> set_before_row(const_bytes);
+    // Sets the row cursor to *some* position (within the current partition)
+    // smaller-or-equal to all entries greater-or-equal to K.
+    // See the comments at trie_cursor::set_before for more elaboration.
+    //
+    // If the row cursor would go beyond the end of the partition,
+    // it instead resets moves the partition cursor to the next partition
+    // and resets the row cursor.
+    future<> set_after_row(const_bytes);
+    // Checks if the row cursor is set.
+    bool row_cursor_set() const;
+    future<std::optional<uint64_t>> last_block_offset() const;
+};
+
+class bti_index_reader : public sstables::index_reader {
+    // Trie sources for Partitions.db and Rows.db
+    //
+    // FIXME: should these be owned by the sstable object instead?
+    bti_trie_source _in_par;
+    bti_trie_source _in_row;
+    // We need the schema solely to parse the partition keys serialized in row index headers.
+    schema_ptr _s;
+    // Supposed to account the memory usage of the index reader.
+    // FIXME: it doesn't actually do that yet.
+    // FIXME: it should probably also mark the permit as blocked on disk?
+    reader_permit _permit;
+    // The index is, in essence, a pair of cursors.
+    index_cursor<bti_trie_source::impl> _lower;
+    index_cursor<bti_trie_source::impl> _upper;
+    // We don't need this for anything, only the cursors do.
+    // But they take it via the asynchronous init() function, not via constructor,
+    // so we need to temporarily hold on to it between the constructor and the init().
+    uint64_t _root;
+    // Partitions.db doesn't store the size of Data.db, so the cursor doesn't know by itself
+    // what Data.db position to return when its position is EOF. We need to pass the file size
+    // from the above.
+    uint64_t _total_file_size;
+    // Before any operation, we have to initialize the two cursors.
+    // It can't be done in constructor, since their init() is async.
+    // Our choice is to have an explicit init(), or a lazy init().
+    // We do the latter, by calling `maybe_init()` on every operation.
+    bool _initialized = false;
+
+    // Helper which reads a row index header from the given position in Rows.db.
+    future<row_index_header> read_row_index_header(uint64_t);
+    // Helper which translates a ring_position_view to a BTI byte-comparable form.
+    std::vector<std::byte> translate_key(dht::ring_position_view key);
+    // Initializes the reader, if it isn't initialized yet.
+    // We must call it before doing anything interesting with the cursors.
+    // 
+    // FIXME: our semantics are different from the semantics of the old (BIG) index reader.
+    //
+    // This new index reader is *unset* after creation, and initially doesn't point at anything.
+    // The old index reader points at the start of the sstable immediately after creation.
+    //
+    // So in our case, some operations (like advance_to_next_partition()) can only be legal
+    // after the cursor is explicitly set to something, while in the old reader's case
+    // they were always legal.
+    //
+    // In particular, we arbitrarily decide that the only legal operations for the new index reader
+    // immediately after creation are advance_to(partition_range) and advance_lower_and_check_if_present().
+    // That's why we only call maybe_init() from those functions -- other calls are assumed to be used
+    // only after the index reader was initialized via one of those 2 chosen functions.
+    //
+    // In practice, the MX reader always starts by setting the index reader with advance_to(partition_range)
+    // (for multi-partition reads), or with advance_lower_and_check_if_present().
+    // But it's not documented that it has to stay this way, and it's dangerous to rely on that.
+    // We should harden the API, via better docs and/or asserts and/or changing the semantics of this index
+    // reader to match the old index reader.
+    future<> maybe_init();
+public:
+    bti_index_reader(bti_trie_source in, bti_trie_source in_row, uint64_t root_pos, uint64_t total_file_size, schema_ptr s, reader_permit);
+    virtual future<> close() noexcept override;
+    virtual sstables::data_file_positions_range data_file_positions() const override;
+    virtual future<std::optional<uint64_t>> last_block_offset() override;
+    virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) override;
+    virtual future<> advance_to_next_partition() override;
+    virtual sstables::indexable_element element_kind() const override;
+    virtual future<> advance_to(dht::ring_position_view pos) override;
+    virtual future<> advance_to(position_in_partition_view pos) override;
+    virtual std::optional<sstables::deletion_time> partition_tombstone() override;
+    virtual std::optional<partition_key> get_partition_key() override;
+    virtual partition_key get_partition_key_prefix() override;
+    virtual bool partition_data_ready() const override;
+    virtual future<> read_partition_data() override;
+    virtual future<> advance_reverse(position_in_partition_view pos) override;
+    virtual future<> advance_to(const dht::partition_range& range) override;
+    virtual future<> advance_reverse_to_next_partition() override;
+    virtual std::optional<sstables::open_rt_marker> end_open_marker() const override;
+    virtual std::optional<sstables::open_rt_marker> reverse_end_open_marker() const override;
+    virtual sstables::clustered_index_cursor* current_clustered_cursor() override;
+    virtual uint64_t get_data_file_position() override;
+    virtual uint64_t get_promoted_index_size() override;
+    virtual bool eof() const override;
 };
 
 // We want to be always inlined so that bits_per_pointer is substituted with a constant,
@@ -933,6 +1260,418 @@ void trie_cursor<Input>::reset() {
     check_invariants();
 }
 
+template <trie_reader_source Input>
+index_cursor<Input>::index_cursor(Input& par, Input& row, reader_permit permit)
+    : _partition_cursor(par)
+    , _row_cursor(row)
+    , _in_row(row)
+    , _permit(permit)
+{}
+
+template <trie_reader_source Input>
+future<> index_cursor<Input>::init(uint64_t root_offset) {
+    expensive_log("index_cursor::init this={} root={}", fmt::ptr(this), root_offset);
+    _row_cursor.reset();
+    _partition_metadata.reset();
+    return _partition_cursor.init(root_offset);
+}
+
+template <trie_reader_source Input>
+bool index_cursor<Input>::row_cursor_set() const {
+    return _row_cursor.initialized();
+}
+
+static int64_t partition_payload_to_pos(const payload_result& p) {
+    uint64_t bits = p.bits & 0x7;
+    expensive_assert(p.bytes.size() >= bits + 1);
+    uint64_t be_result = 0;
+    std::memcpy(&be_result, p.bytes.data() + 1, bits);
+    auto result = int64_t(seastar::be_to_cpu(be_result)) >> 8*(8 - bits);
+    expensive_log("payload_to_offset: be_result={:016x} bits={}, bytes={}, result={:016x}", be_result, bits, fmt_hex(p.bytes), uint64_t(result));
+    return result;
+}
+
+static int64_t row_payload_to_offset(const payload_result& p) {
+    uint64_t bits = p.bits & 0x7;
+    expensive_assert(p.bytes.size() >= size_t(bits + 12));
+    uint64_t be_result = 0;
+    std::memcpy(&be_result, p.bytes.data(), bits);
+    auto result = seastar::be_to_cpu(be_result) >> 8*(8 - bits);
+    return result;
+}
+
+template <trie_reader_source Input>
+future<std::optional<uint64_t>> index_cursor<Input>::last_block_offset() const {
+    if (!_partition_metadata) {
+        expensive_log("last_block_offset: no partition metadata");
+        co_return std::nullopt;
+    }
+
+    //abort();
+    auto cur = _row_cursor;
+    if (!cur.initialized()) {
+        co_await cur.init(_partition_metadata->trie_root);
+    }
+    const std::byte key[] = {std::byte(0x60)};
+    auto res = co_await cur.follow(key);
+    co_await cur.descend_prev_branch(res.prev_branch_depth);
+    if (cur.eof()) {
+        co_return std::nullopt; 
+    }
+
+    auto result = row_payload_to_offset(cur.payload());
+    expensive_log("last_block_offset: {}", result);
+    co_return result;
+}
+
+template <trie_reader_source Input>
+uint64_t index_cursor<Input>::data_file_pos(uint64_t file_size) const {
+    // expensive_log("index_cursor::data_file_pos this={}", fmt::ptr(this));
+    expensive_assert(_partition_cursor.initialized());
+    if (_partition_metadata) {
+        if (!_row_cursor.initialized()) {
+            expensive_log("index_cursor::data_file_pos this={} from empty row cursor: {}", fmt::ptr(this), _partition_metadata->data_file_offset);
+            return _partition_metadata->data_file_offset;
+        }
+        const auto p = _row_cursor.payload();
+        auto res = _partition_metadata->data_file_offset + row_payload_to_offset(p);
+        expensive_log("index_cursor::data_file_pos this={} from row cursor: {} bytes={} bits={}", fmt::ptr(this), res, fmt_hex(p.bytes), p.bits & 0x7);
+        return res;
+    }
+    if (!_partition_cursor.eof()) {
+        auto res = partition_payload_to_pos(_partition_cursor.payload());
+        expensive_assert(res >= 0);
+        // expensive_log("index_cursor::data_file_pos this={} from partition cursor: {}", fmt::ptr(this), res);
+        return res;
+    }
+    // expensive_log("index_cursor::data_file_pos this={} from eof: {}", fmt::ptr(this), file_size);
+    return file_size;
+}
+
+template <trie_reader_source Input>
+tombstone index_cursor<Input>::open_tombstone() const {
+    expensive_log("index_cursor::open_tombstone this={}", fmt::ptr(this));
+    expensive_assert(_partition_cursor.initialized());
+    expensive_assert(_partition_metadata.has_value());
+    if (!_row_cursor.initialized() || _row_cursor.eof()) {
+        auto res = tombstone();
+        expensive_log("index_cursor::open_tombstone this={} from eof: {}", fmt::ptr(this), tombstone());
+        return res;
+    } else {
+        const auto p = _row_cursor.payload();
+        if (p.bits >= 8) {
+            uint64_t bits = p.bits & 0x7;
+            expensive_assert(p.bytes.size() >= size_t(bits + 12));
+            auto marked = seastar::be_to_cpu(read_unaligned<uint64_t>(p.bytes.data() + bits));
+            auto deletion_time = seastar::be_to_cpu(read_unaligned<int32_t>(p.bytes.data() + bits + 8));
+            return tombstone(marked, gc_clock::time_point(gc_clock::duration(deletion_time)));
+        } else {
+            return tombstone();
+        }
+    }
+}
+
+template <trie_reader_source Input>
+const std::optional<row_index_header>& index_cursor<Input>::partition_metadata() const {
+    return _partition_metadata;
+}
+
+template <trie_reader_source Input>
+[[gnu::always_inline]]
+future<> index_cursor<Input>::maybe_read_metadata() {
+    expensive_log("index_cursor::maybe_read_metadata this={}", fmt::ptr(this));
+    if (_partition_cursor.eof()) {
+        return make_ready_future<>();
+    }
+    if (auto res = partition_payload_to_pos(_partition_cursor.payload()); res < 0) {
+        return _in_row.get().read_row_index_header(-res, _permit).then([this] (auto result) {
+            _partition_metadata = result;
+        });
+    }
+    return make_ready_future<>();
+}
+template <trie_reader_source Input>
+future<set_result> index_cursor<Input>::set_before_partition(const_bytes key) {
+    expensive_log("index_cursor::set_before_partition this={} key={}", fmt::ptr(this), fmt_hex(key));
+    _row_cursor.reset();
+    _partition_metadata.reset();
+    follow_result res = co_await _partition_cursor.follow(key);
+    if (res.end_depth == res.prefix_depth) {
+        co_await maybe_read_metadata();
+        co_return set_result::possible_match;
+    } else {
+        co_await _partition_cursor.descend_next_branch(res.next_branch_depth);
+        co_await maybe_read_metadata();
+        co_return _partition_cursor.eof() ? set_result::eof : set_result::definitely_not_a_match;
+    }
+}
+
+template <trie_reader_source Input>
+future<> index_cursor<Input>::set_after_partition(const_bytes key) {
+    expensive_log("index_cursor::set_after_partition this={} key={}", fmt::ptr(this), fmt_hex(key));
+    _row_cursor.reset();
+    _partition_metadata.reset();
+    follow_result res = co_await _partition_cursor.follow(key);
+    co_await _partition_cursor.descend_next_branch(res.next_branch_depth);
+    co_await maybe_read_metadata();
+}
+template <trie_reader_source Input>
+future<> index_cursor<Input>::next_partition() {
+    expensive_log("index_cursor::next_partition() this={}", fmt::ptr(this));
+    _row_cursor.reset();
+    _partition_metadata.reset();
+    return _partition_cursor.step().then([this] {
+        return maybe_read_metadata();
+    });
+}
+template <trie_reader_source Input>
+future<> index_cursor<Input>::set_before_row(const_bytes key) {
+    expensive_log("index_cursor::set_before_row this={} key={}", fmt::ptr(this), fmt_hex(key));
+    if (!_partition_metadata) {
+        co_return;
+    }
+    if (!_row_cursor.initialized()) {
+        co_await _row_cursor.init(_partition_metadata->trie_root);
+    }
+    follow_result res = co_await _row_cursor.follow(key);
+    if (res.prefix_depth > res.prev_branch_depth) {
+        co_await _row_cursor.return_to_prefix(res.prefix_depth);
+    } else {
+        co_await _row_cursor.descend_prev_branch(res.prev_branch_depth);
+    }
+}
+
+template <trie_reader_source Input>
+future<> index_cursor<Input>::set_after_row_cold(const_bytes key) {
+    co_await _row_cursor.init(_partition_metadata->trie_root);
+    auto res = co_await _row_cursor.follow(key);
+    co_await _row_cursor.descend_next_branch(res.next_branch_depth);
+    if (_row_cursor.eof()) {
+        co_await next_partition();
+    }
+}
+
+template <trie_reader_source Input>
+[[gnu::always_inline]]
+future<> index_cursor<Input>::set_after_row(const_bytes key) {
+    expensive_log("index_cursor::set_after_row this={} key={}", fmt::ptr(this), fmt_hex(key));
+    if (!_partition_metadata) {
+        return next_partition();
+    }
+    return set_after_row_cold(key);
+}
+
+future<row_index_header> bti_index_reader::read_row_index_header(uint64_t pos) {
+    auto hdr = co_await _in_row._impl->read_row_index_header(pos, _permit);
+    expensive_log("bti_index_reader::read_row_index_header this={} pos={} result={}", fmt::ptr(this), pos, hdr.data_file_offset);
+    co_return hdr;
+}
+std::vector<std::byte> bti_index_reader::translate_key(dht::ring_position_view key) {
+    auto trie_key = std::vector<std::byte>();
+    trie_key.reserve(256);
+    trie_key.push_back(std::byte(0x40));
+    auto token = key.token().is_maximum() ? std::numeric_limits<uint64_t>::max() : key.token().unbias();
+    append_to_vector(trie_key, object_representation(seastar::cpu_to_be<uint64_t>(token)));
+    if (auto k = key.key()) {
+        trie_key.reserve(k->representation().size() + 64);
+        _s->partition_key_type()->memcmp_comparable_form(*k, trie_key);
+    }
+    std::byte ending;
+    if (key.weight() < 0) {
+        ending = std::byte(0x20);
+    } else if (key.weight() == 0) {
+        ending = std::byte(0x38);
+    } else {
+        ending = std::byte(0x60);
+    }
+    trie_key.push_back(ending);
+    expensive_log("translate_key({}) = {}", key, fmt_hex(trie_key));
+    return trie_key;
+}
+sstables::data_file_positions_range bti_index_reader::data_file_positions() const {
+    auto lo = _lower.data_file_pos(_total_file_size);
+    auto hi =_upper.data_file_pos(_total_file_size);
+    trie_logger.debug("bti_index_reader::data_file_positions this={} result=({}, {})", fmt::ptr(this), lo, hi);
+    return {lo, hi};
+}
+future<std::optional<uint64_t>> bti_index_reader::last_block_offset() {
+    trie_logger.trace("bti_index_reader::last_block_offset this={}", fmt::ptr(this));
+    return _lower.last_block_offset();
+}
+future<> bti_index_reader::close() noexcept {
+    trie_logger.debug("bti_index_reader::close this={}", fmt::ptr(this));
+    return make_ready_future<>();
+}
+bti_index_reader::bti_index_reader(
+    bti_trie_source in,
+    bti_trie_source row_in,
+    uint64_t root_offset,
+    uint64_t total_file_size,
+    schema_ptr s,
+    reader_permit rp
+)
+    : _in_par(std::move(in))
+    , _in_row(std::move(row_in))
+    , _s(s)
+    , _permit(std::move(rp))
+    , _lower(*_in_par._impl, *_in_row._impl, _permit)
+    , _upper(*_in_par._impl, *_in_row._impl, _permit)
+    , _root(root_offset)
+    , _total_file_size(total_file_size)
+{
+    trie_logger.debug("bti_index_reader::constructor: this={} root_offset={} total_file_size={} table={}.{}",
+        fmt::ptr(this), root_offset, total_file_size, _s->ks_name(), _s->cf_name());
+}
+future<> bti_index_reader::maybe_init() {
+    trie_logger.debug("bti_index_reader::constructor: this={} initialized={}", fmt::ptr(this), _initialized);
+    if (!_initialized) {
+        return when_all(_lower.init(_root)).then([this] (const auto&) { _upper = _lower; _initialized = true; });
+    }
+    return make_ready_future<>();
+}
+std::byte bound_weight_to_terminator(bound_weight b) {
+    switch (b) {
+        case bound_weight::after_all_prefixed: return std::byte(0x60);
+        case bound_weight::before_all_prefixed: return std::byte(0x20);
+        case bound_weight::equal: return std::byte(0x40);
+    }
+}
+std::vector<std::byte> byte_comparable(const schema& s, position_in_partition_view pipv) {
+    std::vector<std::byte> res;
+    if (pipv.has_key()) {
+        res.reserve(pipv.key().representation().size() + 64);
+        s.clustering_key_type()->memcmp_comparable_form(pipv.key(), res);
+    }
+    res.push_back(bound_weight_to_terminator(pipv.get_bound_weight()));
+    return res;
+}
+future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key, std::optional<position_in_partition_view> pos) {
+    trie_logger.debug("bti_index_reader::advance_lower_and_check_if_present: this={} key={} pos={}", fmt::ptr(this), key, pos);
+    co_await maybe_init();
+    auto trie_key = translate_key(key);
+    auto res = co_await _lower.set_before_partition(trie_key);
+    _upper = _lower;
+    if (res != set_result::possible_match) {
+        co_return false;
+    }
+    if (!pos) {
+        co_await _upper.next_partition();
+    } else {
+        co_await _upper.set_after_row(byte_comparable(*_s, *pos));
+    }
+    co_return true;
+}
+future<> bti_index_reader::advance_to_next_partition() {
+    trie_logger.debug("bti_index_reader::advance_to_next_partition this={}", fmt::ptr(this));
+    co_await _lower.next_partition();
+}
+sstables::indexable_element bti_index_reader::element_kind() const {
+    trie_logger.debug("bti_index_reader::element_kind");
+    return _lower.row_cursor_set() ? sstables::indexable_element::cell : sstables::indexable_element::partition;
+}
+future<> bti_index_reader::advance_to(dht::ring_position_view pos) {
+    trie_logger.debug("bti_index_reader::advance_to(partition) this={} pos={}", fmt::ptr(this), pos);
+    co_await _lower.set_before_partition(translate_key(pos));
+}
+future<> bti_index_reader::advance_to(position_in_partition_view pos) {
+    trie_logger.debug("bti_index_reader::advance_to(row) this={} pos={}", fmt::ptr(this), pos);
+    co_await _lower.set_before_row(byte_comparable(*_s, pos));
+}
+std::optional<sstables::deletion_time> bti_index_reader::partition_tombstone() {
+    std::optional<sstables::deletion_time> res;
+    if (const auto& hdr = _lower.partition_metadata()) {
+        res = sstables::deletion_time{
+            hdr->partition_tombstone.deletion_time.time_since_epoch().count(),
+            hdr->partition_tombstone.timestamp};
+        trie_logger.debug("bti_index_reader::partition_tombstone this={} res={}", fmt::ptr(this), hdr->partition_tombstone);
+    } else {
+        trie_logger.debug("bti_index_reader::partition_tombstone this={} res=none", fmt::ptr(this));
+    }
+    return res;
+}
+std::optional<partition_key> bti_index_reader::get_partition_key() {
+    std::optional<partition_key> res;
+    if (const auto& hdr = _lower.partition_metadata()) {
+        res = hdr->partition_key.to_partition_key(*_s);
+    }
+    trie_logger.debug("bti_index_reader::get_partition_key this={} res={}", fmt::ptr(this), res);
+    return res;
+}
+partition_key bti_index_reader::get_partition_key_prefix() {
+    trie_logger.debug("bti_index_reader::get_partition_key_prefix this={}", fmt::ptr(this));
+    abort();
+}
+bool bti_index_reader::partition_data_ready() const {
+    trie_logger.debug("bti_index_reader::partition_data_ready this={}", fmt::ptr(this));
+    return _lower.partition_metadata().has_value();
+}
+future<> bti_index_reader::advance_reverse(position_in_partition_view pos) {
+    trie_logger.debug("bti_index_reader::advance_reverse this={} pos={}", fmt::ptr(this), pos);
+    _upper = _lower;
+    co_await _upper.set_after_row(byte_comparable(*_s, pos));
+}
+future<> bti_index_reader::read_partition_data() {
+    trie_logger.debug("bti_index_reader::read_partition_data this={}", fmt::ptr(this));
+    return make_ready_future<>();
+}
+future<> bti_index_reader::advance_to(const dht::partition_range& range) {
+    trie_logger.debug("bti_index_reader::advance_to(range) this={} range={}", fmt::ptr(this), range);
+    co_await maybe_init();
+    if (const auto s = range.start()) {
+        co_await _lower.set_before_partition(translate_key(s.value().value()));
+    } else {
+        co_await _lower.set_before_partition(const_bytes());
+    }
+    if (const auto e = range.end()) {
+        auto k = translate_key(e.value().value());
+        if (e->value().has_key()) {
+            k.back() = std::byte(0x60);
+        }
+        co_await _upper.set_after_partition(k);
+    } else {
+        std::byte top[1] = {std::byte(0x60)};
+        co_await _upper.set_after_partition(top);
+    }
+}
+future<> bti_index_reader::advance_reverse_to_next_partition() {
+    trie_logger.debug("bti_index_reader::advance_reverse_to_next_partition() this={}", fmt::ptr(this));
+    _upper = _lower;
+    return _upper.next_partition().discard_result();
+}
+std::optional<sstables::open_rt_marker> bti_index_reader::end_open_marker() const {
+    trie_logger.debug("bti_index_reader::end_open_marker() this={}", fmt::ptr(this));
+    std::optional<sstables::open_rt_marker> res;
+    if (const auto& hdr = _lower.partition_metadata()) {
+        res = sstables::open_rt_marker{.pos = {position_in_partition::after_static_row_tag_t()}, .tomb = _lower.open_tombstone()};
+    }
+    trie_logger.debug("bti_index_reader::end_open_marker this={} res={}", fmt::ptr(this), res ? res->tomb : tombstone());
+    return res;
+}
+std::optional<sstables::open_rt_marker> bti_index_reader::reverse_end_open_marker() const {
+    trie_logger.debug("bti_index_reader::reverse_end_open_marker() this={}", fmt::ptr(this));
+    std::optional<sstables::open_rt_marker> res;
+    if (const auto& hdr = _upper.partition_metadata()) {
+        res = sstables::open_rt_marker{.pos = {position_in_partition::after_static_row_tag_t()}, .tomb = _upper.open_tombstone()};
+    }
+    trie_logger.debug("bti_index_reader::reverse_end_open_marker this={} res={}", fmt::ptr(this), res ? res->tomb : tombstone());
+    return res;
+}
+sstables::clustered_index_cursor* bti_index_reader::current_clustered_cursor() {
+    trie_logger.debug("bti_index_reader::current_clustered_cursor() this={}", fmt::ptr(this));
+    abort();
+}
+uint64_t bti_index_reader::get_data_file_position() {
+    return data_file_positions().start;
+}
+uint64_t bti_index_reader::get_promoted_index_size() {
+    trie_logger.debug("bti_index_reader::get_promoted_index_size() this={}", fmt::ptr(this));
+    return 0;
+}
+bool bti_index_reader::eof() const {
+    trie_logger.debug("bti_index_reader::eof() this={}", fmt::ptr(this));
+    return _lower.data_file_pos(_total_file_size) >= _total_file_size;
+}
+
 template <trie_writer_sink Output>
 class row_index_writer_impl {
 public:
@@ -1105,6 +1844,17 @@ partition_trie_writer make_partition_trie_writer(bti_trie_sink& out) {
 
 row_trie_writer make_row_trie_writer(bti_trie_sink& out) {
     return row_trie_writer(out);
+}
+
+std::unique_ptr<sstables::index_reader> make_bti_index_reader(
+    bti_trie_source in,
+    bti_trie_source in_row,
+    uint64_t root_offset,
+    uint64_t total_file_size,
+    schema_ptr s,
+    reader_permit rp
+) {
+    return std::make_unique<bti_index_reader>(std::move(in), std::move(in_row), root_offset, total_file_size, std::move(s), std::move(rp));
 }
 
 } // namespace trie
