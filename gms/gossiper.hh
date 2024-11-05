@@ -487,12 +487,7 @@ public:
 
     future<> real_mark_alive(inet_address addr);
 private:
-    // FIXME: for now, allow modifying the endpoint_state's heartbeat_state in place
-    // Gets or creates endpoint_state for this node
-    endpoint_state& get_or_create_endpoint_state(inet_address ep);
-    endpoint_state& my_endpoint_state() {
-        return get_or_create_endpoint_state(get_broadcast_address());
-    }
+    endpoint_state& my_endpoint_state();
 
     // Use with care, as the endpoint_state_ptr in the endpoint_state_map is considered
     // immutable, with one exception - the update_timestamp.
@@ -659,6 +654,7 @@ public:
 public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
+    bool is_shutdown(const endpoint_state& eps) const;
     bool is_normal(const inet_address& endpoint) const;
     bool is_left(const inet_address& endpoint) const;
     // Check if a node is in NORMAL or SHUTDOWN status which means the node is
