@@ -1028,7 +1028,16 @@ template <typename T> static future<std::vector<user_type>> create_types(keyspac
     co_return co_await builder.build();
 }
 
-future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows) {
+static lw_shared_ptr<keyspace_metadata> find_keyspace_metadata(std::string_view name, replica::database& db,
+        std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces) {
+    auto new_ks_it = new_keyspaces.find(sstring(name));
+    if (new_ks_it != new_keyspaces.end()) {
+        return new_ks_it->second.get().metadata();
+    }
+    return db.find_keyspace(name).metadata();
+}
+
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces) {
     std::vector<user_type> ret;
     for (auto i = rows.begin(), e = rows.end(); i != e;) {
         const auto &row = *i;
@@ -1036,7 +1045,7 @@ future<std::vector<user_type>> create_types(replica::database& db, const std::ve
         auto next = std::find_if(i, e, [&keyspace](const query::result_set_row* r) {
             return r->get_nonnull<sstring>("keyspace_name") != keyspace;
         });
-        auto ks = db.find_keyspace(keyspace).metadata();
+        auto ks = find_keyspace_metadata(keyspace, db, new_keyspaces);
         auto v = co_await create_types(*ks, std::ranges::subrange(i, next) | std::views::transform([] (auto&& r) -> auto& { return *r; }));
         std::ranges::move(v, std::back_inserter(ret));
         i = next;

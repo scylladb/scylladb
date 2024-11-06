@@ -247,7 +247,7 @@ std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata
 // Given a set of rows that is sorted by keyspace, create types for each keyspace.
 // The topological sort in each keyspace is necessary when creating types, since we can only create a type when the
 // types it reference have already been created.
-future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows);
+future<std::vector<user_type>> create_types(replica::database& db, const std::vector<const query::result_set_row*>& rows, std::map<sstring, std::reference_wrapper<replica::keyspace>>& new_keyspaces);
 
 future<std::vector<user_type>> create_types_from_schema_partition(keyspace_metadata& ks, lw_shared_ptr<query::result_set> result);
 
