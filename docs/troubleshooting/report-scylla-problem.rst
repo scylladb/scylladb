@@ -279,17 +279,12 @@ Once you have collected and compressed your reports, send them to ScyllaDB for a
    curl -X PUT https://upload.scylladb.com/$report_uuid/yourfile -T yourfile
 
 
-For example with the health check report and node health check report:
-
-
-.. code-block:: shell
-
-   curl -X PUT https://upload.scylladb.com/$report_uuid/output_files.tgz -T output_files.tgz
+For example with the Scylla Doctor's vitals:
 
   
 .. code-block:: shell
  
-   curl -X PUT https://upload.scylladb.com/$report_uuid/192.0.2.0-health-check-report.txt -T 192.0.2.0-health-check-report.txt
+   curl -X PUT https://upload.scylladb.com/$report_uuid/my_cluster_123_vitals.tgz -T my_cluster_123_vitals.tgz
 
 
 The **UUID** you generated replaces the variable ``$report_uuid`` at runtime. ``yourfile`` is any file you need to send to ScyllaDB support.
