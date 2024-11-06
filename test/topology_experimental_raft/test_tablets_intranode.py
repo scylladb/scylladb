@@ -6,7 +6,6 @@
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.cluster import Session, ConsistencyLevel
 
-from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError
 from test.pylib.rest_client import inject_error

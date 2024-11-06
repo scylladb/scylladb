@@ -342,6 +342,21 @@ class ScyllaServer:
     def rpc_address(self) -> IPAddress:
         return self.config["rpc_address"]
 
+    @property
+    def datacenter(self) -> str:
+        if self.property_file and "dc" in self.property_file:
+            return self.property_file["dc"]
+        return "DEFAULT_DC"
+
+    @property
+    def rack(self) -> str:
+        if self.property_file and "rack" in self.property_file:
+            return self.property_file["rack"]
+        return "DEFAULT_RACK"
+    
+    def server_info(self) -> ServerInfo:
+        return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack)
+
     def change_rpc_address(self, rpc_address: IPAddress) -> None:
         """Change RPC IP address of the current server. Pre: the server is
         stopped"""
@@ -984,7 +999,7 @@ class ScyllaCluster:
                 self.stopped[server.server_id] = server
             self.logger.info("Cluster %s added %s", self, server)
 
-        return ServerInfo(server.server_id, server.ip_addr, server.rpc_address)
+        return server.server_info()
 
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
@@ -1030,14 +1045,14 @@ class ScyllaCluster:
         stopped = ", ".join(str(server) for server in self.stopped.values())
         return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
 
-    def running_servers(self) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
+    def running_servers(self) -> list[ServerInfo]:
         """Get a list of tuples of server id and IP address of running servers (and not removed)"""
-        return [(server.server_id, server.ip_addr, server.rpc_address) for server in self.running.values()
+        return [server.server_info() for server in self.running.values()
                 if server.server_id not in self.removed]
 
-    def all_servers(self) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
+    def all_servers(self) -> list[ServerInfo]:
         """Get a list of tuples of server id and IP address of all servers"""
-        return [(server.server_id, server.ip_addr, server.rpc_address) for server in self.servers.values()]
+        return [server.server_info() for server in self.servers.values()]
 
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
@@ -1544,7 +1559,7 @@ class ScyllaClusterManager:
             expected_error=data.get("expected_error"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
         )
-        return {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
+        return s_info.as_dict()
 
     async def _cluster_servers_add(self, request) -> list[dict[str, object]]:
         """Add new servers concurrently"""
@@ -1553,10 +1568,7 @@ class ScyllaClusterManager:
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
                                                  data.get('property_file'), data.get('start', True),
                                                  data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None))
-        return [
-            {"server_id": s_info.server_id, "ip_addr": s_info.ip_addr, "rpc_address": s_info.rpc_address}
-            for s_info in s_infos
-        ]
+        return [s_info.as_dict() for s_info in s_infos]
 
     async def _cluster_remove_node(self, request: aiohttp.web.Request) -> None:
         """Run remove node on Scylla REST API for a specified server"""
