@@ -42,13 +42,7 @@ raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
                 loc.file_name(), loc.line(), loc.function_name(), id);
             return make_ready_future<>();
         }
-        auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
-        if (!ip_addr) {
-            rlogger.debug("{}:{}: {} dropping outgoing message to {} - IP address not found",
-                loc.file_name(), loc.line(), loc.function_name(), id);
-            return make_ready_future<>();
-        }
-        return verb(&_messaging, netw::msg_addr(*ip_addr), timeout(), _group_id, _my_id, id, std::forward<Msg>(msg))
+        return verb(&_messaging, locator::host_id{id.uuid()}, timeout(), _group_id, _my_id, id, std::forward<Msg>(msg))
             .handle_exception([loc = std::move(loc), id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -70,12 +64,7 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
     if (!_failure_detector->is_alive(id)) {
         return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
     }
-    auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
-    if (!ip_addr) {
-        const auto msg = format("Failed to send {} {}: ip address not found", loc.function_name(), id);
-        return make_exception_future<Ret>(raft::transport_error(msg));
-    }
-    return verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
+    return verb(&_messaging, locator::host_id{id.uuid()}, db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
         .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {;
             const auto msg = fmt::format("Failed to execute {}, destination {}: {}", loc.function_name(), id, e);
             rlogger.trace("{}", msg);
@@ -93,12 +82,7 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
         rlogger.debug("Failed to send append_entires to {}: node is not seen as alive by the failure detector", id);
         co_return;
     }
-    auto ip_addr = _address_map.find(locator::host_id{id.uuid()});
-    if (!ip_addr) {
-        const auto msg = format("Failed to send append_entires to {}: ip address not found", id);
-        co_await coroutine::return_exception_ptr(std::make_exception_ptr(raft::transport_error(msg)));
-    }
-    co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, netw::msg_addr(*ip_addr),
+    co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, locator::host_id{id.uuid()},
             db::no_timeout, _group_id, _my_id, id, append_request);
 }
 
