@@ -38,7 +38,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
-#include "service/raft/raft_address_map.hh"
+#include "service/raft/raft_address_map.hh" // needed for raft_tick_interval (FIXME: move it somewhere else)
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/tablet_allocator.hh"
@@ -92,7 +92,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     db::system_keyspace& _sys_ks;
     replica::database& _db;
     service::raft_group0& _group0;
-    const service::raft_address_map& _address_map;
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
@@ -2564,7 +2563,7 @@ public:
             gms::feature_service& feature_service)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
-        , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
+        , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
