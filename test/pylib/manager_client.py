@@ -238,15 +238,18 @@ class ManagerClient():
         await self.server_start(server_id=server_id, wait_others=wait_others, wait_interval=wait_interval)
 
     async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None):
-        for idx, s in enumerate(servers):
+        # `servers` might not include all the running servers, but we want to check against all of them
+        servers_running = await self.running_servers()
+
+        for s in servers:
             await self.server_stop_gracefully(s.server_id)
 
             # Wait for other servers to see the server to be stopped
             # so that the later server_sees_other_server() call will not
             # exit immediately, making it moot.
-            for idx2 in range(len(servers)):
-                if idx2 != idx:
-                    await self.server_not_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+            for s2 in servers_running:
+                if s2.server_id != s.server_id:
+                    await self.server_not_sees_other_server(s2.ip_addr, s.ip_addr)
 
             if with_down:
                 up_servers = [u for u in servers if u.server_id != s.server_id]
@@ -260,11 +263,11 @@ class ManagerClient():
             # and will not send graceful shutdown message to it. Server "s" may learn about the
             # restart from gossip later and close connections while we already sent CQL requests
             # to it, which will cause them to time out. Refs #14746.
-            for idx2 in range(len(servers)):
-                if idx2 != idx:
-                    await self.server_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+            for s2 in servers_running:
+                if s2.server_id != s.server_id:
+                    await self.server_sees_other_server(s2.ip_addr, s.ip_addr)
 
-        await wait_for_cql_and_get_hosts(self.cql, servers, time() + 60)
+        await wait_for_cql_and_get_hosts(self.cql, servers_running, time() + 60)
 
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""
