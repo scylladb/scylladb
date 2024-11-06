@@ -682,6 +682,7 @@ public:
     }
 
     mutation_partition_v2 squashed_v2(const schema& to, is_evictable);
+    clustering_interval_set squashed_continuity(const schema&);
     mutation_partition squashed(const schema&, is_evictable);
     tombstone partition_tombstone() const;
 
