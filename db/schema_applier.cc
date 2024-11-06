@@ -456,35 +456,12 @@ static future<affected_user_types> merge_types(distributed<service::storage_prox
         .per_shard{smp::count},
     };
     co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) mutable -> future<> {
-        // Create and update user types before any tables/views are created that potentially
-        // use those types.
-        auto created = co_await create_types(db, diff.created);
-        for (auto&& user_type : created) {
-            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            affected.per_shard[this_shard_id()].created.push_back(user_type);
-        }
-        auto altered = co_await create_types(db, diff.altered);
-        for (auto&& user_type : altered) {
-            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            affected.per_shard[this_shard_id()].altered.push_back(user_type);
-        }
-        auto dropped = co_await create_types(proxy.local().get_db().local(), diff.dropped);
-        for (auto&& user_type : dropped) {
-            // Just add to affected, defers dropping until after tables/views that may use
-            // some of these user types are dropped.
-            affected.per_shard[this_shard_id()].dropped.push_back(user_type);
-        }
+        const auto shard = this_shard_id();
+        affected.per_shard[shard].created = co_await create_types(db, diff.created);
+        affected.per_shard[shard].altered = co_await create_types(db, diff.altered);
+        affected.per_shard[shard].dropped = co_await create_types(db, diff.dropped);
     });
     co_return affected;
-}
-
-static future<> drop_types(distributed<service::storage_proxy>& proxy, affected_user_types& types) {
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        for (auto& user_type : types.per_shard[this_shard_id()].dropped) {
-            db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-        }
-        co_return;
-    });
 }
 
 // Which side of the diff this schema is on?
@@ -876,8 +853,6 @@ future<> schema_applier::update() {
     _functions_batch = co_await merge_functions(_proxy, _before.functions, _after.functions, _types_storage);
     co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates, _types_storage);
-
-    co_await drop_types(_proxy, _affected_user_types);
 }
 
 void schema_applier::commit_on_shard(replica::database& db) {
@@ -893,9 +868,24 @@ void schema_applier::commit_on_shard(replica::database& db) {
 
     // TODO: move code for all schema modifications
 
+    // commit user defined types,
+    // create and update user types before any tables/views are created that potentially
+    // use those types
+    for (auto& user_type : _affected_user_types.per_shard[this_shard_id()].created) {
+        db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+    }
+    for (auto& user_type : _affected_user_types.per_shard[this_shard_id()].altered) {
+        db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+    }
+
     // commit user functions and aggregates
     auto& funcs_change_batch = _functions_batch[this_shard_id()];
     funcs_change_batch->commit();
+
+    // dropping user types only after tables/views/functions/aggregates that may use some them are dropped
+    for (auto& user_type : _affected_user_types.per_shard[this_shard_id()].dropped) {
+        db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+    }
 
     // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
     for (const auto& ks_name : _affected_keyspaces.names.dropped) {
