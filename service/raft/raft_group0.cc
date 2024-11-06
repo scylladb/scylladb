@@ -21,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "service/storage_proxy.hh"
+#include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "direct_failure_detector/failure_detector.hh"
 #include "gms/gossiper.hh"
@@ -755,6 +756,8 @@ future<> raft_group0::setup_group0(
     auto cfg = group0_server.get_configuration();
     if (!cfg.is_joint() && cfg.current.size() == 1) {
         group0_log.info("setup_group0: we're the only member of the cluster.");
+    } else if (ss.raft_topology_change_enabled()) {
+        group0_log.info("setup_group0: cluster uses raft for topology. No need to sync schema.");
     } else {
         // We're joining an existing cluster - we're not the only member.
         //
