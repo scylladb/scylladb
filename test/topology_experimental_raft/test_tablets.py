@@ -1339,3 +1339,87 @@ async def test_schema_change_during_cleanup(manager: ManagerClient):
     time.sleep(1)
     await cql.run_async("ALTER TABLE test.test WITH gc_grace_seconds = 0;")
     await migration_task
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--target-tablet-size-in-bytes', '5000',
+    ]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }, cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds=0;")
+
+    await manager.api.disable_autocompaction(servers[0].ip_addr, "test")
+
+    keys = range(100)
+
+    logger.info("Generating sstable with shadowed data")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    logger.info("Generating another sstable with tombstones")
+    await asyncio.gather(*[cql.run_async(f"DELETE FROM test.test WHERE pk={k};") for k in keys])
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    async def assert_empty_table():
+        cql = manager.get_cql()
+        rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
+        assert len(rows) == 0
+
+    await assert_empty_table()
+
+    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count == 1
+
+    await manager.api.enable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing", one_shot=False)
+    await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    # Waits for tombstones to be expired.
+    time.sleep(1)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "split_sstable_rewrite", one_shot=False)
+
+    logger.info("Enable balancing so split will be emitted")
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Waits for split of sstable containing expired tombstones")
+    await s1_log.wait_for(f"split_sstable_rewrite: waiting", from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+    await manager.api.message_injection(servers[0].ip_addr, "split_sstable_rewrite")
+    await s1_log.wait_for(f"split_sstable_rewrite: released", from_mark=s1_mark)
+
+    logger.info("Pause split of sstable containing deleted data")
+    await s1_log.wait_for(f"split_sstable_rewrite: waiting", from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+
+    logger.info("Force compaction of split sstable containing expired tombstone")
+    await manager.api.stop_compaction(servers[0].ip_addr, "SPLIT")
+    await manager.api.keyspace_compaction(servers[0].ip_addr, "test")
+
+    await s1_log.wait_for(f"split_sstable_rewrite: released", from_mark=s1_mark)
+
+    await manager.api.disable_injection(servers[0].ip_addr, "split_sstable_rewrite")
+
+    await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
+    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    assert tablet_count > 1
+
+    logger.info("Verify data is not resurrected")
+    await assert_empty_table()
