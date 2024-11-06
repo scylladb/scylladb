@@ -191,14 +191,13 @@ public:
 // Translates `raft::server_id`s to `gms::inet_address`es before pinging.
 class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
     netw::messaging_service& _ms;
-    raft_address_map& _address_map;
 
     using rate_limits = utils::recent_entries_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
     rate_limits _rate_limits;
 
 public:
-    direct_fd_pinger(netw::messaging_service& ms, raft_address_map& address_map)
-            : _ms(ms), _address_map(address_map) {}
+    direct_fd_pinger(netw::messaging_service& ms)
+            : _ms(ms) {}
 
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;

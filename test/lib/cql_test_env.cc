@@ -783,7 +783,7 @@ private:
                 _raft_address_map.stop().get();
             });
 
-            _fd_pinger.start(std::ref(_ms), std::ref(_raft_address_map)).get();
+            _fd_pinger.start(std::ref(_ms)).get();
             auto stop_fd_pinger = defer([this] { _fd_pinger.stop().get(); });
 
             service::direct_fd_clock fd_clock;

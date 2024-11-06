@@ -547,24 +547,17 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
     auto dst_id = raft::server_id{id};
-    auto addr = _address_map.find(locator::host_id{dst_id.uuid()});
-    if (!addr) {
-        {
-            auto& rate_limit = _rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));
-            rslog.log(log_level::warn, rate_limit, "Raft server id {} cannot be translated to an IP address.", id);
-        }
-        _rate_limits.remove_least_recent_entries(std::chrono::minutes(30));
-        co_return false;
-    }
 
     try {
-        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, netw::msg_addr(*addr), as, dst_id);
+        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, locator::host_id{id}, as, dst_id);
         if (auto* wrong_dst = std::get_if<wrong_destination>(&reply.result)) {
+            // FIXME: after moving to host_id based verbs we will not get `wrong_destination`
+            //        any more since the connection will fail
             // This may happen e.g. when node B is replacing node A with the same IP.
             // When we ping node A, the pings will reach node B instead.
             // B will detect they were destined for node A and return wrong_destination.
-            rslog.trace("ping(id = {}, ip_addr = {}): wrong destination (reached {})",
-                        dst_id, *addr, wrong_dst->reached_id);
+            rslog.trace("ping(id = {}): wrong destination (reached {})",
+                        dst_id, wrong_dst->reached_id);
             co_return false;
         } else if (auto* info = std::get_if<group_liveness_info>(&reply.result)) {
             co_return info->group0_alive;

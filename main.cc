@@ -1564,7 +1564,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");
-            fd_pinger.start(std::ref(messaging), std::ref(raft_address_map)).get();
+            fd_pinger.start(std::ref(messaging)).get();
 
             auto stop_fd_pinger = defer_verbose_shutdown("fd_pinger", [] {
                 fd_pinger.stop().get();
