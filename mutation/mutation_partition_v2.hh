@@ -215,6 +215,7 @@ public:
     mutation_partition as_mutation_partition(const schema&) const;
 private:
     // Erases the entry if it's safe to do so without changing the logical state of the partition.
+    // (It's allowed to evict empty row entries, though).
     rows_type::iterator maybe_drop(const schema&, cache_tracker*, rows_type::iterator, mutation_application_stats&);
     void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
     void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);

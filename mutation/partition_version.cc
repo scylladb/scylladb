@@ -14,6 +14,7 @@
 #include "utils/assert.hh"
 #include "utils/coroutine.hh"
 #include "real_dirty_memory_accounter.hh"
+#include "clustering_interval_set.hh"
 
 static void remove_or_mark_as_unique_owner(partition_version* current, mutation_cleaner* cleaner)
 {
@@ -636,6 +637,15 @@ mutation_partition_v2 partition_entry::squashed_v2(const schema& to, is_evictabl
         merge_versions(to, mp, std::move(older), no_cache_tracker, evictable);
     }
     return mp;
+}
+
+clustering_interval_set partition_entry::squashed_continuity(const schema& s)
+{
+    clustering_interval_set result;
+    for (auto&& v : _version->all_elements()) {
+        result.add(s, v.partition().as_mutation_partition(*v.get_schema()).get_continuity(s));
+    }
+    return result;
 }
 
 mutation_partition partition_entry::squashed(const schema& s, is_evictable evictable)

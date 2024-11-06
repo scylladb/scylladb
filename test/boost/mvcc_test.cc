@@ -446,7 +446,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 }
 
                 auto before = e.squashed();
-                auto e_continuity = before.get_continuity(*s);
+                auto e_continuity = e.entry().squashed_continuity(*s);
 
                 auto expected_to_apply_slice = mutation_partition(*s, to_apply.partition());
                 if (!before.static_row_continuous()) {
@@ -463,7 +463,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 
                 // After applying to_apply the continuity can be more narrow due to compaction with tombstones
                 // present in to_apply.
-                auto continuity_after = sq.get_continuity(*s);
+                auto continuity_after = e.entry().squashed_continuity(*s);
                 if (!continuity_after.contained_in(e_continuity)) {
                     BOOST_FAIL(format("Expected later continuity to be contained in earlier, later={}\n, earlier={}",
                                       continuity_after, e_continuity));
