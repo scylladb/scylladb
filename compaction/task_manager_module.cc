@@ -351,6 +351,10 @@ static future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool f
     co_return true;
 }
 
+tasks::is_user_task global_major_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
+}
+
 future<> global_major_compaction_task_impl::run() {
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
@@ -375,6 +379,10 @@ future<> global_major_compaction_task_impl::run() {
         keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
     }
     co_await run_keyspace_tasks(_db.local(), keyspace_tasks, cv, current_task, false);
+}
+
+tasks::is_user_task major_keyspace_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task{!_parent_id};
 }
 
 future<> major_keyspace_compaction_task_impl::run() {
@@ -419,6 +427,10 @@ future<> table_major_keyspace_compaction_task_impl::run() {
     });
 }
 
+tasks::is_user_task cleanup_keyspace_compaction_task_impl::is_user_task() const noexcept {
+    return _is_user_task;
+}
+
 future<> cleanup_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         if (_flush_mode == flush_mode::all_tables) {
@@ -428,6 +440,10 @@ future<> cleanup_keyspace_compaction_task_impl::run() {
         auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
     });
+}
+
+tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
 }
 
 future<> global_cleanup_compaction_task_impl::run() {
@@ -489,6 +505,10 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     });
 }
 
+tasks::is_user_task offstrategy_keyspace_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
+}
+
 future<> offstrategy_keyspace_compaction_task_impl::run() {
     bool res = co_await _db.map_reduce0([&] (replica::database& db) -> future<bool> {
         bool needed = false;
@@ -521,6 +541,10 @@ future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
         _needed |= co_await t.perform_offstrategy_compaction(info);
     });
+}
+
+tasks::is_user_task upgrade_sstables_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
 }
 
 future<> upgrade_sstables_compaction_task_impl::run() {
@@ -561,6 +585,10 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
             return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
     });
+}
+
+tasks::is_user_task scrub_sstables_compaction_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
 }
 
 future<> scrub_sstables_compaction_task_impl::run() {

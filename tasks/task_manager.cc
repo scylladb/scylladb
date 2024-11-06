@@ -157,6 +157,10 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
     return tasks::is_internal(bool(_parent_id));
 }
 
+tasks::is_user_task task_manager::task::impl::is_user_task() const noexcept {
+    return tasks::is_user_task::no;
+}
+
 static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
     co_await utils::get_local_injector().inject("tasks_abort_children", utils::wait_for_message(10s));
 
@@ -350,6 +354,10 @@ is_abortable task_manager::task::is_abortable() const noexcept {
 
 is_internal task_manager::task::is_internal() const noexcept {
     return _impl->is_internal();
+}
+
+is_user_task task_manager::task::is_user_task() const noexcept {
+    return _impl->is_user_task();
 }
 
 void task_manager::task::abort() noexcept {

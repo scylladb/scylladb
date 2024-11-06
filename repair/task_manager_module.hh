@@ -65,6 +65,8 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override {
         return tasks::is_abortable::yes;
     }
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     future<> run() override;
 
@@ -123,6 +125,7 @@ public:
         return tasks::is_abortable(!_abort_subscription);
     }
 
+    tasks::is_user_task is_user_task() const noexcept override;
     virtual void release_resources() noexcept override;
 private:
     size_t get_metas_size() const noexcept;

@@ -56,6 +56,10 @@ future<tasks::task_manager::task::progress> backup_task_impl::get_progress() con
     };
 }
 
+tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
+}
+
 future<> backup_task_impl::do_backup() {
     if (!co_await file_exists(_snapshot_dir.native())) {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));

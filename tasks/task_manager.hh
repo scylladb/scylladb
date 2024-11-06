@@ -39,6 +39,7 @@ namespace tasks {
 
 using is_abortable = bool_class <struct abortable_tag>;
 using is_internal = bool_class<struct internal_tag>;
+using is_user_task = bool_class<struct user_task_tag>;
 
 extern logging::logger tmlogger;
 
@@ -202,6 +203,7 @@ public:
             virtual future<task_manager::task::progress> get_progress() const;
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
+            virtual tasks::is_user_task is_user_task() const noexcept;
             virtual void abort() noexcept;
             bool is_complete() const noexcept;
             bool is_done() const noexcept;
@@ -242,6 +244,7 @@ public:
         future<progress> get_progress() const;
         tasks::is_abortable is_abortable() const noexcept;
         tasks::is_internal is_internal() const noexcept;
+        tasks::is_user_task is_user_task() const noexcept;
         void abort() noexcept;
         bool abort_requested() const noexcept;
         future<> done() const noexcept;

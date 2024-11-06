@@ -44,6 +44,7 @@ public:
     virtual tasks::is_internal is_internal() const noexcept override;
     virtual tasks::is_abortable is_abortable() const noexcept override;
     virtual future<tasks::task_manager::task::progress> get_progress() const override;
+    virtual tasks::is_user_task is_user_task() const noexcept override;
 };
 
 } // snapshot namespace
