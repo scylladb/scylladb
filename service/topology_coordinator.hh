@@ -60,7 +60,8 @@ struct wait_for_ip_timeout : public std::runtime_error {
                 std::runtime_error::runtime_error(format("failed to obtain an IP for {} in {}s", id, timeout)) {}
 };
 
-future<gms::inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, seastar::abort_source& as);
+// Wait for the node with provided id to appear in the gossiper
+future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, seastar::abort_source& as);
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
         raft::term_t, uint64_t, const raft_topology_cmd&)>;

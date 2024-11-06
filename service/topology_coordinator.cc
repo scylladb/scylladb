@@ -62,13 +62,17 @@ namespace service {
 
 logging::logger rtlogger("raft_topology");
 
-future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, abort_source& as) {
+locator::host_id to_host_id(raft::server_id id) {
+    return locator::host_id{id.uuid()};
+}
+
+future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_source& as) {
     const auto timeout = std::chrono::seconds{30};
     const auto deadline = lowres_clock::now() + timeout;
     while (true) {
-        const auto ip = am.find(locator::host_id{id.uuid()});
-        if (ip) {
-            co_return *ip;
+        auto hids = g.get_nodes_with_host_id(to_host_id(id));
+        if (!hids.empty()) {
+            co_return;
         }
         if (lowres_clock::now() > deadline) {
             co_await coroutine::exception(std::make_exception_ptr(
@@ -355,10 +359,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     raft::server_id parse_replaced_node(const std::optional<request_param>& req_param) const {
         return service::topology::parse_replaced_node(req_param);
-    }
-
-    locator::host_id to_host_id(raft::server_id id) {
-        return locator::host_id{id.uuid()};
     }
 
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
@@ -1556,7 +1556,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node_builder.set("node_state", node_state::left);
                     reject_join.emplace_back(id);
                     try {
-                        co_await wait_for_ip(id, _address_map, _as);
+                        co_await wait_for_gossiper(id, _gossiper, _as);
                     } catch (...) {
                         rtlogger.warn("wait_for_ip failed during cancellation: {}", std::current_exception());
                     }
@@ -2246,7 +2246,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         try {
                             if (holds_alternative<join_node_response_params::rejected>(validation_result)) {
                                 release_guard(std::move(node.guard));
-                                co_await wait_for_ip(node.id, _address_map, _as);
+                                co_await wait_for_gossiper(node.id, _gossiper, _as);
                                 node.guard = co_await start_operation();
                             } else {
                                 auto exclude_nodes = get_excluded_nodes(node);

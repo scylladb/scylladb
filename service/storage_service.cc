@@ -5816,7 +5816,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 }
                 rtlogger.debug("Got raft_topology_cmd::wait_for_ip, new nodes [{}]", ids);
                 for (const auto& id: ids) {
-                    co_await wait_for_ip(id, _group0->address_map(), _abort_source);
+                    co_await wait_for_gossiper(id, _gossiper, _abort_source);
                 }
                 rtlogger.debug("raft_topology_cmd::wait_for_ip done [{}]", ids);
                 result.status = raft_topology_cmd_result::command_status::success;
@@ -6789,8 +6789,9 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
 
         if (params.replaced_id) {
             try {
-                auto ip = co_await wait_for_ip(*params.replaced_id, _group0->address_map(), _group0_as);
-                if (is_me(ip) || _gossiper.is_alive(ip)) {
+                co_await wait_for_gossiper(*params.replaced_id, _gossiper, _group0_as);
+                auto rhid = locator::host_id{params.replaced_id->uuid()};
+                if (is_me(rhid) || _gossiper.is_alive(rhid)) {
                     result.result = join_node_request_result::rejected{
                         .reason = fmt::format("tried to replace alive node {}", *params.replaced_id),
                     };
