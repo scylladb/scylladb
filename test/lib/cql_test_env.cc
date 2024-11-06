@@ -849,7 +849,8 @@ private:
                 std::ref(_qp),
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),
-                std::ref(_task_manager)).get();
+                std::ref(_task_manager),
+                std::ref(_gossip_address_map)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());

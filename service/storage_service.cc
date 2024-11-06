@@ -168,7 +168,8 @@ storage_service::storage_service(abort_source& abort_source,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
     topology_state_machine& topology_state_machine,
-    tasks::task_manager& tm)
+    tasks::task_manager& tm,
+    gms::gossip_address_map& address_map)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -183,6 +184,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _task_manager_module(make_shared<node_ops::task_manager_module>(tm, *this))
+        , _address_map(address_map)
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
