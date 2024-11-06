@@ -203,7 +203,7 @@ class cache_mutation_reader final : public mutation_reader::impl {
     gc_clock::time_point get_gc_before(const schema& schema, dht::decorated_key dk, const gc_clock::time_point query_time) {
         auto gc_state = _read_context.tombstone_gc_state();
         if (gc_state) {
-            return gc_state->get_gc_before_for_key(schema.shared_from_this(), dk, query_time);
+            return gc_state->with_commitlog_check_disabled().get_gc_before_for_key(schema.shared_from_this(), dk, query_time);
         }
 
         return gc_clock::time_point::min();

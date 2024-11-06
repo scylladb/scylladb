@@ -4378,19 +4378,28 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         replica::table& t = env.local_db().find_column_family(ks_name, table_name);
         schema_ptr s = t.schema();
 
+        // emulate commitlog behaivor
+        t.get_compaction_manager().get_tombstone_gc_state().set_gc_time_min_source([s](const table_id& id) {
+            return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
+        });
+
         dht::decorated_key dk = tests::generate_partition_key(s);
 
         auto ck1 = clustering_key::from_deeply_exploded(*s, {1});
         auto ck1_prefix = clustering_key_prefix::from_deeply_exploded(*s, {1});
         auto ck2 = clustering_key::from_deeply_exploded(*s, {2});
         auto ck2_prefix = clustering_key_prefix::from_deeply_exploded(*s, {2});
+        auto ck3 = clustering_key::from_deeply_exploded(*s, {3});
+        auto ck3_prefix = clustering_key_prefix::from_deeply_exploded(*s, {3});
 
         auto dt_noexp = gc_clock::now();
-        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 700);
+        auto dt_hold = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
 
         mutation m(s, dk);
         m.partition().apply_delete(*s, ck1_prefix, tombstone(1, dt_noexp)); // create non-expired tombstone
         m.partition().apply_delete(*s, ck2_prefix, tombstone(2, dt_exp)); // create expired tombstone
+        m.partition().apply_delete(*s, ck3_prefix, tombstone(3, dt_hold)); // create held by commit log tombstone
         t.apply(m);
         t.flush().get();
 
@@ -4409,6 +4418,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
 
         BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck1).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
         BOOST_REQUIRE(cp.find_row(*s, ck2) == nullptr); // expired tombstone isn't in cache
+        BOOST_REQUIRE(cp.find_row(*s, ck3) == nullptr); // held tombstone isn't in cache
 
         const auto rows = cp.non_dummy_rows();
         BOOST_REQUIRE(std::distance(rows.begin(), rows.end()) == 1); // cache contains non-expired row only
@@ -4542,8 +4552,10 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         auto ck1 = make_ck(1);
         auto ck2 = make_ck(2);
         auto ck3 = make_ck(3);
+        auto ck4 = make_ck(4);
         auto dt_noexp = gc_clock::now();
-        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 700);
+        auto dt_held = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
 
         auto mt = make_lw_shared<replica::memtable>(s);
         cache_tracker tracker;
@@ -4554,10 +4566,17 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
             m.set_clustered_cell(ck1, "v", data_value(101), 1);
             m.partition().apply_delete(*s, make_prefix(2), tombstone(1, dt_noexp)); // create non-expired tombstone
             m.partition().apply_delete(*s, make_prefix(3), tombstone(2, dt_exp)); // create expired tombstone
+            m.partition().apply_delete(*s, make_prefix(4), tombstone(3, dt_held)); // create expired but held by commit log tombstone
             cache.populate(m);
         }
 
         tombstone_gc_state gc_state(nullptr);
+
+        // emulate commitlog behaivor
+        gc_state.set_gc_time_min_source([&s](const table_id& id) {
+                return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
+        });
+
         auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
@@ -4568,11 +4587,12 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         BOOST_REQUIRE(cp.find_row(*s, ck1) != nullptr); // live row is in cache
         BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck2).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
         BOOST_REQUIRE(cp.find_row(*s, ck3) == nullptr); // expired tombstone isn't in cache
+        BOOST_REQUIRE(cp.find_row(*s, ck4) == nullptr); // held tombstone isn't in cache
 
         // check tracker stats
         auto &tracker_stats = tracker.get_stats();
-        BOOST_REQUIRE(tracker_stats.rows_compacted == 1);
-        BOOST_REQUIRE(tracker_stats.rows_compacted_away == 1);
+        BOOST_REQUIRE(tracker_stats.rows_compacted == 2);
+        BOOST_REQUIRE(tracker_stats.rows_compacted_away == 2);
     });
 }
 
