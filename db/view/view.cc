@@ -1745,17 +1745,24 @@ get_view_natural_endpoint(
     auto my_datacenter = topology.get_datacenter();
     std::vector<locator::host_id> base_endpoints, view_endpoints;
 
+    std::function<bool(const locator::host_id&)> is_candidate;
+    if (network_topology) {
+        is_candidate = [&] (const locator::host_id& ep) { return topology.get_datacenter(ep) == my_datacenter; };
+    } else {
+        is_candidate = [&] (const locator::host_id&) { return true; };
+    }
+
     // We need to use get_replicas() for pairing to be stable in case base or view tablet
     // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
     for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
-        if (!network_topology || topology.get_datacenter(base_endpoint) == my_datacenter) {
+        if (is_candidate(base_endpoint)) {
             base_endpoints.push_back(base_endpoint);
         }
     }
 
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
-    for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-        if (use_legacy_self_pairing) {
+    if (use_legacy_self_pairing) {
+        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
             auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
                 view_endpoint);
             // If this base replica is also one of the view replicas, we use
@@ -1771,8 +1778,10 @@ get_view_natural_endpoint(
             } else if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
                 view_endpoints.push_back(view_endpoint);
             }
-        } else {
-            if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
+        }
+    } else {
+        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
+            if (is_candidate(view_endpoint)) {
                 view_endpoints.push_back(view_endpoint);
             }
         }
