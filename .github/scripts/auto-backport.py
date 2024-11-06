@@ -150,7 +150,10 @@ def main():
         start_commit, end_commit = args.commits.split('..')
         commits = repo.compare(start_commit, end_commit).commits
         for commit in commits:
-            for pr in commit.get_pulls():
+            match = re.search(rf"Closes .*#([0-9]+)", commit.commit.message, re.IGNORECASE)
+            if match:
+                pr_number = int(match.group(1))
+                pr = repo.get_pull(pr_number)
                 closed_prs.append(pr)
     if args.pull_request:
         start_commit = args.head_commit
