@@ -1920,7 +1920,8 @@ mutation_reader make_multishard_streaming_reader(
         reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
         gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size);
+        std::optional<size_t> multishard_reader_buffer_size,
+        read_ahead read_ahead);
 
 mutation_reader make_multishard_streaming_reader(
         distributed<replica::database>& db,
@@ -1928,7 +1929,8 @@ mutation_reader make_multishard_streaming_reader(
         reader_permit permit,
         const dht::partition_range& range,
         gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size);
+        std::optional<size_t> multishard_reader_buffer_size,
+        read_ahead read_ahead);
 
 bool is_internal_keyspace(std::string_view name);
 

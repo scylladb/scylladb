@@ -2911,11 +2911,12 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
         gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size) {
+        std::optional<size_t> multishard_reader_buffer_size,
+        read_ahead read_ahead) {
 
     auto& table = db.local().find_column_family(schema);
     auto erm = table.get_effective_replication_map();
-    auto ms = mutation_source([&db, erm, compaction_time, multishard_reader_buffer_size] (schema_ptr s,
+    auto ms = mutation_source([&db, erm, compaction_time, multishard_reader_buffer_size, read_ahead] (schema_ptr s,
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
@@ -2925,7 +2926,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         auto table_id = s->id();
         const auto buffer_hint = multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value());
         auto rd = make_multishard_combining_reader_v2(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
-                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint);
+                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint, read_ahead);
         if (multishard_reader_buffer_size) {
             rd.set_max_buffer_size(*multishard_reader_buffer_size);
         }
@@ -2941,7 +2942,8 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         reader_permit permit,
         const dht::partition_range& range,
         gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size)
+        std::optional<size_t> multishard_reader_buffer_size,
+        read_ahead read_ahead)
 {
     const auto table_id = schema->id();
     const auto& full_slice = schema->full_slice();
@@ -2955,7 +2957,8 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         full_slice,
         {},
         mutation_reader::forwarding::no,
-        multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value()));
+        multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value()),
+        read_ahead);
     if (multishard_reader_buffer_size) {
         rd.set_max_buffer_size(*multishard_reader_buffer_size);
     }
