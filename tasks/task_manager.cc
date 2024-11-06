@@ -624,17 +624,19 @@ task_manager::task_manager(config cfg, class abort_source& as) noexcept
     , _update_task_ttl_action([this] { return update_task_ttl(); })
     , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
     , _task_ttl(_cfg.task_ttl.get())
+    , _user_task_ttl(_cfg.user_task_ttl)
 {
     _abort_subscription = as.subscribe([this] () noexcept {
         _as.request_abort();
     });
-    tmlogger.debug("Started task manager (TTL={})", get_task_ttl());
+    tmlogger.debug("Started task manager (TTL={}) (USER TTL={})", get_task_ttl(), get_user_task_ttl());
 }
 
 task_manager::task_manager() noexcept
     : _update_task_ttl_action([this] { return update_task_ttl(); })
     , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
     , _task_ttl(0)
+    , _user_task_ttl(0)
 {}
 
 gms::inet_address task_manager::get_broadcast_address() const noexcept {
@@ -740,6 +742,10 @@ abort_source& task_manager::abort_source() noexcept {
 
 std::chrono::seconds task_manager::get_task_ttl() const noexcept {
     return std::chrono::seconds(_task_ttl);
+}
+
+std::chrono::seconds task_manager::get_user_task_ttl() const noexcept {
+    return std::chrono::seconds(_user_task_ttl);
 }
 
 void task_manager::register_module(std::string name, module_ptr module) {

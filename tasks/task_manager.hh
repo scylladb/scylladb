@@ -59,6 +59,7 @@ public:
     enum class task_group;
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
+        utils::updateable_value<uint32_t> user_task_ttl;
         gms::inet_address broadcast_address;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
@@ -84,6 +85,7 @@ private:
     serialized_action _update_task_ttl_action;
     utils::observer<uint32_t> _task_ttl_observer;
     uint32_t _task_ttl;
+    utils::updateable_value<uint32_t> _user_task_ttl;
     netw::messaging_service* _messaging = nullptr;
 public:
     class task_not_found : public std::exception {
@@ -434,6 +436,7 @@ public:
     seastar::abort_source& abort_source() noexcept;
 public:
     std::chrono::seconds get_task_ttl() const noexcept;
+    std::chrono::seconds get_user_task_ttl() const noexcept;
 private:
     future<> update_task_ttl() noexcept {
         _task_ttl = _cfg.task_ttl.get();
