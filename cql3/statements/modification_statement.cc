@@ -566,13 +566,13 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
     auto statement = prepare_statement(db, meta, stats);
-    auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(std::move(statement), meta, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(std::move(statement), meta);
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
 modification_statement::prepare(data_dictionary::database db, prepare_context& ctx, cql_stats& stats) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+    ctx.set_schema(schema);
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->fill_prepare_context(ctx);
@@ -601,7 +601,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions.has_value()) {
         ctx.clear_pk_function_calls_cache();
     }
-    prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
+    prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes().size() != 0;
     return prepared_stmt;
 }
 

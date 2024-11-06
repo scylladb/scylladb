@@ -440,15 +440,14 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
 
+    if (!have_multiple_cfs && !statements.empty()) {
+        meta.set_schema(statements[0].statement->s);
+    }
+
     cql3::statements::batch_statement batch_statement_(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats);
 
-    std::vector<uint16_t> partition_key_bind_indices;
-    if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
-    }
-    return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
-                                                     meta.get_variable_specifications(),
-                                                     std::move(partition_key_bind_indices));
+
+    return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)), meta);
 }
 
 }
