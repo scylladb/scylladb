@@ -303,10 +303,10 @@ mutation_reader repair_reader::make_reader(
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
-            }, compaction_time);
+            }, compaction_time, {});
         }
         case read_strategy::multishard_filter: {
-            return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time),
+            return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time, {}),
                 [&remote_sharder, remote_shard](const dht::decorated_key& k) {
                     return remote_sharder.shard_for_reads(k.token()) == remote_shard;
                 });
