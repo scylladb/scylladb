@@ -318,12 +318,13 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         auto module = _impl->_module;
+        auto user_task = is_user_task();
         bool drop_after_complete = (get_parent_id() && _impl->_parent_kind == task_kind::node) || is_internal();
-        (void)done().finally([module, drop_after_complete] {
+        (void)done().finally([module, drop_after_complete, user_task] {
             if (drop_after_complete) {
                 return make_ready_future<>();
             }
-            return sleep_abortable(module->get_task_manager().get_task_ttl(), module->abort_source());
+            return sleep_abortable(user_task ? module->get_task_manager().get_user_task_ttl() : module->get_task_manager().get_task_ttl(), module->abort_source());
         }).then_wrapped([module, id = id()] (auto f) {
             f.ignore_ready_future();
             module->unregister_task(id);
