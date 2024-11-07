@@ -202,13 +202,30 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, std::vector<table_info>)>;
+using ks_cfs_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, std::vector<table_info>)>;
 
-static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
+static auto wrap_ks_cf(http_context &ctx, ks_cfs_func f) {
     return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
+    };
+}
+
+using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, table_info)>;
+
+static auto wrap_ks_cf(http_context& ctx, ks_cf_func f) {
+    return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto ti = table_info { .name = req->get_query_param("cf") };
+        if (!ti.name.empty()) {
+            try {
+                ti.id = ctx.db.local().find_uuid(keyspace, ti.name);
+            } catch (replica::no_such_column_family& e) {
+                throw bad_param_exception(e.what());
+            }
+        }
+        return f(ctx, std::move(req), std::move(keyspace), std::move(ti));
     };
 }
 
