@@ -30,6 +30,7 @@
 #include "auth_version.hh"
 
 namespace sstables {
+    struct basic_info;
     struct entry_descriptor;
     class generation_type;
     enum class sstable_state;
@@ -109,14 +110,21 @@ typedef std::vector<db::replay_position> replay_positions;
 
 struct compaction_history_entry {
     utils::UUID id;
+    shard_id shard_id;
     sstring ks;
     sstring cf;
+    sstring compaction_type;
     int64_t compacted_at = 0;
     int64_t bytes_in = 0;
     int64_t bytes_out = 0;
     // Key: number of rows merged
     // Value: counter
     std::unordered_map<int32_t, int64_t> rows_merged;
+    std::vector<sstables::basic_info> sstables_in;
+    std::vector<sstables::basic_info> sstables_out;
+    int64_t total_tombstone_purge_attempt = 0;
+    int64_t total_tombstone_purge_failure_due_to_overlapping_with_memtable = 0;
+    int64_t total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable = 0;
 };
 
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
@@ -384,8 +392,7 @@ public:
         DECOMMISSIONED
     };
 
-    future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
-                                       std::unordered_map<int32_t, int64_t> rows_merged);
+    future<> update_compaction_history(compaction_history_entry);
     using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
     future<> get_compaction_history(compaction_history_consumer f);
 

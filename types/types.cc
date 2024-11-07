@@ -3465,6 +3465,8 @@ thread_local const shared_ptr<const abstract_type> varint_type(make_shared<varin
 thread_local const shared_ptr<const abstract_type> decimal_type(make_shared<decimal_type_impl>());
 thread_local const shared_ptr<const abstract_type> counter_type(make_shared<counter_type_impl>());
 thread_local const shared_ptr<const abstract_type> duration_type(make_shared<duration_type_impl>());
+thread_local const shared_ptr<const user_type_impl> sstableinfo_type(user_type_impl::get_instance(
+        "system", "sstableinfo", {"generation", "origin", "size"}, {uuid_type, utf8_type, long_type}, false));
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
 
 data_type abstract_type::parse_type(const sstring& name)
