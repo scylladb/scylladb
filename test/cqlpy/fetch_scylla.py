@@ -6,7 +6,7 @@
 # version of Scylla for a desired release, ready to be run by tests (run.py).
 # What we need to fetch is a "relocatable" package containing just the Scylla
 # executable and the shared libraries it needs - we don't need a full OS and
-# not even stuff like JMX or Python that cql-pytest tests don't need.
+# not even stuff like JMX or Python that cqlpy tests don't need.
 #
 # Can fetch released versions with names like:
 #   * 5.4.7

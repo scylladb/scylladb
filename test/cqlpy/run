@@ -21,7 +21,7 @@ else:
 # where <release> is the specific release downloaded (e.g., if the user
 # asks "--release 2022.1" and the downloaded release is 2022.1.9, it
 # will be stored in build/2022.1.9.
-if sys.argv[1] == '--release':
+if len(sys.argv) > 1 and sys.argv[1] == '--release':
     release = sys.argv[2]
     exe = run.download_precompiled_scylla(release)
     cmd = lambda pid, dir: run.run_precompiled_scylla_cmd(exe, pid, dir)

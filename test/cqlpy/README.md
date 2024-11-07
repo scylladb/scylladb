@@ -52,9 +52,9 @@ release of Scylla downloaded (pre-compiled) from ScyllaDB's official
 release collection. For example:
 
 ```
-test/cql-pytest/run --release 2022.1 --runxfail \
+test/cqlpy/run --release 2022.1 --runxfail \
             test_prepare.py::test_duplicate_named_bind_marker_prepared
-test/cql-pytest/run --release 2022.2 --runxfail \
+test/cqlpy/run --release 2022.2 --runxfail \
             test_prepare.py::test_duplicate_named_bind_marker_prepared
 ```
 
@@ -69,11 +69,11 @@ The `--release` option supports various version specifiers, such as 5.4.7
 (the latest in that branch).
 
 
-# Developing new cql-pytest tests
+# Developing new cqlpy tests
 
-The cql-pytest test framework is designed to encourage Scylla developers
+The cqlpy test framework is designed to encourage Scylla developers
 to quickly write _extensive_ functional tests for the CQL features which
-they develop. This is why cql-pytest is included in the main Scylla
+they develop. This is why cqlpy is included in the main Scylla
 repository (and not some external repository), and why the test framework
 focuses on the ease of writing new tests, the ease of understanding test
 failures, and the speed to run and re-run tests especially during development
@@ -86,12 +86,12 @@ and practices be followed when writing new tests:
 
 1. **Keep each test fast**: Ideally each test function should
    take a fraction of a second. At the time of this writing, the entire
-   cql-pytest test suite of over 800 test functions takes around 80
+   cqlpy test suite of over 800 test functions takes around 80
    seconds to run, on average 0.1 second per test. Always think if your
    test really requires inserting a million items or sleeping 5 seconds -
    usually it does NOT.
    Short tests make it easy and fun to run and rerun a single test during
-   development, and also allow developers to run the entire cql-pytest
+   development, and also allow developers to run the entire cqlpy
    test suite during development instead of trying to guess which test might
    break.
 
@@ -112,7 +112,7 @@ and practices be followed when writing new tests:
    instead of hard-coded keys that can break if another test accidentally
    uses the same key.
    One of the reasons the tests in test/alternator are currently faster
-   than test/cql-pytest (on average 0.03 second per test function, vs. 0.1)
+   than test/cqlpy (on average 0.03 second per test function, vs. 0.1)
    is that they make better use of fixtures, and very few tests create
    their own tables. This is an ideal we should strive for (but harder
    to achieve in CQL because different schemas require different tables).
@@ -131,7 +131,7 @@ and practices be followed when writing new tests:
 
 5. **Run your test against Cassandra**: It is not enough to run your
    test against Scylla and see that it passes. Run it against Cassandra as
-   well, using test/cql-pytest/run-cassandra. If the feature being tested
+   well, using test/cqlpy/run-cassandra. If the feature being tested
    is Scylla-only, the test can be skipped on Cassandra by using the
    `scylla_only` fixture. But most of Scylla's CQL features are identical
    to Cassandra's and therefore most of our CQL tests should pass on
@@ -161,7 +161,7 @@ and practices be followed when writing new tests:
    is actually being tested: For example, a reviewer of the test may think
    the empty string is included in the test, while actually it isn't.
    Randomized "fuzz" testing has its benefits, but it is almost always the
-   wrong thing to do in the context of the cql-pytest framework. We should
+   wrong thing to do in the context of the cqlpy framework. We should
    probably have a separate framework (or at least separate files) for
    these tests.
 
@@ -183,7 +183,7 @@ and practices be followed when writing new tests:
    If you believe something _should_ be a utility function, start by
    putting it inside the single test file that needs it - and only move
    it to util.py if several test files can benefit from it.
-   At the time of this writing, cql-pytest has over 20,000 lines of test
+   At the time of this writing, cqlpy has over 20,000 lines of test
    code, and around of 500 lines of library code. Please keep this ratio.
    We're writing a collection of tests - not a library.
 
@@ -226,12 +226,12 @@ and practices be followed when writing new tests:
    to make this translation easier. If you are not translating additional
    tests, please avoid modifying this directory. In particular, avoid
    changing those tests without good reason, and don't add new tests to
-   any file in it. Put new tests in the `cql-pytest` directory, in any
+   any file in it. Put new tests in the `cqlpy` directory, in any
    place except the `cassandra_tests` subdirectory.
 
 # Installing Cassandra
 
-As explained above, the ability to run cql-pytest tests against Cassandra
+As explained above, the ability to run cqlpy tests against Cassandra
 makes it easier to write correct tests, to ensure compatibility with
 Cassandra, and sometimes to write tests for new Cassandra-inspired features
 before developing the feature in Scylla (this is so-called "test-driven
@@ -239,7 +239,7 @@ development"). Unfortunately, in recent years modern Linux distributions
 dropped their "cassandra" package, so to run Cassandra you'll need to
 install it manually, and this section explains how. It's very easy, and
 don't worry - you don't even need to learn how to run Cassandra, as the
-"test/cql-pytest/run-cassandra" tool will do it for you.
+"test/cqlpy/run-cassandra" tool will do it for you.
 
 To be able to run Cassandra, you'll need either Java 8 or 11 installed on
 your system - Cassandra does not support more recent versions of Java.
@@ -264,7 +264,7 @@ as bin/nodetool and other things), which you will ask run-cassandra to use:
 
 ```
 export CASSANDRA=/tmp/apache-cassandra-4.1.4/bin/cassandra
-test/cql-pytest/run-cassandra testfile.py::testfunc
+test/cqlpy/run-cassandra testfile.py::testfunc
 ```
 
 ## Building Cassandra from source code
@@ -295,5 +295,5 @@ with run-cassandra:
 
 ```
 export CASSANDRA=/tmp/cassandra/bin/cassandra
-test/cql-pytest/run-cassandra testfile.py::testfunc
+test/cqlpy/run-cassandra testfile.py::testfunc
 ```
