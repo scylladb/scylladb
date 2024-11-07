@@ -12,6 +12,7 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <ranges>
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
@@ -1741,8 +1742,9 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static std::optional<locator::host_id>
+std::optional<locator::host_id>
 get_view_natural_endpoint(
+        locator::host_id me,
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
         const locator::abstract_replication_strategy& replication_strategy,
@@ -1752,7 +1754,6 @@ get_view_natural_endpoint(
         bool use_tablets_rack_aware_view_pairing,
         replica::cf_stats& cf_stats) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
-    auto me = topology.my_host_id();
     auto& my_location = topology.get_location(me);
     auto& my_datacenter = my_location.dc;
     auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
@@ -1773,14 +1774,14 @@ get_view_natural_endpoint(
         }
     }
 
-    auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node* {
+    auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
         auto np = topology.find_node(ep);
         if (!np) {
             throw std::runtime_error(format("get_view_natural_endpoint: {} replica {} not found in topology", is_view ? "view" : "base", ep));
-        } else if (np->endpoint() == gms::inet_address{}) {
+        } else if (np->left() || np->endpoint() == gms::inet_address{}) {
             vlogger.warn("get_view_natural_endpoint: {} replica {} already left the cluster", is_view ? "view" : "base", ep);
         }
-        return np;
+        return *np;
     };
     std::function<bool(const locator::node&)> is_candidate;
     if (simple_rack_aware_pairing) {
@@ -1792,9 +1793,9 @@ get_view_natural_endpoint(
         is_candidate = [&] (const locator::node&) { return true; };
     }
     auto process_candidate = [&] (node_vector& nodes, const locator::topology& topology, const locator::host_id& ep, bool is_view) {
-        auto np = resolve(topology, ep, is_view);
-        if (np && is_candidate(*np)) {
-            nodes.emplace_back(*np);
+        auto& node = resolve(topology, ep, is_view);
+        if (is_candidate(node)) {
+            nodes.emplace_back(node);
         }
     };
 
@@ -1819,9 +1820,9 @@ get_view_natural_endpoint(
             if (it != base_endpoints.end()) {
                 base_endpoints.erase(it);
             } else {
-                auto np = resolve(view_topology, view_endpoint, true);
-                if (np && (!network_topology || np->dc() == my_datacenter)) {
-                    view_endpoints.push_back(*np);
+                auto& node = resolve(view_topology, view_endpoint, true);
+                if (!network_topology || node.dc() == my_datacenter) {
+                    view_endpoints.push_back(node);
                 }
             }
         }
@@ -2010,12 +2011,13 @@ future<> view_update_generator::mutate_MV(
     // when the cluster feature is enabled so that all replicas agree
     // on the pairing algorithm.
     bool use_tablets_rack_aware_view_pairing = _db.features().tablet_rack_aware_view_pairing && ks.uses_tablets();
+    auto me = base_ermp->get_topology().my_host_id();
     static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
-        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, replication, base_token, view_token,
+        auto target_endpoint = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
                 use_legacy_self_pairing, use_tablets_rack_aware_view_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
