@@ -936,7 +936,7 @@ future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() 
 future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
-    auto echo_interval = std::chrono::milliseconds(2000);
+    auto echo_interval = std::chrono::seconds(2);
     auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
     while (is_enabled()) {
         bool failed = false;
@@ -1684,7 +1684,7 @@ void gossiper::mark_alive(inet_address addr) {
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
-    (void) ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, id, netw::messaging_service::clock_type::now() + std::chrono::milliseconds(15000), generation.value(), false).then([this, addr] {
+    (void) ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, id, netw::messaging_service::clock_type::now() + std::chrono::seconds(15), generation.value(), false).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         return real_mark_alive(addr);
     }).handle_exception([addr, gh = std::move(gh), unmark_pending = std::move(unmark_pending)] (auto ep) {
@@ -2100,7 +2100,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         co_await coroutine::parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) -> future<> {
             logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
             try {
-                auto response = co_await ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(&_messaging, msg_addr(node), netw::messaging_service::clock_type::now() + std::chrono::milliseconds(5000), request);
+                auto response = co_await ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(&_messaging, msg_addr(node), netw::messaging_service::clock_type::now() + std::chrono::seconds(5), request);
 
                 logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
                 responses.push_back(std::move(response));
