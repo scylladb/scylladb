@@ -1677,12 +1677,12 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
     }
 }
 
-future<> gossiper::notify_nodes_on_up(std::unordered_set<inet_address> dsts) {
-    co_await coroutine::parallel_for_each(dsts, [this] (inet_address dst) -> future<>  {
-        if (dst != get_broadcast_address()) {
+future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts) {
+    co_await coroutine::parallel_for_each(dsts, [this] (locator::host_id dst) -> future<>  {
+        if (dst != _gcfg.host_id) {
             try {
                 auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
-                co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, netw::msg_addr(dst), netw::messaging_service::clock_type::now() + std::chrono::seconds(10), generation.value(), true);
+                co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, dst, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), generation.value(), true);
             } catch (...) {
                 logger.warn("Failed to notify node {} that I am UP: {}", dst, std::current_exception());
             }

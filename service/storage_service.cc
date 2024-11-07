@@ -1933,16 +1933,12 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         // Initializes monitor only after updating local topology.
         start_tablet_split_monitor();
 
-        std::unordered_set<inet_address> ips;
-        const auto& am = _group0->address_map();
-        for (auto id : _topology_state_machine._topology.normal_nodes | std::views::keys) {
-            auto ip = am.find(locator::host_id{id.uuid()});
-            if (ip) {
-                ips.insert(*ip);
-            }
-        }
+        auto ids = _topology_state_machine._topology.normal_nodes |
+                   std::views::keys |
+                   std::views::transform([] (raft::server_id id) { return locator::host_id{id.uuid()}; }) |
+                   std::ranges::to<std::unordered_set<locator::host_id>>();
 
-        co_await _gossiper.notify_nodes_on_up(std::move(ips));
+        co_await _gossiper.notify_nodes_on_up(std::move(ids));
 
         co_return;
     }
@@ -2120,14 +2116,14 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
     })(*this, sys_dist_ks, proxy);
 
-    std::unordered_set<inet_address> ips;
-    _gossiper.for_each_endpoint_state([this, &ips] (const inet_address& addr, const gms::endpoint_state&) {
+    std::unordered_set<locator::host_id> ids;
+    _gossiper.for_each_endpoint_state([this, &ids] (const inet_address& addr, const gms::endpoint_state& ep) {
         if (_gossiper.is_normal(addr)) {
-            ips.insert(addr);
+            ids.insert(ep.get_host_id());
         }
     });
 
-    co_await _gossiper.notify_nodes_on_up(std::move(ips));
+    co_await _gossiper.notify_nodes_on_up(std::move(ids));
 }
 
 future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
