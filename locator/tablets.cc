@@ -25,6 +25,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <type_traits>
 
 namespace locator {
 
@@ -752,6 +753,65 @@ private:
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
     }
+
+    template<typename Set>
+    Set get_pending_helper(const token& search_token) const {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_transition_info(tablet);
+        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+            return {};
+        }
+        switch (info->writes) {
+            case write_replica_set_selector::previous:
+                return {};
+            case write_replica_set_selector::both: {
+                if (!info->pending_replica) {
+                    return {};
+                }
+                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
+                                    search_token, _table, tablet, *info->pending_replica);
+                if constexpr (std::is_same_v<Set, inet_address_vector_topology_change>) {
+                    return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
+                } else {
+                    return {info->pending_replica->host};
+                }
+            }
+            case write_replica_set_selector::next:
+                return {};
+        }
+        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+    }
+
+    template<typename Set>
+    Set get_for_reading_helper(const token& search_token) const {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_transition_info(tablet);
+        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
+            if (!info) {
+                return tablets.get_tablet_info(tablet).replicas;
+            }
+            switch (info->reads) {
+                case read_replica_set_selector::previous:
+                    return tablets.get_tablet_info(tablet).replicas;
+                case read_replica_set_selector::next: {
+                    return info->next;
+                }
+            }
+            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
+        });
+        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        if constexpr (std::is_same_v<Set, inet_address_vector_replica_set>) {
+            auto result = to_replica_set(replicas);
+            maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
+            return result;
+        } else {
+            return to_host_set(replicas);
+        }
+    }
+
+
 public:
     tablet_effective_replication_map(table_id table,
                                      replication_strategy_ptr rs,
@@ -770,6 +830,10 @@ public:
 
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
         return to_replica_set(get_replicas_for_write(search_token));
+    }
+
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const override {
+        return to_host_set(get_replicas_for_write(search_token));
     }
 
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
@@ -796,49 +860,19 @@ public:
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
-        auto&& tablets = get_tablet_map();
-        auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
-            return {};
-        }
-        switch (info->writes) {
-            case write_replica_set_selector::previous:
-                return {};
-            case write_replica_set_selector::both:
-                if (!info->pending_replica) {
-                    return {};
-                }
-                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                                    search_token, _table, tablet, *info->pending_replica);
-                return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
-            case write_replica_set_selector::next:
-                return {};
-        }
-        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+        return get_pending_helper<inet_address_vector_topology_change>(search_token);
+    }
+
+    virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const override {
+        return get_pending_helper<host_id_vector_topology_change>(search_token);
     }
 
     virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
-        auto&& tablets = get_tablet_map();
-        auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->reads) {
-                case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case read_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
-        });
-        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        auto result = to_replica_set(replicas);
-        maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
-        return result;
+        return get_for_reading_helper<inet_address_vector_replica_set>(search_token);
+    }
+
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const override {
+        return get_for_reading_helper<host_id_vector_replica_set>(search_token);
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token) const override {

@@ -134,12 +134,28 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     return endpoints;
 }
 
+host_id_vector_topology_change vnode_effective_replication_map::get_pending_replicas(const token& search_token) const {
+    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
+    if (!pending_endpoints) {
+        return host_id_vector_topology_change{};
+    }
+    return *pending_endpoints | std::ranges::to<host_id_vector_topology_change>();
+}
+
 inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
         return get_natural_endpoints_without_node_being_replaced(token);
     }
     return resolve_endpoints<inet_address_vector_replica_set>(*endpoints, *_tmptr);
+}
+
+host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_reading(const token& token) const {
+    const auto* endpoints = find_token(_read_endpoints, token);
+    if (endpoints == nullptr) {
+        return get_natural_replicas(token);
+    }
+    return *endpoints | std::ranges::to<host_id_vector_replica_set>();
 }
 
 std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
@@ -520,6 +536,10 @@ host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const t
 
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
     return do_get_natural_endpoints(search_token, false);
+}
+
+host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas(const token& search_token) const {
+    return get_replicas(search_token);
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {

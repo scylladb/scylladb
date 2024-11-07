@@ -227,6 +227,9 @@ public:
     /// The returned addresses are present in the topology object associated with this instance.
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
 
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const = 0;
+
     /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
 
@@ -235,8 +238,14 @@ public:
     /// Non-empty only during topology change.
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
 
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const = 0;
+
     /// Returns a list of nodes to which a read request should be directed.
     virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
+
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const = 0;
 
     /// Returns replicas for a given token.
     /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
@@ -330,9 +339,12 @@ private:
     friend class effective_replication_map_factory;
 public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
+    host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
     host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
