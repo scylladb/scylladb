@@ -58,6 +58,12 @@ class TaskManagerClient():
         assert(type(old_ttl) == int)
         return old_ttl
 
+    async def set_user_task_ttl(self, node_ip: IPAddress, ttl: int) -> int:
+        """Set task ttl and get old value."""
+        old_ttl = await self.api.client.post_json("/task_manager/user_ttl", params={ "user_ttl": str(ttl) }, host=node_ip)
+        assert(type(old_ttl) == int)
+        return old_ttl
+
     async def get_task_status_recursively(self, node_ip: IPAddress, task_id: TaskID) -> list[TaskStatus]:
         """Get status of a task and all its descendants."""
         status_list = await self.api.client.get_json(f"/task_manager/task_status_recursive/{task_id}", host=node_ip)
