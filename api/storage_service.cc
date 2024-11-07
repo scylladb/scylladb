@@ -757,7 +757,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    ss::force_keyspace_compaction.set(r, wrap_ks_cf(ctx, [](http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         auto& db = ctx.db;
         auto params = req_params({
             std::pair("keyspace", mandatory::yes),
@@ -766,8 +766,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             std::pair("consider_only_existing_data", mandatory::no),
         });
         params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
         auto flush = params.get_as<bool>("flush_memtables").value_or(true);
         auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
         apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
@@ -786,7 +784,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
 
         co_return json_void();
-    });
+    }));
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
