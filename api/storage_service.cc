@@ -644,19 +644,14 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ss.local().get_schema_version();
     });
 
-    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table = req->get_query_param("cf");
-
+    ss::get_range_to_endpoint_map.set(r, wrap_ks_cf(ctx, [&ss](http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, table_info ti) -> future<json::json_return_type> {
         auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
-            auto& ks = ctx.db.local().find_keyspace(keyspace);
-            if (table.empty()) {
+            if (ti.name.empty()) {
+                auto& ks = ctx.db.local().find_keyspace(keyspace);
                 ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
                 return ks.get_vnode_effective_replication_map();
             } else {
-                validate_table(ctx, keyspace, table);
-
-                auto& cf = ctx.db.local().find_column_family(keyspace, table);
+                auto& cf = ctx.db.local().find_column_family(ti.id);
                 return cf.get_effective_replication_map();
             }
         });
@@ -680,7 +675,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             }
             return m;
         });
-    });
+    }));
 
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
