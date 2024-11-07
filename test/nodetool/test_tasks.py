@@ -29,6 +29,14 @@ def test_abort_failure(nodetool, scylla_only):
             {"expected_requests": []},
             ["required parameter is missing"])
 
+def test_user_ttl(nodetool, scylla_only):
+    nodetool("tasks", "user-ttl", expected_requests=[
+        expected_request("GET", "/task_manager/user_ttl")])
+
+    params = { "user_ttl": "10" }
+    nodetool("tasks", "user-ttl", "--set", params["user_ttl"], expected_requests=[
+        expected_request("POST", "/task_manager/user_ttl", params)])
+
 def test_list(nodetool, scylla_only):
     nodetool("tasks", "list", "repair", expected_requests=[
         expected_request("GET", "/task_manager/list_module_tasks/repair", response=[])])
