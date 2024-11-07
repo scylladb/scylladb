@@ -483,9 +483,7 @@ void unset_repair(http_context& ctx, routes& r) {
 }
 
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
-    ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<http::request> req) {
-        auto ks = validate_keyspace(ctx, req);
-        auto cf = req->get_query_param("cf");
+    ss::load_new_ss_tables.set(r, wrap_ks_cf(ctx, [&sst_loader](http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, table_info ti) {
         auto stream = req->get_query_param("load_and_stream");
         auto primary_replica = req->get_query_param("primary_replica_only");
         boost::algorithm::to_lower(stream);
@@ -494,11 +492,11 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
         // No need to add the keyspace, since all we want is to avoid always sending this to the same
         // CPU. Even then I am being overzealous here. This is not something that happens all the time.
-        auto coordinator = std::hash<sstring>()(cf) % smp::count;
+        auto coordinator = std::hash<sstring>()(ti.name) % smp::count;
         return sst_loader.invoke_on(coordinator,
-                [ks = std::move(ks), cf = std::move(cf),
+                [ks = std::move(keyspace), ti = std::move(ti),
                 load_and_stream, primary_replica_only] (sstables_loader& loader) {
-            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
+            return loader.load_new_sstables(ks, ti.name, load_and_stream, primary_replica_only);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
@@ -506,7 +504,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             }
             return make_ready_future<json::json_return_type>(json_void());
         });
-    });
+    }));
 
     ss::start_restore.set(r, [&sst_loader] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto endpoint = req->get_query_param("endpoint");
