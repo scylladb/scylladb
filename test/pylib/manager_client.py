@@ -244,9 +244,9 @@ class ManagerClient():
             # Wait for other servers to see the server to be stopped
             # so that the later server_sees_other_server() call will not
             # exit immediately, making it moot.
-            for idx2 in range(len(servers)):
+            for idx2, s2 in enumerate(servers):
                 if idx2 != idx:
-                    await self.server_not_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+                    await self.server_not_sees_other_server(s2.ip_addr, s.ip_addr)
 
             if with_down:
                 up_servers = [u for u in servers if u.server_id != s.server_id]
@@ -260,9 +260,9 @@ class ManagerClient():
             # and will not send graceful shutdown message to it. Server "s" may learn about the
             # restart from gossip later and close connections while we already sent CQL requests
             # to it, which will cause them to time out. Refs #14746.
-            for idx2 in range(len(servers)):
+            for idx2, s2 in enumerate(servers):
                 if idx2 != idx:
-                    await self.server_sees_other_server(servers[idx2].ip_addr, s.ip_addr)
+                    await self.server_sees_other_server(s2.ip_addr, s.ip_addr)
 
         await wait_for_cql_and_get_hosts(self.cql, servers, time() + 60)
 
