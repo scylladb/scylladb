@@ -709,11 +709,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_natural_endpoints.set(r, [&ctx, &ss](const_req req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        return container_to_vec(ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"),
-                req.get_query_param("key")));
-    });
+    ss::get_natural_endpoints.set(r, wrap_ks_cf(ctx, [&ss](http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, table_info ti) -> future<json::json_return_type> {
+        return make_ready_future<json::json_return_type>(container_to_vec(ss.local().get_natural_endpoints(keyspace, ti.name, req->get_query_param("key"))));
+    }));
 
     ss::cdc_streams_check_and_repair.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return ss.invoke_on(0, [] (service::storage_service& ss) {
