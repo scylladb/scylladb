@@ -884,18 +884,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
-    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
+    ss::force_keyspace_flush.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
         auto& db = ctx.db;
-        if (column_families.empty()) {
+        if (table_infos.empty()) {
             co_await replica::database::flush_keyspace_on_all_shards(db, keyspace);
         } else {
-            co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
+            co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
         }
         co_return json_void();
-    });
+    }));
 
 
     ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) {
