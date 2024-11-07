@@ -2294,6 +2294,24 @@ static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1
     }
 }
 
+future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::vector<table_info> table_infos) {
+    /**
+     * #14870 
+     * To ensure tests which use nodetool flush to force data
+     * to sstables and do things post this get what they expect,
+     * we do an extra call here and below, asking commitlog
+     * to discard the currently active segment, This ensures we get 
+     * as sstable-ish a universe as we can, as soon as we can.
+    */
+    return sharded_db.invoke_on_all([] (replica::database& db) {
+        return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
+    }).then([&, table_infos = std::move(table_infos)] {
+        return parallel_for_each(table_infos, [&] (const auto& ti) {
+            return flush_table_on_all_shards(sharded_db, ti.id);
+        });
+    });
+}
+
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names) {
     /**
      * #14870 

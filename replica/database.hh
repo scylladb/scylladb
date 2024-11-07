@@ -1810,6 +1810,8 @@ public:
     // flush a single table in a keyspace on all shards.
     static future<> flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name);
     // flush a list of tables in a keyspace on all shards.
+    static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::vector<table_info> table_infos);
+    // flush a list of tables in a keyspace on all shards.
     static future<> flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names);
     // flush all tables in a keyspace on all shards.
     static future<> flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name);
