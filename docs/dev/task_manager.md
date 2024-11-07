@@ -20,9 +20,11 @@ tasks - global, cluster-wide operations.
 # Time to live of a task
 
 Regular root tasks are kept in task manager for `task_ttl` time after
-they are finished. `task_ttl` value can be set in node configuration
-with `--task-ttl-in-seconds` option or changed with task manager API
-(`/task_manager/ttl`).
+they are finished or for `user_task_ttl` if they were started by user.
+`task_ttl` or `user_task_ttl` value can be set in node configuration
+with respectively `--task-ttl-in-seconds` or `--user-task-ttl-in-seconds`
+option or changed with task manager API (`/task_manager/ttl` or
+`/task_manager/user_ttl`).
 
 A task which isn't a root is unregistered immediately after it is
 finished and its status is folded into its parent. When a task
@@ -72,6 +74,8 @@ Briefly:
         order, unregisters the task;
 - `/task_manager/ttl` -
         gets or sets new ttl.
+- `/task_manager/user_ttl` -
+        gets or sets new user ttl.
 
 # Virtual tasks
 
@@ -99,6 +103,6 @@ are kept only on shard 0.
 # Group traits of virtual tasks
 
 - `topology_change_group`:
-    - tasks are listed for `task_ttl` after they are finished,
+    - tasks are listed for `user_task_ttl` after they are finished,
       but their statuses can be viewed as long as they are kept
       in topology_requests table.

@@ -20,9 +20,10 @@ If a task is internal, it is unregistered from task manager immediately after it
 parent, the task's status is folded into its parent and accessible only through the parent. You won't see the statuses
 of indirect descendants (e.g. children of children) of a finished task unless they have failed.
 
-Other non-cluster tasks stay in task manager for *task_ttl* second after they are finished. task_ttl value can be set
-with ``task_ttl_in_seconds`` param or through ``/task_manager/ttl`` api. The time for which cluster tasks are visible
-in task manager isn't specified.
+Other non-cluster tasks stay in task manager for *task_ttl* seconds after they are finished or *user_task_ttl* seconds if they
+were started by user. task_ttl value can be set with ``task_ttl_in_seconds`` param or through ``/task_manager/ttl`` api.
+user_task_ttl value can be set with ``user_task_ttl_in_seconds`` param or through ``/task_manager/user_ttl`` api. The time
+for which cluster tasks are visible in task manager isn't specified.
 
 
 Task manager API
@@ -83,6 +84,10 @@ API calls
 * ``/task_manager/ttl`` - gets or sets new ttl; query params (if setting):
 
 	- *ttl* - new ttl value.
+
+* ``/task_manager/user_ttl`` - gets or sets new user ttl; query params (if setting):
+
+	- *user_ttl* - new user ttl value.
 
 Cluster tasks are not unregistered from task manager with API calls.
 
