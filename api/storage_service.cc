@@ -786,10 +786,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     }));
 
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    ss::force_keyspace_cleanup.set(r, wrap_ks_cf(ctx, [&ss](http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
         if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
             auto reason = rs.get_type() == locator::replication_strategy_type::local ? "require" : "support";
@@ -814,7 +812,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
 
         co_return json::json_return_type(0);
-    });
+    }));
 
     ss::cleanup_all.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("cleanup_all");
