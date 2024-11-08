@@ -13,6 +13,7 @@
 #include <boost/iterator/function_input_iterator.hpp>
 #include <boost/algorithm/string.hpp>
 #include <string>
+#include <fmt/ostream.h>
 #include <seastar/core/sstring.hh>
 #include "marshal_exception.hh"
 

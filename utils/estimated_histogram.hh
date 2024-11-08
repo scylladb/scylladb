@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <vector>
 #include <chrono>
+#include <fmt/ostream.h>
 #include <seastar/core/metrics_types.hh>
 #include <seastar/core/print.hh>
 #include "seastarx.hh"
