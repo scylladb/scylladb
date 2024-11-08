@@ -54,7 +54,8 @@ def main():
     # Print commit information
     for commit in commits:
         print(f'Commit sha is: {commit.sha}')
-        match = pr_pattern.search(commit.commit.message)
+        pr_last_line = commit.commit.message.splitlines()[-1]
+        match = pr_pattern.search(pr_last_line)
         if match:
             pr_number = int(match.group(1))
             if pr_number in processed_prs:
