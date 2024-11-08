@@ -19,7 +19,6 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 
 #include "dht/i_partitioner.hh"
 #include "mutation/mutation_fragment.hh"

@@ -56,7 +56,6 @@
 #include <stdio.h>
 #include <ftw.h>
 #include <unistd.h>
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
@@ -3613,7 +3612,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         auto generation_exists = [&cf] (sstables::generation_type generation) {
             auto sstables = cf->get_sstables();
-            auto entry = boost::range::find_if(*sstables, [generation] (shared_sstable sst) { return generation == sst->generation(); });
+            auto entry = std::ranges::find_if(*sstables, [generation] (shared_sstable sst) { return generation == sst->generation(); });
             return entry != sstables->end();
         };
 

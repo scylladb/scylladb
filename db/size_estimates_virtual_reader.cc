@@ -14,7 +14,6 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 
 #include "clustering_bounds_comparator.hh"
 #include "replica/database_fwd.hh"
@@ -197,10 +196,10 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db, 
         // We merge the ranges to be compatible with how Cassandra shows it's size estimates table.
         // All queries will be on that table, where all entries are text and there's no notion of
         // token ranges form the CQL point of view.
-        auto left_inf = boost::find_if(ranges, [] (auto&& r) {
+        auto left_inf = std::ranges::find_if(ranges, [] (auto&& r) {
             return r.end() && (!r.start() || r.start()->value().is_minimum());
         });
-        auto right_inf = boost::find_if(ranges, [] (auto&& r) {
+        auto right_inf = std::ranges::find_if(ranges, [] (auto&& r) {
             return r.start() && (!r.end() || r.end()->value().is_maximum());
         });
         if (left_inf != right_inf && left_inf != ranges.end() && right_inf != ranges.end()) {

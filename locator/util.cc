@@ -129,10 +129,10 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
         co_await coroutine::maybe_yield();
     }
     // Convert to wrapping ranges
-    auto left_inf = boost::find_if(ranges, [] (const dht::token_range_endpoints& tr) {
+    auto left_inf = std::ranges::find_if(ranges, [] (const dht::token_range_endpoints& tr) {
         return tr._start_token.empty();
     });
-    auto right_inf = boost::find_if(ranges, [] (const dht::token_range_endpoints& tr) {
+    auto right_inf = std::ranges::find_if(ranges, [] (const dht::token_range_endpoints& tr) {
         return tr._end_token.empty();
     });
     using set = std::unordered_set<sstring>;

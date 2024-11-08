@@ -5717,7 +5717,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::normal: {
                         // If asked to stream a node in normal state it means that remove operation is running
                         // Find the node that is been removed
-                        auto it = boost::find_if(_topology_state_machine._topology.transition_nodes, [] (auto& e) { return e.second.state == node_state::removing; });
+                        auto it = std::ranges::find_if(_topology_state_machine._topology.transition_nodes, [] (auto& e) { return e.second.state == node_state::removing; });
                         if (it == _topology_state_machine._topology.transition_nodes.end()) {
                             rtlogger.warn("got stream_ranges request while my state is normal but cannot find a node that is been removed");
                             break;

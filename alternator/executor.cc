@@ -4677,7 +4677,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     // is an implicit order of elements that Dynamo imposes.
     auto table_names_it = [&table_names, &exclusive_start] {
         if (!exclusive_start.empty()) {
-            auto it = boost::find_if(table_names, [&exclusive_start] (const sstring& table_name) { return table_name == exclusive_start; });
+            auto it = std::ranges::find_if(table_names, [&exclusive_start] (const sstring& table_name) { return table_name == exclusive_start; });
             return std::next(it, it != table_names.end());
         } else {
             return table_names.begin();

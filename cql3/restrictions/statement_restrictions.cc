@@ -320,7 +320,7 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             if (!cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto found = boost::find_if(
+                            const auto found = std::ranges::find_if(
                                     tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
                                 return unbounded_value_set;
