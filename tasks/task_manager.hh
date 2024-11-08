@@ -336,18 +336,6 @@ public:
         void unregister_task(task_id id) noexcept;
         virtual future<> stop() noexcept;
     public:
-        template<typename T>
-        requires std::is_base_of_v<task_manager::task::impl, T>
-        future<task_id> make_task(unsigned shard, task_id id, std::string keyspace, std::string table, std::string entity, task_info parent_d) {
-            return _tm.container().invoke_on(shard, [id, module = _name, keyspace = std::move(keyspace), table = std::move(table), entity = std::move(entity), parent_d] (task_manager& tm) {
-                auto module_ptr = tm.find_module(module);
-                auto task_impl_ptr = seastar::make_shared<T>(module_ptr, id ? id : task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id);
-                return module_ptr->make_task(std::move(task_impl_ptr), parent_d).then([] (auto task) {
-                    return task->id();
-                });
-            });
-        }
-
         // Must be called on target shard.
         // If task has a parent, data concerning its children is updated and sequence number is inherited
         // from a parent and set. Otherwise, it must be set by caller.

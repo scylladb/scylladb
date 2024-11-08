@@ -21,6 +21,17 @@ namespace tmt = httpd::task_manager_test_json;
 using namespace json;
 using namespace seastar::httpd;
 
+static future<tasks::task_id> make_test_task(tasks::task_manager& task_manager, sstring module_name, unsigned shard, tasks::task_id id, std::string keyspace,
+                                      std::string table, std::string entity, tasks::task_info parent_d) {
+    return task_manager.container().invoke_on(shard, [id, module = std::move(module_name), keyspace = std::move(keyspace), table = std::move(table), entity = std::move(entity), parent_d] (tasks::task_manager& tm) {
+        auto module_ptr = tm.find_module(module);
+        auto task_impl_ptr = seastar::make_shared<tasks::test_task_impl>(module_ptr, id ? id : tasks::task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id);
+        return module_ptr->make_task(std::move(task_impl_ptr), parent_d).then([] (auto task) {
+            return task->id();
+        });
+    });
+}
+
 void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm) {
     tmt::register_test_module.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         co_await tm.invoke_on_all([] (tasks::task_manager& tm) {
@@ -60,7 +71,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
         }
 
         auto module = tms.local().find_module("test");
-        id = co_await module->make_task<tasks::test_task_impl>(shard, id, keyspace, table, entity, data);
+        id = co_await make_test_task(module->get_task_manager(), module->get_name(), shard, id, keyspace, table, entity, data);
         co_await tms.invoke_on(shard, [id] (tasks::task_manager& tm) {
             auto it = tm.get_local_tasks().find(id);
             if (it != tm.get_local_tasks().end()) {
