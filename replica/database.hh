@@ -15,6 +15,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/when_all.hh>
+#include "replica/global_table_ptr.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
@@ -1423,6 +1424,13 @@ struct string_pair_eq {
 
 class db_user_types_storage;
 
+class tables_metadata_lock_on_all_shards {
+    std::vector<foreign_ptr<std::unique_ptr<seastar::rwlock::holder>>> _holders;
+public:
+    tables_metadata_lock_on_all_shards() : _holders(smp::count) {};
+    void assign_lock(seastar::rwlock::holder&& h);
+};
+
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
@@ -1460,8 +1468,11 @@ public:
     public:
         size_t size() const noexcept;
 
+        // write lock is needed during adding or removing table
+        future<rwlock::holder> hold_write_lock();
         future<> add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
-        future<> remove_table(database& db, table& cf) noexcept;
+        void remove_table(database& db, table& cf) noexcept;
+
         table& get_table(table_id id) const;
         table_id get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const;
         lw_shared_ptr<table> get_table_if_exists(table_id id) const;
@@ -1644,7 +1655,7 @@ private:
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
     future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    future<> remove(table&) noexcept;
+    void remove(table&) noexcept;
     future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
 
@@ -1902,7 +1913,6 @@ public:
 private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
     future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
-    future<> detach_column_family(table& cf);
 
     struct table_truncate_state;
 
@@ -1913,8 +1923,23 @@ public:
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
-    // drops the table on all shards and removes the table directory if there are no snapshots
-    static future<> drop_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, bool with_snapshot = true);
+    static future<tables_metadata_lock_on_all_shards> prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db);
+
+    // Drops the table and removes the table directory if there are no snapshots,
+    // it's executed in 3 steps: prepare, drop and cleanup so that the middle step
+    // (actual drop) could be atomic.
+    static future<global_table_ptr> prepare_drop_table_on_all_shards(sharded<database>& sharded_db,
+            sstring ks_name, sstring cf_name);
+    // drop_table should be called on all shards
+    static void drop_table(sharded<database>& sharded_db,
+            sstring ks_name, sstring cf_name,
+            bool with_snapshot, global_table_ptr& table_shards);
+    static future<> cleanup_drop_table_on_all_shards(sharded<database>& sharded_db,
+            sharded<db::system_keyspace>& sys_ks,
+            bool with_snapshot, global_table_ptr& table_shards);
+    static future<> legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+            sstring ks_name, sstring cf_name,
+            bool with_snapshot = true);
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
