@@ -76,6 +76,22 @@ struct appending_hash<bool> {
     }
 };
 
+template<>
+struct appending_hash<double> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, double d) const noexcept {
+        // Mimics serializer for CQL double type, for inter-machine stability.
+        if (std::isnan(d)) {
+            d = std::numeric_limits<double>::quiet_NaN();
+        }
+        static_assert(sizeof(double) == sizeof(uint64_t));
+        uint64_t i;
+        memcpy(&i, &d, sizeof(i));
+        feed_hash(h, cpu_to_le(i));
+    }
+};
+
 template<typename T>
 requires std::is_enum_v<T>
 struct appending_hash<T> {
