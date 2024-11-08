@@ -1399,7 +1399,6 @@ def test_view_forbids_write(cql, mv1):
 # "TABLE" in their name - DROP TABLE, ALTER TABLE, and DESC TABLE. There
 # are identical operations with "MATERIALIZED VIEW" in their name, which
 # should be used instead.
-@pytest.mark.xfail(reason="issue #21026")
 def test_view_forbids_table_ops(cql, mv1):
     with pytest.raises(InvalidRequest, match='Cannot use'):
         cql.execute(f'DROP TABLE {mv1}')
@@ -1409,7 +1408,7 @@ def test_view_forbids_table_ops(cql, mv1):
     # that DESC TABLE cannot be used on a view and that DESC MATERIALIZED VIEW
     # should be used instead - it just reports that the table is "not found".
     # Reproduces #21026 (DESC TABLE was allowed on a view):
-    with pytest.raises(InvalidRequest):
+    with pytest.raises(InvalidRequest, match='Cannot use'):
         cql.execute(f'DESC TABLE {mv1}')
 
 # A materialized view cannot have its own materialized views, nor secondary
