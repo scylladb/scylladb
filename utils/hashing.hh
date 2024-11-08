@@ -165,6 +165,16 @@ struct appending_hash<std::map<K, V>> {
     }
 };
 
+template<typename K, typename V>
+struct appending_hash<std::unordered_map<K, V>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const std::unordered_map<K, V>& value) const noexcept {
+        std::map<K, V> sorted(value.begin(), value.end());
+        feed_hash(h, sorted);
+    }
+};
+
 template<>
 struct appending_hash<sstring> {
     template<typename H>
