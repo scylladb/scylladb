@@ -397,6 +397,7 @@ async def test_tablet_repair(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'repair=trace',
+        '--task-ttl-in-seconds', '3600',    # Make sure the test passes with non-zero task_ttl.
     ]
     servers = await manager.servers_add(3, cmdline=cmdline)
 

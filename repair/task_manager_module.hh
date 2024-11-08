@@ -108,6 +108,7 @@ private:
     std::vector<tablet_repair_task_meta> _metas;
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
+    size_t _metas_size = 0;
 public:
     tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
@@ -121,6 +122,10 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override {
         return tasks::is_abortable(!_abort_subscription);
     }
+
+    virtual void release_resources() noexcept override;
+private:
+    size_t get_metas_size() const noexcept;
 protected:
     future<> run() override;
 
