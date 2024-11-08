@@ -198,6 +198,14 @@ public:
         _end = std::uninitialized_copy(other.begin(), other.end(), _end);
     }
 
+
+    small_vector(size_t n, const T& value) : small_vector() {
+        reserve(n);
+        auto nend = _begin + n;
+        std::uninitialized_fill(_end, nend, value);
+        _end = nend;
+    }
+
     // May invalidate iterators and references.
     small_vector& operator=(small_vector&& other) noexcept {
         clear();
