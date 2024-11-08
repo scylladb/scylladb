@@ -492,3 +492,36 @@ BOOST_AUTO_TEST_CASE(from_range) {
     // Verify that copies are needed if the range is (only) an input_range.
     BOOST_REQUIRE_GT(do_test_from_range(stream_view, iota_view), 10);
 }
+
+// Constructor small_vector(size_t n, const T& value)
+BOOST_AUTO_TEST_CASE(fill_constructor) {
+    constexpr int64_t value = 42;
+
+    // Construct a vector filled with number of elements less than default capacity.
+    {
+        constexpr size_t NUM = 5;
+        constexpr size_t CAPACITY = 10;
+        utils::small_vector<size_t, CAPACITY> vec(NUM, value);
+        BOOST_CHECK_EQUAL(vec.size(), NUM);
+        BOOST_CHECK_EQUAL(vec.capacity(), CAPACITY);
+
+        // Check if all elements are initialized to 'value'
+        BOOST_CHECK(std::ranges::all_of(vec, [value](const auto& elem) {
+            return elem == value;
+        }));
+    }
+
+    // Construct a vector filled with number of elements higher than default capacity.
+    {
+        constexpr size_t NUM = 50;
+        constexpr size_t CAPACITY = 10;
+        utils::small_vector<size_t, CAPACITY> vec(NUM, value);
+        BOOST_CHECK_EQUAL(vec.size(), NUM);
+        BOOST_CHECK_EQUAL(vec.capacity(), NUM);
+
+        // Check if all elements are initialized to 'value'
+        BOOST_CHECK(std::ranges::all_of(vec, [value](const auto& elem) {
+            return elem == value;
+        }));
+    }
+}
