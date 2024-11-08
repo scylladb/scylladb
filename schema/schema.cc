@@ -532,9 +532,6 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._indices_by_name == y._raw._indices_by_name
         && x._raw._is_counter == y._raw._is_counter
         ;
-#if 0
-        && Objects.equal(triggers, other.triggers)
-#endif
 }
 
 index_metadata::index_metadata(const sstring& name,
