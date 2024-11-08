@@ -29,7 +29,10 @@ async def test_topology_upgrade_not_stuck_after_recent_removal(request, manager:
     4. Verify that the upgrade went OK and it did not get stuck.
     """
     # First, force the nodes to start in legacy mode due to the error injection
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {
+        'force_gossip_topology_changes': True,
+        'enable_tablets': False,
+    }
 
     logging.info("Creating a two node cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(2)]
