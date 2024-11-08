@@ -634,11 +634,11 @@ static future<affected_tables_and_views> merge_tables_and_views(distributed<serv
     auto& db = proxy.local().get_db();
     co_await max_concurrent_for_each(diff.views.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+        return replica::database::legacy_drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
     co_await max_concurrent_for_each(diff.tables.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+        return replica::database::legacy_drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
 
     if (tablet_hint) {

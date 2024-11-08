@@ -11,6 +11,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "schema/schema_fwd.hh"
+#include "seastar/core/rwlock.hh"
 
 namespace replica {
 class database;
