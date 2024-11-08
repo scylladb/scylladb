@@ -116,6 +116,20 @@ struct appending_hash<std::optional<T>>  {
     }
 };
 
+template<typename T>
+struct appending_hash<std::unique_ptr<T>>  {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const std::unique_ptr<T>& value) const noexcept {
+        if (value) {
+            feed_hash(h, true);
+            feed_hash(h, *value);
+        } else {
+            feed_hash(h, false);
+        }
+    }
+};
+
 template<size_t N>
 struct appending_hash<char[N]>  {
     template<typename H>
