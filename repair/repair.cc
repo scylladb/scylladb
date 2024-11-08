@@ -2390,6 +2390,16 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
     auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
 }
 
+void repair::tablet_repair_task_impl::release_resources() noexcept {
+    _metas_size = _metas.size();
+    _metas = {};
+    _tables = {};
+}
+
+size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {
+    return _metas.size() > 0 ? _metas.size() : _metas_size;
+}
+
 future<> repair::tablet_repair_task_impl::run() {
     auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = m->get_repair_service();
@@ -2522,12 +2532,12 @@ future<> repair::tablet_repair_task_impl::run() {
 }
 
 future<std::optional<double>> repair::tablet_repair_task_impl::expected_total_workload() const {
-    auto sz = _metas.size();
+    auto sz = get_metas_size();
     co_return sz ? std::make_optional<double>(sz) : std::nullopt;
 }
 
 std::optional<double> repair::tablet_repair_task_impl::expected_children_number() const {
-    return _metas.size();
+    return get_metas_size();
 }
 
 node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {
