@@ -15,6 +15,7 @@
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
 #include "utils/composite_abort_source.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
@@ -538,8 +539,9 @@ future<bool> raft_server_with_timeouts::trigger_snapshot(seastar::abort_source* 
 
 future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout)
 {
-    return run_with_timeout([&](abort_source* as) {
-        return _group_server.server->read_barrier(as);
+    return run_with_timeout([&](abort_source* as) -> future<> {
+        co_await utils::get_local_injector().inject("sleep_in_read_barrier", std::chrono::seconds(1));
+        co_return co_await _group_server.server->read_barrier(as);
     }, "read_barrier", as, timeout);
 }
 
