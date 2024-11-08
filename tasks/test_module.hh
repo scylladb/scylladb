@@ -23,9 +23,11 @@ class test_task_impl : public task_manager::task::impl {
 private:
     promise<> _finish_run;
     bool _finished = false;
+    tasks::is_user_task _user_task;
 public:
-    test_task_impl(task_manager::module_ptr module, task_id id, uint64_t sequence_number = 0, std::string keyspace = "", std::string table = "", std::string entity = "", task_id parent_id = task_id::create_null_id()) noexcept
+    test_task_impl(task_manager::module_ptr module, task_id id, uint64_t sequence_number = 0, std::string keyspace = "", std::string table = "", std::string entity = "", task_id parent_id = task_id::create_null_id(), tasks::is_user_task user_task = tasks::is_user_task::no) noexcept
         : task_manager::task::impl(module, id, sequence_number, "test", std::move(keyspace), std::move(table), std::move(entity), parent_id)
+        , _user_task(user_task)
     {}
 
     virtual std::string type() const override {
@@ -34,6 +36,10 @@ public:
 
     future<> run() override {
         return _finish_run.get_future();
+    }
+
+    tasks::is_user_task is_user_task() const noexcept override {
+        return _user_task;
     }
 
     friend class test_task;

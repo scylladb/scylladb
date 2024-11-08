@@ -6,7 +6,7 @@ import time
 # Use the util.py library from ../cqlpy:
 sys.path.insert(1, sys.path[0] + '/test/cqlpy')
 from util import new_test_table, new_test_keyspace
-from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error
+from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error, set_tmp_user_task_ttl
 from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task
 
 long_time = 1000000000
@@ -126,6 +126,27 @@ def test_task_manager_ttl(rest_api):
                     time.sleep(ttl + 1)
                     assert_task_does_not_exist(rest_api, task0)
                     assert_task_does_not_exist(rest_api, task1)
+
+def test_task_manager_user_ttl(rest_api):
+    with new_test_module(rest_api):
+        args0 = {"keyspace": "keyspace0", "table": "table0", "user_task": True}
+        args1 = {"keyspace": "keyspace0", "table": "table0", "shard": "1", "user_task": True}
+        with new_test_task(rest_api, args0) as task0:
+            print(f"created test task {task0}")
+            with new_test_task(rest_api, args1) as task1:
+                print(f"created test task {task1}")
+                ttl = 10000
+                user_ttl = 2
+                with set_tmp_task_ttl(rest_api, ttl):
+                    with set_tmp_user_task_ttl(rest_api, user_ttl):
+                        resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task0}")
+                        resp.raise_for_status()
+                        resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task1}")
+                        resp.raise_for_status()
+
+                        time.sleep(user_ttl + 1)
+                        assert_task_does_not_exist(rest_api, task0)
+                        assert_task_does_not_exist(rest_api, task1)
 
 def test_task_manager_sequence_number(rest_api):
     with new_test_module(rest_api):
