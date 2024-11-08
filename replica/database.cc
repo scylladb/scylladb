@@ -10,6 +10,7 @@
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include "seastar/core/rwlock.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
 #include "seastar/core/shard_id.hh"
@@ -1040,37 +1041,50 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::remove(table& cf) noexcept {
+void database::remove(table& cf) noexcept {
     cf.deregister_metrics();
-    return _tables_metadata.remove_table(*this, cf);
-}
-
-future<> database::detach_column_family(table& cf) {
-    auto uuid = cf.schema()->id();
-    co_await remove(cf);
-    cf.clear_views();
-    co_await cf.await_pending_ops();
-    co_await foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
-        co_await sem.evict_inactive_reads_for_table(uuid);
-    });
+    _tables_metadata.remove_table(*this, cf);
 }
 
 global_table_ptr::global_table_ptr() {
     _p.resize(smp::count);
+    _views.resize(smp::count);
+    _base.resize(smp::count);
 }
 
-global_table_ptr::global_table_ptr(global_table_ptr&& o) noexcept
-    : _p(std::move(o._p))
-{ }
+void global_table_ptr::assign(database& db, table_id uuid) {
+    auto& t = db.find_column_family(uuid);
 
-global_table_ptr::~global_table_ptr() {}
+    std::vector<lw_shared_ptr<replica::table>> views;
+    views.reserve(t.views().size());
+    for (const auto& v : t.views()) {
+        views.push_back(db.find_column_family(v).shared_from_this());
+    }
 
-void global_table_ptr::assign(table& t) {
+    if (t.schema()->is_view()) {
+        auto& base = db.find_column_family(t.schema()->view_info()->base_id());
+        _base[this_shard_id()] = make_foreign(base.shared_from_this());
+    }
+
     _p[this_shard_id()] = make_foreign(t.shared_from_this());
+    _views[this_shard_id()] = make_foreign(
+            std::make_unique<std::vector<lw_shared_ptr<table>>>(std::move(views)));
 }
 
 table* global_table_ptr::operator->() const noexcept { return &*_p[this_shard_id()]; }
 table& global_table_ptr::operator*() const noexcept { return *_p[this_shard_id()]; }
+
+std::vector<lw_shared_ptr<table>>& global_table_ptr::views() const noexcept {
+    return *_views[this_shard_id()];
+}
+
+ table& global_table_ptr::base() const noexcept {
+    return *_base[this_shard_id()];
+ }
+
+void tables_metadata_lock_on_all_shards::assign_lock(seastar::rwlock::holder&& h) {
+    _holders[this_shard_id()] = make_foreign(std::make_unique<seastar::rwlock::holder>(std::move(h)));
+}
 
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
@@ -1081,7 +1095,7 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
     global_table_ptr table_shards;
     co_await sharded_db.invoke_on_all([&] (auto& db) {
         try {
-            table_shards.assign(db.find_column_family(uuid));
+            table_shards.assign(db, uuid);
         } catch (no_such_column_family&) {
             on_internal_error(dblog, fmt::format("Table UUID={} not found", uuid));
         }
@@ -1089,30 +1103,62 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
     co_return table_shards;
 }
 
-future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        sstring ks_name, sstring cf_name, bool with_snapshot) {
+future<tables_metadata_lock_on_all_shards> database::prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db) {
+    tables_metadata_lock_on_all_shards locks;
+    co_await sharded_db.invoke_on_all([&] (auto& db) -> future<> {
+        locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
+    });
+    co_return locks;
+}
+
+future<global_table_ptr> database::prepare_drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    co_return co_await get_table_on_all_shards(sharded_db, uuid);;
+}
+
+void database::drop_table(sharded<database>& sharded_db,
+        sstring ks_name, sstring cf_name, bool with_snapshot, global_table_ptr& table_shards) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
+    auto& cf = *table_shards;
+    sharded_db.local().remove(cf);
+    cf.clear_views();
+}
 
-    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
-    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    std::optional<sstring> snapshot_name_opt;
-    if (with_snapshot) {
-        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
-    }
-    co_await sharded_db.invoke_on_all([&] (database& db) {
-        return db.detach_column_family(*table_shards);
+future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        bool with_snapshot, global_table_ptr& table_shards) {
+    co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+        auto& cf = *table_shards;
+        auto uuid = cf.schema()->id();
+        co_await cf.await_pending_ops();
+        co_await db.foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
+            co_await sem.evict_inactive_reads_for_table(uuid);
+        });
     });
     // Use a time point in the far future (9999-12-31T00:00:00+0000)
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
     constexpr db_clock::time_point truncated_at(std::chrono::seconds(253402214400));
+    std::optional<sstring> snapshot_name_opt;
+    if (with_snapshot) {
+        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
+    }
     auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
     co_await table_shards->destroy_storage();
+}
+
+future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        sstring ks_name, sstring cf_name, bool with_snapshot) {
+    auto locks = co_await prepare_tables_metadata_change_on_all_shards(sharded_db);
+    auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, ks_name, cf_name);
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        return db.drop_table(sharded_db, ks_name, cf_name, with_snapshot, table_shards);
+    });
+    co_await cleanup_drop_table_on_all_shards(sharded_db, sys_ks, with_snapshot, table_shards);
 }
 
 table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
@@ -2937,14 +2983,18 @@ size_t database::tables_metadata::size() const noexcept {
     return _column_families.size();
 }
 
+future<rwlock::holder> database::tables_metadata::hold_write_lock() {
+    co_return co_await _cf_lock.hold_write_lock();
+}
+
 future<> database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
     auto holder = co_await _cf_lock.hold_write_lock();
     add_table_helper(db, ks, cf, s);
 }
 
-future<> database::tables_metadata::remove_table(database& db, table& cf) noexcept {
+void database::tables_metadata::remove_table(database& db, table& cf) noexcept {
+    SCYLLA_ASSERT(!_cf_lock.try_write_lock()); // lock should be acquired before the call
     try {
-        auto holder = co_await _cf_lock.hold_write_lock();
         auto s = cf.schema();
         auto& ks = db.find_keyspace(s->ks_name());
         remove_table_helper(db, ks, cf, s);
