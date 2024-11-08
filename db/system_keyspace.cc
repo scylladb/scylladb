@@ -133,16 +133,6 @@ api::timestamp_type system_keyspace::schema_creation_timestamp() {
     return creation_timestamp;
 }
 
-// Increase whenever changing schema of any system table.
-// FIXME: Make automatic by calculating from schema structure.
-static const uint16_t version_sequence_number = 1;
-
-table_schema_version system_keyspace::generate_schema_version(::table_id table_id, uint16_t offset) {
-    md5_hasher h;
-    feed_hash(h, table_id);
-    feed_hash(h, version_sequence_number + offset);
-    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
-}
 
 // Currently, the type variables (uuid_type, etc.) are thread-local reference-
 // counted shared pointers. This forces us to also make the built in schemas
@@ -173,7 +163,7 @@ schema_ptr system_keyspace::hints() {
        );
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy_options({{ "enabled", "false" }});
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
@@ -199,7 +189,7 @@ schema_ptr system_keyspace::batchlog() {
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return batchlog;
@@ -232,7 +222,7 @@ schema_ptr system_keyspace::batchlog() {
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return paxos;
@@ -277,14 +267,13 @@ schema_ptr system_keyspace::topology() {
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
 }
 
 schema_ptr system_keyspace::topology_requests() {
-    constexpr uint16_t schema_version_offset = 1;   // request_type
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, TOPOLOGY_REQUESTS);
         return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
@@ -296,7 +285,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("error", utf8_type)
             .with_column("end_time", timestamp_type)
             .set_comment("Topology request tracking")
-            .with_version(generate_schema_version(id, schema_version_offset))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -334,7 +323,7 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -357,7 +346,7 @@ schema_ptr system_keyspace::raft() {
             .with_column("commit_idx", long_type, column_kind::static_column)
 
             .set_comment("Persisted RAFT log, votes and snapshot info")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -377,7 +366,7 @@ schema_ptr system_keyspace::raft_snapshots() {
             .with_column("term", long_type)
 
             .set_comment("Persisted RAFT snapshot descriptors info")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -393,7 +382,7 @@ schema_ptr system_keyspace::raft_snapshot_config() {
             .with_column("can_vote", boolean_type)
 
             .set_comment("RAFT configuration for the latest snapshot descriptor")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -413,7 +402,7 @@ schema_ptr system_keyspace::repair_history() {
             .with_column("keyspace_name", utf8_type, column_kind::static_column)
             .with_column("table_name", utf8_type, column_kind::static_column)
             .set_comment("Record repair history")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -436,7 +425,7 @@ schema_ptr system_keyspace::built_indexes() {
         "built column indexes"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return built_indexes;
@@ -486,18 +475,18 @@ schema_ptr system_keyspace::built_indexes() {
         "information about the local node"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
-       builder.remove_column("scylla_cpu_sharding_algorithm");
-       builder.remove_column("scylla_nr_shards");
-       builder.remove_column("scylla_msb_ignore");
-       builder.remove_column("thrift_version");
+       auto drop_timestamp = api::max_timestamp;
+       builder.remove_column("scylla_cpu_sharding_algorithm", drop_timestamp);
+       builder.remove_column("scylla_nr_shards", drop_timestamp);
+       builder.remove_column("scylla_msb_ignore", drop_timestamp);
+       builder.remove_column("thrift_version", drop_timestamp);
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
 }
 
 /*static*/ schema_ptr system_keyspace::peers() {
-    constexpr uint16_t schema_version_offset = 0;
     static thread_local auto peers = [] {
         schema_builder builder(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
@@ -524,7 +513,7 @@ schema_ptr system_keyspace::built_indexes() {
         "information about known peers in the cluster"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid(), schema_version_offset));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peers;
@@ -549,7 +538,7 @@ schema_ptr system_keyspace::built_indexes() {
         "events related to peers"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peer_events;
@@ -572,7 +561,7 @@ schema_ptr system_keyspace::built_indexes() {
         "ranges requested for transfer"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return range_xfers;
@@ -598,8 +587,8 @@ schema_ptr system_keyspace::built_indexes() {
         // comment
         "unfinished compactions"
         );
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build(schema_builder::compact_storage::no);
+       builder.with_hash_version();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return compactions_in_progress;
 }
@@ -628,7 +617,7 @@ schema_ptr system_keyspace::built_indexes() {
         "week-long compaction history"
         );
         builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
     return compaction_history;
@@ -657,8 +646,8 @@ schema_ptr system_keyspace::built_indexes() {
         // comment
         "historic sstable read rates"
        );
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build(schema_builder::compact_storage::no);
+       builder.with_hash_version();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return sstable_activity;
 }
@@ -683,7 +672,7 @@ schema_ptr system_keyspace::size_estimates() {
             "per-table primary range size estimates"
             );
         builder.set_gc_grace_seconds(0);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
     return size_estimates;
@@ -715,11 +704,11 @@ schema_ptr system_keyspace::size_estimates() {
         "partitions larger than specified threshold"
         );
         builder.set_gc_grace_seconds(0);
-        builder.with_version(generate_schema_version(builder.uuid()));
         // FIXME re-enable caching for this and the other two
         // system.large_* tables once
         // https://github.com/scylladb/scylla/issues/3288 is fixed
         builder.set_caching_options(caching_options::get_disabled_caching_options());
+        builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
     return large_partitions;
@@ -738,16 +727,15 @@ schema_ptr system_keyspace::large_rows() {
                 .with_column("clustering_key", utf8_type, column_kind::clustering_key)
                 .with_column("compaction_time", timestamp_type)
                 .set_comment("rows larger than specified threshold")
-                .with_version(generate_schema_version(id))
                 .set_gc_grace_seconds(0)
                 .set_caching_options(caching_options::get_disabled_caching_options())
+                .with_hash_version()
                 .build();
     }();
     return large_rows;
 }
 
 schema_ptr system_keyspace::large_cells() {
-    constexpr uint16_t schema_version_offset = 1; // collection_elements
     static thread_local auto large_cells = [] {
         auto id = generate_legacy_id(NAME, LARGE_CELLS);
         return schema_builder(NAME, LARGE_CELLS, id)
@@ -763,9 +751,9 @@ schema_ptr system_keyspace::large_cells() {
                 .with_column("collection_elements", long_type)
                 .with_column("compaction_time", timestamp_type)
                 .set_comment("cells larger than specified threshold")
-                .with_version(generate_schema_version(id, schema_version_offset))
                 .set_gc_grace_seconds(0)
                 .set_caching_options(caching_options::get_disabled_caching_options())
+                .with_hash_version()
                 .build();
     }();
     return large_cells;
@@ -791,8 +779,8 @@ static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::
         // comment
         "Scylla specific information about the local node"
        );
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build(schema_builder::compact_storage::no);
+       builder.with_hash_version();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return scylla_local;
 }
@@ -819,7 +807,7 @@ schema_ptr system_keyspace::v3::batches() {
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
        builder.set_compaction_strategy_options({{"min_threshold", "2"}});
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return schema;
@@ -865,7 +853,7 @@ schema_ptr system_keyspace::v3::local() {
         "information about the local node"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return schema;
@@ -893,7 +881,7 @@ schema_ptr system_keyspace::v3::truncated() {
         "information about table truncation"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -922,8 +910,8 @@ schema_ptr system_keyspace::v3::commitlog_cleanups() {
         // comment
         "information about cleanups, for filtering commitlog replay"
        );
-       builder.with_version(generate_schema_version(builder.uuid()));
-       return builder.build(schema_builder::compact_storage::no);
+        builder.with_hash_version();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
 }
@@ -985,7 +973,7 @@ schema_ptr system_keyspace::v3::available_ranges() {
         "available keyspace/ranges during bootstrap/replace that are ready to be served"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1008,7 +996,7 @@ schema_ptr system_keyspace::v3::views_builds_in_progress() {
         "views builds current progress"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1031,7 +1019,7 @@ schema_ptr system_keyspace::v3::built_views() {
         "built views"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1047,7 +1035,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
                 .with_column("next_token", utf8_type)
                 .with_column("generation_number", int32_type)
                 .with_column("first_token", utf8_type)
-                .with_version(generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -1083,7 +1071,7 @@ schema_ptr system_keyspace::v3::scylla_views_builds_in_progress() {
         "CDC-specific information that the local node stores"
        );
        builder.set_gc_grace_seconds(0);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
     return cdc_local;
@@ -1101,7 +1089,7 @@ schema_ptr system_keyspace::group0_history() {
             .with_column("description", utf8_type)
 
             .set_comment("History of Raft group 0 state changes")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -1119,7 +1107,7 @@ schema_ptr system_keyspace::discovery() {
             // May be unknown during discovery, then it's set to UUID 0.
             .with_column("raft_server_id", uuid_type)
             .set_comment("State of cluster discovery algorithm: the set of discovered peers")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -1131,7 +1119,7 @@ schema_ptr system_keyspace::broadcast_kv_store() {
         return schema_builder(NAME, BROADCAST_KV_STORE, id)
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("value", utf8_type)
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -1148,7 +1136,7 @@ schema_ptr system_keyspace::sstables_registry() {
             .with_column("version", utf8_type)
             .with_column("format", utf8_type)
             .set_comment("SSTables ownership table")
-            .with_version(generate_schema_version(id))
+            .with_hash_version()
             .build();
     }();
     return schema;
@@ -1166,7 +1154,7 @@ schema_ptr system_keyspace::service_levels_v2() {
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_column("timeout", duration_type)
                 .with_column("workload_type", utf8_type)
-                .with_version(db::system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -1180,7 +1168,7 @@ schema_ptr system_keyspace::view_build_status_v2() {
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
-                .with_version(db::system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -1207,7 +1195,7 @@ schema_ptr system_keyspace::roles() {
         // comment
         "roles for authentication and RBAC"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1229,7 +1217,7 @@ schema_ptr system_keyspace::role_members() {
         // comment
         "joins users and their granted roles in RBAC"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1253,7 +1241,7 @@ schema_ptr system_keyspace::role_attributes() {
         // comment
         "role permissions in RBAC"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1277,7 +1265,7 @@ schema_ptr system_keyspace::role_permissions() {
         // comment
         "role permissions for CassandraAuthorizer"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1302,8 +1290,8 @@ schema_ptr system_keyspace::legacy::hints() {
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
        builder.set_compaction_strategy_options({{"enabled", "false"}});
-       builder.with_version(generate_schema_version(builder.uuid()));
        builder.with(schema_builder::compact_storage::yes);
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1329,7 +1317,7 @@ schema_ptr system_keyspace::legacy::batchlog() {
        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
        builder.set_compaction_strategy_options({{"min_threshold", "2"}});
        builder.with(schema_builder::compact_storage::no);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1357,7 +1345,7 @@ schema_ptr system_keyspace::legacy::keyspaces() {
        );
        builder.set_gc_grace_seconds(schema_gc_grace);
        builder.with(schema_builder::compact_storage::yes);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1408,7 +1396,7 @@ schema_ptr system_keyspace::legacy::column_families() {
        );
        builder.set_gc_grace_seconds(schema_gc_grace);
        builder.with(schema_builder::compact_storage::no);
-       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with_hash_version();
        return builder.build();
     }();
     return schema;
@@ -1439,7 +1427,7 @@ schema_ptr system_keyspace::legacy::columns() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1465,7 +1453,7 @@ schema_ptr system_keyspace::legacy::triggers() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1492,7 +1480,7 @@ schema_ptr system_keyspace::legacy::usertypes() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1529,7 +1517,7 @@ schema_ptr system_keyspace::legacy::functions() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;
@@ -1560,7 +1548,7 @@ schema_ptr system_keyspace::legacy::aggregates() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
-        builder.with_version(generate_schema_version(builder.uuid()));
+        builder.with_hash_version();
         return builder.build();
     }();
     return schema;

@@ -227,8 +227,7 @@ schema_ptr keyspaces() {
         // comment
         "keyspace definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -253,8 +252,7 @@ schema_ptr scylla_keyspaces() {
         // comment
         "scylla-specific information for keyspaces"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -297,8 +295,7 @@ schema_ptr tables() {
         // comment
         "table definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -316,18 +313,11 @@ schema_ptr scylla_tables(schema_features features) {
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type);
-        // Each bit in `offset` denotes a different schema feature,
-        // so different values of `offset` are used for different combinations of features.
-        uint16_t offset = 0;
-        // CDC_OPTIONS
+
         sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
-        offset |= 0b1;
 
         // PER_TABLE_PARTITIONERS
         sb.with_column("partitioner", utf8_type);
-        offset |= 0b10;
-
-        // 0b100 reserved for Scylla Enterprise
 
         if (has_group0_schema_versioning) {
             // If true, this table's latest schema was committed by group 0.
@@ -340,9 +330,8 @@ schema_ptr scylla_tables(schema_features features) {
             // before the GROUP0_SCHEMA_VERSIONING feature was enabled (either inside or outside group 0).
             // In this case, for non-system tables, `version` is null and `schema::version()` will be a hash.
             sb.with_column("committed_by_group0", boolean_type);
-            offset |= 0b1000;
         }
-        sb.with_version(system_keyspace::generate_schema_version(id, offset));
+        sb.with_hash_version();
         s = sb.build();
     }
 
@@ -382,8 +371,7 @@ static schema_ptr columns_schema(const char* columns_table_name) {
         // comment
         "column definitions"
         );
-    builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-    return builder.build();
+    return builder.with_hash_version().build();
 }
 schema_ptr columns() {
     static thread_local auto schema = columns_schema(COLUMNS);
@@ -443,8 +431,7 @@ static schema_ptr computed_columns_schema(const char* columns_table_name) {
         // comment
         "computed columns"
         );
-    builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-    return builder.build();
+    return builder.with_hash_version().build();
 }
 
 schema_ptr computed_columns() {
@@ -471,8 +458,7 @@ schema_ptr dropped_columns() {
         // comment
         "dropped column registry"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -495,8 +481,7 @@ schema_ptr triggers() {
         // comment
         "trigger definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -542,8 +527,7 @@ schema_ptr views() {
         // comment
         "view definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -567,8 +551,7 @@ schema_ptr indexes() {
         // comment
         "secondary index definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -592,8 +575,7 @@ schema_ptr types() {
         // comment
         "user defined type definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -620,8 +602,7 @@ schema_ptr functions() {
         // comment
         "user defined function definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -648,8 +629,7 @@ schema_ptr aggregates() {
         // comment
         "user defined aggregate definitions"
         );
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -676,9 +656,7 @@ schema_ptr scylla_aggregates() {
         // comment
         "scylla-specific information for user defined aggregates"
         );
-
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build();
+        return builder.with_hash_version().build();
     }();
     return schema;
 }
@@ -696,8 +674,7 @@ schema_ptr scylla_table_schema_history() {
         builder.with_column("type", utf8_type);
         builder.set_comment("Scylla specific table to store a history of column mappings "
             "for each table schema version upon an CREATE TABLE/ALTER TABLE operations");
-        builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        return builder.build(schema_builder::compact_storage::no);
+        return builder.with_hash_version().build(schema_builder::compact_storage::no);
     }();
     return s;
 }

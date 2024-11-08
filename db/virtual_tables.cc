@@ -62,7 +62,7 @@ public:
             .with_column("tokens", int32_type)
             .with_column("owns", float_type)
             .with_column("host_id", uuid_type)
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -140,7 +140,7 @@ public:
             .with_column("end_token", utf8_type)
             .with_column("dc", utf8_type)
             .with_column("rack", utf8_type)
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -240,7 +240,7 @@ public:
             .with_column("live", long_type)
             .with_column("total", long_type)
             .set_comment("Lists all the snapshots along with their size, dropped tables are not part of the listing.")
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -332,7 +332,7 @@ public:
             .with_column("protocol_version", utf8_type)
             .with_column("listen_addresses", list_type_impl::get_instance(utf8_type, false))
             .set_comment("Lists all client protocol servers and their status.")
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -458,7 +458,7 @@ public:
             .with_column("item", utf8_type, column_kind::clustering_key)
             .with_column("value", utf8_type)
             .set_comment("Runtime system information.")
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -599,7 +599,7 @@ public:
             .with_column("build_mode", utf8_type)
             .with_column("build_id", utf8_type)
             .set_comment("Version information.")
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -624,7 +624,7 @@ class db_config_table final : public streaming_virtual_table {
             .with_column("type", utf8_type)
             .with_column("source", utf8_type)
             .with_column("value", utf8_type)
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -735,7 +735,7 @@ class clients_table : public streaming_virtual_table {
             .with_column("ssl_enabled", boolean_type)
             .with_column("ssl_protocol", utf8_type)
             .with_column("username", utf8_type)
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 
@@ -937,7 +937,7 @@ private:
             .with_column("server_id", uuid_type, column_kind::clustering_key)
             .with_column("can_vote", boolean_type)
             .set_comment("Currently operating RAFT configuration")
-            .with_version(system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
     }
 

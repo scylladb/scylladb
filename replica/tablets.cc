@@ -57,7 +57,7 @@ schema_ptr make_tablets_schema() {
             .with_column("session", uuid_type)
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
-            .with_version(db::system_keyspace::generate_schema_version(id))
+            .with_hash_version()
             .build();
 }
 

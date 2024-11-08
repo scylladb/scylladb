@@ -50,7 +50,7 @@ schema_ptr strings_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -71,7 +71,7 @@ schema_ptr lists_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -92,7 +92,7 @@ schema_ptr hashes_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -113,7 +113,7 @@ schema_ptr sets_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -134,7 +134,7 @@ schema_ptr zsets_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
