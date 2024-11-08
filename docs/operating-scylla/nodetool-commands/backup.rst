@@ -4,6 +4,10 @@ Nodetool backup
 
 **backup** - Copy SSTables from a specified keyspace's snapshot to a designated bucket in object storage
 
+Note that status of backup can be checked for ``user_task_ttl`` seconds after the operation is done.
+You can set the ttl using :doc:`nodetool tasks user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>`.
+If ``--nowait`` flag is not set, the command relies on ``user_task_ttl`` internally.
+
 Syntax
 ------
 

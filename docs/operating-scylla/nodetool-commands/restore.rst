@@ -4,6 +4,10 @@ Nodetool restore
 
 **restore** - Load SSTables from a designated bucket in object store into a specified keyspace or table
 
+Note that status of restore can be checked for ``user_task_ttl`` seconds after the operation is done.
+You can set the ttl using :doc:`nodetool tasks user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>`.
+If ``--nowait`` flag is not set, the command relies on ``user_task_ttl`` internally.
+
 Syntax
 ------
 
