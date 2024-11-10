@@ -297,16 +297,24 @@ mutation_reader repair_reader::make_reader(
             return rd;
         }
         case read_strategy::multishard_split: {
+            std::optional<size_t> multishard_reader_buffer_size;
+            const auto& dbconfig = db.local().get_config();
+            if (dbconfig.repair_multishard_reader_buffer_hint_size()) {
+                // Setting the repair buffer size as the multishard reader's buffer
+                // size helps avoid extra cross-shard round-trips and possible
+                // evict-recreate cycles.
+                multishard_reader_buffer_size = dbconfig.repair_multishard_reader_buffer_hint_size();
+            }
             return make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
                 if (shard_range) {
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
-            }, compaction_time);
+            }, compaction_time, multishard_reader_buffer_size, read_ahead(dbconfig.repair_multishard_reader_enable_read_ahead()));
         }
         case read_strategy::multishard_filter: {
-            return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time),
+            return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time, {}, read_ahead::yes),
                 [&remote_sharder, remote_shard](const dht::decorated_key& k) {
                     return remote_sharder.shard_for_reads(k.token()) == remote_shard;
                 });
