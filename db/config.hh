@@ -521,6 +521,10 @@ public:
     named_value<bool> enable_tablets;
     named_value<uint32_t> view_flow_control_delay_limit_in_ms;
 
+    named_value<int> disk_space_monitor_normal_polling_interval_in_seconds;
+    named_value<int> disk_space_monitor_high_polling_interval_in_seconds;
+    named_value<float> disk_space_monitor_polling_interval_threshold;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
