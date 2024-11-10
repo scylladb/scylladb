@@ -103,7 +103,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_split_stats) {
-    auto ep1 = gms::inet_address("127.0.0.1");
+    auto ep1 = locator::host_id{};
     auto sg1 = create_scheduling_group("apa1", 100).get();
     auto sg2 = create_scheduling_group("apa2", 100).get();
 

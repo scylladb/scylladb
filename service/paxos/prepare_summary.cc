@@ -26,9 +26,9 @@ void prepare_summary::update_most_recent_promised_ballot(utils::UUID ballot) {
     }
 }
 
-inet_address_vector_replica_set
+host_id_vector_replica_set
 prepare_summary::replicas_missing_most_recent_commit(schema_ptr s, std::chrono::seconds now_in_sec) const {
-    inet_address_vector_replica_set replicas;
+    host_id_vector_replica_set replicas;
     // In general, we need every replica that has answered to the prepare (a quorum) to agree on the MRC (see
     // comment in storage_proxy::begin_and_repair_paxos(), but basically we need to make sure at least a quorum of nodes
     // have learned a commit before committing a new one, otherwise that previous commit is not guaranteed to have reached a

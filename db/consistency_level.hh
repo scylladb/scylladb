@@ -70,5 +70,6 @@ void assure_sufficient_live_nodes(
 
 extern template void assure_sufficient_live_nodes(consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
 extern template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
+extern template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set&, const host_id_vector_topology_change&);
 
 }
