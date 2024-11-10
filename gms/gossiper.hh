@@ -700,6 +700,12 @@ public:
     int get_up_endpoint_count() const noexcept;
     // Send UP notification to all nodes in the set
     future<> notify_nodes_on_up(std::unordered_set<locator::host_id>);
+    const gossip_address_map& get_address_map() const  {
+        return _address_map;
+    }
+    gossip_address_map& get_mutable_address_map() const {
+        return _address_map;
+    }
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
