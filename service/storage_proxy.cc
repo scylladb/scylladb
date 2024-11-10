@@ -886,21 +886,18 @@ private:
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
 
-        return get_schema_for_read(cmd.schema_version, src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, cmd = std::move(cmd), key = std::move(key), ballot,
-                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = schema->table().shard_for_reads(token);
-            bool local = shard == this_shard_id();
-            sp.get_stats().replica_cross_shard_ops += !local;
-            return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                     ballot, only_digest, da, timeout, src_ip, &sys_ks] (storage_proxy& sp) {
-                tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prepare(sp, sys_ks.local(), tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
-                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
-                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
-                });
-            });
+        auto schema = co_await get_schema_for_read(cmd.schema_version, src_addr, *timeout);
+        dht::token token = dht::get_token(*schema, key);
+        unsigned shard = schema->table().shard_for_reads(token);
+        bool local = shard == this_shard_id();
+        _sp.get_stats().replica_cross_shard_ops += !local;
+        co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                    cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
+                                    ballot, only_digest, da, timeout, src_ip, &sys_ks = _sys_ks] (storage_proxy& sp) -> future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> {
+            tracing::trace_state_ptr tr_state = gt;
+            auto r = co_await paxos::paxos_state::prepare(sp, sys_ks.local(), tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout);
+            tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
+            co_return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
         });
     }
 
