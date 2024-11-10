@@ -948,26 +948,23 @@ private:
         if (pruning >= pruning_limit) {
             _sp.get_stats().cas_replica_dropped_prune++;
             tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
-            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+            co_return netw::messaging_service::no_wait();
         }
 
         pruning++;
         auto d = defer([] { pruning--; });
-        return get_schema_for_read(schema_id, src_addr, *timeout).then([&sp = _sp, &sys_ks = _sys_ks, key = std::move(key), ballot,
-                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
-            dht::token token = dht::get_token(*schema, key);
-            unsigned shard = schema->table().shard_for_reads(token);
-            bool local = shard == this_shard_id();
-            sp.get_stats().replica_cross_shard_ops += !local;
-            return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     key = std::move(key), ballot, timeout, src_ip, d = std::move(d), &sys_ks] () {
+        auto schema = co_await get_schema_for_read(schema_id, src_addr, *timeout);
+        dht::token token = dht::get_token(*schema, key);
+        unsigned shard = schema->table().shard_for_reads(token);
+        bool local = shard == this_shard_id();
+        _sp.get_stats().replica_cross_shard_ops += !local;
+        co_await smp::submit_to(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                    key = std::move(key), ballot, timeout, src_ip, &sys_ks = _sys_ks] () -> future<> {
                 tracing::trace_state_ptr tr_state = gt;
-                return paxos::paxos_state::prune(sys_ks.local(), gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
-                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
-                    return netw::messaging_service::no_wait();
-                });
+                co_await paxos::paxos_state::prune(sys_ks.local(), gs, key, ballot,  *timeout, tr_state);
+                tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
             });
-        });
+        co_return netw::messaging_service::no_wait();
     }
 
     void connection_dropped(gms::inet_address addr) {
