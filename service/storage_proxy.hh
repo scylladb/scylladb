@@ -629,8 +629,6 @@ public:
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
-            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, allow_hints, is_cancellable);
 
     // Send a mutation to a specific remote target as a hint.

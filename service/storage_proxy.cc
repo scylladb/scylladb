@@ -4103,28 +4103,6 @@ future<> storage_proxy::send_to_endpoint(
             cancellable);
 }
 
-future<> storage_proxy::send_to_endpoint(
-        frozen_mutation_and_schema fm_a_s,
-        locator::effective_replication_map_ptr ermp,
-        gms::inet_address target,
-        inet_address_vector_topology_change pending_endpoints,
-        db::write_type type,
-        tracing::trace_state_ptr tr_state,
-        write_stats& stats,
-        allow_hints allow_hints,
-        is_cancellable cancellable) {
-    return send_to_endpoint(
-            std::make_unique<shared_mutation>(std::move(fm_a_s)),
-            std::move(ermp),
-            std::move(target),
-            std::move(pending_endpoints),
-            type,
-            std::move(tr_state),
-            stats,
-            allow_hints,
-            cancellable);
-}
-
 future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target) {
     return send_to_endpoint(
             std::make_unique<hint_mutation>(std::move(fm_a_s)),
