@@ -21,6 +21,7 @@ target_sources(utils
     dict_trainer.cc
     directories.cc
     disk-error-handler.cc
+    disk_space_monitor.cc
     dynamic_bitset.cc
     error_injection.cc
     exceptions.cc
