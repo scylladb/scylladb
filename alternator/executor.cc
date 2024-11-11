@@ -2104,6 +2104,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                     return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
+                batch_size++;
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = (r->value)["Key"];
                 mutation_builders.emplace_back(schema, put_or_delete_item(
@@ -2114,6 +2115,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                     return make_ready_future<request_return_type>(api_error::validation("Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
+                batch_size++;
             } else {
                 return make_ready_future<request_return_type>(api_error::validation(format("Unknown BatchWriteItem request type: {}", r_name)));
             }
@@ -3362,7 +3364,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
     };
     std::vector<table_requests> requests;
-
+    uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
         tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
@@ -3376,9 +3378,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             rs.add(key);
             check_key(key, rs.schema);
         }
+        batch_size += rs.requests.size();
         requests.emplace_back(std::move(rs));
     }
 
+    _stats.api_operations.batch_get_item_batch_total += batch_size;
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
     std::vector<future<std::vector<rjson::value>>> response_futures;
