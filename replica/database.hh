@@ -16,6 +16,7 @@
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/when_all.hh>
 #include "replica/global_table_ptr.hh"
+#include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
@@ -1491,7 +1492,7 @@ public:
 
         // write lock is needed during adding or removing table
         future<rwlock::holder> hold_write_lock();
-        future<> add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
+        void add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
         void remove_table(database& db, table& cf) noexcept;
 
         table& get_table(table_id id) const;
@@ -1760,8 +1761,12 @@ public:
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
     void init_schema_commitlog();
+
     using is_new_cf = bool_class<struct is_new_cf_tag>;
+    std::function<future<>()> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
+    future<> make_column_family_directory(schema_ptr schema);
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
+
 
     /* throws no_such_column_family if missing */
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
@@ -1939,8 +1944,6 @@ public:
     bool update_column_family(schema_ptr s);
 private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
-    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
-
     struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 
+#include <exception>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
@@ -1010,7 +1011,9 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    co_await add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+    auto lock = get_tables_metadata().hold_write_lock();
+    auto cleanup = add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+    co_await cleanup();
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
@@ -1019,7 +1022,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
+std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1047,21 +1050,35 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     cf->start();
-    auto f = co_await coroutine::as_future(_tables_metadata.add_table(*this, ks, *cf, schema));
-    if (f.failed()) {
-        co_await cf->stop();
-        co_await coroutine::return_exception_ptr(f.get_exception());
-    }
-    // Table must be added before entry is marked synced.
-    schema->registry_entry()->mark_synced();
+    std::exception_ptr ex;
+    try {
+        _tables_metadata.add_table(*this, ks, *cf, schema);
+        // Table must be added before entry is marked synced.
+        schema->registry_entry()->mark_synced();
+    } catch (...) {
+        ex = std::current_exception();
+    };
+    // cleanup function
+    return [cf, ex] () -> future<> {
+        if (ex) {
+            co_await cf->stop();
+            co_await coroutine::return_exception_ptr(ex);
+        }
+    };
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
-    auto& ks = find_keyspace(schema->ks_name());
-    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+future<> database::make_column_family_directory(schema_ptr schema) {
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();
+}
+
+future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
+    auto lock = co_await get_tables_metadata().hold_write_lock();
+    auto& ks = find_keyspace(schema->ks_name());
+    auto cleanup = add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+    co_await cleanup();
+    co_await make_column_family_directory(schema);
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -3078,8 +3095,8 @@ future<rwlock::holder> database::tables_metadata::hold_write_lock() {
     co_return co_await _cf_lock.hold_write_lock();
 }
 
-future<> database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
-    auto holder = co_await _cf_lock.hold_write_lock();
+void database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
+    SCYLLA_ASSERT(!_cf_lock.try_write_lock()); // lock should be acquired before the call
     add_table_helper(db, ks, cf, s);
 }
 
