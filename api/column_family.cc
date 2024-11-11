@@ -943,7 +943,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, true);
+        return set_tables_autocompaction(ctx, keyspace, std::move(tables), true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
@@ -952,7 +952,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, false);
+        return set_tables_autocompaction(ctx, keyspace, std::move(tables), false);
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
@@ -981,7 +981,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
+        return set_tables_tombstone_gc(ctx, keyspace, std::move(tables), true);
     });
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
@@ -990,7 +990,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
+        return set_tables_tombstone_gc(ctx, keyspace, std::move(tables), false);
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
