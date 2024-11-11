@@ -20,11 +20,13 @@
 #include <seastar/util/closeable.hh>
 
 using namespace seastar;
-using namespace std::chrono_literals;
+using namespace std::string_view_literals;
+
 enum class failure_policy : uint8_t {
     SUCCESS = 0,
     RETRYABLE_FAILURE = 1,
     NONRETRYABLE_FAILURE = 2,
+    NEVERENDING_RETRYABLE_FAILURE = 3,
 };
 
 static uint16_t get_port() {
@@ -97,23 +99,34 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_retryable_success) {
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
     const size_t memory_size = part_size;
-    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::RETRYABLE_FAILURE, total_size, memory_size), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO;
-    });
+    BOOST_REQUIRE_NO_THROW(test_client_upload_file(seastar_test::get_name(), failure_policy::RETRYABLE_FAILURE, total_size, memory_size));
 }
 
-SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure) {
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_1) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
     const size_t memory_size = part_size;
-    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE, total_size, memory_size),
-                            storage_io_error,
-                            [](const storage_io_error& e) { return e.code().value() == EIO; });
+    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NEVERENDING_RETRYABLE_FAILURE, total_size, memory_size),
+            storage_io_error, [](const storage_io_error& e) {
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
+            });
 }
 
-void do_test_client_multipart_upload(failure_policy policy) {
-    const sstring name(fmt::format("/{}/testobject-{}", "test", ::getpid()));
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_file_failure_2) {
+    const size_t part_size = 5_MiB;
+    const size_t remainder_size = part_size / 2;
+    const size_t total_size = 4 * part_size + remainder_size;
+    const size_t memory_size = part_size;
+    BOOST_REQUIRE_EXCEPTION(test_client_upload_file(seastar_test::get_name(), failure_policy::NONRETRYABLE_FAILURE, total_size, memory_size), storage_io_error,
+            [](const storage_io_error& e) {
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
+            });
+}
+
+void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = false) {
+    const sstring name(fmt::format("/{}/testobject-{}-{}", "test", is_jumbo ? "jumbo" : "large", ::getpid()));
+
     register_policy(name, policy);
     testlog.info("Make client");
     semaphore mem(16 << 20);
@@ -121,7 +134,7 @@ void do_test_client_multipart_upload(failure_policy policy) {
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
-    auto out = output_stream<char>(cln->make_upload_sink(name));
+    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
     auto close_stream = deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
@@ -139,13 +152,38 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_success) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_retryable_success) {
-    BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::RETRYABLE_FAILURE), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO;
+    BOOST_REQUIRE_NO_THROW(do_test_client_multipart_upload(failure_policy::RETRYABLE_FAILURE));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_failure_1) {
+    BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NEVERENDING_RETRYABLE_FAILURE), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_failure) {
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_failure_2) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO;
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_success) {
+    BOOST_REQUIRE_NO_THROW(do_test_client_multipart_upload(failure_policy::SUCCESS, true));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_retryable_success) {
+    BOOST_REQUIRE_NO_THROW(do_test_client_multipart_upload(failure_policy::RETRYABLE_FAILURE, true));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_1) {
+    BOOST_REQUIRE_EXCEPTION(
+            do_test_client_multipart_upload(failure_policy::NEVERENDING_RETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
+                return e.code().value() == EIO && e.what() == "S3 request failed. Code: 1. Reason: We encountered an internal error. Please try again."sv;
+            });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
+    BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
 }

@@ -47,7 +47,8 @@ target_sources(utils
     uuid.cc
     aws_sigv4.cc
     s3/aws_error.cc
-    s3/client.cc)
+    s3/client.cc
+    s3/retry_strategy.cc)
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}

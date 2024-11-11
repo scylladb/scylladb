@@ -17,6 +17,7 @@
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "retry_strategy.hh"
 #include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
@@ -77,6 +78,7 @@ class client : public enable_shared_from_this<client> {
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
+    std::unique_ptr<aws::retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
@@ -87,12 +89,11 @@ class client : public enable_shared_from_this<client> {
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
     future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
-    future<> do_make_request(group_client&, http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
-
+    future<> do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr) const;
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    explicit client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag);
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = std::make_unique<aws::default_retry_strategy>());
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
