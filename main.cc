@@ -695,6 +695,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         } else {
             app_cfg.reactor_opts.reactor_backend.select_default_candidate("epoll");
         }
+
+        // Leave some reserve IOCBs for scylla-nodetool and other native tool apps.
+        if (std::ranges::contains(candidates, "io_uring")) {
+            app_cfg.reactor_opts.reserve_io_control_blocks.set_default_value(10);
+        } else {
+            startlog.warn("Need to leave extra IOCBs in reserve for tools because the io_uring reactor backend is not available."
+                    " Tools will fall-back to the epoll reactor backend, which requires more IOCBs to function.");
+            app_cfg.reactor_opts.reserve_io_control_blocks.set_default_value(1024);
+        }
     }
     // We need to have the entire app config to run the app, but we need to
     // run the app to read the config file with UDF specific options so that
