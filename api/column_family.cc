@@ -1058,6 +1058,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        auto ti = table_info{ .name = cf, .id = get_uuid(ks, cf, ctx.db.local()) };
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
         return for_tables_on_all_shards(ctx, ks, {std::move(cf)}, [strategy] (replica::table& cf) {
