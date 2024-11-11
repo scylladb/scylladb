@@ -926,14 +926,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_auto_compaction: name={}", req->get_path_param("name"));
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
+        auto ti = table_info{ .name = cf, .id = get_uuid(ks, cf, ctx.db.local()) };
         return set_tables_autocompaction(ctx, ks, {std::move(cf)}, true);
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_auto_compaction: name={}", req->get_path_param("name"));
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
+        auto ti = table_info{ .name = cf, .id = get_uuid(ks, cf, ctx.db.local()) };
         return set_tables_autocompaction(ctx, ks, {std::move(cf)}, false);
     });
 
@@ -964,14 +964,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     cf::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_tombstone_gc: name={}", req->get_path_param("name"));
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
+        auto ti = table_info{ .name = cf, .id = get_uuid(ks, cf, ctx.db.local()) };
         return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, true);
     });
 
     cf::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_tombstone_gc: name={}", req->get_path_param("name"));
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
+        auto ti = table_info{ .name = cf, .id = get_uuid(ks, cf, ctx.db.local()) };
         return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, false);
     });
 
