@@ -25,8 +25,8 @@ combine(InputIterator1 begin1, InputIterator1 end1,
         Compare compare,
         Merge merge) {
     while (begin1 != end1 && begin2 != end2) {
-        auto& e1 = *begin1;
-        auto& e2 = *begin2;
+        std::iter_const_reference_t<InputIterator1> e1 = *begin1;
+        std::iter_const_reference_t<InputIterator2> e2 = *begin2;
         if (compare(e1, e2)) {
             *out++ = e1;
             ++begin1;
