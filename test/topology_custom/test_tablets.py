@@ -441,3 +441,57 @@ async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerCli
         with pytest.raises(SyntaxException, match=expected):
             ks_name = unique_name()
             await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21564")
+async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/21564
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator from processing it using error injection
+        3) Start migration of the tablet from node 1 to 2
+        4) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create table, populate it and flush the table to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    num_of_rows = 64
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(num_of_rows)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to make view generator pause before processing the sstable")
+    injection_name = "view_builder_pause_add_new_view"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == num_of_rows
