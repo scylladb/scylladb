@@ -939,7 +939,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, keyspace, tables, true);
@@ -947,7 +948,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, keyspace, tables, false);
@@ -975,7 +977,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
         return set_tables_tombstone_gc(ctx, keyspace, tables, true);
@@ -983,7 +986,8 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = table_infos | std::views::transform([] (auto& ti) { return ti.name; }) | std::ranges::to<std::vector>();
 
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
         return set_tables_tombstone_gc(ctx, keyspace, tables, false);
