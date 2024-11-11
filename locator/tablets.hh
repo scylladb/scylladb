@@ -327,6 +327,13 @@ private:
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
     resize_decision _resize_decision;
+
+    /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
+    dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
+
+    /// Returns token_range which contains all tokens owned by the specified tablet
+    /// when the tablet_count is `1 << log2_tablets`.
+    dht::token_range get_token_range(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
     ///
@@ -426,6 +433,9 @@ public:
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
+
+    /// Returns the token_range in which the given token will belong to after a tablet split
+    dht::token_range get_token_range_after_split(const token& t) const noexcept;
 
     const locator::resize_decision& resize_decision() const;
 public:

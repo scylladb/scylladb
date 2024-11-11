@@ -286,9 +286,13 @@ std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side
     return {tablet_id(current_id), tablet_range_side(id_after_split & 0x1)};
 }
 
+dht::token tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
+    return dht::last_token_of_compaction_group(log2_tablets, size_t(id));
+}
+
 dht::token tablet_map::get_last_token(tablet_id id) const {
     check_tablet_id(id);
-    return dht::last_token_of_compaction_group(_log2_tablets, size_t(id));
+    return get_last_token(id, _log2_tablets);
 }
 
 dht::token tablet_map::get_first_token(tablet_id id) const {
@@ -299,12 +303,24 @@ dht::token tablet_map::get_first_token(tablet_id id) const {
     }
 }
 
-dht::token_range tablet_map::get_token_range(tablet_id id) const {
+dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) const {
     if (id == first_tablet()) {
-        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id), true});
+        return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id, log2_tablets), true});
     } else {
-        return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1)), false}, {get_last_token(id), true});
+        return dht::token_range::make({get_last_token(tablet_id(size_t(id) - 1), log2_tablets), false}, {get_last_token(id, log2_tablets), true});
     }
+}
+
+dht::token_range tablet_map::get_token_range(tablet_id id) const {
+    check_tablet_id(id);
+    return get_token_range(id, _log2_tablets);
+}
+
+dht::token_range tablet_map::get_token_range_after_split(const token& t) const noexcept {
+    // when the tablets are split, the tablet count doubles, (i.e.) _log2_tablets increases by 1
+    const auto log2_tablets_after_split = _log2_tablets + 1;
+    auto id_after_split = tablet_id(dht::compaction_group_of(log2_tablets_after_split, t));
+    return get_token_range(id_after_split, log2_tablets_after_split);
 }
 
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {

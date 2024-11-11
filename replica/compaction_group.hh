@@ -353,6 +353,7 @@ public:
     virtual future<> split_all_storage_groups() = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) = 0;
+    virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
 
     virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
 };
