@@ -647,7 +647,7 @@ static future<affected_tables_and_views> merge_tables_and_views(distributed<serv
         // and so that compaction groups are not destroyed altogether.
         // We must also do it before tables are created so that new tables see the tablet map.
         co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-            co_await db.get_notifier().update_tablet_metadata(std::move(tablet_hint));
+            co_await db.get_notifier().update_tablet_metadata(tablet_hint);
         });
     }
 
