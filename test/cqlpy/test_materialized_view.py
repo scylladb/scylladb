@@ -1408,7 +1408,7 @@ def test_view_forbids_table_ops(cql, mv1):
     # that DESC TABLE cannot be used on a view and that DESC MATERIALIZED VIEW
     # should be used instead - it just reports that the table is "not found".
     # Reproduces #21026 (DESC TABLE was allowed on a view):
-    with pytest.raises(InvalidRequest, match='Cannot use'):
+    with pytest.raises(InvalidRequest, match='Cannot use|not found'):
         cql.execute(f'DESC TABLE {mv1}')
 
 # A materialized view cannot have its own materialized views, nor secondary
