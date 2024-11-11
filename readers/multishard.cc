@@ -834,7 +834,7 @@ future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictab
             buffer_size += buffer.back().memory_usage();
         }
         // Finish reading if reader is EOS or we read enough.
-        // We read enough if we read at least max_buffer_size_in_bytes and we also fullfilled the hint.
+        // We read enough if we read at least max_buffer_size_in_bytes and we also fulfilled the hint.
         return reader.is_end_of_stream() || ((reached_stop_token || buffer_size >= hint->size) && buffer_size >= max_buffer_size_in_bytes);
     };
 
