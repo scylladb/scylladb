@@ -59,9 +59,9 @@ table_id get_uuid(const sstring& ks, const sstring& cf, const replica::database&
     }
 }
 
-table_id get_uuid(const sstring& name, const replica::database& db) {
+table_info parse_table_info(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
-    return get_uuid(ks, cf, db);
+    return table_info{ .name = cf, .id = get_uuid(ks, cf, db) };
 }
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
@@ -142,7 +142,7 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, con
 
 static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([uuid, f](replica::database& db) {
         // Histograms information is sample of the actual load
         // so to get an estimation of sum, we multiply the mean
@@ -165,7 +165,7 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx,
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -177,7 +177,7 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -204,7 +204,7 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
 
 static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).rate();},
             utils::rate_moving_average_and_histogram(),
@@ -276,7 +276,7 @@ static json::json_return_type sum_map(const std::unordered_map<sstring, uint64_t
 }
 
 static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([uuid, total](replica::database& db) {
         std::unordered_map<sstring, uint64_t> m;
         auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
@@ -914,7 +914,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req.get_path_param("name"), ctx.db.local()).id;
         replica::column_family& cf = ctx.db.local().find_column_family(uuid);
         return !cf.is_auto_compaction_disabled_by_user();
     });
@@ -950,7 +950,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req.get_path_param("name"), ctx.db.local()).id;
         replica::table& t = ctx.db.local().find_column_family(uuid);
         return t.tombstone_gc_enabled();
     });
@@ -1026,7 +1026,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_compression_ratio.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req->get_path_param("name"), ctx.db.local()).id;
 
         return ctx.db.map_reduce(sum_ratio<double>(), [uuid](replica::database& db) {
             replica::column_family& cf = db.find_column_family(uuid);
@@ -1060,7 +1060,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_compaction_strategy_class.set(r, [&ctx](const_req req) {
-        return ctx.db.local().find_column_family(get_uuid(req.get_path_param("name"), ctx.db.local())).get_compaction_strategy().name();
+        return ctx.db.local().find_column_family(parse_table_info(req.get_path_param("name"), ctx.db.local()).id).get_compaction_strategy().name();
     });
 
     cf::set_compression_parameters.set(r, [](std::unique_ptr<http::request> req) {
@@ -1085,7 +1085,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_sstables_for_key.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto key = req->get_query_param("key");
-        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req->get_path_param("name"), ctx.db.local()).id;
 
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) -> future<std::unordered_set<sstring>> {
             auto sstables = co_await db.find_column_family(uuid).get_sstables_by_partition_key(key);

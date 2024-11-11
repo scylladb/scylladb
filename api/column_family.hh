@@ -22,12 +22,12 @@ namespace api {
 void set_column_family(http_context& ctx, httpd::routes& r, sharded<db::system_keyspace>& sys_ks);
 void unset_column_family(http_context& ctx, httpd::routes& r);
 
-table_id get_uuid(const sstring& name, const replica::database& db);
+table_info parse_table_info(const sstring& name, const replica::database& db);
 
 template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     using mapper_type = std::function<std::unique_ptr<std::any>(replica::database&)>;
     using reducer_type = std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)>;
     return ctx.db.map_reduce0(mapper_type([mapper, uuid](replica::database& db) {
