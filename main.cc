@@ -685,6 +685,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 #endif
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.reactor_opts.max_networking_io_control_blocks.set_default_value(50000);
+    {
+        const auto candidates = app_cfg.reactor_opts.reactor_backend.get_candidate_names();
+
+        // We don't wan't ScyllaDB to run with the io_uring backend.
+        // So select the default reactor backend explicitely here.
+        if (std::ranges::contains(candidates, "linux-aio")) {
+            app_cfg.reactor_opts.reactor_backend.select_default_candidate("linux-aio");
+        } else {
+            app_cfg.reactor_opts.reactor_backend.select_default_candidate("epoll");
+        }
+    }
     // We need to have the entire app config to run the app, but we need to
     // run the app to read the config file with UDF specific options so that
     // we know whether we need to reserve additional memory for UDFs.
