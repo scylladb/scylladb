@@ -3,6 +3,11 @@ SSTableLoader
 
 Bulk loads SSTables from a directory to a ScyllaDB cluster via the **CQL API**.
 
+.. warning::
+
+    SSTableLoader is deprecated since ScyllaDB 6.2 and will be removed in the next release.
+    Please consider switching to :doc:`nodetool refresh --load-and-stream </operating-scylla/nodetool-commands/refresh>`.
+
 .. note::
 
    This tool is **different than Apache Cassandra's sstableloader**, which uses an internal RPC protocol to load data.
