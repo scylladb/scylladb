@@ -79,10 +79,6 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
 }
 
 static future<json::json_return_type> for_tables_on_all_shards(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
-    if (tables.empty()) {
-        tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-    }
-
     return do_with(keyspace, std::move(tables), [&ctx, set] (const sstring& keyspace, const std::vector<sstring>& tables) {
         return ctx.db.invoke_on_all([&keyspace, &tables, set] (replica::database& db) {
             return parallel_for_each(tables, [&db, &keyspace, set] (const sstring& table) {
