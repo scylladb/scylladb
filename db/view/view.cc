@@ -1856,21 +1856,20 @@ future<> view_update_generator::mutate_MV(
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
 {
+    auto& ks = _db.find_keyspace(base->ks_name());
+    bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+    // We set legacy self-pairing for old vnode-based tables (for backward
+    // compatibility), and unset it for tablets - where range movements
+    // are more frequent and backward compatibility is less important.
+    // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
+    // on a view, like we have the synchronous_updates_flag.
+    bool use_legacy_self_pairing = !ks.uses_tablets();
     auto base_ermp = base->table().get_effective_replication_map();
     static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
-    co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
-            [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all, base_ermp] (frozen_mutation_and_schema mut) mutable -> future<> {
+    co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = mut.s->table().get_effective_replication_map();
-        auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
-        bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
-        // We set legacy self-pairing for old vnode-based tables (for backward
-        // compatibility), and unset it for tablets - where range movements
-        // are more frequent and backward compatibility is less important.
-        // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
-        // on a view, like we have the synchronous_updates_flag.
-        bool use_legacy_self_pairing = !ks.uses_tablets();
         auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
