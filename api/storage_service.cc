@@ -132,7 +132,7 @@ int64_t validate_int(const sstring& param) {
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
-std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, sstring value) {
+static std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, sstring value) {
     if (value.empty()) {
         return map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
     }
@@ -147,7 +147,7 @@ std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ct
     return names;
 }
 
-std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
+static std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
     auto it = query_params.find(param_name);
     if (it == query_params.end()) {
         return {};
