@@ -5524,24 +5524,27 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
-    if (this_shard_id() != 0) {
-        // replicate_to_all_cores() takes care of other shards.
-        return;
+future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    auto tmptr = co_await get_mutable_token_metadata_ptr();
+    if (hint) {
+        co_await replica::update_tablet_metadata(_db.local(), _qp, tmptr->tablets(), hint);
+    } else {
+        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }
-    load_tablet_metadata(hint).get();
-    _topology_state_machine.event.broadcast(); // wake up load balancer.
+    tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+
+    co_await replicate_to_all_cores(std::move(tmptr));
+    if (wake_up) {
+        _topology_state_machine.event.broadcast();
+    }
 }
 
-future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
-    return mutate_token_metadata([this, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
-        if (hint) {
-            co_await replica::update_tablet_metadata(_db.local(), _qp, tmptr->tablets(), hint);
-        } else {
-            tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
-        }
-        tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
-    }, acquire_merge_lock::no);
+void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
+    if (this_shard_id() != 0) {
+        return;
+    }
+    update_tablet_metadata(hint, wake_up_load_balancer::yes).get();
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
