@@ -1857,7 +1857,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "loading tablet metadata");
             try {
-                ss.local().load_tablet_metadata({}).get();
+                ss.local().update_tablet_metadata({},
+                        service::storage_service::wake_up_load_balancer::no).get();
             } catch (...) {
                 if (!cfg->maintenance_mode()) {
                     throw;
