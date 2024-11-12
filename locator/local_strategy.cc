@@ -20,7 +20,7 @@ local_strategy::local_strategy(replication_strategy_params params) :
 }
 
 future<host_id_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
-    return make_ready_future<host_id_set>(host_id_set{host_id{}});
+    return make_ready_future<host_id_set>(host_id_set{tm.get_topology().my_host_id()});
 }
 
 void local_strategy::validate_options(const gms::feature_service&) const {
