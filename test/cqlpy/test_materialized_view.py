@@ -7,6 +7,7 @@
 import time
 import re
 import pytest
+from . import rest_api
 
 from .util import new_test_table, unique_name, new_materialized_view, ScyllaMetrics, new_secondary_index
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
@@ -1672,3 +1673,17 @@ def test_view_update_with_ttl(cql, test_keyspace):
             cql.execute(f'update {table} using ttl 1 set x=5 where p=1')
             time.sleep(1.1)
             assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in REST API
+def test_view_in_API(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            view_name = view.split('.')[1]
+            res = rest_api.get_request(cql, f"storage_service/view_build_statuses/{test_keyspace}/{view_name}")
+            assert len(res) == 1 and 'value' in res[0] and res[0]['value'] in [ 'UNKNOWN', 'STARTED', 'SUCCESS' ]
+            # Indexes are implemented on top of materialized-views, but even then no MVs
+            # should appear in the output of built_indexes API. And since this API only
+            # reports views that are built, check that view is built first.
+            wait_for_view_built(cql, view)
+            res = rest_api.get_request(cql, f"column_family/built_indexes/{base.replace('.',':')}")
+            assert view_name not in res

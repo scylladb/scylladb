@@ -10,6 +10,7 @@ import time
 import tempfile
 import pytest
 import os
+from . import rest_api
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
@@ -1971,3 +1972,12 @@ def test_index_in_system_tables(cql, test_keyspace):
         assert f'{test_keyspace}::{index_name}' in res
         res = cql.execute(f'select * from system."IndexInfo" where table_name = \'{test_keyspace}\' AND index_name = \'{index_name}\'').one()
         assert (test_keyspace, index_name) == (res.table_name, res.index_name)
+
+# Test index representation in REST API
+def test_index_in_API(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+        res = rest_api.get_request(cql, f"column_family/built_indexes/{table.replace('.',':')}")
+        assert index_name in res
