@@ -44,18 +44,49 @@ using namespace logalloc;
 using namespace replica::dirty_memory_manager_logalloc;
 using namespace replica;
 
+class listener_for_region_group : public region_listener {
+    region_group& _rg;
+public:
+    listener_for_region_group(region_group& rg) : _rg(rg) {}
+    void increase_usage(logalloc::region* r, ssize_t delta) override {
+        _rg.increase_usage(r);
+        _rg.update_unspooled(delta);
+    }
+
+    void decrease_evictable_usage(logalloc::region* r) override {
+        _rg.decrease_usage(r);
+    }
+
+    void decrease_usage(logalloc::region* r, ssize_t delta) override {
+        _rg.decrease_usage(r);
+        _rg.update_unspooled(delta); // FIXME: this should be -delta. Fixed in next patches.
+    }
+
+    void add(logalloc::region* r) override {
+        _rg.add(r);
+    }
+    void del(logalloc::region* r) override {
+        _rg.del(r);
+    }
+    void moved(logalloc::region* old_address, logalloc::region* new_address) override {
+        _rg.moved(old_address, new_address);
+    }
+};
+
 SEASTAR_TEST_CASE(test_region_groups) {
     return seastar::async([] {
         region_group just_four;
         region_group one_and_two("one_and_two");
+        auto just_four_listener = listener_for_region_group(just_four);
+        auto one_and_two_listener = listener_for_region_group(one_and_two);
 
         auto one = std::make_unique<size_tracked_region>();
-        one->listen(&one_and_two);
+        one->listen(&one_and_two_listener);
         auto two = std::make_unique<size_tracked_region>();
-        two->listen(&one_and_two);
+        two->listen(&one_and_two_listener);
         auto three = std::make_unique<size_tracked_region>();
         auto four = std::make_unique<size_tracked_region>();
-        four->listen(&just_four);
+        four->listen(&just_four_listener);
         auto five = std::make_unique<size_tracked_region>();
 
         constexpr size_t base_count = 16 * 1024;
@@ -207,8 +238,9 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     return seastar::async([] {
         // singleton hierarchy, only one segment allowed
         raii_region_group simple({ .unspooled_hard_limit = logalloc::segment_size });
+        auto simple_listener = listener_for_region_group(simple);
         auto simple_region = std::make_unique<test_region>();
-        simple_region->listen(&simple);
+        simple_region->listen(&simple_listener);
 
         // Expectation: after first allocation region will have one segment,
         // memory_used() == throttle_threshold and we are good to go, future
@@ -225,7 +257,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         BOOST_REQUIRE_EQUAL(simple.unspooled_memory_used(), logalloc::segment_size);
 
         auto big_region = std::make_unique<test_region>();
-        big_region->listen(&simple);
+        big_region->listen(&simple_listener);
         // Allocate a big chunk, that will certainly get us over the threshold
         big_region->alloc();
 
@@ -263,9 +295,10 @@ SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {
         raii_region_group rg({.unspooled_hard_limit = logalloc::segment_size});
+        auto rg_listener = listener_for_region_group(rg);
 
         auto region = std::make_unique<test_region>();
-        region->listen(&rg);
+        region->listen(&rg_listener);
 
         // fill the parent. Try allocating at child level. Should not be allowed.
         region->alloc();
@@ -296,13 +329,15 @@ class test_async_reclaim_region {
     // after the first reclaim
     int _reclaim_counter = 0;
     region_group& _rg;
+    listener_for_region_group _rg_listener;
 public:
     test_async_reclaim_region(region_group& rg, size_t alloc_size)
             : _region()
             , _alloc_size(alloc_size)
             , _rg(rg)
+            , _rg_listener(_rg)
     {
-        _region.listen(&rg);
+        _region.listen(&_rg_listener);
         with_allocator(_region.allocator(), [this] {
             _alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), this->_alloc_size)));
         });
@@ -321,7 +356,7 @@ public:
             std::vector<managed_bytes>().swap(_alloc);
         });
         _region = dirty_memory_manager_logalloc::size_tracked_region();
-        _region.listen(&_rg);
+        _region.listen(&_rg_listener);
         return this->_alloc_size;
     }
     static test_async_reclaim_region& from_region(dirty_memory_manager_logalloc::size_tracked_region* region_ptr) {
@@ -437,9 +472,10 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
         auto free_space = memory::stats().free_memory();
         size_t threshold = size_t(0.75 * free_space);
         region_group gr(test_name, {.unspooled_hard_limit = threshold, .unspooled_soft_limit = threshold});
+        auto gr_listener = listener_for_region_group(gr);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
-        r.listen(&gr);
+        r.listen(&gr_listener);
 
         with_allocator(r.allocator(), [&] {
             std::vector<managed_bytes> objs;
@@ -494,9 +530,10 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
                 .start_reclaiming = [&] () noexcept { reclaiming = true; },
                 .stop_reclaiming = [&] () noexcept { reclaiming = false; },
         });
+        auto gr_listener = listener_for_region_group(gr);
         auto close_gr = defer([&gr] () noexcept { gr.shutdown().get(); });
         size_tracked_region r;
-        r.listen(&gr);
+        r.listen(&gr_listener);
 
         with_allocator(r.allocator(), [&] {
             std::vector<managed_bytes> objs;
@@ -531,7 +568,7 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
     });
 }
 
-class test_region_group : public region_group {
+class test_region_group : public region_group, public region_listener {
     sstring _name;
 
 public:
@@ -586,19 +623,19 @@ public:
         testlog.debug("test_region_listener [{}:{}]: increase_usage region={} delta={}", _name, fmt::ptr(this), fmt::ptr(r), delta);
 
         BOOST_REQUIRE(contains(r));
-        region_group::increase_usage(r, delta);
+        listener_for_region_group(*this).increase_usage(r, delta);
     }
     virtual void decrease_evictable_usage(region* r) override {
         testlog.debug("test_region_listener [{}:{}]: decrease_evictable_usage region={}", _name, fmt::ptr(this), fmt::ptr(r));
 
         BOOST_REQUIRE(contains(r));
-        region_group::decrease_evictable_usage(r);
+        listener_for_region_group(*this).decrease_evictable_usage(r);
     }
     virtual void decrease_usage(region* r, ssize_t delta) override {
         testlog.debug("test_region_listener [{}:{}]: decrease_usage region={} delta={}", _name, fmt::ptr(this), fmt::ptr(r), delta);
 
         BOOST_REQUIRE(contains(r));
-        region_group::decrease_usage(r, delta);
+        listener_for_region_group(*this).decrease_usage(r, delta);
     }
 };
 
