@@ -989,9 +989,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto ks_cf = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        auto&& ks = std::get<0>(ks_cf);
-        auto&& cf_name = std::get<1>(ks_cf);
+        auto [ks, cf_name ] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         std::vector<db::system_keyspace_view_build_progress> vb = co_await sys_ks.local().load_view_build_progress();
         std::set<sstring> vp = vb
                 | std::views::filter([&ks] (auto& b) { return b.view.first == ks; })
