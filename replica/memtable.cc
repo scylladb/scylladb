@@ -131,7 +131,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
         , _table_shared_data(table_shared_data)
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
-    logalloc::region::listen(&dmm.region_group());
+    logalloc::region::listen(this);
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
@@ -878,4 +878,28 @@ auto fmt::formatter<replica::memtable>::format(replica::memtable& mt,
                                         fmt::format_context& ctx) const -> decltype(ctx.out()) {
     logalloc::reclaim_lock rl(mt);
     return fmt::format_to(ctx.out(), "{{memtable: [{}]}}", fmt::join(mt.partitions, ",\n"));
+}
+
+void replica::memtable::increase_usage(logalloc::region* r, ssize_t delta) {
+    _dirty_mgr.region_group().increase_usage(r);
+    _dirty_mgr.region_group().update_unspooled(delta);
+}
+
+void replica::memtable::decrease_evictable_usage(logalloc::region* r) {
+    _dirty_mgr.region_group().decrease_usage(r);
+}
+
+void replica::memtable::decrease_usage(logalloc::region* r, ssize_t delta) {
+    _dirty_mgr.region_group().decrease_usage(r);
+    _dirty_mgr.region_group().update_unspooled(delta);
+}
+
+void replica::memtable::add(logalloc::region* r) {
+    _dirty_mgr.region_group().add(r);
+}
+void replica::memtable::del(logalloc::region* r) {
+    _dirty_mgr.region_group().del(r);
+}
+void replica::memtable::moved(logalloc::region* old_address, logalloc::region* new_address) {
+    _dirty_mgr.region_group().moved(old_address, new_address);
 }
