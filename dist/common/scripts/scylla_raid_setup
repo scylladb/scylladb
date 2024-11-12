@@ -16,6 +16,7 @@ import sys
 import stat
 import logging
 import pyudev
+import psutil
 from pathlib import Path
 from scylla_util import *
 from subprocess import run, SubprocessError
@@ -91,6 +92,15 @@ class UdevInfo:
     @property
     def id_links(self):
         return [l for l in self.device.device_links if l.startswith('/dev/disk/by-id')]
+
+
+def is_selinux_enabled():
+    partitions = psutil.disk_partitions(all=True)
+    for p in partitions:
+        if p.fstype == 'selinuxfs':
+            if os.path.exists(p.mountpoint + '/enforce'):
+                return True
+    return False
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -335,17 +345,41 @@ WantedBy=local-fs.target
         udev_info.dump_variables()
 
     if is_redhat_variant():
-        if not shutil.which('getenforce'):
-            pkg_install('libselinux-utils')
+        offline_skip_relabel = False
+        has_semanage = True
+        if not shutil.which('matchpathcon'):
+            offline_skip_relabel = True
+            pkg_install('libselinux-utils', offline_exit=False)
         if not shutil.which('restorecon'):
-            pkg_install('policycoreutils')
+            offline_skip_relabel = True
+            pkg_install('policycoreutils', offline_exit=False)
         if not shutil.which('semanage'):
-            pkg_install('policycoreutils-python-utils')
-        selinux_status = out('getenforce')
+            if is_offline():
+                has_semanage = False
+            else:
+                pkg_install('policycoreutils-python-utils')
+        if is_offline() and offline_skip_relabel:
+            print('Unable to find SELinux tools, skip relabeling.')
+            sys.exit(0)
+
         selinux_context = out('matchpathcon -n /var/lib/systemd/coredump')
         selinux_type = selinux_context.split(':')[2]
-        run(f'semanage fcontext -a -t {selinux_type} "{root}/coredump(/.*)?"', shell=True, check=True)
-        if selinux_status != 'Disabled':
+        if has_semanage:
+            run(f'semanage fcontext -a -t {selinux_type} "{root}/coredump(/.*)?"', shell=True, check=True)
+        else:
+            # without semanage, we need to update file_contexts directly,
+            # and compile it to binary format (.bin file)
+            try:
+                with open('/etc/selinux/targeted/contexts/files/file_contexts.local', 'a') as f:
+                    spacer = ''
+                    if f.tell() != 0:
+                        spacer = '\n'
+                    f.write(f'{spacer}{root}/coredump(/.*)?   {selinux_context}\n')
+            except FileNotFoundError as e:
+                print('Unable to find SELinux policy files, skip relabeling.')
+                sys.exit(0)
+            run('sefcontext_compile /etc/selinux/targeted/contexts/files/file_contexts.local', shell=True, check=True)
+        if is_selinux_enabled():
             run(f'restorecon -F -v -R {root}', shell=True, check=True)
         else:
             Path('/.autorelabel').touch(exist_ok=True)
