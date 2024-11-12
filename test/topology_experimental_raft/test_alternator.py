@@ -264,6 +264,50 @@ async def test_localnodes_drained_node(manager: ManagerClient):
             return False
     assert await wait_for(check_localnodes_one, time.time() + 60)
 
+
+@pytest.mark.asyncio
+async def test_localnodes_down_normal_node(manager: ManagerClient):
+    """Test that if in a cluster one node reaches "normal" state and then
+       brought down (so is now in "DN" state), a "/localnodes" request
+       should NOT return that node. Reproduces issue #21538.
+    """
+    # Start a cluster with two nodes and verify that at this point,
+    # "/localnodes" on the first node returns both nodes.
+    # We the retry loop below because the second node might take a
+    # bit of time to bootstrap after coming up, and only then will it
+    # appear on /localnodes (see #19694).
+    servers = await manager.servers_add(2, config=alternator_config)
+    localnodes_request = f"http://{servers[0].ip_addr}:{alternator_config['alternator_port']}/localnodes"
+    async def check_localnodes_two():
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        if set(j) == {servers[0].ip_addr, servers[1].ip_addr}:
+            return True
+        elif set(j).issubset({servers[0].ip_addr, servers[1].ip_addr}):
+            return None # try again
+        else:
+            return False
+    assert await wait_for(check_localnodes_two, time.time() + 60)
+    # Now stop the second node abruptly with server_stop(). The server will
+    # be down, the gossiper on the first node will soon realize it is down,
+    # but still consider it in a "normal" state - "DN" (down and normal).
+    # We then want to check that "/localnodes" handles this state correctly.
+    await manager.server_stop(servers[1].server_id)
+    # After that, "/localnodes" should no longer return the second node.
+    # It might take a short while until the first node learns what happened
+    # to the second, so we may need to retry for a while.
+    async def check_localnodes_one():
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        if set(j) == {servers[0].ip_addr, servers[1].ip_addr}:
+            return None # try again
+        elif set(j) == {servers[0].ip_addr}:
+            return True
+        else:
+            return False
+    assert await wait_for(check_localnodes_one, time.time() + 60)
+
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_localnodes_joining_nodes(manager: ManagerClient):

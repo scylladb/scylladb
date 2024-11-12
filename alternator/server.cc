@@ -213,8 +213,8 @@ protected:
         for (auto& ip : local_dc_nodes) {
             // Note that it's not enough for the node to be is_alive() - a
             // node joining the cluster is also "alive" but not responsive to
-            // requests. We need the node to be in normal state. See #19694.
-            if (_gossiper.is_normal(ip)) {
+            // requests. We alive *and* normal. See #19694, #21538.
+            if (_gossiper.is_alive(ip) && _gossiper.is_normal(ip)) {
                 // Use the gossiped broadcast_rpc_address if available instead
                 // of the internal IP address "ip". See discussion in #18711.
                 rjson::push_back(results, rjson::from_string(_gossiper.get_rpc_address(ip)));
