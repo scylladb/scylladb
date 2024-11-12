@@ -581,3 +581,52 @@ void client_access_missing_object(const client_maker_function& client_maker) {
 SEASTAR_THREAD_TEST_CASE(test_client_access_missing_object_minio) {
     client_access_missing_object(make_minio_client);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
+    // Pay attention, we are reuploading the same file during the test
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+
+    semaphore mem(16 << 20);
+    auto cln = make_minio_client(mem);
+    auto close_client = deferred_close(*cln);
+    constexpr std::string_view content{"1234567890"};
+    for (auto i : {1, 2}) {
+        testlog.info("Put object {}, iteration {}", name, i);
+        temporary_buffer<char> data = sstring(content).release();
+        cln->put_object(name, std::move(data)).get();
+
+        size_t sz = cln->get_object_size(name).get();
+        BOOST_REQUIRE_EQUAL(sz, content.length());
+
+        s3::stats st = cln->get_object_stats(name).get();
+        BOOST_REQUIRE_EQUAL(st.size, content.length());
+    }
+
+    for (auto jumbo : {true, false}) {
+        for (auto i : {1, 2}) {
+            testlog.info("Upload object {}, iteration {} (with copy = {})", name, i, jumbo);
+            auto out = output_stream<char>(
+                // Make it 3 parts per piece, so that 128Mb buffer below
+                // would be split into several 15Mb pieces
+                jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
+
+            constexpr unsigned chunk_size = 1000;
+            constexpr unsigned writes = 128 * 1024;
+            auto rnd = tests::random::get_bytes(chunk_size);
+            uint64_t object_size = 0;
+            for (unsigned ch = 0; ch < writes; ch++) {
+                out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+                object_size += rnd.size();
+            }
+
+            out.flush().get();
+            out.close().get();
+
+            size_t sz = cln->get_object_size(name).get();
+            BOOST_REQUIRE_EQUAL(sz, object_size);
+
+            s3::stats st = cln->get_object_stats(name).get();
+            BOOST_REQUIRE_EQUAL(st.size, object_size);
+        }
+    }
+}
