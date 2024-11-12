@@ -107,7 +107,8 @@ struct table_stats;
 class memtable final
     : public enable_lw_shared_from_this<memtable>
     , public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>
-    , private dirty_memory_manager_logalloc::size_tracked_region {
+    , private dirty_memory_manager_logalloc::size_tracked_region
+    , public logalloc::region_listener {
 public:
     using partitions_type = double_decker<int64_t, memtable_entry,
                             dht::raw_token_less_comparator, dht::ring_position_comparator,
@@ -330,6 +331,14 @@ public:
     dirty_memory_manager& get_dirty_memory_manager() noexcept {
         return _dirty_mgr;
     }
+
+    // Implementation of region_listener.
+    virtual void increase_usage(logalloc::region* r, ssize_t delta) override;
+    virtual void decrease_evictable_usage(logalloc::region* r) override;
+    virtual void decrease_usage(logalloc::region* r, ssize_t delta) override;
+    virtual void add(logalloc::region* r) override;
+    virtual void del(logalloc::region* r) override;
+    virtual void moved(logalloc::region* old_address, logalloc::region* new_address) override;
 
     friend fmt::formatter<memtable>;
 };
