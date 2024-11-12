@@ -1569,3 +1569,13 @@ def test_views_with_future_tombstones(cql, test_keyspace):
             cql.execute(f'insert into {table} (a,b,c,d,e) values (3,4,5,6,7) using timestamp 18')
             assert [] == list(cql.execute(f'select * from {table}'))
             assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in system.* tables
+def test_view_in_system_tables(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            wait_for_view_built(cql, view)
+            res = [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]
+            assert view in res
+            res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]
+            assert view not in res
