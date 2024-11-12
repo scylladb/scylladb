@@ -19,6 +19,8 @@ import asyncio
 import re
 import requests
 import random
+import os
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -495,3 +497,77 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     # Verify that the view has the expected number of rows
     rows = await cql.run_async("SELECT c from test.mv1")
     assert len(list(rows)) == num_of_rows
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/19149")
+async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/19149
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator
+        3) Inject error to prevent processing of new sstables in view generator
+        4) Create an sstable, move it into upload directory of test table and start upload
+        5) Start migration of the tablet from node 1 to 2
+        6) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Generate an sstable and move it to upload directory of test table")
+    # create an sstable using a dummy table
+    await cql.run_async("CREATE TABLE test.dummy (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.dummy (pk, c) VALUES ({k}, {k%3});") for k in range(64, 128)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "dummy")
+    node_workdir = await manager.server_get_workdir(servers[0].server_id)
+    dummy_table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "dummy-*"))[0]
+    test_table_upload_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*", "upload"))[0]
+    for src_path in glob.glob(os.path.join(dummy_table_dir, "me-*")):
+        dst_path = os.path.join(test_table_upload_dir, os.path.basename(src_path))
+        os.rename(src_path, dst_path)
+    await cql.run_async("DROP TABLE test.dummy;")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to prevent view generator from processing staged sstables")
+    injection_name = "view_update_generator_consume_staging_sstable"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Load the sstables from upload directory")
+    await manager.api.load_new_sstables(servers[0].ip_addr, "test", "test")
+
+    # The table now has both staged and unstaged sstables.
+    # Verify that tablet migration handles them both without causing any base-view inconsistencies.
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    expected_num_of_rows = 128
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == expected_num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == expected_num_of_rows
