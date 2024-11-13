@@ -11,8 +11,7 @@
 #include "db/config.hh"
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include <seastar/rpc/rpc_types.hh>
