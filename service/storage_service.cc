@@ -5503,6 +5503,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
     try {
         auto& raft_server = _group0->group0_server();
         auto group0_holder = _group0->hold_group0_gate();
+
+        // make sure any pending group0 upgrade is completed
+        co_await _group0->client().wait_until_group0_upgraded(_group0_as);
+
         // do barrier to make sure we always see the latest topology
         co_await raft_server.read_barrier(&_group0_as);
         if (raft_server.get_current_term() != term) {
