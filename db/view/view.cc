@@ -1908,13 +1908,18 @@ future<> view_update_generator::mutate_MV(
                 if (*target_endpoint == *remote_it) {
                     remote_endpoints.erase(remote_it);
                 } else {
-                    std::swap(*target_endpoint, *remote_it);
+                    auto target_remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);
+                    if (target_remote_it != remote_endpoints.end()) {
+                        target_endpoint = *remote_it;
+                        remote_endpoints.erase(remote_it);
+                    } else {
+                        std::swap(*target_endpoint, *remote_it);
+                    }
                 }
             }
-        }
-        // It's still possible that a target endpoint is duplicated in the remote endpoints list,
-        // so let's get rid of the duplicate if it exists
-        if (target_endpoint) {
+        } else if (target_endpoint) {
+            // It's still possible that a target endpoint is duplicated in the remote endpoints list,
+            // so let's get rid of the duplicate if it exists
             auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);
             if (remote_it != remote_endpoints.end()) {
                 remote_endpoints.erase(remote_it);
