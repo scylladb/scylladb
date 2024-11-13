@@ -129,6 +129,20 @@ def backport(repo, pr, version, commits, backport_base_branch):
             logging.warning(f"GitCommandError: {e}")
 
 
+def with_github_keyword_prefix(repo, pr):
+    pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
+    match = re.findall(pattern, pr.body, re.IGNORECASE)
+    if not match:
+        print(f'No valid close reference for {pr.number}')
+        comment = f':warning:  @{pr.user.login} PR body does not contain a Fixes reference to an issue '
+        comment += ' and can not be backported\n\n'
+        comment += 'The following labels were removed:\n'
+        create_pr_comment_and_remove_label(pr, comment)
+        return False
+    else:
+        return True
+
+
 def main():
     args = parse_args()
     base_branch = args.base_branch.split('/')[2]
@@ -168,6 +182,8 @@ def main():
             continue
         if not backport_labels:
             print(f'no backport label: {pr.number}')
+            continue
+        if args.commits and not with_github_keyword_prefix(repo, pr):
             continue
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
