@@ -355,7 +355,7 @@ schema::raw_schema::raw_schema(table_id id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> raw_view_info, const schema_static_props& props)
+schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props)
     : _raw(raw)
     , _static_props(props)
     , _offsets([this] {
@@ -438,8 +438,8 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
     }
 
     rebuild();
-    if (raw_view_info) {
-        _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
+    if (_raw._view_info) {
+        _view_info = std::make_unique<::view_info>(*this, *_raw._view_info);
     }
 }
 
@@ -1332,7 +1332,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 }
 
 schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
-    _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    _raw._view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
 
