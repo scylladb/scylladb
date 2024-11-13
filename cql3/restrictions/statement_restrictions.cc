@@ -2396,16 +2396,35 @@ struct multi_column_range_accumulator {
     }
 };
 
+std::vector<query::clustering_range> get_equivalent_ranges(
+        const query::clustering_range& cql_order_range, const schema& schema);
+
 /// Calculates clustering bounds for the multi-column case.
 std::vector<query::clustering_range> get_multi_column_clustering_bounds(
         const query_options& options,
         schema_ptr schema,
-        const std::vector<predicate>& multi_column_restrictions) {
+        const std::vector<predicate>& multi_column_restrictions,
+        bool all_natural, bool all_reverse) {
     multi_column_range_accumulator acc{options, schema};
     for (const auto& restr : multi_column_restrictions | std::views::transform(&predicate::filter)) {
         expr::visit(acc, restr);
     }
-    return acc.ranges;
+    auto bounds = std::move(acc.ranges);
+
+    if (!all_natural && !all_reverse) {
+        std::vector<query::clustering_range> bounds_in_clustering_order;
+        for (const auto& b : bounds) {
+            const auto eqv = get_equivalent_ranges(b, *schema);
+            bounds_in_clustering_order.insert(bounds_in_clustering_order.end(), eqv.cbegin(), eqv.cend());
+        }
+        return bounds_in_clustering_order;
+    }
+    if (all_reverse) {
+        for (auto& crange : bounds) {
+            crange = query::clustering_range(crange.end(), crange.start());
+        }
+    }
+    return bounds;
 }
 
 /// Reverses the range if the type is reversed.  Why don't we have interval::reverse()??
@@ -2746,21 +2765,8 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
                 }
             }
         }
-        auto bounds = get_multi_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions);
-        if (!all_natural && !all_reverse) {
-            std::vector<query::clustering_range> bounds_in_clustering_order;
-            for (const auto& b : bounds) {
-                const auto eqv = get_equivalent_ranges(b, *_schema);
-                bounds_in_clustering_order.insert(bounds_in_clustering_order.end(), eqv.cbegin(), eqv.cend());
-            }
-            return bounds_in_clustering_order;
-        }
-        if (all_reverse) {
-            for (auto& crange : bounds) {
-                crange = query::clustering_range(crange.end(), crange.start());
-            }
-        }
-        return bounds;
+        return get_multi_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions,
+                all_natural, all_reverse);
       };
     } else {
       return [&] (const query_options& options) -> std::vector<query::clustering_range> {
