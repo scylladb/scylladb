@@ -948,6 +948,10 @@ public:
     bool wait_for_sync_to_commitlog() const {
         return _static_props.wait_for_sync_to_commitlog;
     }
+
+    // The calculated version should be machine-independent, so that all nodes
+    // arrive at the same version for the same schema definition.
+    static table_schema_version calculate_digest(const raw_schema& r);
 private:
     // Print all schema properties in CQL syntax
     std::ostream& schema_properties(const schema_describe_helper& helper, std::ostream& os) const;
