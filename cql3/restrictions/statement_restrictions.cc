@@ -2748,13 +2748,14 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
       };
     }
     if (find_binop(_clustering_prefix_restrictions[0].filter, is_multi_column)) { // FIXME: adjust for solve_for
-      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
         for (auto& r : _clustering_prefix_restrictions | std::views::transform(&predicate::filter)) { // TODO: move to constructor, do only once.
             using namespace expr;
             const auto& binop = expr::as<binary_operator>(r);
             if (is_clustering_order(binop)) {
+              return [this] (const query_options& options) -> std::vector<query::clustering_range> {
                 return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
+              };
             }
             for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
                 auto& cv = expr::as<column_value>(element);
@@ -2765,6 +2766,7 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
                 }
             }
         }
+      return [this, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
         return get_multi_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions,
                 all_natural, all_reverse);
       };
