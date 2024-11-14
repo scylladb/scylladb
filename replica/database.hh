@@ -332,6 +332,9 @@ struct cf_stats {
 
     // How many times we build view updates only to realize it's the wrong node and drop the update
     uint64_t total_view_updates_on_wrong_node = 0;
+
+    // How many times we failed to resolve base/view pairing
+    uint64_t total_view_updates_failed_pairing = 0;
 };
 
 class table;

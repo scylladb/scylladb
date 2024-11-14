@@ -1798,7 +1798,6 @@ get_view_natural_endpoint(
         }
     }
 
-    SCYLLA_ASSERT(base_endpoints.size() == view_endpoints.size());
     auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
@@ -1808,6 +1807,13 @@ get_view_natural_endpoint(
         return {};
     }
     size_t idx = base_it - base_endpoints.begin();
+    if (idx >= view_endpoints.size()) {
+        // There are fewer view replicas than base replicas
+        // FIXME: This might still happen when reducing replication factor with tablets,
+        // see https://github.com/scylladb/scylladb/issues/21492
+        ++cf_stats.total_view_updates_failed_pairing;
+        return {};
+    }
 
     // https://github.com/scylladb/scylladb/issues/19439
     // With tablets, a node being replaced might transition to "left" state
