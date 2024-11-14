@@ -64,4 +64,8 @@ public:
             co_await func(_vec[i]);
         }
     }
+
+    const std::vector<T>& raw_vector() const {
+        return _vec;
+    }
 };
