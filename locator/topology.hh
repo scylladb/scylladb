@@ -96,6 +96,14 @@ public:
         return _dc_rack;
     }
 
+    const sstring& dc() const noexcept {
+        return _dc_rack.dc;
+    }
+
+    const sstring& rack() const noexcept {
+        return _dc_rack.rack;
+    }
+
     // Is this "localhost"?
     this_node is_this_node() const noexcept { return _is_this_node; }
 
