@@ -16,6 +16,4 @@ Solution
 2. If you are deleting an entire keyspace, repeat the procedure above for every table inside the keyspace.
 3. This behavior is controlled by the ``auto_snapshot`` flag in ``/etc/scylla/scylla.yaml``, which set to true by default. To stop taking snapshots on deletion, set that flag to false and restart all your scylla nodes.
 
-.. note:: Alternatively you can use the``rm`` Linux utility to remove the files. If you do, keep in mind that the ``rm`` Linux utility is not aware if some snapshots are still associated with existing keyspaces, but nodetool is. 
- 
-
+.. note:: Alternatively you can use the ``rm`` Linux utility to remove the files. If you do, keep in mind that the ``rm`` Linux utility is not aware if some snapshots are still associated with existing keyspaces, but nodetool is.
