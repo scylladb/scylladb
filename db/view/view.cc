@@ -1743,28 +1743,38 @@ get_view_natural_endpoint(
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto me = topology.my_host_id();
     auto my_datacenter = topology.get_datacenter();
-    std::vector<locator::host_id> base_endpoints, view_endpoints;
+    using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
+    node_vector base_endpoints, view_endpoints;
 
-    std::function<bool(const locator::host_id&)> is_candidate;
+    auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
+        if (auto* np = topology.find_node(ep)) {
+            return *np;
+        }
+        throw std::runtime_error(format("get_view_natural_endpoint: {} replica {} not found in topology", is_view ? "view" : "base", ep));
+    };
+    std::function<bool(const locator::node&)> is_candidate;
     if (network_topology) {
-        is_candidate = [&] (const locator::host_id& ep) { return topology.get_datacenter(ep) == my_datacenter; };
+        is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
     } else {
-        is_candidate = [&] (const locator::host_id&) { return true; };
+        is_candidate = [&] (const locator::node&) { return true; };
     }
+    auto process_candidate = [&] (node_vector& nodes, const locator::topology& topology, const locator::host_id& ep, bool is_view) {
+        auto& node = resolve(topology, ep, is_view);
+        if (is_candidate(node)) {
+            nodes.emplace_back(node);
+        }
+    };
 
     // We need to use get_replicas() for pairing to be stable in case base or view tablet
     // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
     for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
-        if (is_candidate(base_endpoint)) {
-            base_endpoints.push_back(base_endpoint);
-        }
+        process_candidate(base_endpoints, topology, base_endpoint, false);
     }
 
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     if (use_legacy_self_pairing) {
         for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
-                view_endpoint);
+            auto it = std::ranges::find(base_endpoints, view_endpoint, std::mem_fn(&locator::node::host_id));
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
             if (view_endpoint == me && it != base_endpoints.end()) {
@@ -1775,20 +1785,21 @@ get_view_natural_endpoint(
             // otherwise.
             if (it != base_endpoints.end()) {
                 base_endpoints.erase(it);
-            } else if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
-                view_endpoints.push_back(view_endpoint);
+            } else {
+                auto& node = resolve(view_topology, view_endpoint, true);
+                if (!network_topology || node.dc() == my_datacenter) {
+                    view_endpoints.push_back(node);
+                }
             }
         }
     } else {
         for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-            if (is_candidate(view_endpoint)) {
-                view_endpoints.push_back(view_endpoint);
-            }
+            process_candidate(view_endpoints, view_topology, view_endpoint, true);
         }
     }
 
     SCYLLA_ASSERT(base_endpoints.size() == view_endpoints.size());
-    auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
+    auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
@@ -1796,7 +1807,7 @@ get_view_natural_endpoint(
         ++cf_stats.total_view_updates_on_wrong_node;
         return {};
     }
-    auto replica = view_endpoints[base_it - base_endpoints.begin()];
+    size_t idx = base_it - base_endpoints.begin();
 
     // https://github.com/scylladb/scylladb/issues/19439
     // With tablets, a node being replaced might transition to "left" state
@@ -1805,8 +1816,9 @@ get_view_natural_endpoint(
     // but are still replicas. Therefore, there is no other sensible option
     // right now but to give up attempt to send the update or write a hint
     // to the paired, permanently down replica.
-    if (!view_topology.get_node(replica).left()) {
-        return replica;
+    const auto& node = view_endpoints[idx].get();
+    if (!node.left()) {
+        return node.host_id();
     } else {
         return std::nullopt;
     }
