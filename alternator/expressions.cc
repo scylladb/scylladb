@@ -17,7 +17,7 @@
 
 #include "seastarx.hh"
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/log.hh>
 
 #include <functional>

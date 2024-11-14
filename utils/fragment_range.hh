@@ -12,7 +12,7 @@
 #include <compare>
 #include <algorithm>
 #include <seastar/net/byteorder.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/backtrace.hh>
 
 #include "marshal_exception.hh"

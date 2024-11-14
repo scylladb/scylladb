@@ -9,7 +9,7 @@
 #include "duration.hh"
 
 #include <boost/lexical_cast.hpp>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include <cctype>
 #include <optional>

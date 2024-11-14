@@ -11,7 +11,7 @@
 #include <boost/io/ios_state.hpp>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/dns.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/future.hh>
 #include "inet_address.hh"
 

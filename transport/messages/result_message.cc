@@ -10,7 +10,7 @@
 #include "result_message.hh"
 #include "cql3/cql_statement.hh"
 #include "utils/to_string.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 namespace cql_transport::messages {
 

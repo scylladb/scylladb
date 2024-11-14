@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <variant>
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"

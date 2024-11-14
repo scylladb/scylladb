@@ -12,7 +12,7 @@
 
 #include "utils/murmur_hash.hh"
 #include "bytes.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 static const bytes full_sequence("012345678901234567890123456789012345678901234567890123456789");
 
