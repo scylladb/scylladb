@@ -12,7 +12,7 @@
 
 #include "native_scalar_function.hh"
 #include "exceptions/exceptions.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/log.hh>
 #include "cql3/cql3_type.hh"
 

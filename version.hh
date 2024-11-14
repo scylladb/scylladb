@@ -10,7 +10,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <tuple>
 
 namespace version {

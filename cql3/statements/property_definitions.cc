@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "cql3/statements/property_definitions.hh"
 #include "exceptions/exceptions.hh"
 

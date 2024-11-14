@@ -8,7 +8,7 @@
 
 #include "base64.hh"
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 // Arrays for quickly converting to and from an integer between 0 and 63,
 // and the character used in base64 encoding to represent it.

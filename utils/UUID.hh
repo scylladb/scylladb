@@ -17,7 +17,7 @@
 #include <compare>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
 #include "utils/assert.hh"

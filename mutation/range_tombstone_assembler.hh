@@ -9,7 +9,7 @@
 #pragma once
 
 #include <exception>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include "mutation/mutation_fragment_v2.hh"
 

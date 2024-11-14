@@ -14,7 +14,7 @@
 #include <unordered_set>
 
 #include <seastar/core/future.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
 
 #include "auth/resource.hh"

@@ -7,7 +7,7 @@
  */
 
 #include "rjson.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/iostream.hh>

@@ -23,7 +23,7 @@
 #include "db/system_keyspace.hh"
 #include "schema/schema.hh"
 #include "gms/gossiper.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "db/config.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "replica/database.hh"

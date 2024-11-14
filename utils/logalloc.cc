@@ -14,7 +14,7 @@
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>

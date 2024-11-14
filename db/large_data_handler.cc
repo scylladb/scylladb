@@ -7,7 +7,7 @@
  */
 
 #include "utils/assert.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"

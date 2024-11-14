@@ -12,7 +12,7 @@
 #include <algorithm>
 
 #include <seastar/core/circular_buffer.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>

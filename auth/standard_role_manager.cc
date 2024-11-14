@@ -15,7 +15,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/on_internal_error.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>

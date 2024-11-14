@@ -10,7 +10,7 @@
 #pragma once
 
 #include <concepts>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include "seastarx.hh"
 

@@ -8,7 +8,7 @@
 
 #include "auth/roles-metadata.hh"
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 

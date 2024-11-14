@@ -8,7 +8,7 @@
 
 #include "bytes.hh"
 #include <fmt/ostream.h>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 static inline int8_t hex_to_int(unsigned char c) {
     switch (c) {

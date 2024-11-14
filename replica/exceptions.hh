@@ -13,7 +13,7 @@
 #include <variant>
 
 #include <seastar/core/abort_source.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/timed_out_error.hh>
 

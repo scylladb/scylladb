@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <seastar/core/iostream.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/simple-stream.hh>
 

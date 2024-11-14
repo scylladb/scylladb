@@ -9,7 +9,7 @@
 #pragma once
 
 #include <ranges>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/weak_ptr.hh>

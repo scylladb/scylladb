@@ -10,7 +10,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <fmt/core.h>
 #include <string>
 

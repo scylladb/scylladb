@@ -17,7 +17,7 @@
 #include "concrete_types.hh"
 #include <exception>
 #include <iterator>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "types/types.hh"
 #include "utils/assert.hh"
