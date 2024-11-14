@@ -14,7 +14,9 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+
 #include "utils/atomic_vector.hh"
+#include "locator/token_metadata_fwd.hh"
 
 namespace data_dictionary {
 class keyspace_metadata;
@@ -139,7 +141,11 @@ public:
     future<> update_column_family(schema_ptr cfm, bool columns_changed);
     future<> update_user_type(user_type type);
     future<> update_view(view_ptr view, bool columns_changed);
+
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(locator::tablet_metadata_change_hint hint);
+    future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr);
     future<> update_tablet_metadata(locator::tablet_metadata_change_hint);
+
     future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(schema_ptr cfm);
     future<> drop_user_type(user_type type);

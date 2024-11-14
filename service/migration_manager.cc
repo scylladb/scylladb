@@ -22,6 +22,7 @@
 #include "service/raft/group0_state_machine.hh"
 
 #include "service/migration_listener.hh"
+#include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
@@ -513,6 +514,22 @@ future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     }, [&] (std::exception_ptr ex) {
         return fmt::format("Update view notification failed {}.{}: {}", ks_name, view_name, ex);
     });
+}
+
+static service::storage_service* get_storage_service(atomic_vector<migration_listener*>& listeners) {
+    auto listener = std::find_if(listeners.raw_vector().cbegin(), listeners.raw_vector().cend(),
+            [] (auto listener) { return dynamic_cast<service::storage_service*>(listener) != nullptr; });
+    auto ss = dynamic_cast<service::storage_service*>(*listener);
+    SCYLLA_ASSERT(ss);
+    return ss;
+}
+
+future<locator::mutable_token_metadata_ptr> migration_notifier::prepare_tablet_metadata(locator::tablet_metadata_change_hint hint) {
+    return get_storage_service(_listeners)->prepare_tablet_metadata(hint);
+}
+
+future<> migration_notifier::commit_tablet_metadata(locator::mutable_token_metadata_ptr metadata) {
+    return get_storage_service(_listeners)->commit_tablet_metadata(metadata);
 }
 
 future<> migration_notifier::update_tablet_metadata(locator::tablet_metadata_change_hint hint) {
