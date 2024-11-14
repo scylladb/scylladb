@@ -2,17 +2,17 @@ name: "Report a bug"
 description: "File a bug report."
 title: "[Bug]: "
 type: "bug"
+labels: bug
 body:
-
   - type: checkboxes
     id: terms
     attributes:
       label: Code of Conduct
       description: "This is Scylla's bug tracker, to be used for reporting bugs only.
 If you have a question about Scylla, and not a bug, please ask it in
-our mailing-list at scylladb-dev@googlegroups.com or in our slack channel. "
+our forum at https://forum.scylladb.com/ or in our slack channel https://slack.scylladb.com/ "
       options:
-        - label: I have read the disclaimer above, and I am reporting a suspected malfunction in Scylla.
+        - label: I have read the disclaimer above and am reporting a suspected malfunction in Scylla.
           required: true
 
   - type: input
@@ -23,22 +23,22 @@ our mailing-list at scylladb-dev@googlegroups.com or in our slack channel. "
       placeholder: ex. scylla-6.1.1
     validations:
       required: true
+      
   - type: input
     id: cluster-size
     attributes:
       label: Cluster Size
-      #description: 
-      #placeholder: 
     validations:
       required: true  
+      
   - type: input
     id: os
     attributes:
       label: OS
-      #description: 
       placeholder: RHEL/CentOS/Ubuntu/AWS AMI
     validations:
       required: true
+      
   - type: textarea
     id: additional-data
     attributes:
@@ -50,33 +50,34 @@ Hardware: sockets=   cores=   hyperthreading=   memory=\n
 Disks: (SSD/HDD, count)"
     validations:
       required: false
+      
   - type: textarea
     id: reproducer-steps
     attributes:
       label: Reproduction Steps
-      #description: 
       placeholder: Describe how to reproduce the problem
       value: "The steps to reproduce the problem are:"
     validations:
       required: true
+      
   - type: textarea
     id: the-problem
     attributes:
       label: What is the problem?
-      #description: Also tell us, what is the problem?
       placeholder: Describe the problem you found
       value: "The problem is that"
     validations:
       required: true
+      
   - type: textarea
     id: what-happened
     attributes:
       label: Expected behavior?
-      #description: Also tell us, what did you expect to happen?
       placeholder: Describe what should have happened
       value: "I expected that "
     validations:
       required: true
+      
   - type: textarea
     id: logs
     attributes:
