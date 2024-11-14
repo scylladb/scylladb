@@ -37,6 +37,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
@@ -50,7 +51,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     std::unordered_set<const locator::node*> nodes;
 
     nodes.insert(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal));
-    nodes.insert(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
+    nodes.insert(topo.add_or_update_endpoint(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
 
     BOOST_REQUIRE_THROW(topo.add_node(id1, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
@@ -74,12 +75,13 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
 
     auto topo = topology(cfg);
 
-    topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
 
     BOOST_REQUIRE(topo.this_node()->topology() == &topo);
 
@@ -187,9 +189,12 @@ SEASTAR_THREAD_TEST_CASE(test_add_or_update_by_host_id) {
     // We need to make the second node 'being_decommissioned', so that
     // it gets removed from ip index and we don't get the non-unique IP error.
 
-    auto topo = topology({});
-    //auto topo = topology({});
-    topo.add_node(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
+    auto topo = topology({
+        .this_host_id = id1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    });
+
+    topo.add_or_update_endpoint(id1, gms::inet_address{}, endpoint_dc_rack::default_location, node::state::normal);
     topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::being_decommissioned);
 
     topo.add_or_update_endpoint(id1, ep1, std::nullopt, node::state::bootstrapping);
@@ -228,12 +233,13 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
 
     topology::config cfg = {
         .this_endpoint = ep1,
+        .this_host_id = id1,
         .local_dc_rack = dc_rack1
     };
 
     auto topo = topology(cfg);
 
-    topo.add_node(id1, ep1, dc_rack1, node::state::normal);
+    topo.add_or_update_endpoint(id1, ep1, dc_rack1, node::state::normal);
     topo.add_node(id2, ep2, dc_rack2, node::state::normal);
 
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1, ep2}}}));
@@ -245,10 +251,11 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
     BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}}}}));
     BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
 
+    // Local endpoint cannot be removed
     topo.remove_endpoint(id1);
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{}));
-    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_endpoints(), (dc_endpoints_t{{"dc1", {ep1}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenter_racks(), (dc_racks_t{{"dc1", {{"rack1", {ep1}}}}}));
+    BOOST_REQUIRE_EQUAL(topo.get_datacenters(), (dcs_t{"dc1"}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
@@ -268,7 +275,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         topology::config{
             .this_endpoint = ip1,
-            .this_host_id = host1
+            .this_host_id = host1,
+            .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
 

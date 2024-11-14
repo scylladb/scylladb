@@ -183,6 +183,8 @@ public:
 
         bool operator==(const config&) const = default;
     };
+    struct shallow_copy{};
+    topology(shallow_copy, config cfg);
     topology(config cfg);
     topology(topology&&) noexcept;
 
@@ -194,9 +196,7 @@ public:
 public:
     const config& get_config() const noexcept { return _cfg; }
 
-    void set_host_id_cfg(host_id this_host_id) {
-        _cfg.this_host_id = this_host_id;
-    }
+    void set_host_id_cfg(host_id this_host_id);
 
     const node* this_node() const noexcept {
         return _this_node;

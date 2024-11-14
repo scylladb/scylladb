@@ -12,6 +12,7 @@
 #include <seastar/util/lazy.hh>
 #include <utility>
 
+#include "seastar/core/shard_id.hh"
 #include "utils/log.hh"
 #include "locator/topology.hh"
 #include "locator/production_snitch_base.hh"
@@ -95,13 +96,22 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
+topology::topology(shallow_copy, config cfg)
+        : _shard(this_shard_id())
+        , _cfg(cfg)
+        , _sort_by_proximity(true)
+{
+    // constructor for shallow copying of token_metadata_impl
+}
+
 topology::topology(config cfg)
         : _shard(this_shard_id())
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
-    tlogger.trace("topology[{}]: constructing using config: endpoint={} dc={} rack={}", fmt::ptr(this),
-            cfg.this_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
+    tlogger.trace("topology[{}]: constructing using config: endpoint={} id={} dc={} rack={}", fmt::ptr(this),
+            cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
+    add_node(cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack, node::state::none);
 }
 
 topology::topology(topology&& o) noexcept
@@ -136,8 +146,30 @@ topology& topology::operator=(topology&& o) noexcept {
     return *this;
 }
 
+void topology::set_host_id_cfg(host_id this_host_id) {
+    if (_cfg.this_host_id) {
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg can be caller only once current id {} new id {}",  fmt::ptr(this), _cfg.this_host_id, this_host_id));
+    }
+    if (_nodes.size() != 1) {
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while nodes size is greater than 1",  fmt::ptr(this)));
+    }
+    if (!_this_node) {
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes is null",  fmt::ptr(this)));
+    }
+    if (_this_node->host_id()) {
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes has non null id {}",  fmt::ptr(this), _this_node->host_id()));
+    }
+
+    remove_node(_this_node);
+
+    tlogger.trace("topology[{}]: set host id to {}", fmt::ptr(this), this_host_id);
+
+    _cfg.this_host_id = this_host_id;
+    add_or_update_endpoint(this_host_id, _cfg.this_endpoint);
+}
+
 future<topology> topology::clone_gently() const {
-    topology ret(_cfg);
+    topology ret(topology::shallow_copy{}, _cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -314,20 +346,24 @@ void topology::index_node(const node* node) {
         on_internal_error(tlogger, seastar::format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), node_printer(node)));
     }
 
-    // FIXME: for now we allow adding nodes with null host_id, for the following cases:
-    // 1. This node might be added with no host_id on pristine nodes.
-    // 2. Other nodes may be introduced via gossip with their endpoint only first
-    //    and their host_id is updated later on.
-    if (node->host_id()) {
-        auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node->host_id(), node);
-        if (!inserted_host_id) {
-            on_internal_error(tlogger, seastar::format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(node)));
-        }
+    // When a node is initialized before host id is known the topology is constructed with a single
+    // node with zero id
+    if (!node->host_id() && _nodes.size() != 1) {
+        on_internal_error(tlogger, fmt::format("topology[{}] try to index node with zero id while this is not a single node in the topology", fmt::ptr(this)));
+    }
+    auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node->host_id(), node);
+    if (!inserted_host_id) {
+        on_internal_error(tlogger, seastar::format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(node)));
     }
     if (node->endpoint() != inet_address{}) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->get_state() == node::state::replacing && node->get_state() == node::state::being_replaced) {
+            if (eit->second->get_state() == node::state::none && eit->second->is_this_node()) {
+                // eit->second is default entry created for local node and it is replaced by existing node withe the same ip
+                // it means this node is going to replace the existing node with the same ip, but it does not know it yet
+                // map ip to the old node
+                _nodes_by_endpoint.erase(node->endpoint());
+            } else if (eit->second->get_state() == node::state::replacing && node->get_state() == node::state::being_replaced) {
                 // replace-with-same-ip, map ip to the old node
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (eit->second->get_state() == node::state::being_replaced && node->get_state() == node::state::replacing) {
@@ -433,6 +469,7 @@ const node* topology::find_node(host_id id) const noexcept {
     if (it != _nodes_by_host_id.end()) {
         return it->second;
     }
+    tlogger.trace("topology[{}]: find_node did not find {}", fmt::ptr(this), id);
     return nullptr;
 }
 
@@ -485,7 +522,9 @@ bool topology::remove_endpoint(locator::host_id host_id)
 {
     auto node = find_node(host_id);
     tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, node_printer(node));
-    if (node) {
+    // Do not allow removing yourself from the topology
+    // The entry is needed for local writes
+    if (node && node != _this_node) {
         remove_node(node);
         return true;
     }

@@ -1681,15 +1681,6 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = get_token_metadata().get_my_id();
-    if (!replacing_a_node_with_diff_ip) {
-        auto endpoint = get_broadcast_address();
-        auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
-        if (eps) {
-            auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
-            slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
-        }
-        tmptr->update_host_id(local_host_id, get_broadcast_address());
-    }
 
     // Replicate the tokens early because once gossip runs other nodes
     // might send reads/writes to this node. Replicate it early to make

@@ -102,7 +102,7 @@ template <> struct fmt::formatter<service_level_op> : fmt::formatter<string_view
 SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
     sharded<auth::service> auth_service;
-    locator::shared_token_metadata tm({}, {});
+    locator::shared_token_metadata tm({}, {locator::topology::config{ .local_dc_rack = locator::endpoint_dc_rack::default_location }});
     sharded<abort_source> as;
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });

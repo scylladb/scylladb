@@ -50,7 +50,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
         {
             // Ring with minimum token
-            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{e.shared_token_metadata().local().get()->get_topology().get_config()});
             const auto host_id = locator::host_id{utils::UUID(0, 1)};
             tmptr->update_topology(host_id, locator::endpoint_dc_rack{"dc1", "rack1"}, locator::node::state::normal);
             tmptr->update_normal_tokens(std::unordered_set<dht::token>({dht::minimum_token()}), host_id).get();
@@ -65,7 +65,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
         }
 
         {
-            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
+            auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{e.shared_token_metadata().local().get()->get_topology().get_config()});
             const auto id1 = locator::host_id{utils::UUID(0, 1)};
             const auto id2 = locator::host_id{utils::UUID(0, 2)};
             tmptr->update_topology(id1, locator::endpoint_dc_rack{"dc1", "rack1"}, locator::node::state::normal);
