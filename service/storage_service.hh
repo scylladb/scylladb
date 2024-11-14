@@ -250,7 +250,10 @@ public:
 
     using wake_up_load_balancer = bool_class<class wake_up_load_balancer_tag>;
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr, const wake_up_load_balancer wake_up = wake_up_load_balancer::yes);
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up);
+
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;

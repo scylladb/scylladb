@@ -5524,7 +5524,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up) {
+future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (hint) {
@@ -5533,11 +5533,19 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
         tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }
     tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+    co_return tmptr;
+}
 
+future<> storage_service::commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr, const wake_up_load_balancer wake_up) {
     co_await replicate_to_all_cores(std::move(tmptr));
     if (wake_up) {
         _topology_state_machine.event.broadcast();
     }
+}
+
+future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up) {
+    co_await commit_tablet_metadata(
+            co_await prepare_tablet_metadata(hint), wake_up);
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
