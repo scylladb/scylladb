@@ -1905,6 +1905,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         struct replacement_desc {
             sstables::compaction_completion_desc desc;
             table::sstable_list_builder::result main_sstable_set_builder_result;
+            std::optional<lw_shared_ptr<sstables::sstable_set>> new_maintenance_sstables;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
     public:
@@ -1922,11 +1923,27 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
             for (auto& [cg, d] : _cg_desc) {
                 d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
                                                                   d.desc.new_sstables, d.desc.old_sstables);
+
+                if (!d.desc.old_sstables.empty()
+                        && d.main_sstable_set_builder_result.removed_sstables.size() != d.desc.old_sstables.size()) {
+                    // Not all old_sstables were removed from the main sstable set, which implies that
+                    // they don't exist there. This can happen if the input sstables were picked up from
+                    // the maintenance set during an offstrategy or scrub compaction. So, remove the old
+                    // sstables from the maintenance set. No need to add any new sstables to the maintenance
+                    // set though, as they are always added to the main set.
+                    auto builder_result = co_await _builder.build_new_list(
+                            *cg->maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), {}, d.desc.old_sstables);
+                    d.new_maintenance_sstables = std::move(builder_result.new_sstable_set);
+                }
             }
         }
         virtual void execute() override {
             for (auto&& [cg, d] : _cg_desc) {
                 cg->set_main_sstables(std::move(d.main_sstable_set_builder_result.new_sstable_set));
+                if (d.new_maintenance_sstables) {
+                    // offstrategy or scrub compaction - replace the maintenance set
+                    cg->set_maintenance_sstables(std::move(d.new_maintenance_sstables.value()));
+                }
             }
             // FIXME: the following is not exception safe
             _t.refresh_compound_sstable_set();
