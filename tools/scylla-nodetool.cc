@@ -2355,7 +2355,11 @@ public:
     double compression_ratio() {
         return get<double>("compression_ratio");
     }
-    uint64_t estimated_row_count() {
+    uint64_t estimated_partition_count() {
+        // The API endpoint still uses "row" in "/metrics/estimated_row_count"
+        // although it returns partition counts. The endpoint name remains unchanged
+        // for backward compatibility while server-side variables were renamed.
+        // See also 26ac2c23ef22186dcca73c6b88a3dda34549d2d0
         return get<uint64_t>("estimated_row_count");
     }
     uint64_t memtable_columns_count() {
@@ -2477,7 +2481,7 @@ public:
         map.emplace("off_heap_memory_used_total",
                     fmt::to_string(file_size_printer(total_off_heap_size, human_readable)));
         map.emplace("sstable_compression_ratio", compression_ratio());
-        map.emplace("number_of_partitions_estimate", estimated_row_count());
+        map.emplace("number_of_partitions_estimate", estimated_partition_count());
         map.emplace("memtable_cell_count", memtable_columns_count());
         map.emplace("memtable_data_size",
                     fmt::to_string(file_size_printer(memtable_live_data_size(), human_readable)));
@@ -2543,7 +2547,7 @@ public:
                                     compression_metadata_off_heap_mem_size);
         fmt::print("\t\tOff heap memory used (total): {}\n", file_size_printer(total_off_heap_size, human_readable));
         fmt::print("\t\tSSTable Compression Ratio: {:.1f}\n", compression_ratio());
-        fmt::print("\t\tNumber of partitions (estimate): {}\n", estimated_row_count());
+        fmt::print("\t\tNumber of partitions (estimate): {}\n", estimated_partition_count());
         fmt::print("\t\tMemtable cell count: {}\n", memtable_columns_count());
         fmt::print("\t\tMemtable data size: {}\n", memtable_live_data_size());
         fmt::print("\t\tMemtable off heap memory used: {}\n", file_size_printer(memtable_off_heap_mem_size, human_readable));
