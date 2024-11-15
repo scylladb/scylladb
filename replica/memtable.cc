@@ -124,8 +124,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
-                   [this] (size_t freed) { remove_flushed_memory(freed); })
+        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , _table_shared_data(table_shared_data)
@@ -149,23 +148,17 @@ memtable::~memtable() {
     logalloc::region::unlisten();
 }
 
-uint64_t memtable::dirty_size() const {
-    return occupancy().total_space();
-}
-
 void memtable::evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept {
     e.partition().evict(cleaner);
     nr_partitions--;
 }
 
 void memtable::clear() noexcept {
-    auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose([this] (memtable_entry* e) noexcept {
             evict_entry(*e, _cleaner);
         });
     });
-    remove_flushed_memory(dirty_before - dirty_size());
 }
 
 future<> memtable::clear_gently() noexcept {
@@ -176,7 +169,6 @@ future<> memtable::clear_gently() noexcept {
             auto p = std::move(partitions);
             nr_partitions = 0;
             while (!p.empty()) {
-                auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
                     while (!p.empty()) {
                         if (p.begin()->clear_gently() == stop_iteration::no) {
@@ -188,7 +180,6 @@ future<> memtable::clear_gently() noexcept {
                         }
                     }
                 });
-                remove_flushed_memory(dirty_before - dirty_size());
                 seastar::thread::yield();
             }
 
@@ -529,13 +520,16 @@ public:
 
 void memtable::add_flushed_memory(uint64_t delta) {
     _flushed_memory += delta;
-    _dirty_mgr.account_potentially_cleaned_up_memory(this, delta);
+    if (_flushed_memory > 0) {
+        _dirty_mgr.account_potentially_cleaned_up_memory(this, std::min<int64_t>(delta, _flushed_memory));
+    }
 }
 
 void memtable::remove_flushed_memory(uint64_t delta) {
-    delta = std::min(_flushed_memory, delta);
+    if (_flushed_memory > 0) {
+        _dirty_mgr.revert_potentially_cleaned_up_memory(this, std::min<int64_t>(delta, _flushed_memory));
+    }
     _flushed_memory -= delta;
-    _dirty_mgr.revert_potentially_cleaned_up_memory(this, delta);
 }
 
 void memtable::on_detach_from_region_group() noexcept {
@@ -544,8 +538,11 @@ void memtable::on_detach_from_region_group() noexcept {
 }
 
 void memtable::revert_flushed_memory() noexcept {
-    _dirty_mgr.revert_potentially_cleaned_up_memory(this, _flushed_memory);
+    if (_flushed_memory > 0) {
+        _dirty_mgr.revert_potentially_cleaned_up_memory(this, _flushed_memory);
+    }
     _flushed_memory = 0;
+    _total_memory_low_watermark_during_flush = _total_memory;
 }
 
 class flush_memory_accounter {
@@ -558,7 +555,7 @@ public:
         : _mt(mt)
 	{}
     ~flush_memory_accounter() {
-        SCYLLA_ASSERT(_mt._flushed_memory <= _mt.occupancy().total_space());
+        SCYLLA_ASSERT(_mt._flushed_memory <= static_cast<int64_t>(_mt.occupancy().total_space()));
     }
     uint64_t compute_size(memtable_entry& e, partition_snapshot& snp) {
         return e.size_in_allocator_without_rows(_mt.allocator())
@@ -751,6 +748,7 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
 mutation_reader
 memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
     if (!_merged_into_cache) {
+        revert_flushed_memory();
         return make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
@@ -881,8 +879,10 @@ auto fmt::formatter<replica::memtable>::format(replica::memtable& mt,
 }
 
 void replica::memtable::increase_usage(logalloc::region* r, ssize_t delta) {
+    SCYLLA_ASSERT(delta >= 0);
     _dirty_mgr.region_group().increase_usage(r);
     _dirty_mgr.region_group().update_unspooled(delta);
+    _total_memory += delta;
 }
 
 void replica::memtable::decrease_evictable_usage(logalloc::region* r) {
@@ -890,8 +890,14 @@ void replica::memtable::decrease_evictable_usage(logalloc::region* r) {
 }
 
 void replica::memtable::decrease_usage(logalloc::region* r, ssize_t delta) {
+    SCYLLA_ASSERT(delta <= 0);
     _dirty_mgr.region_group().decrease_usage(r);
     _dirty_mgr.region_group().update_unspooled(delta);
+    _total_memory += delta;
+    if (_total_memory < _total_memory_low_watermark_during_flush) {
+        remove_flushed_memory(_total_memory_low_watermark_during_flush - _total_memory);
+        _total_memory_low_watermark_during_flush = _total_memory;
+    }
 }
 
 void replica::memtable::add(logalloc::region* r) {
