@@ -72,7 +72,7 @@ Off heap memory used (total)                      The memory used by memtable, b
 ------------------------------------------------  ---------------------------------------------------------------------------------
 SSTable Compression Ratio                         The ratio of the SSTable compression
 ------------------------------------------------  ---------------------------------------------------------------------------------
-Number of keys (estimate)                         The estimated row count (based on the estimated histogram)
+Number of partitions (estimate)                   The estimated partition count (based on the estimated histogram)
 ------------------------------------------------  ---------------------------------------------------------------------------------
 Memtable cell count                               memtable column count
 ------------------------------------------------  ---------------------------------------------------------------------------------
