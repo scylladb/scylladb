@@ -17,6 +17,7 @@
 #include "schema/schema_registry.hh"
 
 #include <seastar/core/distributed.hh>
+#include <unordered_map>
 
 namespace db {
 
@@ -69,12 +70,8 @@ struct affected_user_types_per_shard {
 // groups UDTs based on what is happening to them during schema change
 using affected_user_types = std::vector<affected_user_types_per_shard>;
 
-// schema_diff represents what is happening with tables or views during schema merge
-struct schema_diff {
-    struct dropped_schema {
-        global_schema_ptr schema;
-    };
-
+// global_schema_diff allows safe cross shard access, upon creation it assures that schemas are registered
+struct global_schema_diff {
     struct altered_schema {
         global_schema_ptr old_schema;
         global_schema_ptr new_schema;
@@ -82,17 +79,37 @@ struct schema_diff {
 
     std::vector<global_schema_ptr> created;
     std::vector<altered_schema> altered;
-    std::vector<dropped_schema> dropped;
+    std::vector<global_schema_ptr> dropped;
+};
+
+// schema_diff represents what is happening with tables or views during schema merge
+struct schema_diff {
+    struct altered_schema {
+        schema_ptr old_schema;
+        schema_ptr new_schema;
+    };
+
+    std::vector<schema_ptr> created;
+    std::vector<altered_schema> altered;
+    std::vector<schema_ptr> dropped;
 
     size_t size() const {
         return created.size() + altered.size() + dropped.size();
     }
+
+    global_schema_diff global() const;
 };
 
 struct affected_tables_and_views {
     schema_diff tables;
     schema_diff views;
     std::vector<bool> columns_changed;
+
+    replica::tables_metadata_lock_on_all_shards locks;
+    std::unordered_map<table_id, replica::global_table_ptr> table_shards;
+
+    locator::mutable_token_metadata_ptr new_token_metadata; // represents token metadata after updating tablets metadata, nullptr if there was no change
+    std::vector<std::function<future<>()>> cleanups;
 };
 
 // We wrap it with pointer because change_batch needs to be constructed and destructed
@@ -170,6 +187,8 @@ public:
 
 private:
     void commit_on_shard(replica::database& db);
+    void commit_tables_and_views();
+    future<> finalize_tables_and_views();
 };
 
 }
