@@ -15,7 +15,6 @@
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
 #include "partition_snapshot_row_cursor.hh"
-#include <boost/range/algorithm/heap_algorithm.hpp>
 #include <any>
 
 extern seastar::logger mplog;
