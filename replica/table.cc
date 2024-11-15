@@ -1808,53 +1808,6 @@ compaction_group::delete_unused_sstables(sstables::compaction_completion_desc de
 }
 
 future<>
-compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::compaction_completion_desc desc) {
-    class sstable_lists_updater : public row_cache::external_updater_impl {
-        using sstables_t = std::vector<sstables::shared_sstable>;
-        table& _t;
-        compaction_group& _cg;
-        table::sstable_list_builder _builder;
-        const sstables_t& _old_maintenance;
-        const sstables_t& _new_main;
-        lw_shared_ptr<sstables::sstable_set> _new_maintenance_list;
-        lw_shared_ptr<sstables::sstable_set> _new_main_list;
-    public:
-        explicit sstable_lists_updater(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main)
-                : _t(cg._t), _cg(cg), _builder(std::move(permit)), _old_maintenance(old_maintenance), _new_main(new_main) {
-        }
-        virtual future<> prepare() override {
-            sstables_t empty;
-            // adding new sstables, created by off-strategy operation, to main set
-            _new_main_list = (co_await _builder.build_new_list(*_cg.main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty)).new_sstable_set;
-            // removing old sstables, used as input by off-strategy, from the maintenance set
-            _new_maintenance_list = (co_await _builder.build_new_list(*_cg.maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance)).new_sstable_set;
-        }
-        virtual void execute() override {
-            _cg.set_main_sstables(std::move(_new_main_list));
-            _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
-            // FIXME: the following is not exception safe
-            _t.refresh_compound_sstable_set();
-            // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
-            _cg.backlog_tracker_adjust_charges({}, _new_main);
-        }
-        static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, const sstables_t& old_maintenance, const sstables_t& new_main) {
-            return std::make_unique<sstable_lists_updater>(cg, std::move(permit), old_maintenance, new_main);
-        }
-    };
-    auto permit = co_await seastar::get_units(_t._sstable_set_mutation_sem, 1);
-    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, std::move(permit), desc.old_sstables, desc.new_sstables));
-
-    // row_cache::invalidate() is only used to synchronize sstable list updates, to prevent race conditions from occurring,
-    // meaning nothing is actually invalidated.
-    dht::partition_range_vector empty_ranges = {};
-    co_await _t.get_row_cache().invalidate(std::move(updater), std::move(empty_ranges));
-    _t.get_row_cache().refresh_snapshot();
-    _t.rebuild_statistics();
-
-    co_await delete_unused_sstables(std::move(desc));
-}
-
-future<>
 compaction_group::update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc) {
     // Build a new list of _sstables: We remove from the existing list the
     // tables we compacted (by now, there might be more sstables flushed
