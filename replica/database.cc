@@ -968,7 +968,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
+std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     if (schema->is_view()) {
         try {
             auto base_schema = find_schema(schema->view_info()->base_id());
@@ -981,7 +981,12 @@ std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr s
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
     if (auto pt_rs = rs.maybe_as_per_table()) {
-        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
+        auto metadata_ptr = not_commited_new_metadata;
+        if (!metadata_ptr) {
+            // use the current one
+            metadata_ptr = _shared_token_metadata.get();
+        }
+        erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
         erm = ks.get_vnode_effective_replication_map();
     }
@@ -1128,8 +1133,7 @@ future<tables_metadata_lock_on_all_shards> database::prepare_tables_metadata_cha
     co_return locks;
 }
 
-future<global_table_ptr> database::prepare_drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
-    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+future<global_table_ptr> database::prepare_drop_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     co_return co_await get_table_on_all_shards(sharded_db, uuid);;
 }
 
@@ -1171,7 +1175,8 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
 future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         sstring ks_name, sstring cf_name, bool with_snapshot) {
     auto locks = co_await prepare_tables_metadata_change_on_all_shards(sharded_db);
-    auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, ks_name, cf_name);
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, uuid);
     co_await sharded_db.invoke_on_all([&] (database& db) {
         return db.drop_table(sharded_db, ks_name, cf_name, with_snapshot, table_shards);
     });
