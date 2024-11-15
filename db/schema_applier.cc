@@ -246,7 +246,9 @@ static void maybe_delete_schema_version(mutation& m) {
     }
 }
 
-static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after)
+static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy,
+                                                 const schema_result& before, const schema_result& after,
+                                                 const schema_result& sk_before, const schema_result& sk_after)
 {
     /*
      * - we don't care about entriesOnlyOnLeft() or entriesInCommon(), because only the changes are of interest to us
@@ -259,22 +261,35 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
      *   to this node
      */
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
+    auto sk_diff = difference(sk_before, sk_after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     auto& created = diff.entries_only_on_right;
     auto& altered = diff.entries_differing;
     auto& dropped = diff.entries_only_on_left;
 
+    // For the ALTER case, we have to also consider changes made to SCYLLA_KEYSPACES, not only to KEYSPACES:
+    // 1. changes made to non-null columns...
+    altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
+    // 2. ... and new or deleted entries - these change only when ALTERing, not CREATEing or DROPing
+    for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
+        if (!created.contains(ks) && !dropped.contains(ks)) {
+            altered.emplace(ks);
+        }
+    }
+
     auto& sharded_db = proxy.local().get_db();
     for (auto& name : created) {
         slogger.info("Creating keyspace {}", name);
+        auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto ksm = co_await create_keyspace_from_schema_partition(proxy,
-                schema_result_value_type{name, after.at(name)});
+                schema_result_value_type{name, after.at(name)}, sk_after_v);
         co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
     }
     for (auto& name : altered) {
         slogger.info("Altering keyspace {}", name);
+        auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
         auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
-                schema_result_value_type{name, after.at(name)});
+                schema_result_value_type{name, after.at(name)}, sk_after_v);
         co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
     for (auto& key : dropped) {
@@ -787,6 +802,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
 
     // current state of the schema
     auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
     auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
@@ -798,6 +814,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
 
     // with new data applied
     auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+    auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
     auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
     auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
@@ -805,7 +822,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
 
-    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
+    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces),
+                                                                   std::move(old_scylla_keyspaces), std::move(new_scylla_keyspaces));
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
     co_await merge_tables_and_views(proxy, sys_ks,
         std::move(old_column_families), std::move(new_column_families),

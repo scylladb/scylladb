@@ -5804,6 +5804,18 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_select) {
     }, tablet_cql_test_config());
 }
 
+// Reproduces #20768
+SEASTAR_TEST_CASE(test_alter_keyspace_updates_in_memory_objects_with_data_from_system_schema_scylla_keyspaces) {
+        return do_with_cql_env_thread([] (cql_test_env& e) {
+            e.execute_cql("create keyspace ks_tablet with replication = { 'class': 'NetworkTopologyStrategy', "
+                          "'replication_factor': 1 } and tablets = { 'initial': 1 }").get();
+            e.execute_cql("alter keyspace ks_tablet with tablets = { 'initial': 2 }").get();
+            e.execute_cql("alter keyspace ks_tablet with tablets = { 'initial': 3 }").get();
+            auto& ks = e.local_db().find_keyspace("ks_tablet");
+            BOOST_REQUIRE(ks.metadata()->initial_tablets() == 3);
+        }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
