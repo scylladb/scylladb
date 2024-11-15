@@ -356,31 +356,30 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 }
 
 future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
-    return futurize_invoke([this, from, ack_msg_digest = std::move(ack_msg_digest)] () mutable {
-        /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
-        std::map<inet_address, endpoint_state> delta_ep_state_map;
-        for (auto g_digest : ack_msg_digest) {
-            inet_address addr = g_digest.get_endpoint();
-            const auto es = get_endpoint_state_ptr(addr);
-            if (!es || es->get_heart_beat_state().get_generation() < g_digest.get_generation()) {
-                continue;
-            }
-            // Local generation for addr may have been increased since the
-            // current node sent an initial SYN. Comparing versions across
-            // different generations in get_state_for_version_bigger_than
-            // could result in losing some app states with smaller versions.
-            const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
-                ? version_type(0)
-                : g_digest.get_max_version();
-            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, version);
-            if (local_ep_state_ptr) {
-                delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
-            }
+    /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+    std::map<inet_address, endpoint_state> delta_ep_state_map;
+    for (auto g_digest : ack_msg_digest) {
+        inet_address addr = g_digest.get_endpoint();
+        const auto es = get_endpoint_state_ptr(addr);
+        if (!es || es->get_heart_beat_state().get_generation() < g_digest.get_generation()) {
+            continue;
         }
-        gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-        logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
-        return ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
-    });
+        // Local generation for addr may have been increased since the
+        // current node sent an initial SYN. Comparing versions across
+        // different generations in get_state_for_version_bigger_than
+        // could result in losing some app states with smaller versions.
+        const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
+            ? version_type(0)
+            : g_digest.get_max_version();
+        auto local_ep_state_ptr = get_state_for_version_bigger_than(addr, version);
+        if (local_ep_state_ptr) {
+            delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+        }
+    }
+    gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
+    logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
 }
 
 // Depends on
