@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <chrono>
 #include <fmt/ranges.h>
 
 #include <seastar/core/abort_source.hh>
@@ -26,11 +27,13 @@
 #include "dht/boot_strapper.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
 #include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
 #include "mutation/async_utils.hh"
+#include "raft/raft.hh"
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
@@ -82,6 +85,18 @@ future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_sou
         co_await sleep_abortable(std::chrono::milliseconds(5), as);
     }
 }
+
+namespace {
+// Doesn't throw error on absence of values.
+sstring get_application_state_gently(const gms::application_state_map& epmap, gms::application_state app_state) {
+    const auto it = epmap.find(app_state);
+    if (it == epmap.end()) {
+        return sstring{};
+    }
+    // it's versioned_value::value(), not std::optional::value() - it does not throw
+    return it->second.value();
+}
+} // namespace
 
 class topology_coordinator : public endpoint_lifecycle_subscriber {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -722,6 +737,78 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (...) {
                     rtlogger.debug("CDC generation publisher: sleep failed: {}", std::current_exception());
                 }
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    // If a node crashes after initiating gossip and before joining group0, it becomes orphan and
+    // remains in gossip. This background fiber periodically checks for such nodes and purges those
+    // entries from gossiper by committing the node as left in raft.
+    future<> gossiper_orphan_remover_fiber() {
+        rtlogger.debug("start gossiper orphan remover fiber");
+        bool do_speedup_fiber = false;
+        co_await utils::get_local_injector().inject("fast_orphan_removal_fiber", [&](auto& handler) -> future<> {
+            do_speedup_fiber = true;
+            // While testing, orphan ip is introduced, and its presence is captured. Wait is added before remover thread so that the presence of orphan ip is
+            // confirmed and the difference of gossiper ips before and after this thread application can be easily asserted.
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+        });
+        while (!_as.abort_requested()) {
+            try {
+                auto guard = co_await start_operation();
+                std::vector<canonical_mutation> updates;
+                int32_t timeout = 60;
+                co_await utils::get_local_injector().inject("speedup_orphan_removal", [&](auto& handler) -> future<> {
+                    // Removes all unjoined nodes. Just for testing purposes.
+                    timeout = 0;
+                    co_return;
+                });
+                std::string reason = ::format("Ban the orphan nodes in group0. Orphan nodes HostId/IP:");
+                _gossiper.for_each_endpoint_state([&](const gms::inet_address& addr, const gms::endpoint_state& eps) -> void {
+                    // Since generation is in seconds unit, converting current time to seconds eases comparison computations.
+                    auto current_timestamp =
+                            std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+                    auto generation = eps.get_heart_beat_state().get_generation().value();
+                    auto host_id = eps.get_host_id();
+                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(addr)) {
+                        topology_mutation_builder builder(guard.write_timestamp());
+                        // This topology mutation moves a node to left state and bans it. Hence, the value of below fields are not useful.
+                        // The dummy_value used for few fields indicates the trivialness of this row entry, and is used to detect this special case.
+                        static constexpr uint32_t dummy_value = 0;
+                        builder.with_node(raft::server_id{host_id.id})
+                                .set("datacenter", get_application_state_gently(eps.get_application_state_map(), gms::application_state::DC))
+                                .set("rack", get_application_state_gently(eps.get_application_state_map(), gms::application_state::RACK))
+                                .set("release_version", get_application_state_gently(eps.get_application_state_map(), gms::application_state::RELEASE_VERSION))
+                                .set("num_tokens", dummy_value)
+                                .set("tokens_string", sstring{})
+                                .set("shard_count", dummy_value)
+                                .set("ignore_msb", dummy_value)
+                                .set("request_id", dummy_value)
+                                .set("cleanup_status", cleanup_status::clean)
+                                .set("node_state", node_state::left);
+                        reason.append(::format(" {}/{},", host_id, addr));
+                        updates.push_back({builder.build()});
+                    }
+                });
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), reason);
+                }
+
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("gossiper orphan remover fiber aborted");
+            } catch (seastar::abort_requested_exception) {
+                rtlogger.debug("gossiper orphan remover fiber aborted");
+            } catch (group0_concurrent_modification&) {
+            } catch (term_changed_error&) {
+                rtlogger.debug("gossiper orphan remover fiber notices term change {} -> {}", _term, _raft.get_current_term());
+            } catch (...) {
+                rtlogger.error("gossiper orphan remover fiber got error {}", std::current_exception());
+            }
+            try {
+                co_await seastar::sleep_abortable(do_speedup_fiber ? std::chrono::milliseconds(1) : std::chrono::seconds(10), _as);
+            } catch (...) {
+                rtlogger.debug("gossiper orphan remover: sleep failed: {}", std::current_exception());
             }
             co_await coroutine::maybe_yield();
         }
@@ -3061,6 +3148,7 @@ future<> topology_coordinator::run() {
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
+    auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3099,6 +3187,7 @@ future<> topology_coordinator::run() {
     co_await _async_gate.close();
     co_await std::move(tablet_load_stats_refresher);
     co_await std::move(cdc_generation_publisher);
+    co_await std::move(gossiper_orphan_remover);
 }
 
 future<> topology_coordinator::stop() {
