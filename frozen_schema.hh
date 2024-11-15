@@ -31,3 +31,14 @@ public:
     schema_ptr unfreeze(const db::schema_ctxt&, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
     const bytes_ostream& representation() const;
 };
+
+// To unfreeze view without base table added to schema registry
+// we need base_info.
+class frozen_schema_with_base_info : public frozen_schema {
+public:
+    frozen_schema_with_base_info(const schema_ptr& c);
+    schema_ptr unfreeze(const db::schema_ctxt& ctxt) const;
+private:
+    // Set only for views.
+    std::optional<db::view::base_dependent_view_info> base_info;
+};
