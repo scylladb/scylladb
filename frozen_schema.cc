@@ -9,6 +9,7 @@
 #include "frozen_schema.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view.hh"
+#include "view_info.hh"
 #include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -47,4 +48,14 @@ frozen_schema::frozen_schema(bytes_ostream b)
 const bytes_ostream& frozen_schema::representation() const
 {
     return _data;
+}
+
+frozen_schema_with_base_info::frozen_schema_with_base_info(const schema_ptr& c) : frozen_schema(c) {
+    if (c->is_view()) {
+        base_info = c->view_info()->base_info();
+    }
+}
+
+schema_ptr frozen_schema_with_base_info::unfreeze(const db::schema_ctxt& ctxt) const {
+    return frozen_schema::unfreeze(ctxt, base_info);
 }

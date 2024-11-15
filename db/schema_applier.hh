@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "frozen_schema.hh"
 #include "mutation/mutation.hh"
 #include <seastar/core/future.hh>
 #include "service/storage_proxy.hh"
@@ -17,8 +18,12 @@
 #include "data_dictionary/user_types_metadata.hh"
 #include "schema/schema_registry.hh"
 #include "service/storage_service.hh"
+#include "replica/database.hh"
+#include "replica/global_table_ptr.hh"
+#include "replica/tables_metadata_lock.hh"
 
 #include <seastar/core/distributed.hh>
+#include <unordered_map>
 
 namespace db {
 
@@ -89,30 +94,53 @@ public:
     in_progress_types_storage_per_shard& local();
 };
 
-// schema_diff represents what is happening with tables or views during schema merge
-struct schema_diff {
-    struct dropped_schema {
-        global_schema_ptr schema;
-    };
-
+struct frozen_schema_diff {
     struct altered_schema {
-        global_schema_ptr old_schema;
-        global_schema_ptr new_schema;
+        frozen_schema_with_base_info old_schema;
+        frozen_schema_with_base_info new_schema;
+    };
+    std::vector<frozen_schema_with_base_info> created;
+    std::vector<altered_schema> altered;
+    std::vector<frozen_schema_with_base_info> dropped;
+};
+
+// schema_diff represents what is happening with tables or views during schema merge
+struct schema_diff_per_shard {
+    struct altered_schema {
+        schema_ptr old_schema;
+        schema_ptr new_schema;
     };
 
-    std::vector<global_schema_ptr> created;
+    std::vector<schema_ptr> created;
     std::vector<altered_schema> altered;
-    std::vector<dropped_schema> dropped;
+    std::vector<schema_ptr> dropped;
 
-    size_t size() const {
-        return created.size() + altered.size() + dropped.size();
-    }
+    future<frozen_schema_diff> freeze() const;
+
+    static future<schema_diff_per_shard> copy_from(replica::database&, in_progress_types_storage&, const frozen_schema_diff& oth);
+};
+
+
+class new_token_metadata {
+    std::vector<locator::mutable_token_metadata_ptr> shards{smp::count};
+public:
+    locator::mutable_token_metadata_ptr& local();
+    future<> destroy();
+};
+
+struct affected_tables_and_views_per_shard {
+    schema_diff_per_shard tables;
+    schema_diff_per_shard views;
+    std::vector<bool> columns_changed;
 };
 
 struct affected_tables_and_views {
-    schema_diff tables;
-    schema_diff views;
-    std::vector<bool> columns_changed;
+    sharded<affected_tables_and_views_per_shard> tables_and_views;
+
+    std::unique_ptr<replica::tables_metadata_lock_on_all_shards> locks;
+    std::unordered_map<table_id, replica::global_table_ptr> table_shards;
+
+    new_token_metadata new_token_metadata; // represents token metadata after updating tablets metadata, nullptr if there was no change
 };
 
 // We wrap it with pointer because change_batch needs to be constructed and destructed
@@ -174,6 +202,8 @@ public:
     future<> destroy();
 private:
     void commit_on_shard(replica::database& db);
+    void commit_tables_and_views();
+    future<> finalize_tables_and_views();
 };
 
 }

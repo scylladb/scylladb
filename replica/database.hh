@@ -1754,7 +1754,7 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    std::function<future<>()> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
+    std::function<future<>()> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
     future<> make_column_family_directory(schema_ptr schema);
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
 
@@ -1949,8 +1949,7 @@ public:
     // Drops the table and removes the table directory if there are no snapshots,
     // it's executed in 3 steps: prepare, drop and cleanup so that the middle step
     // (actual drop) could be atomic.
-    static future<global_table_ptr> prepare_drop_table_on_all_shards(sharded<database>& sharded_db,
-            sstring ks_name, sstring cf_name);
+    static future<global_table_ptr> prepare_drop_table_on_all_shards(sharded<database>& sharded_db, table_id uuid);
     // drop_table should be called on all shards
     static void drop_table(sharded<database>& sharded_db,
             sstring ks_name, sstring cf_name,
