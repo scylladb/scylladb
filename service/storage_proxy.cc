@@ -3969,7 +3969,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 tracing::set_batchlog_endpoints(_trace_state, _batchlog_endpoints);
         }
 
-        future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
+        future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) const {
             return _p.mutate_prepare(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 return _p.create_write_response_handler(_ermp, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
@@ -3977,12 +3977,12 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
             }));
         }
-        future<result<>> sync_write_to_batchlog() {
+        future<result<>> sync_write_to_batchlog() const {
             auto m = _p.do_get_batchlog_mutation_for(_schema, _mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
-        future<> async_remove_from_batchlog() {
+        future<> async_remove_from_batchlog() const {
             // delete batch
             auto key = partition_key::from_exploded(*_schema, {uuid_type->decompose(_batch_uuid)});
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
