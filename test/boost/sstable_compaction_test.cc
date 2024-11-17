@@ -76,6 +76,7 @@
 namespace fs = std::filesystem;
 
 using namespace sstables;
+using compress_sstable = tests::random_schema_specification::compress_sstable;
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -483,6 +484,122 @@ SEASTAR_TEST_CASE(compact_02) {
         // Check that the compacted sstable contains all keys.
         check_compacted_sstables(env, std::move(res)).get();
     });
+}
+
+template <typename ExceptionType>
+static void compact_corrupted_by_compression_mode(const std::string& tname,
+        compress_sstable compress,
+        sstables::compaction_type_options&& options,
+        const sstring& error_msg)
+{
+    test_env::do_with_async([&] (test_env& env) {
+        auto compact = [&] (schema_ptr schema, std::vector<shared_sstable> to_compact) {
+            auto sst_gen = env.make_sst_factory(schema);
+            auto cf = env.make_table_for_tests(schema);
+            auto stop_cf = deferred_stop(cf);
+            for (auto&& sst : to_compact) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            sstables::compaction_descriptor desc(to_compact,
+                    sstables::compaction_descriptor::default_level,
+                    sstables::compaction_descriptor::default_max_sstable_bytes,
+                    run_id::create_random_id(),
+                    options);
+            desc.sharder = &schema->get_sharder(); // needed to support resharding compaction
+            compact_sstables(env, desc, cf, sst_gen).get();
+        };
+        auto test_failing_compact = [&compact] (schema_ptr schema, std::vector<shared_sstable> to_compact, const sstring& compaction_err_msg, const sstring& integrity_err_msg) {
+            try {
+                compact(schema, to_compact);
+                BOOST_FAIL("expecting compaction to fail with exception");
+            } catch (const ExceptionType& e) {
+                std::string what = e.what();
+                BOOST_REQUIRE(what.find(compaction_err_msg) != std::string::npos);
+                BOOST_REQUIRE(what.find(integrity_err_msg) != std::string::npos);
+            }
+        };
+
+        auto random_spec = tests::make_random_schema_specification(
+                tname,
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8),
+                compress);
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        testlog.info("Compacting {}compressed SSTable with invalid checksums", compress ? "" : "un");
+
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst = make_sstable_containing(env.make_sstable(schema), muts);
+        {
+            auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+            auto close_f = deferred_close(f);
+            const auto wbuf_align = f.memory_dma_alignment();
+            const auto wbuf_len = f.disk_write_dma_alignment();
+            auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+            std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+            f.dma_write(0, wbuf.get(), wbuf_len).get();
+        }
+        test_failing_compact(schema, {sst}, error_msg, "failed checksum");
+
+        testlog.info("Compacting {}compressed SSTable with invalid digest", compress ? "" : "un");
+
+        sst = make_sstable_containing(env.make_sstable(schema), muts);
+        {
+            auto f = open_file_dma(sstables::test(sst).filename(component_type::Digest).native(), open_flags::rw).get();
+            auto stream = make_file_input_stream(f);
+            auto close_stream = deferred_close(stream);
+            auto digest_str = util::read_entire_stream_contiguous(stream).get();
+            auto digest = boost::lexical_cast<uint32_t>(digest_str);
+            auto new_digest = to_sstring<bytes>(digest + 1); // a random invalid digest
+            f.dma_write(0, new_digest.c_str(), new_digest.size()).get();
+        }
+        test_failing_compact(schema, {sst}, error_msg, "Digest mismatch");
+    }).get();
+}
+
+template <typename ExceptionType>
+static void compact_corrupted(const std::string& tname, sstables::compaction_type_options&& options, const sstring& error_msg) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        compact_corrupted_by_compression_mode<ExceptionType>(tname, compress, std::move(options), error_msg);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_regular) {
+    compact_corrupted<sstables::malformed_sstable_exception>(get_name(),
+            sstables::compaction_type_options::make_regular(),
+            "Failed to read partition from SSTable");
+}
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_scrub) {
+    using scrub_mode = sstables::compaction_type_options::scrub::mode;
+    compact_corrupted<sstables::compaction_aborted_exception>(get_name(),
+            sstables::compaction_type_options::make_scrub(scrub_mode::segregate),
+            "scrub compaction failed due to unrecoverable error: sstables::malformed_sstable_exception");
+}
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_cleanup) {
+    compact_corrupted<sstables::malformed_sstable_exception>(get_name(),
+            sstables::compaction_type_options::make_cleanup(),
+            "Failed to read partition from SSTable");
+}
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshape) {
+    compact_corrupted<sstables::malformed_sstable_exception>(get_name(),
+            sstables::compaction_type_options::make_reshape(),
+            "Failed to read partition from SSTable");
+}
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshard) {
+    compact_corrupted<sstables::malformed_sstable_exception>(get_name(),
+            sstables::compaction_type_options::make_reshard(),
+            "Failed to read partition from SSTable");
+}
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_split) {
+    auto classify_fn = [] (dht::token t) -> mutation_writer::token_group_id { return 1; };
+    compact_corrupted<sstables::malformed_sstable_exception>(get_name(),
+            sstables::compaction_type_options::make_split(classify_fn),
+            "Failed to read partition from SSTable");
 }
 
 // Leveled compaction strategy tests
@@ -2187,8 +2304,6 @@ static void verify_fragments(std::vector<sstables::shared_sstable> ssts, reader_
     }
     r.produces_end_of_stream();
 };
-
-using compress_sstable = tests::random_schema_specification::compress_sstable;
 
 // A framework for scrub-related tests.
 // Lives in a seastar thread

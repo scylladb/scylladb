@@ -186,7 +186,6 @@ public:
     using format_types = sstable_format_types;
     using manager_list_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     using manager_set_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
-    using integrity_check = bool_class<class integrity_check_tag>;
 public:
     sstable(schema_ptr schema,
             const data_dictionary::storage_options& storage,
@@ -275,7 +274,8 @@ public:
             tracing::trace_state_ptr trace_state = {},
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
-            read_monitor& monitor = default_read_monitor());
+            read_monitor& monitor = default_read_monitor(),
+            integrity_check integrity = integrity_check::no);
 
     // A reader which doesn't use the index at all. It reads everything from the
     // sstable and it doesn't support skipping.
@@ -1011,13 +1011,13 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, sstable::integrity_check);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
+    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check);
     template <typename DataConsumeRowsContext>
     friend std::unique_ptr<DataConsumeRowsContext>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::integrity_check);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;

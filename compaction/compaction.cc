@@ -1176,7 +1176,8 @@ public:
                 mr_fwd,
                 unwrap_monitor_generator(),
                 default_sstable_predicate(),
-                &_reader_statistics);
+                &_reader_statistics,
+                integrity_check::yes);
     }
 
     std::string_view report_start_desc() const override {
@@ -1323,7 +1324,10 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                unwrap_monitor_generator());
+                unwrap_monitor_generator(),
+                default_sstable_predicate(),
+                nullptr,
+                integrity_check::yes);
     }
 
     std::string_view report_start_desc() const override {
@@ -1665,7 +1669,7 @@ public:
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
-        auto full_scan_reader = _compacting->make_full_scan_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
+        auto full_scan_reader = _compacting->make_full_scan_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator(), integrity_check::yes);
         return make_mutation_reader<reader>(std::move(full_scan_reader), _options.operation_mode, _validation_errors);
     }
 
@@ -1770,7 +1774,8 @@ public:
                 nullptr,
                 sm_fwd,
                 mr_fwd,
-                unwrap_monitor_generator());
+                unwrap_monitor_generator(),
+                integrity_check::yes);
 
     }
 

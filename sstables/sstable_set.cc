@@ -1342,11 +1342,12 @@ sstable_set::make_range_sstable_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor_generator& monitor_generator) const
+        read_monitor_generator& monitor_generator,
+        integrity_check integrity) const
 {
-    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator]
+    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, integrity]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        return sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst));
+        return sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst), integrity);
     };
     return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
@@ -1368,15 +1369,16 @@ sstable_set::make_local_shard_sstable_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor_generator& monitor_generator,
         const sstable_predicate& predicate,
-        combined_reader_statistics* statistics) const
+        combined_reader_statistics* statistics,
+        integrity_check integrity) const
 {
-    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate]
+    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate, integrity]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         SCYLLA_ASSERT(!sst->is_shared());
         if (!predicate(*sst)) {
             return make_empty_flat_reader_v2(s, permit);
         }
-        auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst));
+        auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst), integrity);
         // Auto-closed sstable reader is only enabled in the context of fast-forward to partition ranges
         if (!fwd && fwd_mr) {
             return make_auto_closed_sstable_reader(sst, std::move(reader), permit);
@@ -1402,11 +1404,12 @@ mutation_reader sstable_set::make_full_scan_reader(
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_ptr,
-        read_monitor_generator& monitor_generator) const {
+        read_monitor_generator& monitor_generator,
+        integrity_check integrity) const {
     std::vector<mutation_reader> readers;
     readers.reserve(size());
     for_each_sstable([&] (const shared_sstable& sst) mutable {
-        readers.emplace_back(sst->make_full_scan_reader(schema, permit, trace_ptr, monitor_generator(sst)));
+        readers.emplace_back(sst->make_full_scan_reader(schema, permit, trace_ptr, monitor_generator(sst), integrity));
     });
     return make_combined_reader(schema, std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 }
