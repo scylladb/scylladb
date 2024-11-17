@@ -4017,7 +4017,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
     }).then_wrapped(std::move(cleanup));
 }
 
-mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) const {
     auto schema = local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
     return do_get_batchlog_mutation_for(std::move(schema), mutations, id, version, now);
 }
