@@ -15,22 +15,11 @@ number of requests per second you'll need - or at an extra cost not even
 provision that - Scylla requires you to provision your cluster. You need
 to reason about the number and size of your nodes - not the throughput.
 
-When creating a table, the BillingMode and ProvisionedThroughput options
-are ignored by Scylla. Tables default to a Billing mode of `PAY_PER_REQUEST`.
-`DescribeTable` API calls will return the provisioned value of the RCUs, WCUs
-but the NumberOfDecreasesToday will be zero within the response.
-
-## Scan ordering
-
-In DynamoDB, the Hash key (or partition key) determines where the item will
-be stored within DynamoDB's internal storage. Another notable difference between
-DynamoDB and Scylla comes down to the underlying hashing algorithm.
-While DynamoDB uses a proprietary hashing function, ScyllaDB implements the well-known
-[Murmur3](https://docs.scylladb.com/stable/glossary.html#term-Partitioner) algorithm.
-
-Even though regular users should not typically care about the underlying
-implementation details, particularly such difference causes Scan operations
-to return results in a different order between DynamoDB and Alternator.
+Moreover, DynamoDB's per-table provisioning (`BillingMode=PROVISIONED`) is
+not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
+on a table need to be valid but are ignored, and Scylla behaves like DynamoDB's
+`BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
+throughput cap.
 
 ## Load balancing
 
@@ -63,10 +52,11 @@ it could use LWT only for the read-modify-write operations.
 Therefore, Alternator must be explicitly configured to tell it which of the
 above assumptions it may make on the write workload. This configuration is
 mandatory, and described in the "Write isolation policies" section of
-alternator.md. One of the options, `always_use_lwt`, is always safe, but the
-other options result in significantly better write performance and should be
-considered when the workload involves pure writes (e.g., ingestion of new
-data) or if pure writes and read-modify-writes go to distinct items.
+[Alternator-specific APIs](new-apis.md). One of the options, `always_use_lwt`,
+is always safe, but the other options result in significantly better write
+performance and should be considered when the workload involves pure writes
+(e.g., ingestion of new data) or if pure writes and read-modify-writes go
+to distinct items.
 
 ## Avoiding write reordering
 
@@ -115,7 +105,9 @@ and any request from any connected client will be allowed. To enforce
 client authentication, and authorization of which client is allowed
 to do what, configure the following in ScyllaDB's configuration:
 
-    `alternator_enforce_authorization: true`
+```
+    alternator_enforce_authorization: true
+```
 
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
 as DynamoDB and the rest of AWS. Clients use, as usual, an access key ID and
@@ -134,25 +126,24 @@ which authenticated user is allowed to do which operation, such as reading
 or writing to a specific table. The way this is supported in Alternator is
 currently _not_ compatible with DynamoDB's APIs (IAM or PutResourcePolicy).
 Instead, one needs to grant permissions to specific roles using CQL, with
-the "GRANT" command. For example, an Alternator table "xyz" is visible to
+the `GRANT` command. For example, an Alternator table "xyz" is visible to
 CQL as `alternator_xyz.xyz`, and the following command will allow requests
 from user "myrole" to read this table (with GetItem and other read operations):
 `GRANT SELECT ON alternator_xyz.xyz TO myrole`. Refer to the CQL documentation
-on how to use GRANT and REVOKE to control permissions, and which permissions
-exist:
+on how to use GRANT and REVOKE to control permissions:
 <https://docs.scylladb.com/stable/operating-scylla/security/authorization.html>
 
 The following permissions are needed to run the following API operations:
 
- * SELECT:      GetItem, Query, Scan, BatchGetItem, GetRecords
- * MODIFY:      PutItem, DeleteItem, UpdateItem, BatchWriteItem
- * CREATE:      CreateTable
- * DROP:        DeleteTable
- * ALTER:       UpdateTable, TagResource, UntagResource, UpdateTimeToLive
- * none needed: ListTables, DescribeTable, DescribeEndpoints,
-                ListTagsOfResource, DescribeTimeToLive,
-                DescribeContinuousBackups, ListStreams, DescribeStream,
-                GetShardIterator
+ * `SELECT`:      GetItem, Query, Scan, BatchGetItem, GetRecords
+ * `MODIFY`:      PutItem, DeleteItem, UpdateItem, BatchWriteItem
+ * `CREATE`:      CreateTable
+ * `DROP`:        DeleteTable
+ * `ALTER`:       UpdateTable, TagResource, UntagResource, UpdateTimeToLive
+ * _none needed_: ListTables, DescribeTable, DescribeEndpoints,
+                  ListTagsOfResource, DescribeTimeToLive,
+                  DescribeContinuousBackups, ListStreams, DescribeStream,
+                  GetShardIterator
 
 Note that the required permissions depend on the type of operation, not on
 what it does. For example, even though the PutItem operation can read the
@@ -197,6 +188,19 @@ See <https://github.com/scylladb/scylla/issues/5060>.
 <!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 5.3/2023.1 -->
 
 > **Note** This feature is experimental in versions earlier than ScyllaDB Open Source 5.2 and ScyllaDB Enterprise 2022.2.
+
+## Scan ordering
+
+In DynamoDB, scanning the _entire_ table returns the partitions sorted by
+some undocumented hash function of the partition key - which is why this key
+is also sometimes called the _hash key_. Alternator uses a different hash
+function, Cassandra's variant of the 128-bit Mumur3 hash function.
+So `Scan`ing the same data on DynamoDB and Alternator will return the same
+data in different partition order. Applications mustn't rely on that
+undocumented order.
+
+Note that inside each partition, the individual items will be sorted the same
+in DynamoDB and Scylla - determined by the _sort key_ defined for that table.
 
 ---
 
@@ -303,7 +307,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   another cache in front of the it. We wrote more about this here:
   <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
 
-* The DescribeTable is missing information about creation data and size
+* The DescribeTable is missing information about creation date and size
   estimates, and also part of the information about indexes enabled on 
   the table.
   <https://github.com/scylladb/scylla/issues/5013>
