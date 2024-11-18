@@ -554,12 +554,11 @@ bool repair::task_manager_module::is_aborted(const tasks::task_id& uuid) {
 
 void repair::task_manager_module::abort_all_repairs() {
     _aborted_pending_repairs = _pending_repairs;
-    for (auto& x : _repairs) {
-        auto it = get_local_tasks().find(x.second);
+    for (auto& id : _aborted_pending_repairs) {
+        auto it = get_local_tasks().find(id);
         if (it != get_local_tasks().end()) {
-            auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
-            impl.abort();
+            it->second->abort();
         }
     }
     rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _aborted_pending_repairs, _aborted_pending_repairs.size());
