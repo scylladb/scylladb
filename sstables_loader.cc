@@ -267,15 +267,12 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
     size_t nr_sst_current = 0;
 
     while (!sstables.empty()) {
-        size_t batch_sst_nr = 16;
-        std::vector<sstables::shared_sstable> sst_processed;
-        sst_processed.reserve(std::min(sstables.size(), size_t(16)));
-        while (batch_sst_nr-- && !sstables.empty()) {
-            auto sst = sstables.back();
-            sst_processed.push_back(sst);
-            sstables.pop_back();
-        }
-
+        const size_t batch_sst_nr = std::min(16uz, sstables.size());
+        auto sst_processed = sstables
+            | std::views::reverse
+            | std::views::take(batch_sst_nr)
+            | std::ranges::to<std::vector>();
+        sstables.erase(sstables.end() - batch_sst_nr, sstables.end());
 
         auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
