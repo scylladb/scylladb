@@ -46,7 +46,7 @@ query::clustering_row_ranges slice(
 /// Overload that parses the WHERE clause from string.  Named differently to disambiguate when where_clause is
 /// brace-initialized.
 query::clustering_row_ranges slice_parse(
-        sstring_view where_clause, cql_test_env& env,
+        std::string_view where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     return slice(boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{})), env, table_name, keyspace_name);
 }

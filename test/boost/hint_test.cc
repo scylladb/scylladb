@@ -58,7 +58,7 @@ std::ostream& operator<<(std::ostream& out, const sync_point& sp) {
 static constexpr size_t version_size = sizeof(uint8_t);
 static constexpr size_t checksum_size = sizeof(uint64_t);
 
-static uint64_t calculate_checksum(const sstring_view s) {
+static uint64_t calculate_checksum(const std::string_view s) {
     xx_hasher h;
     h.update(s.data(), s.size());
     return h.finalize_uint64();
@@ -121,7 +121,7 @@ sstring encode_v1_or_v2(const sync_point& sp, encode_version v) {
     ser::serializer<sync_point_v1_or_v2>::write(out, v2);
 
     if (v == encode_version::v2) {
-        sstring_view serialized_s(reinterpret_cast<const char*>(serialized.data()), version_size + measure.size());
+        std::string_view serialized_s(reinterpret_cast<const char*>(serialized.data()), version_size + measure.size());
         uint64_t checksum = calculate_checksum(serialized_s);
         ser::serializer<uint64_t>::write(out, checksum);
     }
