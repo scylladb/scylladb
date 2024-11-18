@@ -11,51 +11,9 @@ set -e
 
 gh_hosts=~/.config/gh/hosts.yml
 jenkins_url="https://jenkins.scylladb.com"
+FORCE=$2
 ORANGE='\033[0;33m'
 NC='\033[0m'
-
-PR_NUM=""
-CI_STABLE=true
-VALID_REF=true
-IGNORE_CI=false
-IGNORE_REF_CHECK=false
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --force)
-      IGNORE_REF_CHECK=true
-      IGNORE_CI=true
-      shift
-      ;;
-    --ignore-ci)
-      IGNORE_CI=true
-      shift
-      ;;
-    --ignore-ref-check)
-      IGNORE_REF_CHECK=true
-      shift
-      ;;
-    # Check if the argument is a number
-    [0-9]*)
-      if [[ -z "$PR_NUM" ]]; then
-        PR_NUM="$1"
-      else
-        echo "Error: Multiple numbers provided."
-        exit 1
-      fi
-      shift
-      ;;
-    *)
-      echo "Error: Invalid flag or argument: $1"
-      exit 1
-      ;;
-  esac
-done
-
-if [[ -z "$PR_NUM" ]]; then
-  echo "Error: Number is required."
-  exit 1
-fi
 
 if [[ ( -z "$GITHUB_LOGIN" || -z "$GITHUB_TOKEN" ) && -f "$gh_hosts" ]]; then
 	GITHUB_LOGIN=$(awk '/user:/ { print $2 }' "$gh_hosts")
@@ -68,6 +26,11 @@ if [[ -z "$JENKINS_USERNAME" || -z "$JENKINS_API_TOKEN" ]]; then
     To create a TOKEN, browse to https://jenkins.scylladb.com, then click on your username (upper right corner) and configure. Click on Add new token and set the JENKINS_USERNAME and JENKINS_API_TOKEN environment variables accordingly.
   "
   exit 1
+fi
+
+if [ -z "$1" ]; then
+	echo Please provide a github pull request number
+	exit 1
 fi
 
 for required in jq curl; do
@@ -101,6 +64,7 @@ set_jenkins_job() {
     next-enterprise) jenkins_job="scylla-enterprise/job/next";;
     next*) jenkins_job="$folder_prefix-$version/job/next";;
     *) echo "You are running the script from branch: $branch. Valid branches: next|next-enterprise|next-*"
+      exit 1
   esac
 }
 
@@ -118,17 +82,17 @@ check_jenkins_job_status() {
   if [[ "$lastCompleted" == "SUCCESS" ]]; then
       echo "$lastCompletedJobName is stable"
   else
-    echo -e "${ORANGE}WARNING:${NC} $lastCompletedJobName is not stable, To override run pull_github_pr.sh with --ignore-ci"
-    CI_STABLE=false
+    echo -e "${ORANGE}WARNING:${NC} $lastCompletedJobName is not stable"
   fi
 }
 
-if [[ "${IGNORE_CI}" == "false" ]]; then
+if [[ "$FORCE" != "--force" ]]; then
   check_jenkins_job_status
 fi
 
 NL=$'\n'
 
+PR_NUM=$1
 # convert full repo URL to its project/repo part, in case of failure default to origin/master:
 REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstream} \
      || git rev-parse --abbrev-ref --symbolic-full-name master@{upstream} \
@@ -140,22 +104,6 @@ PR_PREFIX=https://api.github.com/repos/$PROJECT/pulls
 
 echo "Fetching info on PR #$PR_NUM... "
 PR_DATA=$(curl -s $PR_PREFIX/$PR_NUM)
-PR_LABELS=$(jq -r .labels[].name <<< "$PR_DATA")
-PR_BODY=$(jq -r .body <<< "$PR_DATA")
-
-if [[ "${IGNORE_REF_CHECK}" == "false" ]]; then
-  if echo "$PR_LABELS" | grep -qE "^backport/[0-9]+\.[0-9]+$"; then
-    if [[ ! "$PR_BODY" =~ [Ff]ix|[Ff]ixes|[Ff]ixed ]]; then
-      echo -e "${ORANGE}\nWARNING:${NC} ${PR_NUM} is a candidate for backport but doesn't contain any Fixes reference to an issue. To override run pull_github_pr.sh with --ignore-ref-check"
-      VALID_REF=false
-    fi
-  fi
-fi
-
-if [ "${VALID_REF}" == "false" ] || [ "${CI_STABLE}" == "false" ]; then
-  exit 1
-fi
-
 MESSAGE=$(jq -r .message <<< $PR_DATA)
 if [ "$MESSAGE" != null ]
 then
