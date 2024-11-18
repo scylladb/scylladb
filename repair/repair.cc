@@ -460,7 +460,6 @@ void repair::task_manager_module::start(repair_uniq_id id) {
 
 void repair::task_manager_module::done(repair_uniq_id id, bool succeeded) {
     _pending_repairs.erase(id.uuid());
-    _aborted_pending_repairs.erase(id.uuid());
     if (succeeded) {
         _status.erase(id.id);
     } else {
@@ -549,19 +548,19 @@ size_t repair::task_manager_module::nr_running_repair_jobs() {
 }
 
 bool repair::task_manager_module::is_aborted(const tasks::task_id& uuid) {
-    return _aborted_pending_repairs.contains(uuid);
+    auto it = get_local_tasks().find(uuid);
+    return it != get_local_tasks().end() && it->second->abort_requested();
 }
 
 void repair::task_manager_module::abort_all_repairs() {
-    _aborted_pending_repairs = _pending_repairs;
-    for (auto& id : _aborted_pending_repairs) {
+    for (auto& id : _pending_repairs) {
         auto it = get_local_tasks().find(id);
         if (it != get_local_tasks().end()) {
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             it->second->abort();
         }
     }
-    rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _aborted_pending_repairs, _aborted_pending_repairs.size());
+    rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _pending_repairs, _pending_repairs.size());
 }
 
 float repair::task_manager_module::report_progress() {

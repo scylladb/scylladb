@@ -222,7 +222,6 @@ private:
     // Map repair id into repair_info.
     std::unordered_map<int, tasks::task_id> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
-    std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
