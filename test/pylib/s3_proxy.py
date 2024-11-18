@@ -174,7 +174,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(response.content)
         except Exception as e:
-            print(e)
+            self.logger.error("%s", e)
 
     def do_GET(self):
         self.process_request()
@@ -197,8 +197,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # addition, it is possible just to start this server using another script - `start_s3_proxy.py` to run it locally to
 # provide proxy between tests and minio
 class S3ProxyServer:
-    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, seed: int, logger=None):
-        print(f'Setting minio proxy random seed to {seed}')
+    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, seed: int, logger):
+        self.logger = logger
+        self.logger.info('Setting minio proxy random seed to %s', seed)
         random.seed(seed)
         self.req_states = LRUCache(10000)
         handler = partial(InjectingHandler, self.req_states, logger, minio_uri, max_retries)
@@ -214,14 +215,14 @@ class S3ProxyServer:
 
     async def start(self):
         if not self.is_running:
-            print(f'Starting S3 proxy server on {self.server.server_address}')
+            self.logger.info('Starting S3 proxy server on %s', self.server.server_address)
             loop = asyncio.get_running_loop()
             self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
             self.is_running = True
 
     async def stop(self):
         if self.is_running:
-            print('Stopping S3 proxy server')
+            self.logger.info('Stopping S3 proxy server')
             self.server.shutdown()
             await self.server_thread
             self.is_running = False
@@ -232,5 +233,5 @@ class S3ProxyServer:
             while self.is_running:
                 await asyncio.sleep(1)
         except Exception as e:
-            print(f"Server error: {e}")
+            self.logger.error("Server error: %s", e)
             await self.stop()
