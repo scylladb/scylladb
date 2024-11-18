@@ -155,7 +155,7 @@ public:
 
     virtual future<> stream();
     inet_address_vector_replica_set get_endpoints(const dht::token& token) const;
-    future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>);
+    future<> stream_sstable_mutations(streaming::plan_id, const dht::partition_range&, std::vector<sstables::shared_sstable>);
 protected:
     virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>);
@@ -263,6 +263,9 @@ future<> tablet_sstable_streamer::stream() {
 }
 
 future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables) {
+    size_t nr_sst_total = _sstables.size();
+    size_t nr_sst_current = 0;
+
     while (!sstables.empty()) {
         size_t batch_sst_nr = 16;
         std::vector<sstables::shared_sstable> sst_processed;
@@ -273,20 +276,22 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
             sstables.pop_back();
         }
 
-        co_await stream_sstable_mutations(pr, std::move(sst_processed));
+
+        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
+        llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
+            ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total,
+            fmt::join(sst_processed | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
+        nr_sst_current += sst_processed.size();
+        co_await stream_sstable_mutations(ops_uuid, pr, std::move(sst_processed));
     }
 }
 
-future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables) {
+future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid, const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables) {
     const auto token_range = pr.transform(std::mem_fn(&dht::ring_position::token));
     auto s = _table.schema();
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
 
-    size_t nr_sst_total = _sstables.size();
-    size_t nr_sst_current = 0;
-
-    auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
     auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
     size_t estimated_partitions = 0;
     for (auto& sst : sstables) {
@@ -294,16 +299,11 @@ future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& 
         sst_set->insert(sst);
     }
 
-    llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
-            ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total,
-            fmt::join(sstables | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
-
     auto start_time = std::chrono::steady_clock::now();
     inet_address_vector_replica_set current_targets;
     std::unordered_map<gms::inet_address, send_meta_data> metas;
     size_t num_partitions_processed = 0;
     size_t num_bytes_read = 0;
-    nr_sst_current += sstables.size();
     auto permit = co_await _db.obtain_reader_permit(_table, "sstables_loader::load_and_stream()", db::no_timeout, {});
     auto reader = mutation_fragment_v1_stream(_table.make_streaming_reader(s, std::move(permit), pr, sst_set, gc_clock::now()));
     std::exception_ptr eptr;
