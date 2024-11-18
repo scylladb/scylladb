@@ -31,7 +31,7 @@ jobs:
               const updatedDate = new Date(pr.updated_at);
               if (updatedDate >= threeDaysAgo) continue;
               if (pr.assignee === null) continue;
-              const assignee = pr.assignee;
+              const assignee = pr.assignee.login;
               if (assignee) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
