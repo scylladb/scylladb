@@ -286,104 +286,101 @@ future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& 
     size_t nr_sst_total = _sstables.size();
     size_t nr_sst_current = 0;
 
-        // FIXME: indentation
-        auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
-        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
-        size_t estimated_partitions = 0;
-        for (auto& sst : sstables) {
-            estimated_partitions += sst->estimated_keys_for_range(token_range);
-            sst_set->insert(sst);
-        }
+    auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
+    auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+    size_t estimated_partitions = 0;
+    for (auto& sst : sstables) {
+        estimated_partitions += sst->estimated_keys_for_range(token_range);
+        sst_set->insert(sst);
+    }
 
-        llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
-                ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total,
-                fmt::join(sstables | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
+    llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
+            ops_uuid, nr_sst_current, nr_sst_current + sstables.size(), nr_sst_total,
+            fmt::join(sstables | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
 
-        auto start_time = std::chrono::steady_clock::now();
-        inet_address_vector_replica_set current_targets;
-        std::unordered_map<gms::inet_address, send_meta_data> metas;
-        size_t num_partitions_processed = 0;
-        size_t num_bytes_read = 0;
-        nr_sst_current += sstables.size();
-        auto permit = co_await _db.obtain_reader_permit(_table, "sstables_loader::load_and_stream()", db::no_timeout, {});
-        auto reader = mutation_fragment_v1_stream(_table.make_streaming_reader(s, std::move(permit), pr, sst_set, gc_clock::now()));
-        std::exception_ptr eptr;
-        bool failed = false;
+    auto start_time = std::chrono::steady_clock::now();
+    inet_address_vector_replica_set current_targets;
+    std::unordered_map<gms::inet_address, send_meta_data> metas;
+    size_t num_partitions_processed = 0;
+    size_t num_bytes_read = 0;
+    nr_sst_current += sstables.size();
+    auto permit = co_await _db.obtain_reader_permit(_table, "sstables_loader::load_and_stream()", db::no_timeout, {});
+    auto reader = mutation_fragment_v1_stream(_table.make_streaming_reader(s, std::move(permit), pr, sst_set, gc_clock::now()));
+    std::exception_ptr eptr;
+    bool failed = false;
 
-        try {
-            while (auto mf = co_await reader()) {
-                bool is_partition_start = mf->is_partition_start();
-                if (is_partition_start) {
-                    ++num_partitions_processed;
-                    auto& start = mf->as_partition_start();
-                    const auto& current_dk = start.key();
+    try {
+        while (auto mf = co_await reader()) {
+            bool is_partition_start = mf->is_partition_start();
+            if (is_partition_start) {
+                ++num_partitions_processed;
+                auto& start = mf->as_partition_start();
+                const auto& current_dk = start.key();
 
-                    current_targets = get_endpoints(current_dk.token());
-                    llog.trace("load_and_stream: ops_uuid={}, current_dk={}, current_targets={}", ops_uuid,
-                            current_dk.token(), current_targets);
-                    for (auto& node : current_targets) {
-                        if (!metas.contains(node)) {
-                            auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
-                                    ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, netw::messaging_service::msg_addr(node));
-                            llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
-                            metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
-                            metas.at(node).receive();
-                        }
+                current_targets = get_endpoints(current_dk.token());
+                llog.trace("load_and_stream: ops_uuid={}, current_dk={}, current_targets={}", ops_uuid,
+                        current_dk.token(), current_targets);
+                for (auto& node : current_targets) {
+                    if (!metas.contains(node)) {
+                        auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
+                                ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, netw::messaging_service::msg_addr(node));
+                        llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
+                        metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
+                        metas.at(node).receive();
                     }
                 }
-                frozen_mutation_fragment fmf = freeze(*s, *mf);
-                num_bytes_read += fmf.representation().size();
-                co_await coroutine::parallel_for_each(current_targets, [&metas, &fmf, is_partition_start] (const gms::inet_address& node) {
-                    return metas.at(node).send(fmf, is_partition_start);
-                });
             }
-        } catch (...) {
-            failed = true;
-            eptr = std::current_exception();
-            llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, send_phase, err={}",
-                    ops_uuid, s->ks_name(), s->cf_name(), eptr);
+            frozen_mutation_fragment fmf = freeze(*s, *mf);
+            num_bytes_read += fmf.representation().size();
+            co_await coroutine::parallel_for_each(current_targets, [&metas, &fmf, is_partition_start] (const gms::inet_address& node) {
+                return metas.at(node).send(fmf, is_partition_start);
+            });
         }
-        co_await reader.close();
+    } catch (...) {
+        failed = true;
+        eptr = std::current_exception();
+        llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, send_phase, err={}",
+                ops_uuid, s->ks_name(), s->cf_name(), eptr);
+    }
+    co_await reader.close();
+    try {
+        co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const gms::inet_address, send_meta_data>& pair) {
+            auto& meta = pair.second;
+            return meta.finish(failed);
+        });
+    } catch (...) {
+        failed = true;
+        eptr = std::current_exception();
+        llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, finish_phase, err={}",
+                ops_uuid, s->ks_name(), s->cf_name(), eptr);
+    }
+    if (!failed && _unlink_sstables) {
         try {
-            co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const gms::inet_address, send_meta_data>& pair) {
-                auto& meta = pair.second;
-                return meta.finish(failed);
+            co_await coroutine::parallel_for_each(sstables, [&] (sstables::shared_sstable& sst) {
+                llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
+                        ops_uuid, s->ks_name(), s->cf_name(), sst->component_filenames());
+                return sst->unlink();
             });
         } catch (...) {
             failed = true;
             eptr = std::current_exception();
-            llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, finish_phase, err={}",
+            llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, del_sst_phase, err={}",
                     ops_uuid, s->ks_name(), s->cf_name(), eptr);
         }
-        if (!failed && _unlink_sstables) {
-            try {
-                co_await coroutine::parallel_for_each(sstables, [&] (sstables::shared_sstable& sst) {
-                    llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
-                            ops_uuid, s->ks_name(), s->cf_name(), sst->component_filenames());
-                    return sst->unlink();
-                });
-            } catch (...) {
-                failed = true;
-                eptr = std::current_exception();
-                llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, del_sst_phase, err={}",
-                        ops_uuid, s->ks_name(), s->cf_name(), eptr);
-            }
-        }
-        auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start_time).count();
-        for (auto& [node, meta] : metas) {
-            llog.info("load_and_stream: ops_uuid={}, ks={}, table={}, target_node={}, num_partitions_sent={}, num_bytes_sent={}",
-                    ops_uuid, s->ks_name(), s->cf_name(), node, meta.num_partitions_sent(), meta.num_bytes_sent());
-        }
-        auto partition_rate = std::fabs(duration) > FLT_EPSILON ? num_partitions_processed / duration : 0;
-        auto bytes_rate = std::fabs(duration) > FLT_EPSILON ? num_bytes_read / duration / 1024 / 1024 : 0;
-        auto status = failed ? "failed" : "succeeded";
-        llog.info("load_and_stream: finished ops_uuid={}, ks={}, table={}, partitions_processed={} partitions, bytes_processed={} bytes, partitions_per_second={} partitions/s, bytes_per_second={} MiB/s, duration={} s, status={}",
-                ops_uuid, s->ks_name(), s->cf_name(), num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
-        if (failed) {
-            std::rethrow_exception(eptr);
-        }
-
-    co_return;
+    }
+    auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start_time).count();
+    for (auto& [node, meta] : metas) {
+        llog.info("load_and_stream: ops_uuid={}, ks={}, table={}, target_node={}, num_partitions_sent={}, num_bytes_sent={}",
+                ops_uuid, s->ks_name(), s->cf_name(), node, meta.num_partitions_sent(), meta.num_bytes_sent());
+    }
+    auto partition_rate = std::fabs(duration) > FLT_EPSILON ? num_partitions_processed / duration : 0;
+    auto bytes_rate = std::fabs(duration) > FLT_EPSILON ? num_bytes_read / duration / 1024 / 1024 : 0;
+    auto status = failed ? "failed" : "succeeded";
+    llog.info("load_and_stream: finished ops_uuid={}, ks={}, table={}, partitions_processed={} partitions, bytes_processed={} bytes, partitions_per_second={} partitions/s, bytes_per_second={} MiB/s, duration={} s, status={}",
+            ops_uuid, s->ks_name(), s->cf_name(), num_partitions_processed, num_bytes_read, partition_rate, bytes_rate, duration, status);
+    if (failed) {
+        std::rethrow_exception(eptr);
+    }
 }
 
 template <typename... Args>
