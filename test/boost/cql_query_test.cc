@@ -3750,7 +3750,7 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             auto row0 = rows[0];
             BOOST_REQUIRE_EQUAL(row0.size(), 1);
 
-            auto parsed = rjson::parse(to_sstring_view(to_bytes(*row0[0])));
+            auto parsed = rjson::parse(to_string_view(to_bytes(*row0[0])));
             return std::move(rjson::get(parsed, "replication"));
         };
 

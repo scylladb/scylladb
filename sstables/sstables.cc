@@ -1354,7 +1354,7 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     }
     auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
     if (origin) {
-        _origin = sstring(to_sstring_view(bytes_view(origin->value)));
+        _origin = sstring(to_string_view(bytes_view(origin->value)));
     }
     auto* ts_stats = _components->scylla_metadata->data.get<scylla_metadata_type::ExtTimestampStats, scylla_metadata::ext_timestamp_stats>();
     if (ts_stats) {

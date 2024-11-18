@@ -131,7 +131,7 @@ std::vector<column_translation::column_info> column_translation::state::build(
         cols.reserve(src.size());
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
-            data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
+            data_type type = db::marshal::type_parser::parse(to_string_view(type_name));
             if (!features.is_enabled(CorrectUDTsInCollections) && is_certainly_scylla_sstable(features)) {
                 // See #6130.
                 type = freeze_types_in_collections(std::move(type));

@@ -1919,7 +1919,7 @@ bytes collection_column_computation::serialize() const {
             break;
     }
     rjson::add(serialized, "type", rjson::from_string(type));
-    rjson::add(serialized, "collection_name", rjson::from_string(to_sstring_view(_collection_name)));
+    rjson::add(serialized, "collection_name", rjson::from_string(to_string_view(_collection_name)));
     return to_bytes(rjson::print(serialized));
 }
 
