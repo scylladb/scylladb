@@ -92,26 +92,6 @@ class InjectingHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
         self.close_connection = False
 
-    def log_error(self, format, *args):
-        if self.logger:
-            self.logger.info("%s - - [%s] %s\n" %
-                             (self.client_address[0],
-                              self.log_date_time_string(),
-                              format % args))
-        else:
-            sys.stderr.write("%s - - [%s] %s\n" %
-                             (self.address_string(),
-                              self.log_date_time_string(),
-                              format % args))
-
-    def log_message(self, format, *args):
-        # Just don't be too verbose
-        if not self.logger:
-            sys.stderr.write("%s - - [%s] %s\n" %
-                             (self.address_string(),
-                              self.log_date_time_string(),
-                              format % args))
-
     def parsed_qs(self):
         parsed_url = urlparse(self.path)
         query_components = parse_qs(parsed_url.query)
