@@ -1339,7 +1339,7 @@ future<> repair::user_requested_repair_task_impl::run() {
     auto id = get_repair_uniq_id();
 
     return module->run(id, [this, &rs, &db, id, keyspace = _status.keyspace, germs = std::move(_germs),
-            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
+            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes), &task_as = _as] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
         auto start_time = std::chrono::steady_clock::now();
 
@@ -1393,9 +1393,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             }
         });
 
-        if (rs.get_repair_module().is_aborted(id.uuid())) {
-            throw abort_requested_exception();
-        }
+        task_as.check();
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
@@ -1504,7 +1502,7 @@ future<> repair::data_sync_repair_task_impl::run() {
 
     auto id = get_repair_uniq_id();
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
-    co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason] () mutable {
+    co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason, &task_as = _as] () mutable {
         auto cfs = list_column_families(db, keyspace);
         _cfs_size = cfs.size();
         if (cfs.empty()) {
@@ -1514,9 +1512,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         auto table_ids = get_table_ids(db, keyspace, cfs);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
-        if (rs.get_repair_module().is_aborted(id.uuid())) {
-            throw abort_requested_exception();
-        }
+        task_as.check();
         for (auto shard : std::views::iota(0u, smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, germs, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
