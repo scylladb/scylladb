@@ -542,7 +542,7 @@ struct simple_date_return_visitor {
         return uint32_t(v);
     }
     uint32_t operator()(const std::string_view& v) {
-        return simple_date_type_impl::from_sstring(v);
+        return simple_date_type_impl::from_string_view(v);
     }
     uint32_t operator()(const lua_table&);
 };
@@ -561,7 +561,7 @@ struct timestamp_return_visitor {
         throw exceptions::invalid_request_exception("timestamp value must fit in signed 64 bits");
     }
     db_clock::time_point operator()(const std::string_view& v) {
-        return timestamp_type_impl::from_sstring(v);
+        return timestamp_type_impl::from_string_view(v);
     }
     db_clock::time_point operator()(const lua_table&);
 };
@@ -774,15 +774,15 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const inet_addr_type_impl& t) {
-        return t.from_sstring(get_string(l, -1));
+        return t.from_string_view(get_string(l, -1));
     }
 
     data_value operator()(const uuid_type_impl&) {
-        return uuid_type_impl::from_sstring(get_string(l, -1));
+        return uuid_type_impl::from_string_view(get_string(l, -1));
     }
 
     data_value operator()(const timeuuid_type_impl&) {
-        return timeuuid_native_type{timeuuid_type_impl::from_sstring(get_string(l, -1))};
+        return timeuuid_native_type{timeuuid_type_impl::from_string_view(get_string(l, -1))};
     }
 
     data_value operator()(const bytes_type_impl& t) {
@@ -839,7 +839,7 @@ struct from_lua_visitor {
                        throw exceptions::invalid_request_exception("time value must fit in signed 64 bits");
                    },
                    [] (const std::string_view& v) {
-                       return time_type_impl::from_sstring(v);
+                       return time_type_impl::from_string_view(v);
                    }
                ))};
     }
