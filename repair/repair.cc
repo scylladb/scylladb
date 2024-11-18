@@ -547,9 +547,11 @@ size_t repair::task_manager_module::nr_running_repair_jobs() {
     return count;
 }
 
-bool repair::task_manager_module::is_aborted(const tasks::task_id& uuid) {
-    auto it = get_local_tasks().find(uuid);
-    return it != get_local_tasks().end() && it->second->abort_requested();
+future<bool> repair::task_manager_module::is_aborted(const tasks::task_id& uuid, shard_id shard) {
+    return smp::submit_to(shard, [&] () {
+        auto it = get_local_tasks().find(uuid);
+        return it != get_local_tasks().end() && it->second->abort_requested();
+    });
 }
 
 void repair::task_manager_module::abort_all_repairs() {
@@ -2442,8 +2444,8 @@ future<> repair::tablet_repair_task_impl::run() {
             }
         });
 
-
-        rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, ranges_parallelism = _ranges_parallelism] (repair_service& rs) -> future<> {
+        auto parent_shard = this_shard_id();
+        rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
             std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
@@ -2458,7 +2460,7 @@ future<> repair::tablet_repair_task_impl::run() {
                     continue;
                 }
                 auto erm = t->get_effective_replication_map();
-                if (rs.get_repair_module().is_aborted(id.uuid())) {
+                if (co_await rs.get_repair_module().is_aborted(id.uuid(), parent_shard)) {
                     throw abort_requested_exception();
                 }
 
