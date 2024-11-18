@@ -155,10 +155,10 @@ public:
 
     virtual future<> stream();
     inet_address_vector_replica_set get_endpoints(const dht::token& token) const;
+    future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>);
 protected:
     virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>);
-    future<> stream_sstable_mutations(const dht::partition_range&, std::vector<sstables::shared_sstable>);
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
