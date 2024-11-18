@@ -316,9 +316,8 @@ public:
     }
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
-    const endpoint_dc_rack& get_location(host_id id) const {
-        return find_node(id)->dc_rack();
-    }
+    const endpoint_dc_rack& get_location(host_id id) const;
+
     // Get dc/rack location of a node identified by endpoint
     // The specified node must exist.
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
