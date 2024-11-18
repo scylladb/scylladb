@@ -1841,15 +1841,15 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     }
     if (!_origin.empty()) {
         scylla_metadata::sstable_origin o;
-        o.value = bytes(to_bytes_view(sstring_view(_origin)));
+        o.value = bytes(to_bytes_view(std::string_view(_origin)));
         _components->scylla_metadata->data.set<scylla_metadata_type::SSTableOrigin>(std::move(o));
     }
 
     scylla_metadata::scylla_version version;
-    version.value = bytes(to_bytes_view(sstring_view(scylla_version())));
+    version.value = bytes(to_bytes_view(std::string_view(scylla_version())));
     _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaVersion>(std::move(version));
     scylla_metadata::scylla_build_id build_id;
-    build_id.value = bytes(to_bytes_view(sstring_view(get_build_id())));
+    build_id.value = bytes(to_bytes_view(std::string_view(get_build_id())));
     _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaBuildId>(std::move(build_id));
     if (ts_stats) {
         if (sstlog.is_enabled(log_level::debug)) {

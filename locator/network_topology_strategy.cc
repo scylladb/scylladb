@@ -184,7 +184,7 @@ class natural_endpoints_tracker {
     //
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
 
-    std::unordered_map<sstring_view, data_center_endpoints> _dcs;
+    std::unordered_map<std::string_view, data_center_endpoints> _dcs;
 
     size_t _dcs_to_fill;
 

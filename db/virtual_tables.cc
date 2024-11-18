@@ -631,7 +631,7 @@ class db_config_table final : public streaming_virtual_table {
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
         struct config_entry {
             dht::decorated_key key;
-            sstring_view type;
+            std::string_view type;
             sstring source;
             sstring value;
         };

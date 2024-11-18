@@ -256,7 +256,7 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(gms::inet_
     parameters_values_vector.reserve(record.parameters.size());
     std::for_each(record.parameters.begin(), record.parameters.end(), [&parameters_values_vector] (auto& val_pair) { parameters_values_vector.emplace_back(val_pair.first, val_pair.second); });
     auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
-    std::vector<sstring_view> names {
+    std::vector<std::string_view> names {
         "session_id",
         "command",
         "client",
