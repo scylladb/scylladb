@@ -395,7 +395,7 @@ static std::string_view truncated_content_view(const chunked_content& content, s
     }
 }
 
-static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_state, std::string_view username, sstring_view op, const chunked_content& query) {
+static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_state, std::string_view username, std::string_view op, const chunked_content& query) {
     tracing::trace_state_ptr trace_state;
     tracing::tracing& tracing_instance = tracing::tracing::get_local_tracing_instance();
     if (tracing_instance.trace_next_query() || tracing_instance.slow_query_tracing_enabled()) {

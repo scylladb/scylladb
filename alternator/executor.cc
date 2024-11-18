@@ -70,7 +70,7 @@ enum class table_status {
     deleting
 };
 
-static sstring_view table_status_to_sstring(table_status tbl_status) {
+static std::string_view table_status_to_sstring(table_status tbl_status) {
     switch(tbl_status) {
         case table_status::active:
             return "ACTIVE";
