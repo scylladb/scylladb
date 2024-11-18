@@ -1,0 +1,45 @@
+name: Notify PR Authors of Conflicts
+
+on:
+  schedule:
+    - cron: '0 10 * * 1,4'  # Runs every Monday and Thursday at 10:00am
+  workflow_dispatch:      # Manual trigger for testing
+
+jobs:
+  notify_conflict_prs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify PR Authors of Conflicts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+            const branchPrefix = 'branch-';
+            const threeDaysAgo = new Date();
+            const conflictLabel = 'conflicts';          
+            threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+            for (const pr of prs) {
+              if (!pr.base.ref.startsWith(branchPrefix)) continue;
+              const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
+              if (!hasConflictLabel) continue;
+              const updatedDate = new Date(pr.updated_at);
+              if (updatedDate >= threeDaysAgo) continue;
+              if (pr.assignee === null) continue;
+              const assignee = pr.assignee.login;
+              if (assignee) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `@${assignee}, this PR has been open with conflicts. Please resolve the conflicts so we can merge it.`,
+                });
+                console.log(`Notified @${assignee} for PR #${pr.number}`);
+              } 
+            }
+            console.log(`Total PRs checked: ${prs.length}`);
