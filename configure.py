@@ -729,8 +729,6 @@ arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debugin
                         help='Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--perf-tests-debuginfo', action='store', dest='perf_tests_debuginfo', type=int, default=0,
                         help='Enable(1)/disable(0)compiler debug information generation for perf tests')
-arg_parser.add_argument('--python', action='store', dest='python', default='python3',
-                        help='Python3 path')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
                         help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
@@ -1921,7 +1919,7 @@ def write_build_file(f,
             command = {seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
             description = SWAGGER $out
         rule serializer
-            command = {python} ./idl-compiler.py --ns ser -f $in -o $out
+            command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
         rule ninja
             command = {ninja} -C $subdir $target
@@ -1981,7 +1979,6 @@ def write_build_file(f,
                     user_ldflags=user_ldflags,
                     libs=libs,
                     link_pool_depth=link_pool_depth,
-                    python=args.python,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
                     ragel_exec=args.ragel_exec))
@@ -2402,7 +2399,7 @@ def write_build_file(f,
 
     f.write(textwrap.dedent('''\
         rule configure
-          command = {python} configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
+          command = ./configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
         build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
