@@ -23,7 +23,7 @@ logging::logger trace_state_logger("trace_state");
 struct trace_state::params_values {
     struct prepared_statement_info {
         prepared_checked_weak_ptr statement;
-        std::optional<std::vector<sstring_view>> query_option_names;
+        std::optional<std::vector<std::string_view>> query_option_names;
         cql3::raw_value_view_vector_with_unset query_option_values;
         explicit prepared_statement_info(prepared_checked_weak_ptr statement) : statement(std::move(statement)) {}
     };
@@ -76,11 +76,11 @@ void trace_state::set_response_size(size_t s) noexcept {
     _records->session_rec.response_size = s;
 }
 
-void trace_state::add_query(sstring_view val) {
+void trace_state::add_query(std::string_view val) {
     _params_ptr->queries.emplace_back(std::move(val));
 }
 
-void trace_state::add_session_param(sstring_view key, sstring_view val) {
+void trace_state::add_session_param(std::string_view key, std::string_view val) {
     _records->session_rec.parameters.emplace(std::move(key), std::move(val));
 }
 
@@ -165,7 +165,7 @@ void trace_state::build_parameters_map() {
 }
 
 void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
-        std::optional<std::vector<sstring_view>>& names_opt,
+        std::optional<std::vector<std::string_view>>& names_opt,
         cql3::raw_value_view_vector_with_unset& values, const sstring& param_name_prefix) {
     auto& params_map = _records->session_rec.parameters;
     size_t i = 0;

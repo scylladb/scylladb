@@ -1554,7 +1554,7 @@ void read_collections(schema_builder& builder, sstring comparator)
     // The format of collection entries in the comparator is:
     // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name1>:<type1>, ...)
 
-    auto find_closing_parenthesis = [] (sstring_view str, size_t start) {
+    auto find_closing_parenthesis = [] (std::string_view str, size_t start) {
         auto pos = start;
         auto nest_level = 0;
         do {
@@ -1591,10 +1591,10 @@ void read_collections(schema_builder& builder, sstring comparator)
             throw marshal_exception("read_collections - colon not found");
         }
 
-        auto name = from_hex(sstring_view(comparator.c_str() + pos, colon - pos));
+        auto name = from_hex(std::string_view(comparator.c_str() + pos, colon - pos));
 
         colon++;
-        auto type_str = sstring_view(comparator.c_str() + colon, end - colon);
+        auto type_str = std::string_view(comparator.c_str() + colon, end - colon);
         auto type = db::marshal::type_parser::parse(type_str);
 
         builder.with_collection(name, type);
@@ -1919,7 +1919,7 @@ bytes collection_column_computation::serialize() const {
             break;
     }
     rjson::add(serialized, "type", rjson::from_string(type));
-    rjson::add(serialized, "collection_name", rjson::from_string(to_sstring_view(_collection_name)));
+    rjson::add(serialized, "collection_name", rjson::from_string(to_string_view(_collection_name)));
     return to_bytes(rjson::print(serialized));
 }
 

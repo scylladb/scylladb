@@ -39,7 +39,7 @@ BOOST_AUTO_TEST_CASE(test_UUID_comparison) {
 }
 
 BOOST_AUTO_TEST_CASE(test_from_string) {
-    auto check = [] (sstring_view sv) {
+    auto check = [] (std::string_view sv) {
         auto uuid = UUID(sv);
         BOOST_CHECK_EQUAL(uuid.version(), 4);
         BOOST_CHECK_EQUAL(fmt::to_string(uuid), sv);

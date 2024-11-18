@@ -70,7 +70,7 @@ enum class table_status {
     deleting
 };
 
-static sstring_view table_status_to_sstring(table_status tbl_status) {
+static std::string_view table_status_to_sstring(table_status tbl_status) {
     switch(tbl_status) {
         case table_status::active:
             return "ACTIVE";
@@ -3088,7 +3088,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         any_updates = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
             rjson::replace_with_string_name(_return_attributes,
-                to_sstring_view(column_name), rjson::copy(json_value));
+                to_string_view(column_name), rjson::copy(json_value));
         } else if (_returnvalues == returnvalues::UPDATED_NEW) {
             rjson::value&& v = rjson::copy(json_value);
             if (h) {
@@ -3099,14 +3099,14 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     // empty and the attribute names are unique, so we can
                     // use add().
                     rjson::add_with_string_name(_return_attributes,
-                        to_sstring_view(column_name), std::move(v));
+                        to_string_view(column_name), std::move(v));
                 }
             } else {
                 rjson::add_with_string_name(_return_attributes,
-                    to_sstring_view(column_name), std::move(v));
+                    to_string_view(column_name), std::move(v));
             }
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_sstring_view(column_name);
+            std::string_view cn =  to_string_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::value&& v = rjson::copy(*col);
@@ -3134,9 +3134,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto do_delete = [&] (bytes&& column_name) {
         any_deletes = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
-            rjson::remove_member(_return_attributes, to_sstring_view(column_name));
+            rjson::remove_member(_return_attributes, to_string_view(column_name));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_sstring_view(column_name);
+            std::string_view cn =  to_string_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 // In the UPDATED_OLD case the item starts empty and column
@@ -3239,7 +3239,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     // check_needs_read_before_write_attribute_updates()
                     // returns true in this case, and previous_item is
                     // available to us when the item exists.
-                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
                     const rjson::value& v2 = (it->value)["Value"];
                     validate_value(v2, "AttributeUpdates");
                     std::string v2_type = get_item_type_string(v2);
@@ -3274,7 +3274,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 // Note that check_needs_read_before_write_attribute_updates()
                 // made sure we retrieved previous_item (if exists) when there
                 // is an ADD action.
-                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
                 const rjson::value& v2 = (it->value)["Value"];
                 validate_value(v2, "AttributeUpdates");
                 // An ADD can be used to create a new attribute (when

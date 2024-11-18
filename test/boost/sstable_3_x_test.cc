@@ -1308,7 +1308,7 @@ SEASTAR_TEST_CASE(test_uncompressed_compound_static_row_read) {
     auto val_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("val"));
     BOOST_REQUIRE(val_cdef);
 
-    auto generate = [&] (int int_val, sstring_view text_val, sstring_view inet_val) {
+    auto generate = [&] (int int_val, std::string_view text_val, std::string_view inet_val) {
         std::vector<flat_reader_assertions_v2::expected_column> columns;
 
         columns.push_back({s_int_cdef, int32_type->decompose(int_val)});
@@ -1669,8 +1669,8 @@ static future<> test_partition_key_with_values_of_different_types_read(const sst
     BOOST_REQUIRE(text_cdef);
 
     auto generate = [&] (bool bool_val, double double_val, float float_val, int int_val, long long_val,
-                         sstring_view timestamp_val, sstring_view timeuuid_val, sstring_view uuid_val,
-                         sstring_view text_val) {
+                         std::string_view timestamp_val, std::string_view timeuuid_val, std::string_view uuid_val,
+                         std::string_view text_val) {
         std::vector<flat_reader_assertions_v2::expected_column> columns;
 
         columns.push_back({bool_cdef, boolean_type->decompose(bool_val)});
@@ -1906,8 +1906,8 @@ SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
 
     auto generate = [&] (std::optional<bool> bool_val, std::optional<double> double_val,
                          std::optional<float> float_val, std::optional<int> int_val, std::optional<long> long_val,
-                         std::optional<sstring_view> timestamp_val, std::optional<sstring_view> timeuuid_val,
-                         std::optional<sstring_view> uuid_val, std::optional<sstring_view> text_val) {
+                         std::optional<std::string_view> timestamp_val, std::optional<std::string_view> timeuuid_val,
+                         std::optional<std::string_view> uuid_val, std::optional<std::string_view> text_val) {
         std::vector<flat_reader_assertions_v2::expected_column> columns;
 
         if (bool_val) {

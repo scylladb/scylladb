@@ -41,7 +41,7 @@ big_decimal::big_decimal() : big_decimal(0, 0) {}
 big_decimal::big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value)
     : _scale(scale), _unscaled_value(std::move(unscaled_value)) {}
 
-big_decimal::big_decimal(sstring_view text)
+big_decimal::big_decimal(std::string_view text)
 {
     size_t e_pos = text.find_first_of("eE");
     std::string_view base = text.substr(0, e_pos);

@@ -23,7 +23,7 @@ void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** stack_b
 
 namespace cql3::util {
 
-static void do_with_parser_impl_impl(const sstring_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+static void do_with_parser_impl_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
     cql3_parser::CqlLexer::collector_type lexer_error_collector(cql);
     cql3_parser::CqlParser::collector_type parser_error_collector(cql);
     cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(cql.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(cql.size()), nullptr};
@@ -38,7 +38,7 @@ static void do_with_parser_impl_impl(const sstring_view& cql, dialect d, noncopy
 
 #ifndef DEBUG
 
-void do_with_parser_impl(const sstring_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
     return do_with_parser_impl_impl(cql, d, std::move(f));
 }
 
@@ -50,7 +50,7 @@ void do_with_parser_impl(const sstring_view& cql, dialect d, noncopyable_functio
 
 struct thunk_args {
     // arguments to do_with_parser_impl_impl
-    const sstring_view& cql;
+    const std::string_view& cql;
     dialect d;
     noncopyable_function<void (cql3_parser::CqlParser&)>&& func;
     // Exceptions can't be returned from another stack, so store
@@ -84,7 +84,7 @@ static void thunk(int p1, int p2) {
     setcontext(&args->caller_stack);
 };
 
-void do_with_parser_impl(const sstring_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
+void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& parser)> f) {
     static constexpr size_t stack_size = 1 << 20;
     static thread_local std::unique_ptr<char[]> stack = std::make_unique<char[]>(stack_size);
     thunk_args args{
@@ -142,11 +142,11 @@ sstring relations_to_where_clause(const expr::expression& e) {
     return boost::algorithm::join(expressions, " AND ");
 }
 
-expr::expression where_clause_to_relations(const sstring_view& where_clause, dialect d) {
+expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d) {
     return do_with_parser(where_clause, d, std::mem_fn(&cql3_parser::CqlParser::whereClause));
 }
 
-sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d) {
+sstring rename_column_in_where_clause(const std::string_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d) {
     std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause, d));
     std::vector<expr::expression> new_relations;
     new_relations.reserve(relations.size());

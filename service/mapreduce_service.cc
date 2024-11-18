@@ -434,7 +434,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
     auto query_options = make_lw_shared<cql3::query_options>(
         cql3::default_cql_config,
         req.cl,
-        std::optional<std::vector<sstring_view>>(), // Represents empty names.
+        std::optional<std::vector<std::string_view>>(), // Represents empty names.
         std::vector<cql3::raw_value>(), // Represents empty values.
         true, // Skip metadata.
         cql3::query_options::specific_options::DEFAULT

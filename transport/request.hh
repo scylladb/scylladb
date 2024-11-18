@@ -34,7 +34,7 @@ private:
             throw exceptions::protocol_exception(format("truncated frame: expected {:d} bytes, length is {:d}", attempted_read, actual_left));
         };
     };
-    static void validate_utf8(sstring_view s) {
+    static void validate_utf8(std::string_view s) {
         auto error_pos = utils::utf8::validate_with_error_position(to_bytes_view(s));
         if (error_pos) {
             throw exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos));
@@ -99,18 +99,18 @@ public:
         return s;
     }
 
-    sstring_view read_string_view() {
+    std::string_view read_string_view() {
         auto n = read_short();
         auto bv = _in.read_bytes_view(n, *_linearization_buffer, exception_thrower());
-        auto s = sstring_view(reinterpret_cast<const char*>(bv.data()), bv.size());
+        auto s = std::string_view(reinterpret_cast<const char*>(bv.data()), bv.size());
         validate_utf8(s);
         return s;
     }
 
-    sstring_view read_long_string_view() {
+    std::string_view read_long_string_view() {
         auto n = read_int();
         auto bv = _in.read_bytes_view(n, *_linearization_buffer, exception_thrower());
-        auto s = sstring_view(reinterpret_cast<const char*>(bv.data()), bv.size());
+        auto s = std::string_view(reinterpret_cast<const char*>(bv.data()), bv.size());
         validate_utf8(s);
         return s;
     }
@@ -149,7 +149,7 @@ public:
         return cql3::raw_value_view::make_value(_in.read_view(len, exception_thrower()));
     }
 
-    void read_name_and_value_list(uint8_t version, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values,
+    void read_name_and_value_list(uint8_t version, std::vector<std::string_view>& names, std::vector<cql3::raw_value_view>& values,
             cql3::unset_bind_variable_vector& unset) {
         uint16_t size = read_short();
         names.reserve(size);
@@ -225,7 +225,7 @@ public:
         auto flags = enum_set<options_flag_enum>::from_mask(read_byte());
         std::vector<cql3::raw_value_view> values;
         cql3::unset_bind_variable_vector unset;
-        std::vector<sstring_view> names;
+        std::vector<std::string_view> names;
 
         if (flags.contains<options_flag::VALUES>()) {
             if (flags.contains<options_flag::NAMES_FOR_VALUES>()) {
@@ -261,7 +261,7 @@ public:
                 }
             }
 
-            std::optional<std::vector<sstring_view>> onames;
+            std::optional<std::vector<std::string_view>> onames;
             if (!names.empty()) {
                 onames = std::move(names);
             }

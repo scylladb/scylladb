@@ -120,7 +120,7 @@ public:
     schema_ptr find_indexed_table(std::string_view ks_name, std::string_view index_name) const;
     sstring get_available_index_name(std::string_view ks_name, std::string_view table_name,
                                                std::optional<sstring> index_name_root) const;
-    schema_ptr get_cdc_base_table(sstring_view ks_name, std::string_view table_name) const;
+    schema_ptr get_cdc_base_table(std::string_view ks_name, std::string_view table_name) const;
     schema_ptr get_cdc_base_table(const schema&) const;
     const db::extensions& extensions() const;
     const gms::feature_service& features() const;

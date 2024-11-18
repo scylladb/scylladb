@@ -28,7 +28,7 @@ using boost::adaptors::transformed;
 
 std::unique_ptr<cql3::query_options> to_options(
         const cql3::cql_config& cfg,
-        std::optional<std::vector<sstring_view>> names,
+        std::optional<std::vector<std::string_view>> names,
         std::vector<cql3::raw_value> values) {
     static auto& d = cql3::query_options::DEFAULT;
     return std::make_unique<cql3::query_options>(
@@ -40,7 +40,7 @@ std::unique_ptr<cql3::query_options> to_options(
 /// Asserts that e.execute_prepared(id, values) contains expected rows, in any order.
 void require_rows(cql_test_env& e,
                   cql3::prepared_cache_key_type id,
-                  std::optional<std::vector<sstring_view>> names,
+                  std::optional<std::vector<std::string_view>> names,
                   const std::vector<bytes_opt>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const seastar::compat::source_location& loc = source_location::current()) {

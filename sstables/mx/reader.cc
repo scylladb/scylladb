@@ -178,7 +178,7 @@ public:
     void check_column_missing_in_current_schema(const column_translation::column_info& column_info,
                                                 api::timestamp_type timestamp) const {
         if (!column_info.id) {
-            sstring name = sstring(to_sstring_view(*column_info.name));
+            sstring name = sstring(to_string_view(*column_info.name));
             auto it = _schema->dropped_columns().find(name);
             if (it == _schema->dropped_columns().end() || timestamp > it->second.timestamp) {
                 throw malformed_sstable_exception(format("Column {} missing in current schema", name));

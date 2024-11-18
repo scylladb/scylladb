@@ -30,7 +30,7 @@ struct sync_point {
     std::vector<shard_rps> mv_per_shard_rps;
 
     /// \brief Decodes a sync point from an encoded, textual form (a hexadecimal string).
-    static sync_point decode(sstring_view s);
+    static sync_point decode(std::string_view s);
 
     /// \brief Encodes the sync point in a textual form (a hexadecimal string)
     sstring encode() const;

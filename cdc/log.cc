@@ -439,7 +439,7 @@ schema_ptr get_base_table(const replica::database& db, const schema& s) {
     return get_base_table(db, s.ks_name(), s.cf_name());
 }
 
-schema_ptr get_base_table(const replica::database& db, sstring_view ks_name,std::string_view table_name) {
+schema_ptr get_base_table(const replica::database& db, std::string_view ks_name, std::string_view table_name) {
     if (!is_log_name(table_name)) {
         return nullptr;
     }

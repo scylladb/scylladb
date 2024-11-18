@@ -167,7 +167,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_c
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_regular_columns_in_view_pk;
 }
@@ -176,7 +176,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_static_co
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_static_columns_in_view_pk;
 }
@@ -185,7 +185,7 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_schema(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_schema;
 }
@@ -217,8 +217,8 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             base_static_columns_in_view_pk.push_back(base_col->id);
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
-                    to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
-            if (to_sstring_view(view_col_name) == "idx_token") {
+                    to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
+            if (to_string_view(view_col_name) == "idx_token") {
                 vlogger.warn("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
                         "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
             }

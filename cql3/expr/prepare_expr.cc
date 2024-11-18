@@ -605,7 +605,7 @@ untyped_constant_parsed_value(const untyped_constant uc, data_type validator)
 {
     try {
         if (uc.partial_type == untyped_constant::type_class::hex && validator == bytes_type) {
-            auto v = static_cast<sstring_view>(uc.raw_text);
+            auto v = static_cast<std::string_view>(uc.raw_text);
             v.remove_prefix(2);
             return validator->from_string(v);
         }
