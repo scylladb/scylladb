@@ -11,14 +11,14 @@
 #include "utils/assert.hh"
 #include <iosfwd>
 #include <boost/intrusive/set.hpp>
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/util/optimized_optional.hh>
 
 #include "mutation_partition.hh"
+
+#include <ranges>
 
 // is_evictable::yes means that the object is part of an evictable snapshots in MVCC,
 // and non-evictable one otherwise.
@@ -252,8 +252,8 @@ public:
     std::ranges::subrange<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
     // Returns an iterator range of rows_entry, with only non-dummy entries.
     auto non_dummy_rows() const {
-        return boost::make_iterator_range(_rows.begin(), _rows.end())
-            | boost::adaptors::filtered([] (const rows_entry& e) { return bool(!e.dummy()); });
+        return std::ranges::subrange(_rows.begin(), _rows.end())
+            | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
     void accept(const schema&, mutation_partition_visitor&) const;
 

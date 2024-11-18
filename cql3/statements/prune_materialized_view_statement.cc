@@ -13,6 +13,7 @@
 #include "service/storage_proxy.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
+#include <boost/range/adaptor/filtered.hpp>
 
 using namespace std::chrono_literals;
 

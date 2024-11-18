@@ -851,7 +851,7 @@ bool mutation_partition_v2::equal(const schema& this_schema, const mutation_part
         return false;
     }
 
-    if (!boost::equal(non_dummy_rows(), p.non_dummy_rows(),
+    if (!std::ranges::equal(non_dummy_rows(), p.non_dummy_rows(),
         [&] (const rows_entry& e1, const rows_entry& e2) {
             return e1.equal(this_schema, e2, p_schema);
         }
