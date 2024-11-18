@@ -26,7 +26,7 @@ thread_local query_options query_options::DEFAULT{default_cql_config,
 
 query_options::query_options(const cql_config& cfg,
                            db::consistency_level consistency,
-                           std::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<std::string_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
                            cql3::unset_bind_variable_vector unset,
@@ -46,7 +46,7 @@ query_options::query_options(const cql_config& cfg,
 
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
-                             std::optional<std::vector<sstring_view>> names,
+                             std::optional<std::vector<std::string_view>> names,
                              cql3::raw_value_vector_with_unset values,
                              bool skip_metadata,
                              specific_options options
@@ -65,7 +65,7 @@ query_options::query_options(const cql_config& cfg,
 
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
-                             std::optional<std::vector<sstring_view>> names,
+                             std::optional<std::vector<std::string_view>> names,
                              cql3::raw_value_view_vector_with_unset value_views,
                              bool skip_metadata,
                              specific_options options

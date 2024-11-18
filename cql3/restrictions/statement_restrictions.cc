@@ -195,7 +195,7 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
         const expression& e, const query_options& options, const serialized_compare& comparator,
-        sstring_view column_name) {
+        std::string_view column_name) {
     const cql3::raw_value in_list = evaluate(e, options);
     if (in_list.is_null()) {
         return value_list();

@@ -565,7 +565,7 @@ query_processor::execute_maybe_with_guard(service::query_state& query_state, ::s
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_direct_without_checking_exception_message(const sstring_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
+query_processor::execute_direct_without_checking_exception_message(const std::string_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state(), d);
@@ -684,7 +684,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(const sstring_view& query, const service::client_state& client_state, dialect d) {
+query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
@@ -699,12 +699,12 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 }
 
 std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(const sstring_view& query, dialect d) {
+query_processor::parse_statement(const std::string_view& query, dialect d) {
     try {
         {
             const char* error_injection_key = "query_processor-parse_statement-test_failure";
             utils::get_local_injector().inject(error_injection_key, [&]() {
-                if (query.find(error_injection_key) != sstring_view::npos) {
+                if (query.find(error_injection_key) != std::string_view::npos) {
                     throw std::runtime_error(error_injection_key);
                 }
             });
