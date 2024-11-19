@@ -1046,6 +1046,14 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
 
+        // If the view has a regular column (i.e. a column that's NOT part of the base table's PK)
+        // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
+        // Because of that, we don't generate view updates when the value in an unselected column is created
+        // or changes.
+        if (!column_is_selected && _base_info->has_base_non_pk_columns_in_view_pk) {
+            return true;
+        }
+
         //TODO(sarna): Optimize collections case - currently they do not go under optimization
         if (!cdef.is_atomic()) {
             return false;

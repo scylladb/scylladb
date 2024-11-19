@@ -3064,9 +3064,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(6))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 6);
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 5);
             BOOST_REQUIRE_EQUAL(total_mv1_updates(), 4); // only one update for creation, update does not generate one
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 2);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
         });
 
         // Updating column value with TTL will propagate for virtual columns
@@ -3075,9 +3075,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(8))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 10);
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 7);
             BOOST_REQUIRE_EQUAL(total_mv1_updates(), 6); // two updates - one for creation, one for updating the TTL
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 4);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
         });
     });
 }
