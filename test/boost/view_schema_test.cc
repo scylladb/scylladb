@@ -3011,6 +3011,23 @@ struct update_counter {
 };
 
 SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
+    // The test revolves around timestamps in materialized views and their relation to timestamps
+    // in the base table. Values in an MV should have the same timestamp as the corresponding
+    // ones in the base table. However, that only applies to values that are readable with `WRITETIME`.
+    // Those that are not readable encompass unselected columns, even if a view has virtual columns
+    // that correspond to them. Because of that, Scylla employs an optimization that prevents emitting
+    // redundant view updates -- that's what this test verifies. For that end, we use two MVs:
+    //
+    // * mv1: its primary key is a permutation of the base table's primary key. Because of that,
+    //        it will have virtual columns corresponding to unselected columns from the base table.
+    //        Creating a value in such a column (in the base table) will generate a view update
+    //        to the MV. However, updating it will not generate an update UNLESS it changes
+    //        the cell's TTL.
+    // * mv2: its primary key consists of the columns from the base table's primary key and one
+    //        regular column. Because of that, the MV will NOT have any virtual columns corresponding
+    //        to the unselected columns from the base table. As a result, no view updates will be
+    //        generated for unselected columns as a result.
+
     return do_with_cql_env_thread([] (cql_test_env& e) {
 
         e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, g int, primary key(k, c))").get();
@@ -3043,8 +3060,11 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
 
         ::shared_ptr<cql_transport::messages::result_message> msg;
 
-        // Updating timestamp for unselected column will not be propagated,
-        // and its creation will be propagated for a virtual column only
+        // A view update is generated for mv1 because the row has a complete primary key in that view
+        // and we need to mark that the value in the corresponding virtual column is present.
+        //
+        // A view update is NOT generated for mv2 because the row still has an incomplete primary key
+        // in that view (it lacks `a`).
         e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
@@ -3056,6 +3076,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
+        // The row still doesn't have a complete PK for mv2.
+        //
+        // Updating an unselected column will NOT produce a view update, so no update for mv1 either.
         e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
@@ -3067,7 +3090,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
-        // Updating timestamp for a selected column will propagate for existing columns
+        // A view update is generated for mv1 because the `b` column is part of the view.
+        //
+        // A view update is NOT generated for mv2 because the row still has an incomplete primary key in that view.
         e.execute_cql("UPDATE t USING TIMESTAMP 3 SET b=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get();
@@ -3078,7 +3103,13 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
 
             BOOST_REQUIRE_EQUAL(results, expected);
         });
-        // After instantiating view row a, selected column's timestamp from previous example will propagate to mv2
+
+        // A view update is generated for mv1 because `a` is part of the view.
+        //
+        // A view update is generated for mv2 because `a` is part of the view
+        // AND the row has finally a complete primary key.
+        //
+        // The timestamp from the previous CQL statement is preserved for `b`.
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get();
@@ -3090,8 +3121,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
-        // Updating column value without touching TTL will not propagate
-        // if it's either unselected or virtual
+        // `f` is an unselected column for both MVs, so a view update will only be generated
+        // to mv1 (to the corresponding virtual column) because the value in the cell is
+        // only created now.
         e.execute_cql("UPDATE t USING TIMESTAMP 5 SET f=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
@@ -3103,6 +3135,7 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
+        // Updating an unselected column will not produce view updates.
         e.execute_cql("UPDATE t USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
@@ -3114,7 +3147,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
-        // Updating column value with TTL will propagate for virtual columns
+        // `g` is an unselected column for both MVs, so a view update will only be generated
+        // to mv1 (to the corresponding virtual column) because the value in the cell is
+        // only created now.
         e.execute_cql("UPDATE t USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
@@ -3126,6 +3161,7 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
+        // Updating the TTL of an unselected column will produce a view update to the virtual column.
         e.execute_cql("UPDATE t USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
