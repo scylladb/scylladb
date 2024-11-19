@@ -6688,11 +6688,14 @@ db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
     slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
-    if (local_db().find_keyspace(keyspace).get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-        return replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
+    const replica::keyspace& ks = local_db().find_keyspace(keyspace);
+    if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+        co_await replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
+    } else if (ks.uses_tablets() && features().truncate_as_topology_operation) {
+        co_await remote().truncate_with_tablets(std::move(keyspace), std::move(cfname), timeout_in_ms);
+    } else {
+        co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
-
-    return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
 void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
