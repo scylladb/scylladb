@@ -76,6 +76,7 @@ enum class global_topology_request: uint16_t {
     new_cdc_generation,
     cleanup,
     keyspace_rf_change,
+    truncate_table,
 };
 
 struct ring_slice {
