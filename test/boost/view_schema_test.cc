@@ -3029,6 +3029,14 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         // Updating timestamp for unselected column will not be propagated,
         // and its creation will be propagated for a virtual column only
         e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(1))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 1);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 1);
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+        });
+
         e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
@@ -3060,6 +3068,14 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         // Updating column value without touching TTL will not propagate
         // if it's either unselected or virtual
         e.execute_cql("UPDATE t USING TIMESTAMP 5 SET f=40 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(5))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 5);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 4); // only one update for creation, update does not generate one
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+        });
+
         e.execute_cql("UPDATE t USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
@@ -3071,6 +3087,14 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
 
         // Updating column value with TTL will propagate for virtual columns
         e.execute_cql("UPDATE t USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
+            assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(7))});
+            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 6);
+            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 5); // two updates - one for creation, one for updating the TTL
+            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+        });
+
         e.execute_cql("UPDATE t USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
