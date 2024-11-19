@@ -2993,6 +2993,23 @@ SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
     });
 }
 
+// Used by `test_view_update_generating_writetime` below.
+struct update_counter {
+    // View update count towards mv1.
+    unsigned mv1;
+    // View update count towards mv2.
+    unsigned mv2;
+    // Total view update count.
+    unsigned total;
+
+    bool operator==(const update_counter&) const noexcept = default;
+
+    friend std::ostream& operator<<(std::ostream& os, const update_counter& uc) {
+        std::print(os, "{{mv1: {}, mv2: {}, total: {}}}", uc.mv1, uc.mv2, uc.total);
+        return os;
+    }
+};
+
 SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
 
@@ -3032,18 +3049,22 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(1))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 1);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 1);
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{1, 0, 1};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(e) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(2))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 1);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 1);
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{1, 0, 1};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         // Updating timestamp for a selected column will propagate for existing columns
@@ -3051,18 +3072,22 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(3))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 2);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 2);
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 0);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{2, 0, 2};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
         // After instantiating view row a, selected column's timestamp from previous example will propagate to mv2
         e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(b) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(3))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 4);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 3);
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{3, 1, 4};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         // Updating column value without touching TTL will not propagate
@@ -3071,18 +3096,22 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(5))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 5);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 4); // only one update for creation, update does not generate one
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{4, 1, 5};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         e.execute_cql("UPDATE t USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(f) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(6))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 5);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 4); // only one update for creation, update does not generate one
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{4, 1, 5};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         // Updating column value with TTL will propagate for virtual columns
@@ -3090,18 +3119,22 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(7))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 6);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 5); // two updates - one for creation, one for updating the TTL
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{5, 1, 6};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
 
         e.execute_cql("UPDATE t USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(8))});
-            BOOST_REQUIRE_EQUAL(total_t_view_updates(), 7);
-            BOOST_REQUIRE_EQUAL(total_mv1_updates(), 6); // two updates - one for creation, one for updating the TTL
-            BOOST_REQUIRE_EQUAL(total_mv2_updates(), 1);
+
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{6, 1, 7};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
         });
     });
 }
