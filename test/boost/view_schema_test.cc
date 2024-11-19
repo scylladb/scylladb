@@ -3071,7 +3071,7 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
 
         // Updating column value with TTL will propagate for virtual columns
         e.execute_cql("UPDATE t USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1;").get();
-        e.execute_cql("UPDATE t USING TTL 10 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
+        e.execute_cql("UPDATE t USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1;").get();
         eventually([&] {
             msg = e.execute_cql("SELECT WRITETIME(g) FROM t").get();
             assert_that(msg).is_rows().with_row({long_type->decompose(int64_t(8))});
