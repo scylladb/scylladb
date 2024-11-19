@@ -3002,6 +3002,9 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
         e.execute_cql("CREATE MATERIALIZED VIEW mv2 AS SELECT k,c,a,b FROM t "
                          "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, k, a)").get();
 
+        e.local_view_builder().wait_until_built("ks", "mv1").get();
+        e.local_view_builder().wait_until_built("ks", "mv2").get();
+
         auto total_t_view_updates = [&] {
             return e.db().map_reduce0([] (replica::database& local_db) {
                 const db::view::stats& local_stats = local_db.find_column_family("ks", "t").get_view_stats();
