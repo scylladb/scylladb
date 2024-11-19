@@ -422,9 +422,6 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_id* from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
     bool respond = true;
-    if (!_advertise_myself) {
-        respond = false;
-    } else {
         if (!_advertise_to_nodes.empty()) {
             auto it = _advertise_to_nodes.find(from);
             if (it == _advertise_to_nodes.end()) {
@@ -443,7 +440,6 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_i
                 }
             }
         }
-    }
     if (!respond) {
         throw std::runtime_error("Not ready to respond gossip echo message");
     }
@@ -2047,13 +2043,8 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states, gms::advertise_myself advertise) {
+future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states) {
     auto permit = co_await lock_endpoint(get_broadcast_address(), null_permit_id);
-    co_await container().invoke_on_all([advertise] (gossiper& g) {
-        if (!advertise) {
-            g._advertise_myself = false;
-        }
-    });
 
     build_seeds_list();
     if (_gcfg.force_gossip_generation() > 0) {
@@ -2104,7 +2095,6 @@ gossiper::get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) 
 future<> gossiper::advertise_to_nodes(generation_for_nodes advertise_to_nodes) {
     return container().invoke_on_all([advertise_to_nodes = std::move(advertise_to_nodes)] (auto& g) {
         g._advertise_to_nodes = advertise_to_nodes;
-        g._advertise_myself = true;
     });
 }
 

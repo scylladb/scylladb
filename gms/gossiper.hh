@@ -46,8 +46,6 @@ class i_endpoint_state_change_subscriber;
 class gossip_get_endpoint_states_request;
 class gossip_get_endpoint_states_response;
 
-using advertise_myself = bool_class<class advertise_myself_tag>;
-
 struct syn_msg_pending {
     bool pending = false;
     std::optional<gossip_digest_syn> syn_msg;
@@ -122,7 +120,6 @@ private:
     seastar::gate _background_msg;
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
-    bool _advertise_myself = true;
     // Map ip address and generation number
     generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
@@ -607,8 +604,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {},
-            gms::advertise_myself advertise = gms::advertise_myself::yes);
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {});
 
 public:
     using mandatory = bool_class<class mandatory_tag>;
