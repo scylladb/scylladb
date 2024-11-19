@@ -285,7 +285,7 @@ add_version_library(scylla_version
 
 add_executable(scylla
   main.cc)
-target_link_libraries(scylla PRIVATE
+set(scylla_libs
     scylla-main
     api
     auth
@@ -320,6 +320,8 @@ target_link_libraries(scylla PRIVATE
     transport
     types
     utils)
+target_link_libraries(scylla PRIVATE
+    ${scylla_libs})
 
 target_link_libraries(scylla PRIVATE
     Seastar::seastar
