@@ -59,6 +59,7 @@
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
 #include "service/paxos/proposal.hh"
+#include "service/topology_mutation.hh"
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -240,7 +241,9 @@ class storage_proxy::remote {
     sharded<db::system_keyspace>& _sys_ks;
     raft_group0_client& _group0_client;
     topology_state_machine& _topology_state_machine;
- 
+    abort_source _group0_as;
+    future<> _truncate_table_fiber = make_ready_future<>();
+
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
 
@@ -276,6 +279,8 @@ public:
 
     // Must call before destroying the `remote` object.
     future<> stop() {
+        _group0_as.request_abort();
+        co_await std::move(_truncate_table_fiber);
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -447,6 +452,25 @@ public:
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             table_schema_version schema_id, const partition_key& key, utils::UUID ballot) {
         return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
+    }
+
+    future<> truncate_with_tablets(sstring ks_name, sstring cf_name, std::chrono::milliseconds timeout_in_ms) {
+        if (!_truncate_table_fiber.available()) {
+            throw std::runtime_error("Another TRUNCATE TABLE is ongoing, please retry.");
+        }
+        auto sem = make_lw_shared<seastar::semaphore>(0);
+        _truncate_table_fiber = request_truncate_with_tablets(ks_name, cf_name).then_wrapped([sem] (auto f) {
+            if (f.failed()) {
+                sem->broken(f.get_exception());
+            } else {
+                sem->signal(1);
+            }
+        });
+        try {
+            co_await sem->wait(timeout_in_ms, 1);
+        } catch (seastar::semaphore_timed_out&) {
+            throw std::runtime_error(format("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name));
+        }
     }
 
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
@@ -1042,6 +1066,58 @@ private:
         }
         for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
             cf->drop_hit_rate(*id);
+        }
+    }
+
+    future<> request_truncate_with_tablets(sstring ks_name, sstring cf_name) {
+        if (this_shard_id() != 0) {
+            // group0 is only set on shard 0
+            co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
+                return sp.remote().request_truncate_with_tablets(ks_name, cf_name);
+            });
+        }
+
+        // Create the global topology request
+        utils::UUID global_request_id;
+        while (true) {
+            group0_guard guard = co_await _group0_client.start_operation(_group0_as, raft_timeout{});
+
+            if (_topology_state_machine._topology.global_request.has_value()) {
+                throw exceptions::invalid_request_exception("Another global topology request is ongoing, please retry.");
+            }
+
+            global_request_id = guard.new_group0_state_id();
+
+            const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
+
+            std::vector<canonical_mutation> updates;
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                    .set_global_topology_request(global_topology_request::truncate_table)
+                                    .set_global_topology_request_id(global_request_id)
+                                    .set_session(session_id(global_request_id))
+                                    .build());
+
+            updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id)
+                                    .set_truncate_table_data(table_id)
+                                    .set("done", false)
+                                    .set("start_time", db_clock::now())
+                                    .build());
+
+            topology_change change{std::move(updates)};
+            sstring reason = "Truncating table";
+            group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
+            try {
+                co_await _group0_client.add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+                break;
+            } catch (group0_concurrent_modification&) {
+                slogger.debug("request_truncate_with_tablets: concurrent modification, retrying");
+            }
+        }
+
+        // Wait for the topology request to complete
+        sstring error = co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), global_request_id, true);
+        if (!error.empty()) {
+            throw std::runtime_error(error);
         }
     }
 };
