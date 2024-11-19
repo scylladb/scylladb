@@ -103,16 +103,8 @@ void raft_group_registry::init_rpc_verbs() {
         }
 
         return container().invoke_on(shard_for_group(gid),
-                [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
-            // Update the address mappings for the rpc module
-            // in case the sender is encountered for the first time
+                [addr = netw::messaging_service::get_source(cinfo).addr, gid, handler] (raft_group_registry& self) mutable {
             auto& rpc = self.get_rpc(gid);
-            // The address learnt from a probably unknown server should
-            // eventually expire. Do not use it to update
-            // a previously learned gossiper address: otherwise an RPC from
-            // a node outside of the config could permanently
-            // change the address map of a healthy cluster.
-            self._address_map.opt_add_entry(locator::host_id{from.uuid()}, std::move(addr));
             // Execute the actual message handling code
             if constexpr (is_one_way) {
                 handler(rpc);
