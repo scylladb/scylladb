@@ -8,8 +8,6 @@
 
 #include <seastar/util/lazy.hh>
 
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "schema_upgrader.hh"
@@ -18,11 +16,11 @@ logging::logger mrlog("mutation_reader");
 
 static size_t compute_buffer_size(const schema& s, const mutation_reader::tracked_buffer& buffer)
 {
-    return boost::accumulate(
+    return std::ranges::fold_left(
         buffer
-        | boost::adaptors::transformed([] (const mutation_fragment_v2& mf) {
+        | std::views::transform([] (const mutation_fragment_v2& mf) {
             return mf.memory_usage();
-        }), size_t(0)
+        }), size_t(0), std::plus<size_t>()
     );
 }
 
