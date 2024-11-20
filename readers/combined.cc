@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <boost/range/algorithm/heap_algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 
 #include "readers/empty_v2.hh"
@@ -395,7 +394,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         if (mfo) {
             if (mfo->is_partition_start()) {
                 _reader_heap.emplace_back(rk.reader, std::move(*mfo));
-                boost::push_heap(_reader_heap, reader_heap_compare(*_schema));
+                std::ranges::push_heap(_reader_heap, reader_heap_compare(*_schema));
             } else {
                 if (reader_galloping) {
                     // Optimization: assume that galloping reader will keep winning, and compare directly with the heap front.
@@ -411,7 +410,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
                 }
 
                 _fragment_heap.emplace_back(rk.reader, std::move(*mfo));
-                boost::range::push_heap(_fragment_heap, fragment_heap_compare(*_schema));
+                std::ranges::push_heap(_fragment_heap, fragment_heap_compare(*_schema));
             }
         } else if (_fwd_sm == streamed_mutation::forwarding::yes && rk.last_kind != mutation_fragment_v2::kind::partition_end) {
             // When in streamed_mutation::forwarding mode we need
@@ -538,7 +537,7 @@ future<mutation_fragment_batch_opt> mutation_reader_merger::maybe_produce_batch(
         };
 
         do {
-            boost::range::pop_heap(_reader_heap, reader_heap_compare(*_schema));
+            std::ranges::pop_heap(_reader_heap, reader_heap_compare(*_schema));
             // All fragments here are partition_start so no need to
             // heap-sort them.
             _fragment_heap.emplace_back(std::move(_reader_heap.back()));
@@ -556,7 +555,7 @@ future<mutation_fragment_batch_opt> mutation_reader_merger::maybe_produce_batch(
 
     const auto equal = position_in_partition::equal_compare(*_schema);
     do {
-        boost::range::pop_heap(_fragment_heap, fragment_heap_compare(*_schema));
+        std::ranges::pop_heap(_fragment_heap, fragment_heap_compare(*_schema));
         auto& n = _fragment_heap.back();
         const auto kind = n.fragment.mutation_fragment_kind();
         _current.emplace_back(std::move(n.fragment), &*n.reader);
@@ -790,7 +789,7 @@ class clustering_order_reader_merger {
         explicit peeked_reader_cmp(const schema& s) : _less(s) {}
 
         bool operator()(const reader_iterator& a, const reader_iterator& b) {
-            // Boost heaps are max-heaps, but we want a min-heap, so invert the comparison.
+            // Heap is max-heap, but we want a min-heap, so invert the comparison.
             return _less(b->reader.peek_buffer().position(), a->reader.peek_buffer().position());
         }
     };
@@ -906,7 +905,7 @@ class clustering_order_reader_merger {
                 }
                 if (!_partition_start_fetched) {
                     _peeked_readers.emplace_back(it);
-                    boost::range::push_heap(_peeked_readers, _peeked_cmp);
+                    std::ranges::push_heap(_peeked_readers, _peeked_cmp);
                     _partition_start_fetched = true;
                     // there is no _forwarded_to range yet (see `fast_forward_to`)
                     // so no need to forward this reader
@@ -930,7 +929,7 @@ class clustering_order_reader_merger {
                 return erase_reader(std::move(it));
             } else {
                 _peeked_readers.emplace_back(it);
-                boost::range::push_heap(_peeked_readers, _peeked_cmp);
+                std::ranges::push_heap(_peeked_readers, _peeked_cmp);
             }
 
             return make_ready_future<>();
@@ -984,7 +983,7 @@ class clustering_order_reader_merger {
                     // In either case we exit the galloping mode.
 
                     _peeked_readers.emplace_back(std::move(_galloping_reader));
-                    boost::range::push_heap(_peeked_readers, _peeked_cmp);
+                    std::ranges::push_heap(_peeked_readers, _peeked_cmp);
                 }
             } else {
                 // See comment in `peek_reader`.
@@ -1082,7 +1081,7 @@ public:
 
         // Take all fragments with the next smallest position (there may be multiple such fragments).
         do {
-            boost::range::pop_heap(_peeked_readers, _peeked_cmp);
+            std::ranges::pop_heap(_peeked_readers, _peeked_cmp);
             auto r = _peeked_readers.back();
             auto mf = r->reader.pop_mutation_fragment();
             _peeked_readers.pop_back();
