@@ -176,6 +176,7 @@ struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
     locator::tablet_task_info repair_task_info;
+    locator::tablet_task_info migration_task_info;
 
     bool operator==(const tablet_info&) const = default;
 };
