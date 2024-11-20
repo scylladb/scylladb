@@ -7,7 +7,7 @@
 
 from cassandra_tests.porting import *
 
-@pytest.mark.xfail(reason="Issue #2060, #5361, #5362, #5363, #13109")
+@pytest.mark.xfail(reason="Issue #2060, #13109")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
 
@@ -533,7 +533,6 @@ def testGroupByWithoutPagingWithDeletions(cql, test_keyspace):
                    row(1, 2, 2, 3, 12),
                    row(1, 2, 3, 4, 12))
 
-@pytest.mark.xfail(reason="Issue #5361, #5363")
 def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c))") as table:
         for i in range(1,5):
@@ -603,7 +602,7 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(1, 1, 2, 2, 2),
                    row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #5361, #5362, #5363, #13109")
+@pytest.mark.xfail(reason="Issue #13109")
 def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
@@ -1081,7 +1080,6 @@ def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
                    row(4, 8, None, 1, 0),
                    row(1, 4, 1, 2, 2))
 
-@pytest.mark.xfail(reason="Issue #5361, #5362, #5363")
 def testGroupByWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, 1, 3, 6)")
@@ -1499,7 +1497,6 @@ def testGroupByWithPaging(cql, test_keyspace):
                                                pageSize),
                           row(1, 3))
 
-@pytest.mark.xfail(reason="Issue #5361, #5363")
 def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, primary key (a, b, c))") as table:
         for i in range(1,5):
@@ -1570,7 +1567,7 @@ def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
                           row(1, 1, 2, 2, 2),
                           row(2, 1, 3, 2, 3))
 
-@pytest.mark.xfail(reason="Issue #5361, #5362, #5363")
+@pytest.mark.xfail(reason="Issue #21267")
 def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, s int static, d int, primary key (a, b, c))") as table:
         # ------------------------------------
@@ -1778,6 +1775,7 @@ def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
 
         for pageSize in range(1,10):
             # Range queries
+            # Reproduces #21267
             assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, s, count(b), count(s) FROM %s GROUP BY a", pageSize),
                           row(1, 2, 1, 4, 4),
                           row(2, 2, 2, 2, 2),

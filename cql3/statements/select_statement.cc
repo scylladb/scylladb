@@ -308,7 +308,7 @@ select_statement::make_partition_slice(const query_options& options) const
 }
 
 select_statement::get_limit_result select_statement::get_limit(
-    const query_options& options, const std::optional<expr::expression>& limit) const
+    const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit) const
 {
     if (!limit.has_value()) {
         return bo::success(query::max_rows);
@@ -320,7 +320,8 @@ select_statement::get_limit_result select_statement::get_limit(
         }
         auto l = val.view().validate_and_deserialize<int32_t>(*int32_type);
         if (l <= 0) {
-            return bo::failure(exceptions::invalid_request_exception("LIMIT must be strictly positive"));
+            auto msg = is_per_partition_limit ? "PER PARTITION LIMIT must be strictly positive" : "LIMIT must be strictly positive";
+            return bo::failure(exceptions::invalid_request_exception(msg));
         }
         return bo::success(l);
     } catch (const marshal_exception& e) {
@@ -495,8 +496,10 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
+    auto per_partition_limit = get_limit(options, _per_partition_limit, true);
+
     if (aggregate || nonpaged_filtering) {
-        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit);
+        auto builder = cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices, limit, per_partition_limit.value());
         coordinator_result<void> result_void = co_await utils::result_do_until(
                 [&p, &builder, limit] {
                     return p->is_exhausted() || (limit < builder.result_set_size());
