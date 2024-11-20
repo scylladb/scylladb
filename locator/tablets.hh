@@ -149,6 +149,8 @@ enum class tablet_task_type {
     none,
     user_repair,
     auto_repair,
+    migration,
+    intranode_migration
 };
 
 sstring tablet_task_type_to_string(tablet_task_type);
@@ -165,6 +167,8 @@ struct tablet_task_info {
     bool is_user_repair_request() const;
     static tablet_task_info make_user_repair_request();
     static tablet_task_info make_auto_repair_request();
+    static tablet_task_info make_migration_request();
+    static tablet_task_info make_intranode_migration_request();
 };
 
 /// Stores information about a single tablet.
