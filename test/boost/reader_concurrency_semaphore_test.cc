@@ -517,6 +517,34 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     });
 }
 
+SEASTAR_TEST_CASE(reader_concurrency_semaphore_abort) {
+    return async([&] () {
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
+        auto stop_sem = deferred_stop(semaphore);
+
+        {
+            auto timeout = db::timeout_clock::now() + 500ms;
+
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout, {}).get();
+
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout, {});
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+
+            // The permits are rejected when the remaining time is less than half of its timeout when arrived to the semaphore.
+            // Hence, sleep 300ms to reject the permits in the waitlist during admission.
+            seastar::sleep(300ms).get();
+
+            permit1 = {};
+            const auto futures_failed = eventually_true([&] { return permit2_fut.failed(); });
+            BOOST_CHECK(futures_failed);
+            BOOST_CHECK_THROW(std::rethrow_exception(permit2_fut.get_exception()), semaphore_aborted);
+        }
+
+        // All units should have been deposited back.
+        REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
+    });
+}
+
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     return async([&] () {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost, 2);
@@ -597,7 +625,8 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
 
                 permit.resources = permit.permit->consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
             } else {
-                const auto timeout_seconds = tests::random::get_int<unsigned>(0, 3);
+                //Ensure timeout_seconds > 0 to avoid permits being rejected during admission. The test will become flaky.
+                const auto timeout_seconds = tests::random::get_int<unsigned>(1, 4);
 
                 permit.permit_fut = semaphore.obtain_permit(
                         schema,
@@ -694,7 +723,12 @@ static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& s
     testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
     const auto stats_before = semaphore.get_stats();
 
-    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now() + 50ms, {});
+    // We can neither use
+    //      db::timeout_clock::now() - the permit might time out immediately and if not, it will be rejected during admission
+    //      db::no_timeout - tests invoking the function with `expected_can_admit=False`, rely on a timeout exception
+    // Thus, we need to add an offset that is neither too big not too small so we do not introduce flakiness nor tests' execution
+    // takes too much time.
+    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now() + 500ms, {});
     admit_fut.wait();
     const bool can_admit = !admit_fut.failed();
     if (can_admit) {
