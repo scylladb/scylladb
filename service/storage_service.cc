@@ -5939,6 +5939,34 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     }
 }
 
+future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
+    return do_tablet_operation(tablet, "Repair", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+        slogger.debug("Executing repair for tablet={}", tablet);
+        auto& tmap = guard.get_tablet_map();
+        auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+        // Check if the request is still valid.
+        // If there is mismatch, it means this repair was canceled and the coordinator moved on.
+        if (!trinfo) {
+            throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
+        }
+        if (trinfo->stage != locator::tablet_transition_stage::repair) {
+            throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
+        }
+        if (trinfo->session_id) {
+            // TODO: Propagate session id to repair
+            slogger.debug("repair_tablet: tablet={} session_id={}", tablet, trinfo->session_id);
+        } else {
+            throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
+        }
+
+        utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
+            [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
+        co_await _repair.local().repair_tablet(guard, tablet);
+        co_return;
+    });
+}
+
 future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
     if (leaving.host != pending.host) {
         throw std::runtime_error(fmt::format("Leaving and pending tablet replicas belong to different nodes, {} and {} respectively",
@@ -6145,6 +6173,154 @@ static bool increases_replicas_per_rack(const locator::topology& topology, const
     }
     auto max = *std::ranges::max_element(m | std::views::values);
     return m[dst_rack] + 1 > max;
+}
+
+future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
+    auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+    co_return guard;
+}
+
+future<bool> storage_service::exec_tablet_update(service::group0_guard guard, std::vector<canonical_mutation> updates, sstring reason) {
+    rtlogger.info("{}", reason);
+    rtlogger.trace("do update {} reason {}", updates, reason);
+    updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+            .set_version(_topology_state_machine._topology.version + 1)
+            .build());
+    topology_change change{std::move(updates)};
+    group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+    try {
+        co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+        co_return true;
+    } catch (group0_concurrent_modification&) {
+        rtlogger.debug("exec_tablet_update(): concurrent modification, retrying");
+    }
+    co_return false;
+}
+
+// Repair the tablets contain the tokens and wait for the repair to finish
+// This is used to run a manual repair requested by user from the restful API.
+future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.add_repair_tablet_request(table, std::move(tokens_variant));
+        });
+    }
+
+    bool all_tokens = std::holds_alternative<all_tokens_tag>(tokens_variant);
+    utils::chunked_vector<dht::token> tokens;
+    if (!all_tokens) {
+        tokens = std::get<utils::chunked_vector<dht::token>>(tokens_variant);
+    }
+
+    if (!_feature_service.tablet_repair_scheduler) {
+        throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
+    }
+
+    auto repair_task_info = locator::tablet_task_info::make_user_request();
+    auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
+
+    auto start = std::chrono::steady_clock::now();
+    slogger.info("Starting tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={}", table, tokens, all_tokens, repair_task_info.tablet_task_id);
+
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        std::vector<canonical_mutation> updates;
+
+        if (all_tokens) {
+            tokens.clear();
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+                auto last_token = tmap.get_last_token(tid);
+                tokens.push_back(last_token);
+                co_return;
+            });
+        }
+
+        for (const auto& token : tokens) {
+            auto tid = tmap.get_tablet_id(token);
+            auto& tinfo = tmap.get_tablet_info(tid);
+            auto& req_id = tinfo.repair_task_info.tablet_task_id;
+            if (req_id) {
+                throw std::runtime_error(fmt::format("Tablet {} is already in repair by tablet_task_id={}",
+                        locator::global_tablet_id{table, tid}, req_id));
+            }
+            auto last_token = tmap.get_last_token(tid);
+            updates.emplace_back(
+                replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                    .set_repair_task_info(last_token, repair_task_info)
+                    .build());
+        }
+
+        sstring reason = format("Repair tablet by API request tokens={} tablet_task_id={}", tokens, repair_task_info.tablet_task_id);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+
+    co_await _topology_state_machine.event.wait([&] {
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        return std::all_of(tokens.begin(), tokens.end(), [&] (const dht::token& token) {
+            auto id = tmap.get_tablet_id(token);
+            return tmap.get_tablet_info(id).repair_task_info.tablet_task_id != repair_task_info.tablet_task_id;
+        });
+    });
+
+    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start);
+    slogger.info("Finished tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} duration={}",
+            table, tokens, all_tokens, repair_task_info.tablet_task_id, duration);
+
+    co_return res;
+}
+
+
+// Delete a tablet repair request by the given tablet_task_id
+future<> storage_service::del_repair_tablet_request(table_id table, locator::tablet_task_id tablet_task_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.del_repair_tablet_request(table, tablet_task_id);
+        });
+    }
+
+    if (!_feature_service.tablet_repair_scheduler) {
+        throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
+    }
+
+    slogger.info("Deleting tablet repair request by API request table_id={} tablet_task_id={}", table, tablet_task_id);
+    while (true) {
+        auto guard = co_await get_guard_for_tablet_update();
+
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+        std::vector<canonical_mutation> updates;
+
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+            auto& tinfo = tmap.get_tablet_info(tid);
+            auto& req_id = tinfo.repair_task_info.tablet_task_id;
+            if (req_id != tablet_task_id) {
+                co_return;
+            }
+            auto last_token = tmap.get_last_token(tid);
+            auto* trinfo = tmap.get_tablet_transition_info(tid);
+            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                            .del_repair_task_info(last_token);
+            if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
+                update.del_session(last_token);
+            }
+            updates.emplace_back(update.build());
+        });
+
+        sstring reason = format("Deleting tablet repair request by API request tablet_id={} tablet_task_id={}", table, tablet_task_id);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            break;
+        }
+    }
+    slogger.info("Deleted tablet repair request by API request table_id={} tablet_task_id={}", table, tablet_task_id);
 }
 
 future<> storage_service::move_tablet(table_id table, dht::token token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force) {
@@ -6945,6 +7121,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
         return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
             return ss.stream_tablet(tablet);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
+        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
+            return ss.repair_tablet(tablet);
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {

@@ -2321,6 +2321,7 @@ future<> system_keyspace::make(
         co_await db.create_local_system_table(table, maybe_write_in_user_memory(table), erm_factory);
         co_await db.find_column_family(table).init_storage();
     }
+    replica::tablet_add_repair_scheduler_user_types(NAME, db);
 }
 
 void system_keyspace::mark_writable() {
