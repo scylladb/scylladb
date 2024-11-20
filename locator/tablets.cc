@@ -555,6 +555,8 @@ static const std::unordered_map<tablet_task_type, sstring> tablet_task_type_to_n
     {locator::tablet_task_type::none, "none"},
     {locator::tablet_task_type::user_repair, "user_repair"},
     {locator::tablet_task_type::auto_repair, "auto_repair"},
+    {locator::tablet_task_type::migration, "migration"},
+    {locator::tablet_task_type::intranode_migration, "intranode_migration"},
 };
 
 static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from_name = std::invoke([] {
@@ -568,7 +570,7 @@ static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from
 sstring tablet_task_type_to_string(tablet_task_type kind) {
     auto i = tablet_task_type_to_name.find(kind);
     if (i == tablet_task_type_to_name.end()) {
-        on_internal_error(tablet_logger, format("Invalid repair task type: {}", static_cast<int>(kind)));
+        on_internal_error(tablet_logger, format("Invalid tablet task type: {}", static_cast<int>(kind)));
     }
     return i->second;
 }
@@ -1185,4 +1187,16 @@ locator::tablet_task_info locator::tablet_task_info::make_user_repair_request() 
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_migration_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_intranode_migration_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::intranode_migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }
