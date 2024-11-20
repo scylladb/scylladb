@@ -1757,7 +1757,7 @@ void table::subtract_compaction_group_from_stats(const compaction_group& cg) noe
     _stats.live_sstable_count -= cg.live_sstable_count();
 }
 
-future<lw_shared_ptr<sstables::sstable_set>>
+future<table::sstable_list_builder::result>
 table::sstable_list_builder::build_new_list(const sstables::sstable_set& current_sstables,
                               sstables::sstable_set new_sstable_list,
                               const std::vector<sstables::shared_sstable>& new_sstables,
@@ -1767,13 +1767,17 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
     // this might seem dangerous, but "move" here just avoids constness,
     // making the two ranges compatible when compiling with boost 1.55.
     // No one is actually moving anything...
+    std::vector<sstables::shared_sstable> removed_sstables;
     for (auto all = current_sstables.all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
-        if (!s.contains(tab)) {
+        if (s.contains(tab)) {
+            removed_sstables.push_back(tab);
+        } else {
             new_sstable_list.insert(tab);
         }
         co_await coroutine::maybe_yield();
     }
-    co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
+    co_return table::sstable_list_builder::result {
+        make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list)), std::move(removed_sstables)};
 }
 
 future<>
@@ -1818,9 +1822,9 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
         virtual future<> prepare() override {
             sstables_t empty;
             // adding new sstables, created by off-strategy operation, to main set
-            _new_main_list = co_await _builder.build_new_list(*_cg.main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
+            _new_main_list = (co_await _builder.build_new_list(*_cg.main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty)).new_sstable_set;
             // removing old sstables, used as input by off-strategy, from the maintenance set
-            _new_maintenance_list = co_await _builder.build_new_list(*_cg.maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
+            _new_maintenance_list = (co_await _builder.build_new_list(*_cg.maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance)).new_sstable_set;
         }
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_main_list));
@@ -1913,8 +1917,8 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
-                d.new_sstables = co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
-                                                                  d.desc.new_sstables, d.desc.old_sstables);
+                d.new_sstables = (co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
+                                                                  d.desc.new_sstables, d.desc.old_sstables)).new_sstable_set;
             }
         }
         virtual void execute() override {
