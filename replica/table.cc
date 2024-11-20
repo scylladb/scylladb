@@ -1904,7 +1904,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         const sstables::compaction_completion_desc& _desc;
         struct replacement_desc {
             sstables::compaction_completion_desc desc;
-            lw_shared_ptr<sstables::sstable_set> new_sstables;
+            table::sstable_list_builder::result main_sstable_set_builder_result;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
     public:
@@ -1920,18 +1920,18 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
-                d.new_sstables = (co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
-                                                                  d.desc.new_sstables, d.desc.old_sstables)).new_sstable_set;
+                d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
+                                                                  d.desc.new_sstables, d.desc.old_sstables);
             }
         }
         virtual void execute() override {
             for (auto&& [cg, d] : _cg_desc) {
-                cg->set_main_sstables(std::move(d.new_sstables));
+                cg->set_main_sstables(std::move(d.main_sstable_set_builder_result.new_sstable_set));
             }
             // FIXME: the following is not exception safe
             _t.refresh_compound_sstable_set();
             for (auto& [cg, d] : _cg_desc) {
-                cg->backlog_tracker_adjust_charges(d.desc.old_sstables, d.desc.new_sstables);
+                cg->backlog_tracker_adjust_charges(d.main_sstable_set_builder_result.removed_sstables, d.desc.new_sstables);
             }
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder::permit_t permit, sstables::compaction_completion_desc& d) {
