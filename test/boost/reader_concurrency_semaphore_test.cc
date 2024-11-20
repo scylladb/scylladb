@@ -513,6 +513,34 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     });
 }
 
+SEASTAR_TEST_CASE(reader_concurrency_semaphore_abort) {
+    return async([&] () {
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
+        auto stop_sem = deferred_stop(semaphore);
+
+        {
+            auto timeout = db::timeout_clock::now() + 100ms;
+
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout, {}).get();
+
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout, {});
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+
+            // The permits are aborted when the remaining time is less than half of its timeout when arrived to the semaphore.
+            // Hence, sleep 60ms to abort the permits in the waitlist during admission.
+            seastar::sleep(60ms).get();
+
+            permit1 = {};
+            const auto futures_failed = eventually_true([&] { return permit2_fut.failed(); });
+            BOOST_CHECK(futures_failed);
+            BOOST_CHECK_THROW(std::rethrow_exception(permit2_fut.get_exception()), semaphore_aborted);
+        }
+
+        // All units should have been deposited back.
+        REQUIRE_EVENTUALLY_EQUAL(replica::new_reader_base_cost, semaphore.available_resources().memory);
+    });
+}
+
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     return async([&] () {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost, 2);
