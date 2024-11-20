@@ -7,7 +7,6 @@
  */
 
 #include "utils/assert.hh"
-#include <boost/range/algorithm/heap_algorithm.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/closeable.hh>
@@ -1065,7 +1064,7 @@ void multishard_combining_reader_v2::on_partition_range_change(const dht::partit
     // We stop earlier if the sharder has no ranges for the remaining shards.
     for (next = sharder.next(*_schema); next && next->shard != _current_shard; next = sharder.next(*_schema)) {
         _shard_selection_min_heap.push_back(shard_and_token{next->shard, next->ring_range.start()->value().token()});
-        boost::push_heap(_shard_selection_min_heap);
+        std::ranges::push_heap(_shard_selection_min_heap, std::less<shard_and_token>{});
     }
 }
 
@@ -1074,13 +1073,13 @@ bool multishard_combining_reader_v2::maybe_move_to_next_shard(const dht::token* 
         return false;
     }
 
-    boost::pop_heap(_shard_selection_min_heap);
+    std::ranges::pop_heap(_shard_selection_min_heap, std::less<shard_and_token>{});
     const auto next_shard = _shard_selection_min_heap.back().shard;
     _shard_selection_min_heap.pop_back();
 
     if (t) {
         _shard_selection_min_heap.push_back(shard_and_token{_current_shard, *t});
-        boost::push_heap(_shard_selection_min_heap);
+        std::ranges::push_heap(_shard_selection_min_heap, std::less<shard_and_token>{});
     }
 
     _crossed_shards = true;
@@ -1114,7 +1113,7 @@ future<> multishard_combining_reader_v2::handle_empty_reader_buffer() {
             // background. They will be brought to the foreground when we move
             // to their respective shard.
             for (unsigned i = 1; i < _concurrency && !shard_selection_min_heap_copy.empty(); ++i) {
-                boost::pop_heap(shard_selection_min_heap_copy);
+                std::ranges::pop_heap(shard_selection_min_heap_copy, std::less<shard_and_token>{});
                 const auto next_shard = shard_selection_min_heap_copy.back().shard;
                 shard_selection_min_heap_copy.pop_back();
                 _shard_readers[next_shard]->read_ahead();
