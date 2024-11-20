@@ -227,7 +227,6 @@ private:
     // Map repair id into repair_info.
     std::unordered_map<int, tasks::task_id> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
-    std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
@@ -262,7 +261,7 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress();
-    bool is_aborted(const tasks::task_id& uuid);
+    future<bool> is_aborted(const tasks::task_id& uuid, shard_id shard);
 };
 
 }
