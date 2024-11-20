@@ -1232,11 +1232,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
             return;
         }
+        auto migration_task_info = mig.kind == locator::tablet_transition_kind::migration ? locator::tablet_task_info::make_migration_request()
+            : locator::tablet_task_info::make_intranode_migration_request();
+        migration_task_info.sched_nr++;
+        migration_task_info.sched_time = db_clock::now();
         out.emplace_back(
             replica::tablet_mutation_builder(guard.write_timestamp(), mig.tablet.table)
                 .set_new_replicas(last_token, locator::get_new_replicas(tmap.get_tablet_info(mig.tablet.tablet), mig))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                 .set_transition(last_token, mig.kind)
+                .set_migration_task_info(last_token, std::move(migration_task_info), _db.features())
                 .build());
     }
 
@@ -1516,6 +1521,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
+                                .del_migration_task_info(last_token, _db.features())
                                 .build());
                     }
                     break;
@@ -1527,6 +1533,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
+                                .del_migration_task_info(last_token, _db.features())
                                 .build());
                     }
                     break;
