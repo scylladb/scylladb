@@ -48,6 +48,7 @@
 #include "replica/tablets.hh"
 #include "service/raft/group0_state_machine_merger.hh"
 #include "gms/feature_service.hh"
+#include "idl/migration_manager.dist.hh"
 
 namespace service {
 
@@ -341,7 +342,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
-    auto [_, cm] = co_await _mm._messaging.send_migration_request(addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
+    auto [_, cm] = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_mm._messaging, addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
     if (!cm) {
         // If we're running this code then remote supports Raft group 0, so it should also support canonical mutations
         // (which were introduced a long time ago).

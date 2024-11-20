@@ -42,6 +42,7 @@
 #include <csignal>
 
 #include "idl/group0.dist.hh"
+#include "idl/migration_manager.dist.hh"
 
 // Used to implement 'wait for any task to finish'.
 //
@@ -1484,7 +1485,7 @@ collect_schema_versions_from_group0_members(
                 upgrade_log.info("synchronize_schema: `send_schema_check({})`", node);
                 versions.emplace(node,
                     co_await with_timeout(as, rpc_timeout, [&ms, addr = netw::msg_addr(node)] (abort_source& as) mutable {
-                            return ms.send_schema_check(std::move(addr), as);
+                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, std::move(addr), as);
                         }));
             } catch (abort_requested_exception&) {
                 upgrade_log.warn("synchronize_schema: abort requested during `send_schema_check({})`", node);

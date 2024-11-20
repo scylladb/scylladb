@@ -76,6 +76,7 @@
 #include "idl/gossip.dist.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/join_node.dist.hh"
+#include "idl/migration_manager.dist.hh"
 #include "message/rpc_protocol_impl.hh"
 #include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"
@@ -105,6 +106,7 @@
 #include "idl/per_partition_rate_limit_info.dist.impl.hh"
 #include "idl/storage_proxy.dist.impl.hh"
 #include "idl/gossip.dist.impl.hh"
+#include "idl/migration_manager.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -1183,58 +1185,6 @@ future<> messaging_service::send_complete_message(msg_addr id, streaming::plan_i
 }
 future<> messaging_service::unregister_complete_message() {
     return unregister_handler(messaging_verb::COMPLETE_MESSAGE);
-}
-
-void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
-            rpc::optional<std::vector<canonical_mutation>> cm)>&& func) {
-    register_handler(this, netw::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
-}
-future<> messaging_service::unregister_definitions_update() {
-    return unregister_handler(netw::messaging_verb::DEFINITIONS_UPDATE);
-}
-future<> messaging_service::send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm) {
-    return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm), std::move(cm));
-}
-
-void messaging_service::register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>>
-        (const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func) {
-    register_handler(this, netw::messaging_verb::MIGRATION_REQUEST, std::move(func));
-}
-future<> messaging_service::unregister_migration_request() {
-    return unregister_handler(netw::messaging_verb::MIGRATION_REQUEST);
-}
-future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> messaging_service::send_migration_request(msg_addr id,
-        schema_pull_options options) {
-    return send_message<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
-            std::move(id), options);
-}
-future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> messaging_service::send_migration_request(msg_addr id,
-        abort_source& as, schema_pull_options options) {
-    return send_message_cancellable<future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>>>(this, messaging_verb::MIGRATION_REQUEST,
-            std::move(id), as, options);
-}
-
-void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
-    register_handler(this, netw::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
-}
-future<> messaging_service::unregister_get_schema_version() {
-    return unregister_handler(netw::messaging_verb::GET_SCHEMA_VERSION);
-}
-future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
-    return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
-}
-
-void messaging_service::register_schema_check(std::function<future<table_schema_version>()>&& func) {
-    register_handler(this, netw::messaging_verb::SCHEMA_CHECK, std::move(func));
-}
-future<> messaging_service::unregister_schema_check() {
-    return unregister_handler(netw::messaging_verb::SCHEMA_CHECK);
-}
-future<table_schema_version> messaging_service::send_schema_check(msg_addr dst) {
-    return send_message<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst);
-}
-future<table_schema_version> messaging_service::send_schema_check(msg_addr dst, abort_source& as) {
-    return send_message_cancellable<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst, as);
 }
 
 // Wrapper for REPAIR_GET_FULL_ROW_HASHES

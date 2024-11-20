@@ -97,6 +97,7 @@
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/join_node.hh"
 #include "idl/join_node.dist.hh"
+#include "idl/migration_manager.dist.hh"
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "node_ops/task_manager_module.hh"
@@ -3571,8 +3572,8 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
     auto live_hosts = _gossiper.get_live_members();
     std::unordered_map<sstring, std::vector<sstring>> results;
     netw::messaging_service& ms = _messaging.local();
-    return map_reduce(std::move(live_hosts), [&ms] (auto host) {
-        auto f0 = ms.send_schema_check(netw::msg_addr{ host, 0 });
+    return map_reduce(std::move(live_hosts), [&ms, as = abort_source()] (auto host) mutable {
+        auto f0 = ser::migration_manager_rpc_verbs::send_schema_check(&ms, netw::msg_addr{ host, 0 }, as);
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();

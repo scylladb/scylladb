@@ -1313,6 +1313,8 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/join_node.idl.hh',
         'idl/utils.idl.hh',
         'idl/gossip.idl.hh',
+        'idl/migration_manager.idl.hh',
+
         ]
 
 scylla_tests_generic_dependencies = [

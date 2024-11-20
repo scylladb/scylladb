@@ -13,6 +13,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "auth/resource.hh"
+#include "locator/host_id.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -36,6 +37,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/function_name.hh"
 #include "unimplemented.hh"
+#include "idl/migration_manager.dist.hh"
 
 namespace service {
 
@@ -119,7 +121,7 @@ void migration_manager::init_messaging_service()
         }
     }
 
-    _messaging.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>> cm) {
+    ser::migration_manager_rpc_verbs::register_definitions_update(&_messaging, [this] (const rpc::client_info& cinfo, std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>> cm) {
         auto src = netw::messaging_service::get_source(cinfo);
         if (!cm) {
             on_internal_error(mlogger, ::format(
@@ -137,11 +139,11 @@ void migration_manager::init_messaging_service()
                 mlogger.debug("Applied definitions update from {}.", src);
             }
         });
-        return netw::messaging_service::no_wait();
+        return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
     });
-    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
+    ser::migration_manager_rpc_verbs::register_migration_request(&_messaging, [this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
         return container().invoke_on(0, std::bind_front(
-            [] (netw::msg_addr src, rpc::optional<netw::schema_pull_options> options, migration_manager& self)
+            [] (locator::host_id src, rpc::optional<netw::schema_pull_options> options, migration_manager& self)
                 -> future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> {
             const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
             if (!cm_retval_supported) {
@@ -178,12 +180,12 @@ void migration_manager::init_messaging_service()
             }
 
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
-        }, netw::messaging_service::get_source(cinfo), std::move(options)));
+        }, cinfo.retrieve_auxiliary<locator::host_id>("host_id"), std::move(options)));
     });
-    _messaging.register_schema_check([this] {
+    ser::migration_manager_rpc_verbs::register_schema_check(&_messaging, [this] {
         return make_ready_future<table_schema_version>(_storage_proxy.get_db().local().get_version());
     });
-    _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
+    ser::migration_manager_rpc_verbs::register_get_schema_version(&_messaging, [this] (unsigned shard, table_schema_version v) {
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
         return container().invoke_on(shard, [v] (auto&& sp) {
             mlogger.debug("Schema version request for {}", v);
@@ -194,12 +196,7 @@ void migration_manager::init_messaging_service()
 
 future<> migration_manager::uninit_messaging_service()
 {
-    return when_all_succeed(
-        _messaging.unregister_migration_request(),
-        _messaging.unregister_definitions_update(),
-        _messaging.unregister_schema_check(),
-        _messaging.unregister_get_schema_version()
-    ).discard_result();
+    co_await ser::migration_manager_rpc_verbs::unregister(&_messaging);
 }
 
 void migration_notifier::register_listener(migration_listener* listener)
@@ -350,7 +347,8 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
 {
     mlogger.info("Pulling schema from {}", id);
-    auto frozen_and_canonical_mutations = co_await _messaging.send_migration_request(id, netw::schema_pull_options{});
+    abort_source as;
+    auto frozen_and_canonical_mutations = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_messaging, id, as, netw::schema_pull_options{});
     auto&& [_, canonical_mutations] = frozen_and_canonical_mutations;
     if (!canonical_mutations) {
         on_internal_error(mlogger, format(
@@ -891,7 +889,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
-    return _messaging.send_definitions_update(id, std::vector<frozen_mutation>{}, std::move(cm));
+    return ser::migration_manager_rpc_verbs::send_definitions_update(&_messaging, id, std::vector<frozen_mutation>{}, std::move(cm));
 }
 
 template<typename mutation_type>
@@ -1043,7 +1041,7 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
 static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& storage_proxy) {
     return local_schema_registry().get_or_load(v, [&ms, &storage_proxy, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        return ms.send_get_schema_version(dst, v).then([&storage_proxy] (frozen_schema s) {
+        return ser::migration_manager_rpc_verbs::send_get_schema_version(&ms, dst, static_cast<unsigned>(dst.cpu_id), v).then([&storage_proxy] (frozen_schema s) {
             auto& proxy = storage_proxy.container();
             // Since the latest schema version is always present in the schema registry
             // we only happen to query already outdated schema version, which is
@@ -1135,7 +1133,8 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
     schema_and_hosts schema_map;
     co_await coroutine::parallel_for_each(nodes, [this, &schema_map, &db] (const gms::inet_address& node) -> future<> {
         const auto& my_version = db.get_version();
-        auto remote_version = co_await _messaging.send_schema_check(netw::msg_addr(node));
+        abort_source as;
+        auto remote_version = co_await ser::migration_manager_rpc_verbs::send_schema_check(&_messaging, netw::msg_addr(node), as);
         if (my_version != remote_version) {
             schema_map[remote_version].emplace_back(node);
         }
