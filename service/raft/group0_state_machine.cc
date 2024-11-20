@@ -321,28 +321,19 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {
-  // FIXME: The translation will ultimately be done by messaging_service
-  auto from_ip = _address_map.find(locator::host_id{from_id.uuid()});
-  if (!from_ip.has_value()) {
-    // This is virtually impossible. We've just received the
-    // snapshot from the sender and must have updated our
-    // address map with its IP address.
-    const auto msg = seastar::format("Failed to apply snapshot from {}: ip address of the sender is not found", from_ip);
-    co_await coroutine::return_exception(raft::transport_error(msg));
-  }
   try {
     // Note that this may bring newer state than the group0 state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
+    locator::host_id hid{from_id.uuid()};
 
     auto holder = _gate.hold();
 
-    slogger.trace("transfer snapshot from {} index {} snp id {}", from_ip, snp.idx, snp.id);
-    netw::messaging_service::msg_addr addr{*from_ip, 0};
+    slogger.trace("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
-    auto [_, cm] = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_mm._messaging, addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
+    auto [_, cm] = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_mm._messaging, hid, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
     if (!cm) {
         // If we're running this code then remote supports Raft group 0, so it should also support canonical mutations
         // (which were introduced a long time ago).
@@ -361,7 +352,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
         topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
         tables = std::vector<table_id>();
         tables.reserve(auth_tables.size() + 1);
@@ -372,7 +363,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         tables.push_back(db::system_keyspace::service_levels_v2()->id());
 
         raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
@@ -381,7 +372,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
-    co_await _mm.merge_schema_from(addr, std::move(*cm));
+    // FIXME: move schema merging to host id and pass hid here
+    // for now empty value is OK since it is used for logging only
+    co_await _mm.merge_schema_from(netw::messaging_service::msg_addr{gms::inet_address{}, 0}, std::move(*cm));
 
     if (topology_snp && !topology_snp->mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
@@ -396,7 +389,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
   } catch (const abort_requested_exception&) {
     throw raft::request_aborted(fmt::format(
-        "Abort requested while transferring snapshot from ID/IP: {}/{}, snapshot descriptor id: {}, snapshot index: {}", from_id, from_ip, snp.id, snp.idx));
+        "Abort requested while transferring snapshot from ID: {}, snapshot descriptor id: {}, snapshot index: {}", from_id, snp.id, snp.idx));
   }
 }
 
