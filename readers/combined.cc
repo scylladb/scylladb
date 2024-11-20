@@ -31,7 +31,7 @@ struct mutation_fragment_and_stream_id {
     { }
 };
 
-using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment_and_stream_id>::iterator>;
+using mutation_fragment_batch = std::ranges::subrange<merger_vector<mutation_fragment_and_stream_id>::iterator>;
 using mutation_fragment_batch_opt = std::optional<mutation_fragment_batch>;
 
 template<typename Producer>
@@ -493,7 +493,7 @@ future<mutation_fragment_batch_opt> mutation_reader_merger::maybe_produce_batch(
         if (_single_reader.reader->is_buffer_empty()) {
             if (_single_reader.reader->is_end_of_stream()) {
                 _current.clear();
-                return make_ready_future<mutation_fragment_batch_opt>(mutation_fragment_batch(_current, &_single_reader));
+                return make_ready_future<mutation_fragment_batch_opt>(_current);
             }
             return _single_reader.reader->fill_buffer().then([] {
                 return make_ready_future<mutation_fragment_batch_opt>();
