@@ -10,7 +10,8 @@ import logging
 import requests
 import re
 
-from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
+from cassandra.cluster import ConnectionException, NoHostAvailable, ConsistencyLevel  # type: ignore
+from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
@@ -194,3 +195,61 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
     # will be held for long time until the write timeouts.
     # Otherwise, it is expected to complete in short time.
     await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=30)
+
+# Reproduces https://github.com/scylladb/scylladb/issues/21492
+# In this test we perform a write with a view update while the replication factor
+# of the keyspace is being changed and the corresponding base tablet finishes
+# the migration at a different time the view tablet does.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delayed_replica", ["base", "mv"])
+@pytest.mark.parametrize("altered_dc", ["dc1", "dc2"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
+    # The workaround for this issue depends on the fact that only last replica
+    # in the DCs replica list is modified when changing RF. Use 2 DCs to ensure
+    # that the fix works even if the new replica is not the last one in the total list.
+    servers = await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'myrack'})
+    servers.extend(await manager.servers_add(2, property_file={'dc': f'dc2', 'rack': 'myrack'}))
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
+
+
+    # Insert a row so that there's data to be streamed during tablet migration
+    await cql.run_async("INSERT INTO ks.base (pk,ck) VALUES (0,0)")
+
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", True, parameters={'keyspace': 'ks', 'table': delayed_replica}) for s in servers])
+
+    ks_fut = cql.run_async(f"ALTER KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', '{altered_dc}':2}}")
+    # Perform a write after the migration has started but before it has finished
+    async def first_migration_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
+        logger.info(f"Current stages: {[row.stage for row in stages]}")
+        return set([None, "streaming"]) == set([row.stage for row in stages]) or None
+    await wait_for(first_migration_done, time.time() + 60)
+
+    metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+    replica_mismatches_before = sum([server_metrics.get('scylla_database_total_base_view_replicas_mismatch') or 0 for server_metrics in metrics])
+
+    # If the base was delayed, there may be just 1 base replica even though RF is now 2, so use cl=ONE
+    await cql.run_async(SimpleStatement("INSERT INTO ks.base (pk,ck) VALUES (1,1)", consistency_level=ConsistencyLevel.ONE))
+
+    # Disable the injection by message
+    await asyncio.gather(*[manager.api.message_injection(s.ip_addr, f"block_tablet_streaming") for s in servers])
+    await ks_fut
+
+    # Confirm that the problematic scenario occurred
+    metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+    replica_mismatches = sum([server_metrics.get('scylla_database_total_base_view_replicas_mismatch') or 0 for server_metrics in metrics])
+    assert replica_mismatches > replica_mismatches_before
+
+    # Confirm the content of the view after the migration has finished
+    async def migrations_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets")
+        return [row.stage for row in stages] == [None, None] or None
+    await wait_for(migrations_done, time.time() + 60)
+
+    res = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.mv", consistency_level=ConsistencyLevel.ONE))
+    assert len(res) == 2

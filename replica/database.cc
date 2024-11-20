@@ -677,6 +677,10 @@ database::setup_metrics() {
 
         sm::make_total_operations("total_view_updates_on_wrong_node", _cf_stats.total_view_updates_on_wrong_node,
                 sm::description("Total number of view updates which are computed on the wrong node.")).set_skip_when_empty(),
+
+        sm::make_total_operations("total_base_view_replicas_mismatch", _cf_stats.total_base_view_replicas_mismatch,
+                sm::description("Total number of view updates for which the base had a different replica count than the view. "
+                    "Should only increase during RF change. Should stop increasing shortly after finishing the RF change.")).set_skip_when_empty(),
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {

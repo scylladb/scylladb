@@ -332,6 +332,8 @@ struct cf_stats {
 
     // How many times we build view updates only to realize it's the wrong node and drop the update
     uint64_t total_view_updates_on_wrong_node = 0;
+    // How many times we had a different count of base and view replicas.
+    uint64_t total_base_view_replicas_mismatch = 0;
 };
 
 class table;

@@ -1702,7 +1702,7 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 }
 
 // Calculate the node ("natural endpoint") to which this node should send
-// a view update.
+// a view update. The natural endpoint is the first value in the returned pair.
 //
 // A materialized view table is in the same keyspace as its base table,
 // and in particular both have the same replication factor. Therefore it
@@ -1728,8 +1728,21 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 // after taking this node out).
 //
 // If the assumption that the given base token belongs to this replica
-// does not hold, we return an empty optional.
-static std::optional<locator::host_id>
+// does not hold, we return an empty optional as the paired replica.
+//
+// Aside from the paired replica, we may return another replica that we should
+// send the update to - the extra replica is then returned as the second replica
+// in the pair. We may need to send the update to an extra replica during
+// a change of the replication factor of the keyspace. In that case the replica
+// count of the base table and of the view may temporarily differ by 1. When we
+// have an extra view replica, there is no base replica it can pair with. To
+// make sure it gets the update regardless, we return along with the paired
+// replica. If this scenario does not occur, we return an empty optional as the
+// second replica.
+// We don't need to return the second replica if we have more base replicas than
+// view replicas - in that case the corresponding view replica will get the
+// update anyway, because it's pending.
+static std::pair<std::optional<locator::host_id>, std::optional<locator::host_id>>
 get_view_natural_endpoint(
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
@@ -1758,8 +1771,10 @@ get_view_natural_endpoint(
                 view_endpoint);
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
+            // We don't return an extra endpoint, as it's only needed when
+            // using tablets (so !use_legacy_self_pairing)
             if (view_endpoint == me && it != base_endpoints.end()) {
-                return me;
+                return std::make_pair(std::move(me), std::nullopt);
             }
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
@@ -1776,15 +1791,49 @@ get_view_natural_endpoint(
         }
     }
 
-    SCYLLA_ASSERT(base_endpoints.size() == view_endpoints.size());
     auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
         // would be lost.
         ++cf_stats.total_view_updates_on_wrong_node;
-        return {};
+        return std::make_pair(std::nullopt, std::nullopt);
     }
+
+    // The following code handles the case where after a replication factor change
+    // the base replica completed the corresponding tablet migration at a different
+    // time than the view replica.
+    std::optional<locator::host_id> extra_view_endpoint;
+    if (base_endpoints.size() == view_endpoints.size() + 1) {
+        ++cf_stats.total_base_view_replicas_mismatch;
+        // Because RF changes only affect the last replica in the list, we can simply
+        // ignore the extra base replica. If we are the extra base replica, we should
+        // pair with nothing
+        if (base_it == base_endpoints.end() - 1) {
+            return std::make_pair(std::nullopt, std::nullopt);
+        }
+        base_endpoints.pop_back();
+    } else if (base_endpoints.size() == view_endpoints.size() - 1) {
+        ++cf_stats.total_base_view_replicas_mismatch;
+        // As in the case above, we remove the last view replica from the list.
+        // This replica won't get an update from its paired base replica (as it didn't
+        // finish its tablet migration yet), so we should send an extra update to it now.
+        // FIXME: Here we may unnecessarily send the update to the extra view replica
+        // from many base replicas, similarly to https://github.com/scylladb/scylladb/issues/7711
+        extra_view_endpoint = std::make_optional(view_endpoints.back());
+        view_endpoints.pop_back();
+    } else if (base_endpoints.size() != view_endpoints.size()) {
+        ++cf_stats.total_base_view_replicas_mismatch;
+        // RF can be changed only by 1 at a time, so the difference between the number
+        // of base and view replicas should be at most 1.
+        // If this doesn't hold true, we log an error and send the update only if there's
+        // a view replica that can be paired with us.
+        vlogger.error("Numbers of base and view replicas differ by more than 1");
+        if (base_it - base_endpoints.begin() >= (int)view_endpoints.size()) {
+            return std::make_pair(std::nullopt, std::nullopt);
+        }
+    }
+
     auto replica = view_endpoints[base_it - base_endpoints.begin()];
 
     // https://github.com/scylladb/scylladb/issues/19439
@@ -1794,10 +1843,13 @@ get_view_natural_endpoint(
     // but are still replicas. Therefore, there is no other sensible option
     // right now but to give up attempt to send the update or write a hint
     // to the paired, permanently down replica.
+    if (extra_view_endpoint && view_topology.get_node(*extra_view_endpoint).left()) {
+        extra_view_endpoint = std::nullopt;
+    }
     if (!view_topology.get_node(replica).left()) {
-        return replica;
+        return std::make_pair(std::move(replica), std::move(extra_view_endpoint));
     } else {
-        return std::nullopt;
+        return std::make_pair(std::nullopt, std::move(extra_view_endpoint));
     }
 }
 
@@ -1871,8 +1923,15 @@ future<> view_update_generator::mutate_MV(
         // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
         // on a view, like we have the synchronous_updates_flag.
         bool use_legacy_self_pairing = !ks.uses_tablets();
-        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
+        auto [target_endpoint, extra_target_endpoint] = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
+        if (extra_target_endpoint) {
+            // The extra endpoint can appear during a replication factor increase when the base tablet migration finished after
+            // the corresponding (for current token) base tablet migration. In this case, the view replica is no longer
+            // pending (so it's not present in the pending endpoints list), but the base replica still is. We don't pair pending
+            // replicas, so the base won't send any view updates to this view replica. with this view replica and won't send any view updates.
+            remote_endpoints.push_back(std::move(*extra_target_endpoint));
+        }
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
