@@ -150,10 +150,10 @@ public:
     void add_maintenance_sstable(sstables::shared_sstable sst);
     api::timestamp_type max_seen_timestamp() const { return _max_seen_timestamp; }
 
-    // Update main sstable set based on info in completion descriptor, where input sstables
-    // will be replaced by output ones, row cache ranges are possibly invalidated and
-    // statistics are updated.
-    future<> update_main_sstable_list_on_compaction_completion(sstables::compaction_completion_desc desc);
+    // Update main and/or maintenance sstable sets based in info in completion descriptor,
+    // where input sstables will be replaced by output ones, row cache ranges are possibly
+    // invalidated and statistics are updated.
+    future<> update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc);
 
     // This will update sstable lists on behalf of off-strategy compaction, where
     // input files will be removed from the maintenance set and output files will
