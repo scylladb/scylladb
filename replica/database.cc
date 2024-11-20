@@ -34,7 +34,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
 #include "mutation/frozen_mutation.hh"
@@ -173,7 +172,7 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
             return;
         }
 
-        auto it = boost::find_if(res, [count] (const count_and_tables& x) {
+        auto it = std::ranges::find_if(res, [count] (const count_and_tables& x) {
             return x.first == count;
         });
         if (it != res.end()) {

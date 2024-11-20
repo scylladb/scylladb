@@ -17,7 +17,6 @@
 #include <vector>
 #include <algorithm>
 
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -2498,7 +2497,7 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
         if (step_it == _base_to_build_step.end()) {
             return;// In case all the views for this CF have finished building already.
         }
-        auto status_it = boost::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+        auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
             return bs.view->id() == view->id();
         });
         if (status_it != step_it->second.build_status.end()) {

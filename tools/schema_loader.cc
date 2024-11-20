@@ -603,7 +603,7 @@ schema_ptr load_system_schema(const db::config& cfg, std::string_view keyspace, 
     if (ks_it == schemas.end()) {
         throw std::invalid_argument(fmt::format("unknown system keyspace: {}", keyspace));
     }
-    auto tb_it = boost::find_if(ks_it->second, [&] (const schema_ptr& s) {
+    auto tb_it = std::ranges::find_if(ks_it->second, [&] (const schema_ptr& s) {
         return s->cf_name() == table;
     });
     if (tb_it == ks_it->second.end()) {

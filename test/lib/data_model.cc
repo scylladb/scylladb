@@ -41,7 +41,7 @@ mutation_description::row_marker::row_marker(api::timestamp_type timestamp, gc_c
 { }
 
 void mutation_description::remove_column(row& r, const sstring& name) {
-    auto it = boost::range::find_if(r, [&] (const cell& c) {
+    auto it = std::ranges::find_if(r, [&] (const cell& c) {
         return c.column_name == name;
     });
     if (it != r.end()) {
@@ -226,7 +226,7 @@ mutation mutation_description::build(schema_ptr s) const {
 }
 
 std::vector<table_description::column>::iterator table_description::find_column(std::vector<column>& columns, const sstring& name) {
-    return boost::range::find_if(columns, [&] (const column& c) {
+    return std::ranges::find_if(columns, [&] (const column& c) {
         return std::get<sstring>(c) == name;
     });
 }

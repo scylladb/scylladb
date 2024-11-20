@@ -23,7 +23,6 @@
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/reversed.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>

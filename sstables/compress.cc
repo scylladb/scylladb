@@ -9,7 +9,6 @@
 #include <stdexcept>
 #include <cstdlib>
 
-#include <boost/range/algorithm/find_if.hpp>
 #include <seastar/core/align.hh>
 #include <seastar/core/bitops.hh>
 #include <seastar/core/byteorder.hh>
@@ -76,7 +75,7 @@ inline bit_displacement displacement_for(uint64_t prefix_bits, uint8_t size_bits
 std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) {
     const uint8_t chunk_size_log2 = log2ceil(chunk_size);
 
-    auto it = boost::find_if(bucket_infos, [&] (const bucket_info& bi) {
+    auto it = std::ranges::find_if(bucket_infos, [&] (const bucket_info& bi) {
         return bi.chunk_size_log2 == chunk_size_log2;
     });
 
@@ -89,7 +88,7 @@ std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) 
     }
 
     auto b = *it;
-    auto s = *boost::find_if(segment_infos, [&] (const segment_info& si) {
+    auto s = *std::ranges::find_if(segment_infos, [&] (const segment_info& si) {
         return si.data_size_log2 == b.best_data_size_log2 && si.chunk_size_log2 == b.chunk_size_log2;
     });
 

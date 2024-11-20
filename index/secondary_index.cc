@@ -13,7 +13,6 @@
 #include "cql3/statements/index_target.hh"
 
 #include <boost/regex.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/util/log.hh>
 

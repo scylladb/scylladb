@@ -10,7 +10,6 @@
 
 #include "utils/assert.hh"
 #include <boost/range/iterator_range.hpp>
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/numeric.hpp>
 
 #include "mutation/atomic_cell.hh"
@@ -50,7 +49,7 @@ public:
     int64_t value() const { return read<int64_t>(offset::value); }
     int64_t logical_clock() const { return read<int64_t>(offset::logical_clock); }
 
-    void swap_value_and_clock(basic_counter_shard_view& other) noexcept {
+    void swap_value_and_clock(basic_counter_shard_view other) noexcept {
         static constexpr size_t off = size_t(offset::value);
         static constexpr size_t size = size_t(offset::total_size) - off;
 
@@ -253,23 +252,25 @@ protected:
 private:
     class shard_iterator {
     public:
-        using iterator_category = std::input_iterator_tag;
+        using iterator_category = std::bidirectional_iterator_tag;
+        using iterator_concept = std::bidirectional_iterator_tag;
         using value_type = basic_counter_shard_view<is_mutable>;
         using difference_type = std::ptrdiff_t;
         using pointer = basic_counter_shard_view<is_mutable>*;
-        using reference = basic_counter_shard_view<is_mutable>&;
     private:
         managed_bytes_basic_view<is_mutable> _current;
         basic_counter_shard_view<is_mutable> _current_view;
         size_t _pos = 0;
     public:
+        shard_iterator() noexcept = default;
         shard_iterator(managed_bytes_basic_view<is_mutable> v, size_t offset) noexcept
             : _current(v), _current_view(_current), _pos(offset) { }
 
-        basic_counter_shard_view<is_mutable>& operator*() noexcept {
+        value_type operator*() const noexcept {
             return _current_view;
         }
-        basic_counter_shard_view<is_mutable>* operator->() noexcept {
+
+        pointer operator->() noexcept {
             return &_current_view;
         }
         shard_iterator& operator++() noexcept {
@@ -297,11 +298,11 @@ private:
         }
     };
 public:
-    boost::iterator_range<shard_iterator> shards() const {
+    std::ranges::subrange<shard_iterator> shards() const {
         auto value = _cell.value();
         auto begin = shard_iterator(value, 0);
         auto end = shard_iterator(value, value.size());
-        return boost::make_iterator_range(begin, end);
+        return {begin, end};
     }
 
     size_t shard_count() const {
@@ -321,13 +322,13 @@ public:
     static data_type total_value_type() { return long_type; }
 
     int64_t total_value() const {
-        return boost::accumulate(shards(), int64_t(0), [] (int64_t v, counter_shard_view cs) {
+        return std::ranges::fold_left(shards(), int64_t(0), [] (int64_t v, counter_shard_view cs) {
             return v + cs.value();
         });
     }
 
     std::optional<counter_shard_view> get_shard(const counter_id& id) const {
-        auto it = boost::range::find_if(shards(), [&id] (counter_shard_view csv) {
+        auto it = std::ranges::find_if(shards(), [&id] (counter_shard_view csv) {
             return csv.id() == id;
         });
         if (it == shards().end()) {
@@ -337,7 +338,7 @@ public:
     }
 
     bool operator==(const basic_counter_cell_view& other) const {
-        return timestamp() == other.timestamp() && boost::equal(shards(), other.shards());
+        return timestamp() == other.timestamp() && std::ranges::equal(shards(), other.shards());
     }
 };
 
