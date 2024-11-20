@@ -148,6 +148,7 @@ public:
     };
 
 private:
+    const db::timeout_clock::time_point _created;
     reader_concurrency_semaphore& _semaphore;
     schema_ptr _schema;
 
@@ -254,7 +255,8 @@ public:
     struct value_tag {};
 
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name_view(op_name)
         , _base_resources(base_resources)
@@ -265,7 +267,8 @@ public:
         _semaphore.on_permit_created(*this);
     }
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
@@ -483,6 +486,10 @@ public:
 
     future<> wait_readmission() {
         return _semaphore.do_wait_admission(*this);
+    }
+
+    db::timeout_clock::time_point created() const noexcept {
+        return _created;
     }
 
     db::timeout_clock::time_point timeout() const noexcept {
@@ -1513,6 +1520,25 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         auto& permit = _wait_list.front();
         dequeue_permit(permit);
         try {
+            // Do not admit the read as it is unlikely to finish before its timeout. The condition is:
+            // permit's remaining time <= preemptive_abort_factor * permit's time budget
+            //
+            // The additional check for remaining_time > 0 is to avoid preemptive aborting reads
+            // that already timed out but are still in the wait list due to scheduling delays.
+            // It also effectively disables preemptive aborting when the factor is set to 0.
+            const auto time_budget = permit.timeout() - permit.created();
+            const auto remaining_time = permit.timeout() - db::timeout_clock::now();
+            if (remaining_time > db::timeout_clock::duration::zero() && remaining_time <= _preemptive_abort_factor() * time_budget) {
+                permit.on_preemptive_aborted();
+                using ms = std::chrono::milliseconds;
+                tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] read shed as unlikely to finish (elapsed: {}, timeout: {}, preemptive_factor: {})",
+                               _name,
+                               std::chrono::duration_cast<ms>(time_budget - remaining_time),
+                               std::chrono::duration_cast<ms>(time_budget),
+                               _preemptive_abort_factor());
+                continue;
+            }
+
             if (permit.get_state() == reader_permit::state::waiting_for_memory) {
                 _blessed_permit = &permit;
                 permit.on_granted_memory();

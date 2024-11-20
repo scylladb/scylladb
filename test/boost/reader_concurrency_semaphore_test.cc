@@ -517,6 +517,38 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_abort) {
+    const auto preemptive_abort_factor = 0.5f;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost,
+            100, utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t>(1), utils::updateable_value<float>(preemptive_abort_factor));
+    auto stop_sem = deferred_stop(semaphore);
+
+    {
+        BOOST_REQUIRE(semaphore.get_stats().total_reads_shed_due_to_overload == 0);
+
+        auto timeout = db::timeout_clock::now() + 500ms;
+
+        reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout, {}).get();
+
+        auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout, {});
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+
+        // The permits are rejected when the remaining time is less than half of its timeout when arrived to the semaphore.
+        // Hence, sleep 300ms to reject the permits in the waitlist during admission.
+        seastar::sleep(300ms).get();
+
+        permit1 = {};
+        const auto futures_failed = eventually_true([&] { return permit2_fut.failed(); });
+        BOOST_CHECK(futures_failed);
+        BOOST_CHECK_THROW(std::rethrow_exception(permit2_fut.get_exception()), semaphore_aborted);
+        BOOST_CHECK(semaphore.get_stats().total_reads_shed_due_to_overload > 0);
+    }
+
+    // All units should have been deposited back.
+    REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
+}
+
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     return async([&] () {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost, 2);
@@ -597,7 +629,8 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
 
                 permit.resources = permit.permit->consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
             } else {
-                const auto timeout_seconds = tests::random::get_int<unsigned>(0, 3);
+                //Ensure timeout_seconds > 0 to avoid permits being rejected during admission. The test will become flaky.
+                const auto timeout_seconds = tests::random::get_int<unsigned>(1, 4);
 
                 permit.permit_fut = semaphore.obtain_permit(
                         schema,
