@@ -155,6 +155,7 @@ public:
     };
 
 private:
+    const db::timeout_clock::time_point _created;
     reader_concurrency_semaphore& _semaphore;
     schema_ptr _schema;
 
@@ -263,7 +264,8 @@ public:
     struct value_tag {};
 
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name_view(op_name)
         , _base_resources(base_resources)
@@ -274,7 +276,8 @@ public:
         _semaphore.on_permit_created(*this);
     }
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
@@ -491,6 +494,10 @@ public:
 
     future<> wait_readmission() {
         return _semaphore.do_wait_admission(*this);
+    }
+
+    db::timeout_clock::time_point created() const noexcept {
+        return _created;
     }
 
     db::timeout_clock::time_point timeout() const noexcept {
@@ -1513,6 +1520,12 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         auto& permit = _wait_list.front();
         dequeue_permit(permit);
         try {
+            // Abort the read if its remaining time is less than half of its timeout when arrived to the semaphore
+            if (permit.timeout() - db::timeout_clock::now() <= (permit.timeout() - permit.created())/2) {
+                permit.on_reject();
+                continue;
+            }
+
             if (permit.get_state() == reader_permit::state::waiting_for_memory) {
                 _blessed_permit = &permit;
                 permit.on_granted_memory();
