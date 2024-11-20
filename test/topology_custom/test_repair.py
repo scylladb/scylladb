@@ -167,3 +167,41 @@ async def test_repair_succeeds_with_unitialized_bm(manager):
     assert len(matches) == 1
     matches = await logs[0].grep("failed, continue to run repair", from_mark=marks[0])
     assert len(matches) == 1
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_abort(manager):
+    cfg = {'enable_tablets': True}
+    await manager.server_add(config=cfg)
+    await manager.server_add(config=cfg)
+    servers = await manager.running_servers()
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    await manager.api.client.post(f"/task_manager/ttl", params={ "ttl": "100000" },
+                                                    host=servers[0].ip_addr)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "repair_tablet_repair_task_impl_run", False, {})
+
+    # Start repair.
+    sequence_number = await manager.api.client.post_json(f"/storage_service/repair_async/ks", host=servers[0].ip_addr)
+
+    # Get repair id.
+    stats_list = await manager.api.client.get_json("/task_manager/list_module_tasks/repair", host=servers[0].ip_addr)
+    ids = [stats["task_id"] for stats in stats_list if stats["sequence_number"] == sequence_number]
+    assert len(ids) == 1
+    id = ids[0]
+
+    # Abort repair.
+    await manager.api.client.post("/storage_service/force_terminate_repair", host=servers[0].ip_addr)
+
+    await manager.api.message_injection(servers[0].ip_addr, "repair_tablet_repair_task_impl_run")
+    await manager.api.disable_injection(servers[0].ip_addr, "repair_tablet_repair_task_impl_run")
+
+    # Check if repair was aborted.
+    await manager.api.client.get_json(f"/task_manager/wait_task/{id}", host=servers[0].ip_addr)
+    statuses = await manager.api.client.get_json(f"/task_manager/task_status_recursive/{id}", host=servers[0].ip_addr)
+    assert all([status["state"] == "failed" for status in statuses])
