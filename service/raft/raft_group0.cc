@@ -40,6 +40,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <stdexcept>
 #include <csignal>
+#include <unordered_set>
 
 #include "idl/group0.dist.hh"
 #include "idl/migration_manager.dist.hh"
@@ -1440,7 +1441,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 }
 
 // Returning nullopt means we finished early (`can_finish_early` returned true).
-static future<std::optional<std::unordered_map<gms::inet_address, table_schema_version>>>
+static future<std::optional<std::unordered_map<locator::host_id, table_schema_version>>>
 collect_schema_versions_from_group0_members(
         netw::messaging_service& ms, const group0_members& members0,
         const noncopyable_function<future<bool>()>& can_finish_early,
@@ -1448,17 +1449,20 @@ collect_schema_versions_from_group0_members(
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
 
-    std::unordered_map<gms::inet_address, table_schema_version> versions;
+    std::unordered_map<locator::host_id, table_schema_version> versions;
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
 
         // We fetch the config on each iteration; some nodes may leave.
-        auto current_config = members0.get_inet_addrs();
+        auto current_config = members0.get_members() |
+                    std::views::transform([] (auto m) { return locator::host_id{m.addr.id.uuid()}; }) |
+                    std::ranges::to<std::vector<locator::host_id>>();
+
         if (current_config.empty()) {
             continue;
         }
 
         bool failed = false;
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (locator::host_id& node) -> future<> {
             if (versions.contains(node)) {
                 // This node was already contacted in a previous iteration.
                 co_return;
@@ -1467,8 +1471,8 @@ collect_schema_versions_from_group0_members(
             try {
                 upgrade_log.info("synchronize_schema: `send_schema_check({})`", node);
                 versions.emplace(node,
-                    co_await with_timeout(as, rpc_timeout, [&ms, addr = netw::msg_addr(node)] (abort_source& as) mutable {
-                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, std::move(addr), as);
+                    co_await with_timeout(as, rpc_timeout, [&ms, node] (abort_source& as) mutable {
+                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, node, as);
                         }));
             } catch (abort_requested_exception&) {
                 upgrade_log.warn("synchronize_schema: abort requested during `send_schema_check({})`", node);
@@ -1566,7 +1570,7 @@ static future<bool> synchronize_schema(
 
             try {
                 upgrade_log.info("synchronize_schema: `merge_schema_from({})`", addr);
-                co_await mm.merge_schema_from(netw::msg_addr(addr));
+                co_await mm.merge_schema_from(addr);
             } catch (const rpc::closed_error& e) {
                 upgrade_log.warn("synchronize_schema: `merge_schema_from({})` failed due to connection error: {}", addr, e);
                 last_pull_successful = false;

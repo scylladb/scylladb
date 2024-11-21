@@ -483,16 +483,12 @@ public:
 private:
     future<schema_ptr> get_schema_for_read(table_schema_version v, locator::host_id from, uint32_t from_shard, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        // FIXME: provide get_schema_for_read that gets host_id
-        auto ip = _gossiper.get_address_map().find(from);
-        co_return co_await _mm.get_schema_for_read(std::move(v), netw::msg_addr{ip.value(), from_shard}, _ms, aoe.abort_source());
+        co_return co_await _mm.get_schema_for_read(std::move(v), from, from_shard, _ms, aoe.abort_source());
     }
 
     future<schema_ptr> get_schema_for_write(table_schema_version v, locator::host_id from, uint32_t from_shard, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        // FIXME: provide get_schema_for_write that gets host_id
-        auto ip = _gossiper.get_address_map().find(from);
-        co_return co_await _mm.get_schema_for_write(std::move(v), netw::msg_addr{ip.value(), from_shard}, _ms, aoe.abort_source());
+        co_return co_await _mm.get_schema_for_write(std::move(v), from, from_shard, _ms, aoe.abort_source());
     }
 
     future<replica::exception_variant> handle_counter_mutation(

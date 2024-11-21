@@ -233,6 +233,7 @@ public:
     future<>
     insert_repair_meta(
             const gms::inet_address& from,
+            locator::host_id from_id,
             uint32_t src_cpu_id,
             uint32_t repair_meta_id,
             dht::token_range range,

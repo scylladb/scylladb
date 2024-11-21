@@ -56,7 +56,7 @@ class migration_manager : public seastar::async_sharded_service<migration_manage
 private:
     migration_notifier& _notifier;
 
-    std::unordered_map<netw::msg_addr, serialized_action, netw::msg_addr::hash> _schema_pulls;
+    std::unordered_map<locator::host_id, serialized_action> _schema_pulls;
     serialized_action _group0_barrier;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::gate _background_tasks;
@@ -104,7 +104,7 @@ public:
     // Disable schema pulls when Raft group 0 is fully responsible for managing schema.
     future<> disable_schema_pulls();
 
-    future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
+    future<> submit_migration_task(locator::host_id endpoint, bool can_ignore_down_node = true);
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes);
@@ -112,13 +112,13 @@ public:
     // Fetches schema from remote node and applies it locally.
     // Differs from submit_migration_task() in that all errors are propagated.
     // Coalesces requests.
-    future<> merge_schema_from(netw::msg_addr);
-    future<> do_merge_schema_from(netw::msg_addr);
+    future<> merge_schema_from(locator::host_id);
+    future<> do_merge_schema_from(locator::host_id);
     future<> reload_schema();
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
-    future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
+    future<> merge_schema_from(locator::host_id src, const std::vector<canonical_mutation>& mutations);
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
 
@@ -158,30 +158,30 @@ private:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
-    future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
+    future<> push_schema_mutation(locator::host_id endpoint, const std::vector<mutation>& schema);
 
     future<> passive_announce();
 
-    void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+    void schedule_schema_pull(locator::host_id endpoint, const gms::endpoint_state& state);
 
-    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, locator::host_id endpoint);
 
     template<typename mutation_type = schema_change>
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
     future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
 
 public:
-    future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
+    future<> maybe_sync(const schema_ptr& s, locator::host_id endpoint);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().
     // Intended to be used in the read path.
-    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source& as);
+    future<schema_ptr> get_schema_for_read(table_schema_version, locator::host_id from, unsigned shard, netw::messaging_service& ms, abort_source& as);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
     // Intended to be used in the write path, which relies on synchronized schema.
-    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source& as);
+    future<schema_ptr> get_schema_for_write(table_schema_version, locator::host_id from, unsigned shard, netw::messaging_service& ms, abort_source& as);
 
 private:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;

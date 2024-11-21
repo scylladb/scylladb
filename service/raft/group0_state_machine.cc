@@ -186,7 +186,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
-        return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+        return _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -198,7 +198,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
     },
     [&] (mixed_change& chng) -> future<> {
-        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         co_await _ss.topology_transition();
         co_return;
     },
@@ -372,9 +372,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
-    // FIXME: move schema merging to host id and pass hid here
-    // for now empty value is OK since it is used for logging only
-    co_await _mm.merge_schema_from(netw::messaging_service::msg_addr{gms::inet_address{}, 0}, std::move(*cm));
+    co_await _mm.merge_schema_from(hid, std::move(*cm));
 
     if (topology_snp && !topology_snp->mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));

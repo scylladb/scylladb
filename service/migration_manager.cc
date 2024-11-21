@@ -8,6 +8,8 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include <algorithm>
+#include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -46,7 +48,7 @@ static logging::logger mlogger("migration_manager");
 using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
-static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& sp);
+static future<schema_ptr> get_schema_definition(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, service::storage_proxy& sp);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
             service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
@@ -122,7 +124,7 @@ void migration_manager::init_messaging_service()
     }
 
     ser::migration_manager_rpc_verbs::register_definitions_update(&_messaging, [this] (const rpc::client_info& cinfo, std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>> cm) {
-        auto src = netw::messaging_service::get_source(cinfo);
+        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         if (!cm) {
             on_internal_error(mlogger, ::format(
                 "definitions_update handler: canonical mutations not supported by {}", src));
@@ -209,7 +211,7 @@ future<> migration_notifier::unregister_listener(migration_listener* listener)
     return _listeners.remove(listener);
 }
 
-void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
+void migration_manager::schedule_schema_pull(locator::host_id endpoint, const gms::endpoint_state& state)
 {
     if (!_enable_schema_pulls) {
         mlogger.debug("Not pulling schema because schema pulls were disabled due to Raft.");
@@ -218,7 +220,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
-    if (endpoint != _messaging.broadcast_address() && value) {
+    if (endpoint != _gossiper.my_host_id() && value) {
         // FIXME: discarded future
         (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
@@ -278,12 +280,18 @@ future<> migration_manager::wait_for_schema_agreement(const replica::database& d
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
  */
-future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint)
+future<> migration_manager::maybe_schedule_schema_pull(const table_schema_version& their_version, locator::host_id endpoint)
 {
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
 
-    if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
+    auto ip = _gossiper.get_address_map().find(endpoint);
+    if (!ip) {
+        mlogger.debug("No ip address for {}, not submitting migration task", endpoint);
+        return make_ready_future<>();
+    }
+
+    if (db.get_version() == their_version || !should_pull_schema_from(*ip)) {
         mlogger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
     }
@@ -294,12 +302,12 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
         return submit_migration_task(endpoint);
     }
 
-    return with_gate(_background_tasks, [this, &db, endpoint] {
+    return with_gate(_background_tasks, [this, &db, endpoint, ip = *ip] {
         // Include a delay to make sure we have a chance to apply any changes being
         // pushed out simultaneously. See CASSANDRA-5025
-        return sleep_abortable(migration_delay, _as).then([this, &db, endpoint] {
+        return sleep_abortable(migration_delay, _as).then([this, &db, endpoint, ip] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
-            auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+            auto ep_state = _gossiper.get_endpoint_state_ptr(ip);
             if (!ep_state) {
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
@@ -326,14 +334,13 @@ future<> migration_manager::disable_schema_pulls() {
     });
 }
 
-future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
+future<> migration_manager::submit_migration_task(locator::host_id id, bool can_ignore_down_node)
 {
-    if (!_gossiper.is_alive(endpoint)) {
-        auto msg = format("Can't send migration request: node {} is down.", endpoint);
+    if (!_gossiper.is_alive(id)) {
+        auto msg = format("Can't send migration request: node {} is down.", id);
         mlogger.warn("{}", msg);
         return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
     }
-    netw::messaging_service::msg_addr id{endpoint, 0};
     return merge_schema_from(id).handle_exception([](std::exception_ptr e) {
         try {
             std::rethrow_exception(e);
@@ -344,7 +351,7 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
     });
 }
 
-future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
+future<> migration_manager::do_merge_schema_from(locator::host_id id)
 {
     mlogger.info("Pulling schema from {}", id);
     abort_source as;
@@ -359,7 +366,7 @@ future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_ad
     mlogger.info("Schema merge with {} completed", id);
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
+future<> migration_manager::merge_schema_from(locator::host_id id)
 {
     if (_as.abort_requested()) {
         return make_exception_future<>(abort_requested_exception());
@@ -373,7 +380,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return res.first->second.trigger();
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
+future<> migration_manager::merge_schema_from(locator::host_id src, const std::vector<canonical_mutation>& canonical_mutations) {
     canonical_mutation_merge_count++;
     mlogger.debug("Applying schema mutations from {}", src);
     auto& proxy = _storage_proxy;
@@ -883,9 +890,8 @@ future<std::vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, 
     }
 }
 
-future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
+future<> migration_manager::push_schema_mutation(locator::host_id id, const std::vector<mutation>& schema)
 {
-    netw::messaging_service::msg_addr id{endpoint, 0};
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
@@ -919,7 +925,9 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
                 _messaging.knows_version(endpoint) &&
                 _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
         });
-        co_await coroutine::parallel_for_each(live_members,
+        // FIXME: gossiper should return host id set
+        auto live_host_ids = live_members | std::views::transform([&] (const gms::inet_address& ip) { return _gossiper.get_host_id(ip); });
+        co_await coroutine::parallel_for_each(live_host_ids,
             std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
     } catch (...) {
         mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());
@@ -1017,7 +1025,7 @@ future<> migration_manager::passive_announce() {
 //
 // The endpoint is the node from which 's' originated.
 //
-future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_service::msg_addr endpoint) {
+future<> migration_manager::maybe_sync(const schema_ptr& s, locator::host_id endpoint) {
     if (s->is_synced()) {
         return make_ready_future<>();
     }
@@ -1038,10 +1046,10 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
 
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // Doesn't affect current node's schema in any way.
-static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, service::storage_proxy& storage_proxy) {
-    return local_schema_registry().get_or_load(v, [&ms, &storage_proxy, dst] (table_schema_version v) {
+static future<schema_ptr> get_schema_definition(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, service::storage_proxy& storage_proxy) {
+    return local_schema_registry().get_or_load(v, [&ms, &storage_proxy, dst, shard] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        return ser::migration_manager_rpc_verbs::send_get_schema_version(&ms, dst, static_cast<unsigned>(dst.cpu_id), v).then([&storage_proxy] (frozen_schema s) {
+        return ser::migration_manager_rpc_verbs::send_get_schema_version(&ms, dst, shard, v).then([&storage_proxy] (frozen_schema s) {
             auto& proxy = storage_proxy.container();
             // Since the latest schema version is always present in the schema registry
             // we only happen to query already outdated schema version, which is
@@ -1076,11 +1084,11 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
     });
 }
 
-future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source& as) {
-    return get_schema_for_write(v, dst, ms, as);
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, abort_source& as) {
+    return get_schema_for_write(v, dst, shard, ms, as);
 }
 
-future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source& as) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, abort_source& as) {
     if (_as.abort_requested()) {
         co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
     }
@@ -1096,7 +1104,7 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     }
 
     if (!s) {
-        s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
+        s = co_await get_schema_definition(v, dst, shard, ms, _storage_proxy);
     }
 
     if (!s->is_synced()) {
@@ -1151,7 +1159,7 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
         const auto& src = hosts.front();
         mlogger.debug("Pulling schema {} from {}", schema, src);
         bool can_ignore_down_node = false;
-        return submit_migration_task(src, can_ignore_down_node);
+        return submit_migration_task(_gossiper.get_host_id(src), can_ignore_down_node);
     });
 }
 
@@ -1164,7 +1172,7 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id 
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) {
-    schedule_schema_pull(endpoint, *ep_state);
+    schedule_schema_pull(ep_state->get_host_id(), *ep_state);
     return make_ready_future();
 }
 
@@ -1178,14 +1186,14 @@ future<> migration_manager::on_change(gms::inet_address endpoint, const gms::app
         const auto host_id = _gossiper.get_host_id(endpoint);
         const auto* node = _storage_proxy.get_token_metadata_ptr()->get_topology().find_node(host_id);
         if (node && node->is_member()) {
-            schedule_schema_pull(endpoint, *ep_state);
+            schedule_schema_pull(host_id, *ep_state);
         }
         return make_ready_future<>();
     });
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {
-    schedule_schema_pull(endpoint, *state);
+    schedule_schema_pull(state->get_host_id(), *state);
     return make_ready_future();
 }
 
