@@ -699,6 +699,17 @@ BOOST_AUTO_TEST_CASE(test_parse_invalid_tuple) {
     BOOST_REQUIRE_THROW(parser.parse(), exceptions::configuration_exception);
 }
 
+BOOST_AUTO_TEST_CASE(test_parse_valid_vector) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.Int32Type,5)");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type().to_string() == "vector<int, 5>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_invalid_vector) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.VectorType()");
+    BOOST_REQUIRE_THROW(parser.parse(), exceptions::configuration_exception);
+}
+
 BOOST_AUTO_TEST_CASE(test_parse_valid_frozen_set) {
     auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.FrozenType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))");
     auto type = parser.parse();
