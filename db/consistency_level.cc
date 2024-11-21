@@ -293,7 +293,7 @@ filter_for_query(consistency_level cl,
     const auto remaining_bf = bf - selected_endpoints.size();
 
     if (cf) {
-        auto get_hit_rate = [&g, cf] (gms::inet_address ep) -> float {
+        auto get_hit_rate = [&g, cf, &erm] (gms::inet_address ep) -> float {
             // We limit each nodes' cache-hit ratio to max_hit_rate = 0.95
             // for two reasons:
             // 1. If two nodes have hit rate 0.99 and 0.98, the miss rates
@@ -307,16 +307,23 @@ filter_for_query(consistency_level cl,
             //    its miss rate is 0.05, 1/20th of the worst miss rate 1.0,
             //    so the cold node will get 1/20th the work of the hot.
             constexpr float max_hit_rate = 0.95;
-            auto ht = cf->get_hit_rate(g, ep);
+            // FIXME: all functions here should work on host ids
+            auto hid = erm.get_token_metadata_ptr()->get_host_id_if_known(ep);
+            if (hid) {
+            auto ht = cf->get_hit_rate(g, *hid);
             if (float(ht.rate) < 0) {
                 return float(ht.rate);
             } else if (lowres_clock::now() - ht.last_updated > std::chrono::milliseconds(1000)) {
                 // if a cache entry is not updates for a while try to send traffic there
                 // to get more up to date data, mark it updated to not send to much traffic there
-                cf->set_hit_rate(ep, ht.rate);
+                cf->set_hit_rate(*hid, ht.rate);
                 return max_hit_rate;
             } else {
                 return std::min(float(ht.rate), max_hit_rate); // calculation below cannot work with hit rate 1
+            }
+            } else {
+                // do not send traffic to node we cannot map (should not happen)
+                return 0.0f;
             }
         };
 

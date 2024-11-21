@@ -3170,7 +3170,7 @@ size_t table::estimate_read_memory_cost() const {
     return new_reader_base_cost;
 }
 
-void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
+void table::set_hit_rate(locator::host_id addr, cache_temperature rate) {
     auto& e = _cluster_cache_hit_rates[addr];
     e.rate = rate;
     e.last_updated = lowres_clock::now();
@@ -3180,14 +3180,15 @@ table::cache_hit_rate table::get_my_hit_rate() const {
     return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
 }
 
-table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::inet_address addr) {
-    if (gossiper.get_broadcast_address() == addr) {
+table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, locator::host_id addr) {
+    if (gossiper.my_host_id() == addr) {
         return get_my_hit_rate();
     }
     auto it = _cluster_cache_hit_rates.find(addr);
     if (it == _cluster_cache_hit_rates.end()) {
+        auto ip_opt = gossiper.get_address_map().find(addr);
         // no data yet, get it from the gossiper
-        auto eps = gossiper.get_endpoint_state_ptr(addr);
+        auto eps = ip_opt ? gossiper.get_endpoint_state_ptr(*ip_opt) : nullptr;
         if (eps) {
             auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
             float f = -1.0f; // missing state means old node
@@ -3210,7 +3211,7 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::in
     }
 }
 
-void table::drop_hit_rate(gms::inet_address addr) {
+void table::drop_hit_rate(locator::host_id addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
 

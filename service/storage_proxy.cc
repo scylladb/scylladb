@@ -1042,8 +1042,14 @@ private:
 
     void connection_dropped(gms::inet_address addr, std::optional<locator::host_id> id) {
         slogger.debug("Drop hit rate info for {} because of disconnect", addr);
+        if (!id) {
+            id = _sp.get_token_metadata_ptr()->get_host_id_if_known(addr);
+        }
+        if (!id) {
+            return;
+        }
         for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
-            cf->drop_hit_rate(addr);
+            cf->drop_hit_rate(*id);
         }
     }
 };
@@ -5185,8 +5191,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
-                    // FIXME: channge set_hit_rate to work on host ids
-                    _cf->set_hit_rate(_effective_replication_map_ptr->get_token_metadata().get_endpoint_for_host_id_if_known(ep).value(), std::get<1>(v));
+                    _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(get_topology(), ep);
                     register_request_latency(latency_clock::now() - start);
@@ -5212,8 +5217,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
-                    // FIXME: change set_hit_rate to work on host ids
-                    _cf->set_hit_rate(_effective_replication_map_ptr->get_token_metadata().get_endpoint_for_host_id_if_known(ep).value(), std::get<1>(v));
+                    _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
@@ -5240,8 +5244,7 @@ protected:
                 try {
                   if (!f.failed()) {
                     auto v = f.get();
-                    // FIXME: change set_hit_rate to work on host ids
-                    _cf->set_hit_rate(_effective_replication_map_ptr->get_token_metadata().get_endpoint_for_host_id_if_known(ep).value(), std::get<2>(v));
+                    _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
@@ -6025,8 +6028,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                                 locator::effective_replication_map_ptr erm;
                                 replica::column_family* cf = nullptr;
                                 float operator()(const locator::host_id& ep) const {
-                                    // FIXME: move get_hit_rate to host ids
-                                    return float(cf->get_hit_rate(g, erm->get_token_metadata().get_endpoint_for_host_id_if_known(ep).value()).rate);
+                                    return float(cf->get_hit_rate(g, ep).rate);
                                 }
                             } ep_to_hr{remote().gossiper(), erm, pcf};
 
