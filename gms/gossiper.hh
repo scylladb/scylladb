@@ -531,8 +531,8 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
-    future<> do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool listener_notification);
-    future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
+    future<> do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool shadow_round);
+    future<> apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
     future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);

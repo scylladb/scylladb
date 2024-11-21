@@ -579,7 +579,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 }
 
 
-future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool listener_notification) {
+future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool shadow_round) {
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
@@ -605,32 +605,32 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
                 node, local_generation, remote_generation);
         } else if (remote_generation > local_generation) {
-            logger.trace("Updating heartbeat state generation to {} from {} for {} (notify={})", remote_generation, local_generation, node, listener_notification);
+            logger.trace("Updating heartbeat state generation to {} from {} for {} (notify={})", remote_generation, local_generation, node, shadow_round);
             // major state change will handle the update by inserting the remote state directly
-            co_await handle_major_state_change(node, std::move(remote_state), permit.id(), listener_notification);
+            co_await handle_major_state_change(node, std::move(remote_state), permit.id(), shadow_round);
         } else if (remote_generation == local_generation) {
             // find maximum state
             auto local_max_version = get_max_endpoint_state_version(local_state);
             auto remote_max_version = get_max_endpoint_state_version(remote_state);
             if (remote_max_version > local_max_version) {
                 // apply states, but do not notify since there is no major change
-                co_await apply_new_states(node, std::move(local_state), remote_state, permit.id(), listener_notification);
+                co_await apply_new_states(node, std::move(local_state), remote_state, permit.id(), shadow_round);
             } else {
                 logger.debug("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
             }
-            if (!is_alive(node) && !is_dead_state(get_endpoint_state(node)) && listener_notification) { // unless of course, it was dead
+            if (!is_alive(node) && !is_dead_state(get_endpoint_state(node)) && shadow_round) { // unless of course, it was dead
                 mark_alive(node);
             }
         } else {
             logger.debug("Ignoring remote generation {} < {}", remote_generation, local_generation);
         }
     } else {
-        logger.debug("Applying remote_state for node {} ({} node)", node, listener_notification ? "old" : "new");
-        co_await handle_major_state_change(node, std::move(remote_state), permit.id(), listener_notification);
+        logger.debug("Applying remote_state for node {} ({} node)", node, shadow_round ? "old" : "new");
+        co_await handle_major_state_change(node, std::move(remote_state), permit.id(), shadow_round);
     }
 }
 
-future<> gossiper::apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map) {
+future<> gossiper::apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map) {
     for (auto& [node, remote_state] : map) {
         co_await do_apply_state_locally(node, std::move(remote_state), false);
     }
@@ -2121,7 +2121,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         });
 
         for (auto& response : responses) {
-            co_await apply_state_locally_without_listener_notification(std::move(response.endpoint_state_map));
+            co_await apply_state_locally_in_shadow_round(std::move(response.endpoint_state_map));
         }
         if (!nodes_talked.empty()) {
             break;
