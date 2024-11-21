@@ -3828,18 +3828,18 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             .then(utils::result_into_future<result<>>);
 }
 
-static inet_address_vector_replica_set endpoint_filter(
-        const noncopyable_function<bool(const gms::inet_address&)>& is_alive, gms::inet_address my_address,
-        const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>& endpoints) {
+static host_id_vector_replica_set endpoint_filter(
+        const noncopyable_function<bool(const locator::host_id&)>& is_alive, locator::host_id my_address,
+        const sstring& local_rack, const std::unordered_map<sstring, std::unordered_set<locator::host_id>>& endpoints) {
     // special case for single-node data centers
     if (endpoints.size() == 1 && endpoints.begin()->second.size() == 1) {
-        return endpoints.begin()->second | std::ranges::to<inet_address_vector_replica_set>();
+        return endpoints.begin()->second | std::ranges::to<host_id_vector_replica_set>();
     }
 
     // strip out dead endpoints and localhost
-    std::unordered_multimap<sstring, gms::inet_address> validated;
+    std::unordered_multimap<sstring, locator::host_id> validated;
 
-    auto is_valid = [&is_alive, my_address] (gms::inet_address input) {
+    auto is_valid = [&is_alive, my_address] (locator::host_id input) {
         return input != my_address && is_alive(input);
     };
 
@@ -3851,7 +3851,7 @@ static inet_address_vector_replica_set endpoint_filter(
         }
     }
 
-    typedef inet_address_vector_replica_set return_type;
+    typedef host_id_vector_replica_set return_type;
 
     if (validated.size() <= 2) {
         return validated | std::views::values | std::ranges::to<return_type>();
@@ -3867,7 +3867,7 @@ static inet_address_vector_replica_set endpoint_filter(
         auto res = validated | std::views::values;
         if (validated.size() > 2) {
             return
-                    res | std::ranges::to<std::vector<gms::inet_address>>()
+                    res | std::ranges::to<std::vector<locator::host_id>>()
                             | std::views::take(2)
                             | std::ranges::to<return_type>();
         }
@@ -3885,12 +3885,12 @@ static inet_address_vector_replica_set endpoint_filter(
         racks.resize(2);
     }
 
-    inet_address_vector_replica_set result;
+    host_id_vector_replica_set result;
 
     // grab a random member of up to two racks
     for (auto& rack : racks) {
         auto this_rack = validated.equal_range(rack);
-        auto cpy = std::ranges::subrange(this_rack.first, this_rack.second) | std::views::values | std::ranges::to<std::vector<gms::inet_address>>();
+        auto cpy = std::ranges::subrange(this_rack.first, this_rack.second) | std::views::values | std::ranges::to<std::vector<locator::host_id>>();
         std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
         result.emplace_back(cpy[rdist(rnd_engine)]);
     }
@@ -3933,26 +3933,30 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
                 , _batchlog_endpoints(
                         [this]() -> host_id_vector_replica_set {
-                            auto local_addr = _p.my_address();
+                            auto local_addr = _p.my_host_id(*_ermp);
                             auto& topology = _ermp->get_topology();
                             auto local_dc = topology.get_datacenter();
-                            auto local_token_owners = _ermp->get_token_metadata().get_datacenter_racks_token_owners_ips().at(local_dc);
+                            std::unordered_map<sstring, std::unordered_set<locator::host_id>> local_token_owners;
+                            auto local_token_nodes  = _ermp->get_token_metadata().get_datacenter_racks_token_owners_nodes().at(local_dc);
+                            for (const auto& e : local_token_nodes) {
+                                local_token_owners.emplace(e.first, e.second |
+                                    std::views::transform([] (const locator::node* n) { return n->host_id(); }) |
+                                    std::ranges::to<std::unordered_set<locator::host_id>>());
+                            }
                             auto local_rack = topology.get_rack();
-                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive, &_p), local_addr,
+                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive_id, &_p, std::cref(*_ermp)), local_addr,
                                                                     local_rack, local_token_owners);
 
                             if (chosen_endpoints.empty()) {
                                 if (_cl == db::consistency_level::ANY) {
-                                    return addr_vector_to_id(_ermp->get_topology(), inet_address_vector_replica_set{local_addr});
+                                    return {local_addr};
                                 }
                                 throw exceptions::unavailable_exception(db::consistency_level::ONE, 1, 0);
                             }
-                            // FIXME: rewrite the code in the lambda to work with host ids
-                            return addr_vector_to_id(_ermp->get_topology(), chosen_endpoints);
+                            return chosen_endpoints;
                         }()) {
                 tracing::trace(_trace_state, "Created a batch context");
-                // FIXME: change tracing to work with host ids
-                tracing::set_batchlog_endpoints(_trace_state, id_vector_to_addr(*_ermp, _batchlog_endpoints));
+                tracing::set_batchlog_endpoints(_trace_state, _batchlog_endpoints);
         }
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
