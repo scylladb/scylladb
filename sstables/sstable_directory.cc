@@ -690,7 +690,7 @@ future<> sstable_directory::filesystem_components_lister::replay_pending_delete_
         sstring all(text.begin(), text.end());
         std::vector<sstring> basenames;
         boost::split(basenames, all, boost::is_any_of("\n"), boost::token_compress_on);
-        auto tocs = boost::copy_range<std::vector<sstring>>(basenames | boost::adaptors::filtered([] (auto&& basename) { return !basename.empty(); }));
+        auto tocs = std::ranges::to<std::vector<sstring>>(basenames | std::views::filter([] (auto&& basename) { return !basename.empty(); }));
         dirlog.debug("TOCs to remove: {}", tocs);
         co_await parallel_for_each(tocs, [&sstdir] (const sstring& name) {
             // Only move TOC to TOC.tmp, the rest will be finished by regular process

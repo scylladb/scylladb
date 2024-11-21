@@ -70,9 +70,11 @@ namespace {
 
 template <typename Range, typename Describer>
     requires std::is_invocable_r_v<description, Describer, std::ranges::range_value_t<Range>>
-future<std::vector<description>> generate_descriptions(const Range& range, const Describer& describer, bool sort_by_name = true) {
+future<std::vector<description>> generate_descriptions(Range&& range, const Describer& describer, bool sort_by_name = true) {
     std::vector<description> result{};
-    result.reserve(std::ranges::size(range));
+    if constexpr (std::ranges::sized_range<Range>) {
+        result.reserve(std::ranges::size(range));
+    }
 
     for (const auto& element : range) {
         result.push_back(describer(element));
@@ -151,10 +153,10 @@ future<std::vector<description>> function(replica::database& db, const sstring& 
         throw exceptions::invalid_request_exception(format("Function '{}' not found in keyspace '{}'", name, ks));
     }
 
-    auto udfs = fs | boost::adaptors::transformed([] (const auto& f) {
+    auto udfs = fs | std::views::transform([] (const auto& f) {
         const auto& [function_name, function_ptr] = f;
         return dynamic_pointer_cast<const functions::user_function>(function_ptr);
-    }) | boost::adaptors::filtered([] (shared_ptr<const functions::user_function> f) {
+    }) | std::views::filter([] (shared_ptr<const functions::user_function> f) {
         return f != nullptr;
     });
     if (udfs.empty()) {
@@ -181,9 +183,9 @@ future<std::vector<description>> aggregate(replica::database& db, const sstring&
         throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
     }
 
-    auto udas = fs | boost::adaptors::transformed([] (const auto& f) {
+    auto udas = fs | std::views::transform([] (const auto& f) {
         return dynamic_pointer_cast<const functions::user_aggregate>(f.second);
-    }) | boost::adaptors::filtered([] (shared_ptr<const functions::user_aggregate> f) {
+    }) | std::views::filter([] (shared_ptr<const functions::user_aggregate> f) {
         return f != nullptr;
     });
     if (udas.empty()) {
@@ -312,9 +314,9 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
 
 future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto& replica_db = db.real_database();
-    auto tables = boost::copy_range<std::vector<schema_ptr>>(ks->tables() | boost::adaptors::filtered([&replica_db] (const schema_ptr& s) {
+    auto tables = ks->tables() | std::views::filter([&replica_db] (const schema_ptr& s) {
         return !cdc::is_log_for_some_table(replica_db, s->ks_name(), s->cf_name());
-    }));
+    }) | std::ranges::to<std::vector<schema_ptr>>();
     std::ranges::sort(tables, std::ranges::less(), std::mem_fn(&schema::cf_name));
 
     if (with_internals) {
@@ -758,10 +760,10 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
 
     auto uf = functions::instance().find(functions::function_name(ks_name, _name));
     if (!uf.empty()) {
-        auto udfs = uf | boost::adaptors::transformed([] (const auto& f) {
+        auto udfs = uf | std::views::transform([] (const auto& f) {
             const auto& [function_name, function_ptr] = f;
             return dynamic_pointer_cast<const functions::user_function>(function_ptr);
-        }) | boost::adaptors::filtered([] (shared_ptr<const functions::user_function> f) {
+        }) | std::views::filter([] (shared_ptr<const functions::user_function> f) {
             return f != nullptr;
         });
 
@@ -773,10 +775,10 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
             co_return serialize_descriptions(co_await generate_descriptions(udfs, udf_describer, true));
         }
 
-        auto udas = uf | boost::adaptors::transformed([] (const auto& f) {
+        auto udas = uf | std::views::transform([] (const auto& f) {
             const auto& [function_name, function_ptr] = f;
             return dynamic_pointer_cast<const functions::user_aggregate>(function_ptr);
-        }) | boost::adaptors::filtered([] (shared_ptr<const functions::user_aggregate> f) {
+        }) | std::views::filter([] (shared_ptr<const functions::user_aggregate> f) {
             return f != nullptr;
         });
 

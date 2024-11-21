@@ -15,9 +15,6 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
-#include <boost/range/adaptor/indexed.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/algorithm/for_each.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"
@@ -476,18 +473,18 @@ public:
         if (_static_param) {
             params_value[_static_param->first.c_str()] = _static_param->second.c_str();
         }
-        std::string all_params_names = boost::algorithm::join(
-                param_names
-                    | boost::adaptors::transformed([](const output_item& item) { return item.value; })
-                    | boost::adaptors::filtered([](const sstring& s) { return !s.empty(); }),
-                ",");
-        std::string all_params_values = boost::algorithm::join(
-                params
-                    | boost::adaptors::indexed()
-                    | boost::adaptors::filtered([&param_names](const boost::range::index_value<const sstring&>& idx) {
-                        return !param_names[idx.index()].value.empty(); })
-                    | boost::adaptors::transformed([](const boost::range::index_value<const sstring&>& idx) { return idx.value(); }),
-                ",");
+        std::string all_params_names = param_names
+                    | std::views::transform([](const output_item& item) { return item.value; })
+                    | std::views::filter([](const sstring& s) { return !s.empty(); })
+                    | std::views::join_with(',')
+                    | std::ranges::to<std::string>();
+        std::string all_params_values = params
+                    | std::views::enumerate
+                    | std::views::filter([&param_names](const std::tuple<ssize_t, sstring>& idx) {
+                        return !param_names[std::get<0>(idx)].value.empty(); })
+                    | std::views::transform([](const std::tuple<ssize_t, sstring>& idx) { return std::get<1>(idx); })
+                    | std::views::join_with(',')
+                    | std::ranges::to<std::string>();
         if (_static_param) {
             all_params_names += "," + _static_param->first;
             all_params_values += "," + _static_param->first;
@@ -2111,7 +2108,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
                     auto requested_test_groups = boost::copy_range<std::unordered_set<std::string>>(
                             app.configuration()["run-tests"].as<std::vector<std::string>>()
                     );
-                    auto enabled_test_groups = test_groups | boost::adaptors::filtered([&] (auto&& tc) {
+                    auto enabled_test_groups = test_groups | std::views::filter([&] (auto&& tc) {
                         return requested_test_groups.contains(tc.name);
                     });
 
@@ -2121,9 +2118,9 @@ int scylla_fast_forward_main(int argc, char** argv) {
                         })));
 
                     auto run_tests = [&] (test_group::type type) {
-                                boost::for_each(
+                                std::ranges::for_each(
                                     enabled_test_groups
-                                    | boost::adaptors::filtered([type] (auto&& tc) { return tc.partition_type == type; }),
+                                    | std::views::filter([type] (auto&& tc) { return tc.partition_type == type; }),
                                     [&] (auto&& tc) {
                                      for (auto&& ds : enabled_datasets) {
                                       if (tc.test_fn->can_run(*ds)) {

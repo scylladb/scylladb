@@ -23,7 +23,6 @@
 #include <iterator>
 #include <chrono>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/functional/hash.hpp>
@@ -1000,9 +999,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             return keyspaces;
         }
         const auto want_tablets = replication == "tablets";
-        return boost::copy_range<std::vector<sstring>>(keyspaces | boost::adaptors::filtered([&ctx, want_tablets] (const sstring& ks) {
+        return keyspaces | std::views::filter([&ctx, want_tablets] (const sstring& ks) {
             return ctx.db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
-        }));
+        }) | std::ranges::to<std::vector>();
     });
 
     ss::stop_gossiping.set(r, [&ss](std::unique_ptr<http::request> req) {

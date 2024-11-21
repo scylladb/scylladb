@@ -151,10 +151,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto rconf = _group0.group0_server().get_configuration();
         if (!rconf.is_joint()) {
             // Find nodes that 'left' but still in the config and remove them
-            auto to_remove = boost::copy_range<std::vector<raft::server_id>>(
+            auto to_remove = std::ranges::to<std::vector<raft::server_id>>(
                     rconf.current
-                    | boost::adaptors::transformed([&] (const raft::config_member& m) { return m.addr.id; })
-                    | boost::adaptors::filtered([&] (const raft::server_id& id) { return topo.left_nodes.contains(id); }));
+                    | std::views::transform([&] (const raft::config_member& m) { return m.addr.id; })
+                    | std::views::filter([&] (const raft::server_id& id) { return topo.left_nodes.contains(id); }));
             if (!to_remove.empty()) {
                 // Remove from group 0 nodes that left. They may failed to do so by themselves
                 release_guard(std::move(guard));

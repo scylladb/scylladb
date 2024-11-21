@@ -804,7 +804,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             }
 
-            auto unused_features = cfg->experimental_features() | boost::adaptors::filtered([] (auto& f) {
+            auto unused_features = cfg->experimental_features() | std::views::filter([] (auto& f) {
                 return f == db::experimental_features_t::feature::UNUSED;
             });
             if (!unused_features.empty()) {

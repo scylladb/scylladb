@@ -100,10 +100,10 @@ cql3::statements::select_statement& view_info::select_statement(data_dictionary:
         }
 
         if (legacy_token_column || std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
-            auto real_columns = _schema.all_columns() | boost::adaptors::filtered([legacy_token_column] (const column_definition& cdef) {
+            auto real_columns = _schema.all_columns() | std::views::filter([legacy_token_column] (const column_definition& cdef) {
                 return &cdef != legacy_token_column && !cdef.is_computed();
             });
-            schema::columns_type columns = boost::copy_range<schema::columns_type>(std::move(real_columns));
+            schema::columns_type columns = std::ranges::to<schema::columns_type>(std::move(real_columns));
             raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), columns);
         } else {
             raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
@@ -2245,10 +2245,11 @@ void view_builder::setup_shard_build_step(
         return view_ptr(nullptr);
     };
 
-    vbi.built_views = boost::copy_range<std::unordered_set<table_id>>(built
-            | boost::adaptors::transformed(maybe_fetch_view)
-            | boost::adaptors::filtered([] (const view_ptr& v) { return bool(v); })
-            | boost::adaptors::transformed([] (const view_ptr& v) { return v->id(); }));
+    vbi.built_views = built
+            | std::views::transform(maybe_fetch_view)
+            | std::views::filter([] (const view_ptr& v) { return bool(v); })
+            | std::views::transform([] (const view_ptr& v) { return v->id(); })
+            | std::ranges::to<std::unordered_set<table_id>>();
 
     for (auto& [view_name, first_token, next_token_opt, cpu_id] : in_progress) {
         if (auto view = maybe_fetch_view(view_name)) {
@@ -2297,7 +2298,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         return _db.column_family_exists(v->view_info()->base_id()) && !loaded_views.contains(v->id())
                 && !vbi.built_views.contains(v->id());
     };
-    for (auto&& view : all_views | boost::adaptors::filtered(is_new)) {
+    for (auto&& view : all_views | std::views::filter(is_new)) {
         vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 

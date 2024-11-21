@@ -829,9 +829,9 @@ public:
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
                     _selector_position);
 
-            readers = boost::copy_range<std::vector<mutation_reader>>(selection.sstables
-                    | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
-                    | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+            readers = std::ranges::to<std::vector<mutation_reader>>(selection.sstables
+                    | std::views::filter([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
+                    | std::views::transform([this] (auto& sst) { return this->create_reader(sst); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());

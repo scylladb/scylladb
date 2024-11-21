@@ -22,9 +22,6 @@
 #include "cql3/prepare_context.hh"
 #include "user_aggregate.hh"
 #include "cql3/expr/expression.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/map.hpp>
 
 #include "error_injection_fcts.hh"
 
@@ -433,11 +430,10 @@ std::vector<shared_ptr<F>> functions::get_filtered_transformed(const sstring& ke
         return dynamic_pointer_cast<F>(d.second);
     };
     
-    return boost::copy_range<std::vector<shared_ptr<F>>>(
-        _declared 
-        | boost::adaptors::filtered(filter) 
-        | boost::adaptors::transformed(transformer)
-    );
+    return _declared
+        | std::views::filter(filter)
+        | std::views::transform(transformer)
+        | std::ranges::to<std::vector>();
 }
 
 std::vector<shared_ptr<user_function>>

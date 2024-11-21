@@ -9,8 +9,6 @@
 
 #include <algorithm>
 #include <boost/range/algorithm.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <functional>
 #include <ranges>
 #include <stdexcept>
@@ -55,11 +53,6 @@ using namespace expr;
 
 static logging::logger rlogger("restrictions");
 static auto& expr_logger = rlogger; // compatibility with code moved from expression.cc
-
-using boost::adaptors::filtered;
-using boost::adaptors::transformed;
-using statements::request_validations::invalid_request;
-
 
 /// A set of discrete values.
 using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
@@ -160,8 +153,8 @@ struct intersection_visitor {
     }
 
     value_set operator()(const interval<managed_bytes>& a, const value_list& b) const {
-        const auto common = b | filtered([&] (const managed_bytes& el) { return a.contains(el, type->as_tri_comparator()); });
-        return value_list(common.begin(), common.end());
+        auto common = b | std::views::filter([&] (const managed_bytes& el) { return a.contains(el, type->as_tri_comparator()); });
+        return common | std::ranges::to<value_list>();
     }
 
     value_set operator()(const value_list& a, const interval<managed_bytes>& b) const {
@@ -178,9 +171,8 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
 }
 
-template<std::ranges::range Range>
+template<std::ranges::forward_range Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
-    BOOST_CONCEPT_ASSERT((boost::ForwardRangeConcept<Range>));
     value_list tmp(r.begin(), r.end()); // Need random-access range to sort (r is not necessarily random-access).
     std::ranges::sort(tmp, comparator);
     auto last = std::unique(tmp.begin(), tmp.end());
@@ -188,9 +180,9 @@ value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
     return tmp;
 }
 
-const auto non_null = boost::adaptors::filtered([] (const managed_bytes_opt& b) { return b.has_value(); });
+const auto non_null = std::views::filter([] (const managed_bytes_opt& b) { return b.has_value(); });
 
-const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) { return b.value(); });
+const auto deref = std::views::transform([] (const managed_bytes_opt& b) { return b.value(); });
 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
@@ -210,7 +202,7 @@ value_list get_IN_values(const expression& e, size_t k, const query_options& opt
     const cql3::raw_value in_list = evaluate(e, options);
     const auto split_values = get_list_of_tuples_elements(in_list, *type_of(e)); // Need lvalue from which to make std::view.
     const auto result_range = split_values
-            | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
+            | std::views::transform([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
     return to_sorted_vector(std::move(result_range), comparator);
 }
 
@@ -574,7 +566,7 @@ bool has_supporting_index(
     const auto support = std::bind(is_supported_by, std::ref(expr), std::placeholders::_1);
     return allow_local ? std::ranges::any_of(indexes, support)
             : std::ranges::any_of(
-                    indexes | filtered([] (const secondary_index::index& i) { return !i.metadata().local(); }),
+                    indexes | std::views::filter([] (const secondary_index::index& i) { return !i.metadata().local(); }),
                     support);
 }
 
@@ -1542,7 +1534,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
         throw exceptions::invalid_request_exception(
                 seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
-                                 boost::adaptors::transformed([](auto* p) {
+                                 std::views::transform([](auto* p) {
                                    return maybe_column_definition{p};
                                  }),
                                  ", ")));
@@ -1557,7 +1549,7 @@ void statement_restrictions::add_token_partition_key_restriction(const expr::bin
         throw exceptions::invalid_request_exception(
                 seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                         fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
-                                  boost::adaptors::transformed([](auto* p) {
+                                  std::views::transform([](auto* p) {
                                     return maybe_column_definition{p};
                                   }),
                                   ", ")));

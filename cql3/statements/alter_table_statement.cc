@@ -21,7 +21,6 @@
 #include "timestamp.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "cql3/util.hh"
 #include "view_info.hh"

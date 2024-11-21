@@ -775,8 +775,8 @@ future<std::vector<mutation>> prepare_column_family_drop_announcement(storage_pr
         auto&& views = old_cfm.views();
         if (!drop_views && views.size() > schema->all_indices().size()) {
             auto explicit_view_names = views
-                                    | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
-                                    | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
+                                    | std::views::filter([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
+                                    | std::views::transform([](const view_ptr& v) { return v->cf_name(); });
             co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
                         schema->ks_name(), fmt::join(explicit_view_names, ", "))));
         }
@@ -915,7 +915,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
     try {
         using namespace std::placeholders;
         auto all_live = _gossiper.get_live_members();
-        auto live_members = all_live | boost::adaptors::filtered([this, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint) {
+        auto live_members = all_live | std::views::filter([this, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint) {
             // only push schema to nodes with known and equal versions
             return endpoint != my_address &&
                 _messaging.knows_version(endpoint) &&

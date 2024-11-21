@@ -1745,8 +1745,8 @@ SEASTAR_TEST_CASE(test_select_with_token_range_filtering) {
         }
 
         auto do_test = [&](sstring token_restriction, sstring column_restrictions, std::function<bool(const testset_row&)> matches_row) {
-            auto expected_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(rows |
-                boost::adaptors::filtered(std::move(matches_row)) | boost::adaptors::transformed([] (const testset_row& row) {
+            auto expected_rows = std::ranges::to<std::vector<std::vector<bytes_opt>>>(rows |
+                std::views::filter(std::move(matches_row)) | std::views::transform([] (const testset_row& row) {
                 return std::vector<bytes_opt> { 
                     int32_type->decompose(row.pk1), int32_type->decompose(row.pk2), 
                     int32_type->decompose(row.ck1), int32_type->decompose(row.ck2), 

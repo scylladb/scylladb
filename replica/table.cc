@@ -1793,8 +1793,8 @@ future<>
 compaction_group::delete_unused_sstables(sstables::compaction_completion_desc desc) {
     std::unordered_set<sstables::shared_sstable> output(desc.new_sstables.begin(), desc.new_sstables.end());
 
-    auto sstables_to_remove = boost::copy_range<std::vector<sstables::shared_sstable>>(desc.old_sstables
-            | boost::adaptors::filtered([&output] (const sstables::shared_sstable& input_sst) {
+    auto sstables_to_remove = std::ranges::to<std::vector<sstables::shared_sstable>>(desc.old_sstables
+            | std::views::filter([&output] (const sstables::shared_sstable& input_sst) {
         return !output.contains(input_sst);
     }));
     return delete_sstables_atomically(std::move(sstables_to_remove));
@@ -3078,7 +3078,7 @@ const std::vector<view_ptr>& table::views() const {
 
 std::vector<view_ptr> table::affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
-    return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&] (auto&& view) {
+    return std::ranges::to<std::vector<view_ptr>>(_views | std::views::filter([&] (auto&& view) {
         return db::view::partition_key_matches(gen->get_db().as_data_dictionary(), *base, *view->view_info(), update.decorated_key());
     }));
 }

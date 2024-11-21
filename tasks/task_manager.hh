@@ -10,7 +10,6 @@
 
 #include <list>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/join.hpp>
 #include <seastar/core/on_internal_error.hh>
@@ -169,15 +168,13 @@ public:
                     std::function<std::optional<Res>(const task_essentials&)> map_finished_children) const {
                 auto shared_holder = co_await _lock.hold_read_lock();
 
-                co_return boost::copy_range<std::vector<Res>>(
-                    boost::adaptors::filter(
-                        boost::join(
+                co_return boost::join(
                             _children | boost::adaptors::map_values | boost::adaptors::transformed(map_children),
                             _finished_children | boost::adaptors::transformed(map_finished_children)
-                        ),
-                        [] (const auto& task) { return bool(task); }
-                    ) | boost::adaptors::transformed([] (const auto& res) { return res.value(); })
-                );
+                        )
+                        | std::views::filter([] (const auto& task) { return bool(task); })
+                        | std::views::transform([] (const auto& res) { return res.value(); })
+                        | std::ranges::to<std::vector<Res>>();
             }
         };
 

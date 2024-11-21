@@ -708,8 +708,9 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     repair_neighbors r_neighbors = get_repair_neighbors(range);
     auto neighbors = std::move(r_neighbors.all);
     auto mandatory_neighbors = std::move(r_neighbors.mandatory);
-    auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
-                boost::adaptors::filtered([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }));
+    auto live_neighbors = neighbors |
+                std::views::filter([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }) |
+                std::ranges::to<std::vector>();
     for (auto& node : mandatory_neighbors) {
         auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
         if (it == live_neighbors.end()) {
@@ -1688,8 +1689,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             // Remove the new nodes from the old nodes list, so
                             // that it contains only the node that will lose
                             // the ownership of the range.
-                            auto nodes = boost::copy_range<std::vector<gms::inet_address>>(old_nodes |
-                                    boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }));
+                            auto nodes = old_nodes |
+                                    std::views::filter([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }) |
+                                    std::ranges::to<std::vector>();
                             if (nodes.size() != 1) {
                                 throw std::runtime_error(fmt::format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found {} nodes={}",
                                         keyspace_name, desired_range, nodes.size(), nodes));
@@ -1709,11 +1711,11 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             return rf_in_local_dc;
                         };
                         auto get_old_endpoints_in_local_dc = [&] () {
-                            return boost::copy_range<std::vector<gms::inet_address>>(old_endpoints |
-                                boost::adaptors::filtered([&] (const gms::inet_address& node) {
+                            return old_endpoints |
+                                std::views::filter([&] (const gms::inet_address& node) {
                                     return topology.get_datacenter(node) == myloc.dc;
-                                })
-                            );
+                                }) |
+                                std::ranges::to<std::vector>();
                         };
                         auto old_endpoints_in_local_dc = get_old_endpoints_in_local_dc();
                         auto rf_in_local_dc = get_rf_in_local_dc();
@@ -1934,11 +1936,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 for (const auto& node : get_ignore_nodes()) {
                     neighbors_set.erase(node);
                 }
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors_set |
-                    boost::adaptors::filtered([&local_dc, &topology] (const gms::inet_address& node) {
+                auto neighbors = neighbors_set |
+                    std::views::filter([&local_dc, &topology] (const gms::inet_address& node) {
                         return topology.get_datacenter(node) == local_dc;
-                    })
-                );
+                    }) |
+                    std::ranges::to<std::vector>();
 
                 if (skip_this_range) {
                     nr_ranges_skipped++;
@@ -2158,17 +2160,16 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto natural_eps = strat.calculate_natural_endpoints(end_token, *tmptr).get();
-                auto neighbors = boost::copy_range<std::unordered_map<locator::host_id, gms::inet_address>>(natural_eps |
-                    boost::adaptors::filtered([&] (const auto& node) {
+                auto neighbors = natural_eps |
+                    std::views::filter([&] (const auto& node) {
                         if (topology.is_me(node)) {
                             return false;
                         }
                         return sync_nodes.contains(node);
-                    }) | boost::adaptors::transformed([&topology] (const auto& node) {
+                    }) | std::views::transform([&topology] (const auto& node) {
                         const auto& n = topology.get_node(node);
                         return std::make_pair(n.host_id(), n.endpoint());
-                    })
-                );
+                    }) | std::ranges::to<std::unordered_map>();
                 rlogger.debug("{}: keyspace={}, range={}, natural_enpoints={}, neighbors={}", op, keyspace_name, r, natural_eps, neighbors);
                 if (!neighbors.empty()) {
                     range_sources[r] = repair_neighbors(neighbors);
