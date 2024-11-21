@@ -135,6 +135,7 @@ async def test_random_failures(manager: ManagerClient,
         expected_statuses=[
             psutil.STATUS_STOPPED,
         ],
+        deadline=time.time() + 180,
     )
 
     LOGGER.info("Run the cluster event main step.")
