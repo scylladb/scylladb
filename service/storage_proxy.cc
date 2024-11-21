@@ -311,28 +311,40 @@ public:
     //
     // Running handlers prevent the object from being destroyed,
     // assuming `stop()` is called before destruction.
-
+    inet_address_vector_replica_set get_forward_ips_if_needed(const host_id_vector_replica_set& forward) {
+        inet_address_vector_replica_set forward_ips;
+        if (!_sp.features().address_nodes_by_host_ids) {
+            // if not the entire cluster is upgraded we may be sending the request no a non upgraded node
+            // that does not know how to handle new, host id, based forward array, so the old one needs to
+            // be populated
+            forward_ips = forward |
+                    std::views::transform([&] (locator::host_id id) { return _gossiper.get_address_map().find(id).value(); }) |
+                    std::ranges::to<inet_address_vector_replica_set>();
+        }
+        return forward_ips;
+    }
     future<> send_mutation(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
-            const frozen_mutation& m, const inet_address_vector_replica_set& forward, gms::inet_address reply_to, unsigned shard,
+            const frozen_mutation& m, const host_id_vector_replica_set& forward, gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
+        inet_address_vector_replica_set forward_ips;
         return ser::storage_proxy_rpc_verbs::send_mutation(
                 &_ms, std::move(addr), timeout,
-                m, forward, std::move(reply_to), shard,
-                response_id, trace_info, rate_limit_info, fence);
+                m, get_forward_ips_if_needed(forward), reply_to_ip, shard,
+                response_id, trace_info, rate_limit_info, fence, forward, reply_to);
     }
 
     future<> send_hint_mutation(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            const frozen_mutation& m, const inet_address_vector_replica_set& forward, gms::inet_address reply_to, unsigned shard,
+            const frozen_mutation& m, const host_id_vector_replica_set& forward, gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
         tracing::trace(tr_state, "Sending a hint to /{}", addr);
         return ser::storage_proxy_rpc_verbs::send_hint_mutation(
                 &_ms, std::move(addr), timeout,
-                m, forward, std::move(reply_to), shard,
-                response_id, tracing::make_trace_info(tr_state), fence);
+                m, get_forward_ips_if_needed(forward), reply_to_ip, shard,
+                response_id, tracing::make_trace_info(tr_state), fence, forward, reply_to);
     }
 
     future<> send_counter_mutation(
@@ -437,10 +449,10 @@ public:
 
     future<> send_paxos_learn(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
-            const service::paxos::proposal& decision, const inet_address_vector_replica_set& forward,
-            gms::inet_address reply_to, unsigned shard, uint64_t response_id) {
+            const service::paxos::proposal& decision, const host_id_vector_replica_set& forward,
+            gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard, uint64_t response_id) {
         return ser::storage_proxy_rpc_verbs::send_paxos_learn(
-                &_ms, addr, timeout, decision, forward, reply_to, shard, response_id, trace_info);
+                &_ms, addr, timeout, decision, {}, reply_to_ip, shard, response_id, trace_info, forward, reply_to);
     }
 
     future<> send_paxos_prune(
@@ -539,6 +551,7 @@ private:
     future<rpc::no_wait_type> handle_write(
             locator::host_id src_addr, rpc::opt_time_point t,
             auto schema_version, auto in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id,
             unsigned shard, storage_proxy::response_id_type response_id, const std::optional<tracing::trace_info>& trace_info,
             fencing_token fence, auto&& apply_fn1, auto&& forward_fn1) {
         auto apply_fn = std::move(apply_fn1);
@@ -565,20 +578,12 @@ private:
             timeout = *t;
         }
 
-        // FIXME: send ids in the RPC and use if available
-        // We wait for a replica to appear in the gossiper to support tests
-        // that skip wait_for_gossip_to_settle.
-        gms::endpoint_state_ptr ep_state;
-        while (!(ep_state = _gossiper.get_endpoint_state_ptr(reply_to))) {
-            co_await sleep(1ms);
-            if (clock_type::now() > timeout) {
-                auto m = fmt::format("Failed to resolve reply_to address {} to host id", reply_to);
-                slogger.warn("{}", m);
-                throw std::runtime_error(std::move(m));
-            }
+        auto reply_to_host_id = reply_to_id ? *reply_to_id : _gossiper.get_host_id(reply_to);
+        auto forward_host_id = forward_id ? std::move(*forward_id) : addr_vector_to_id(_sp._shared_token_metadata.get()->get_topology(), forward);
+
+        if (reply_to_id) {
+            _gossiper.get_mutable_address_map().opt_add_entry(reply_to_host_id, reply_to);
         }
-        auto reply_to_host_id = ep_state->get_host_id();
-        auto forward_host_id = addr_vector_to_id(_sp._shared_token_metadata.get()->get_topology(), forward);
 
         struct errors_info {
             size_t count = 0;
@@ -631,7 +636,7 @@ private:
                     return parallel_for_each(forward_host_id.begin(), forward_host_id.end(), [&] (locator::host_id forward) {
                         // Note: not a coroutine, since forward_fn() typically returns a ready future
                         tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                        return forward_fn(p, forward, timeout, m, reply_to, shard, response_id,
+                        return forward_fn(p, forward, timeout, m, reply_to, reply_to_host_id, shard, response_id,
                                             tracing::make_trace_info(trace_state_ptr), fence)
                                 .then_wrapped([&] (future<> f) {
                             if (f.failed()) {
@@ -665,13 +670,14 @@ private:
             unsigned shard, storage_proxy::response_id_type response_id,
             rpc::optional<std::optional<tracing::trace_info>> trace_info,
             rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
-            rpc::optional<fencing_token> fence) {
+            rpc::optional<fencing_token> fence,
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
 
         auto schema_version = in.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
+        return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, std::move(forward_id), reply_to_id, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
                 fence.value_or(fencing_token{}),
                 /* apply_fn */ [smp_grp, rate_limit_info, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
@@ -679,9 +685,9 @@ private:
                     return p->apply_fence(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
-                        gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                        gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
                         const std::optional<tracing::trace_info>& trace_info, fencing_token fence) {
-                    return send_mutation(addr, timeout, trace_info, m, {}, reply_to, shard, response_id, rate_limit_info, fence);
+                    return send_mutation(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id, rate_limit_info, fence);
                 });
     }
 
@@ -690,24 +696,26 @@ private:
             frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
             unsigned shard, storage_proxy::response_id_type response_id,
             rpc::optional<std::optional<tracing::trace_info>> trace_info,
-            rpc::optional<fencing_token> fence) {
+            rpc::optional<fencing_token> fence,
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id) {
         ++_sp.get_stats().received_hints_total;
         _sp.get_stats().received_hints_bytes_total += in.representation().size();
 
         return receive_mutation_handler(_sp._hints_write_smp_service_group, cinfo, t, std::move(in),
             std::move(forward), std::move(reply_to), shard, response_id, std::move(trace_info),
-            std::monostate(), fence);
+            std::monostate(), fence, std::move(forward_id), std::move(reply_to_id));
     }
 
     future<rpc::no_wait_type> handle_paxos_learn(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
+            storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
 
         auto schema_version = decision.update.schema_version();
-        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, shard,
+        return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, std::move(forward_id),reply_to_id, shard,
                 response_id, trace_info,
                 fencing_token{},
                /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
@@ -715,9 +723,9 @@ private:
                      return paxos::paxos_state::learn(*p, _sys_ks.local(), std::move(s), decision, timeout, tr_state);
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, locator::host_id addr, clock_type::time_point timeout, const paxos::proposal& m,
-                      gms::inet_address reply_to, unsigned shard, response_id_type response_id,
+                      gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
                       const std::optional<tracing::trace_info>& trace_info, fencing_token) {
-                    return send_paxos_learn(addr, timeout, trace_info, m, {}, reply_to, shard, response_id);
+                    return send_paxos_learn(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id);
               });
     }
 
@@ -1126,7 +1134,7 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, fencing_token fence) = 0;
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const inet_address_vector_replica_set& forward,
+    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) = 0;
@@ -1182,14 +1190,14 @@ public:
         }
         return make_ready_future<>();
     }
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const inet_address_vector_replica_set& forward,
+    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
             return sp.remote().send_mutation(ep, timeout, tracing::make_trace_info(tr_state),
-                    *m, forward, sp.my_address(), this_shard_id(),
+                    *m, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
                     response_id, rate_limit_info, fence);
         }
         sp.got_response(response_id, ep, std::nullopt);
@@ -1233,13 +1241,13 @@ public:
         tracing::trace(tr_state, "Executing a mutation locally");
         return sp.apply_fence(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_address());
     }
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const inet_address_vector_replica_set& forward,
+    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
         return sp.remote().send_mutation(ep, timeout, tracing::make_trace_info(tr_state),
-                *_mutation, forward, sp.my_address(), this_shard_id(),
+                *_mutation, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(),
                 response_id, rate_limit_info, fence);
     }
     virtual bool is_shared() override {
@@ -1265,11 +1273,11 @@ public:
         // becomes unavailable - this might include the current node
         return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_address());
     }
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const inet_address_vector_replica_set& forward,
+    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
         return sp.remote().send_hint_mutation(ep, timeout, tr_state,
-                *_mutation, forward, sp.my_address(), this_shard_id(), response_id, rate_limit_info, fence);
+                *_mutation, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id, rate_limit_info, fence);
     }
 };
 
@@ -1390,13 +1398,13 @@ public:
         // TODO: Enforce per partition rate limiting in paxos
         return paxos::paxos_state::learn(sp, sp.remote().system_keyspace(), _schema, *_proposal, timeout, tr_state);
     }
-    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const inet_address_vector_replica_set& forward,
+    virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
         // TODO: Enforce per partition rate limiting in paxos
         return sp.remote().send_paxos_learn(ep, timeout, tracing::make_trace_info(tr_state),
-                *_proposal, forward, sp.my_address(), this_shard_id(), response_id);
+                *_proposal, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id);
     }
     virtual bool is_shared() override {
         return true;
@@ -1697,7 +1705,7 @@ public:
             *_effective_replication_map_ptr,
             storage_proxy::get_fence(*_effective_replication_map_ptr));
     }
-    future<> apply_remotely(locator::host_id ep, const inet_address_vector_replica_set& forward,
+    future<> apply_remotely(locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) {
         return _mutation_holder->apply_remotely(*_proxy, ep, forward,
@@ -4241,7 +4249,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // lambda for applying mutation remotely
-    auto rmutate = [this, handler_ptr, timeout, response_id, &global_stats] (locator::host_id coordinator, const inet_address_vector_replica_set& forward) {
+    auto rmutate = [this, handler_ptr, timeout, response_id, &global_stats] (locator::host_id coordinator, const host_id_vector_replica_set& forward) {
         auto msize = handler_ptr->get_mutation_size(); // can overestimate for repair writes
         global_stats.queued_write_bytes += msize;
 
@@ -4275,8 +4283,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             if (coordinator == my_address) {
                 f = futurize_invoke(lmutate);
             } else {
-                // FIXME: ammend MUTATE RPC to send forward as host ids
-                f = futurize_invoke(rmutate, coordinator, id_vector_to_addr(*handler_ptr->_effective_replication_map_ptr, forward));
+                f = futurize_invoke(rmutate, coordinator, forward);
             }
         }
 
