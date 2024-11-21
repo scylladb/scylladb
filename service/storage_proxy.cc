@@ -6589,14 +6589,7 @@ storage_proxy::filter_replicas_for_read(
 
     // There are nodes other than us in `live_endpoints`.
     auto& gossiper = remote().gossiper();
-    std::optional<gms::inet_address> extra_ip;
-    // FIXME: chnage filter_for_query to work on host ids
-    auto r = db::filter_for_query(cl, erm, id_vector_to_addr(erm, live_endpoints), id_vector_to_addr(erm, preferred_endpoints),
-                                repair_decision, gossiper, extra ? &extra_ip : nullptr, cf);
-    if (extra && extra_ip) {
-        *extra = gossiper.get_host_id(*extra_ip);
-    }
-    return addr_vector_to_id(erm.get_topology(), std::move(r));
+    return db::filter_for_query(cl, erm, live_endpoints, preferred_endpoints, repair_decision, gossiper, extra, cf);
 }
 
 host_id_vector_replica_set
