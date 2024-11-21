@@ -268,9 +268,7 @@ private:
     // which is then copied to temporary copies for all shards
     // and then applied atomcically on all shards.
     //
-    // Finally, the `on_success` callback is called on shard 0 iff replication was successful.
-    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func,
-            std::function<void(gossiper&)> on_success = [] (gossiper&) {});
+    future<> mutate_live_and_unreachable_endpoints(std::function<void(live_and_unreachable_endpoints&)> func);
 
     // replicate shard 0 live and unreachable endpoints sets across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration
@@ -512,7 +510,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id);
+    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
 
 public:
     bool is_alive(inet_address ep) const;
@@ -537,7 +535,7 @@ private:
     future<> apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
-    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id);
+    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
@@ -640,12 +638,6 @@ public:
 
 public:
     bool is_enabled() const;
-
-    void finish_shadow_round();
-
-    bool is_in_shadow_round() const;
-
-    void goto_shadow_round();
 
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);

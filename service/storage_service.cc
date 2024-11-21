@@ -3284,7 +3284,6 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                             throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true (check_for_endpoint_collision)");
                         } else {
                             sstring saved_state(state);
-                            _gossiper.goto_shadow_round();
                             _gossiper.reset_endpoint_state_map().get();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
