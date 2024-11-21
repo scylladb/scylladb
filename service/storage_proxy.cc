@@ -1040,7 +1040,7 @@ private:
         co_return netw::messaging_service::no_wait();
     }
 
-    void connection_dropped(gms::inet_address addr) {
+    void connection_dropped(gms::inet_address addr, std::optional<locator::host_id> id) {
         slogger.debug("Drop hit rate info for {} because of disconnect", addr);
         for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
             cf->drop_hit_rate(addr);

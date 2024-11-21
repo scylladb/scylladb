@@ -1014,10 +1014,12 @@ void messaging_service::find_and_remove_client(Map& clients, typename Map::key_t
     }
 
     gms::inet_address addr;
+    std::optional<locator::host_id> hid;
     if constexpr (std::is_same_v<typename Map::key_type, msg_addr>) {
         addr = id.addr;
     } else {
         addr = _address_map.find(id).value();
+        hid = id;
     }
     auto it = clients.find(id);
     if (it != clients.end() && filter(it->second)) {
@@ -1032,7 +1034,7 @@ void messaging_service::find_and_remove_client(Map& clients, typename Map::key_t
         (void)client->stop().finally([addr, client, ms = shared_from_this()] {
             mlogger.debug("dropped connection to {}", addr);
         }).discard_result();
-        _connection_dropped(addr);
+        _connection_dropped(addr, hid);
     }
 }
 
