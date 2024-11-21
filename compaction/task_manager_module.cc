@@ -635,10 +635,10 @@ future<> shard_reshaping_compaction_task_impl::run() {
 future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
 
     while (true) {
-        auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(sstables_in_cg
-                | boost::adaptors::filtered([&filter = _filter] (const auto& sst) {
+        auto reshape_candidates = sstables_in_cg
+                | std::views::filter([&filter = _filter] (const auto& sst) {
             return filter(sst);
-        }));
+        }) | std::ranges::to<std::vector>();
         if (reshape_candidates.empty()) {
             break;
         }

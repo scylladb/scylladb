@@ -121,10 +121,10 @@ private:
         return boost::copy_range<std::vector<data_dictionary::keyspace>>(unwrap(db).keyspaces | boost::adaptors::transformed([this] (const keyspace& ks) { return wrap(ks); }));
     }
     virtual std::vector<sstring> get_user_keyspaces(data_dictionary::database db) const override {
-        return boost::copy_range<std::vector<sstring>>(
+        return std::ranges::to<std::vector<sstring>>(
             unwrap(db).keyspaces 
-            | boost::adaptors::transformed([] (const keyspace& ks) { return ks.metadata->name(); })
-            | boost::adaptors::filtered([] (const sstring& ks) {return !is_internal_keyspace(ks); })
+            | std::views::transform([] (const keyspace& ks) { return ks.metadata->name(); })
+            | std::views::filter([] (const sstring& ks) {return !is_internal_keyspace(ks); })
         );
     }
     virtual std::vector<sstring> get_all_keyspaces(data_dictionary::database db) const override {
@@ -180,9 +180,9 @@ private:
         return secondary_index::get_available_index_name(ks_name, cf_name, index_name_root, existing_index_names(db, ks_name), has_schema);
     }
     virtual std::set<sstring> existing_index_names(data_dictionary::database db, std::string_view ks_name, std::string_view cf_to_exclude = {}) const override {
-        auto tables = boost::copy_range<std::vector<schema_ptr>>(unwrap(db).tables
-                | boost::adaptors::filtered([ks_name] (const table& t) { return t.schema->ks_name() == ks_name; })
-                | boost::adaptors::transformed([] (const table& t) { return t.schema; }));
+        auto tables = std::ranges::to<std::vector<schema_ptr>>(unwrap(db).tables
+                | std::views::filter([ks_name] (const table& t) { return t.schema->ks_name() == ks_name; })
+                | std::views::transform([] (const table& t) { return t.schema; }));
         return secondary_index::existing_index_names(tables, cf_to_exclude);
     }
     virtual schema_ptr find_indexed_table(data_dictionary::database db, std::string_view ks_name, std::string_view index_name) const override {
@@ -375,10 +375,10 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         }
     }
 
-    return boost::copy_range<std::vector<schema_ptr>>(
+    return std::ranges::to<std::vector<schema_ptr>>(
             real_db.tables |
-            boost::adaptors::filtered([] (const table& t) { return t.user; }) |
-            boost::adaptors::transformed([] (const table& t) { return t.schema; }));
+            std::views::filter([] (const table& t) { return t.user; }) |
+            std::views::transform([] (const table& t) { return t.schema; }));
 }
 
 class single_keyspace_user_types_storage : public data_dictionary::user_types_storage {

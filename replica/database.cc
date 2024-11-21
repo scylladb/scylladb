@@ -1314,9 +1314,9 @@ bool database::has_schema(std::string_view ks_name, std::string_view cf_name) co
 }
 
 std::vector<view_ptr> database::get_views() const {
-    return boost::copy_range<std::vector<view_ptr>>(get_non_system_column_families()
-            | boost::adaptors::filtered([] (auto& cf) { return cf->schema()->is_view(); })
-            | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
+    return std::ranges::to<std::vector<view_ptr>>(get_non_system_column_families()
+            | std::views::filter([] (auto& cf) { return cf->schema()->is_view(); })
+            | std::views::transform([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
 future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
@@ -2698,7 +2698,7 @@ future<> database::flush_non_system_column_families() {
         return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
     });
     // count CFs first
-    auto total_cfs = boost::distance(non_system_cfs);
+    auto total_cfs = std::ranges::distance(non_system_cfs);
     _drain_progress.total_cfs = total_cfs;
     _drain_progress.remaining_cfs = total_cfs;
     // flush

@@ -109,8 +109,6 @@
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
 #include "partition_range_compat.hh"
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/indirected.hpp>
 #include "mutation/frozen_mutation.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
@@ -478,7 +476,7 @@ messaging_service::~messaging_service() = default;
 static future<> do_with_servers(std::string_view what, std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers, auto method) {
     mlogger.info("{} server", what);
     co_await coroutine::parallel_for_each(
-            servers | boost::adaptors::filtered([] (auto& ptr) { return bool(ptr); }) | boost::adaptors::indirected,
+            servers | std::views::filter([] (auto& ptr) { return bool(ptr); }) | std::views::transform([] (auto& ptr) -> messaging_service::rpc_protocol_server_wrapper& { return *ptr; }),
             method);
     mlogger.info("{} server - Done", what);
 }

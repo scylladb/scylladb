@@ -9,7 +9,6 @@
 
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
-#include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -1343,10 +1342,10 @@ future<> server_impl::applier_fiber() {
                 const term_t last_term = batch.back()->term;
                 SCYLLA_ASSERT(last_idx == _applied_idx + index_t{batch.size()});
 
-                boost::range::copy(
+                std::ranges::copy(
                        batch |
-                       boost::adaptors::filtered([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
-                       boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
+                       std::views::filter([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
+                       std::views::transform([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                        std::back_inserter(commands));
 
                 const auto size = commands.size();

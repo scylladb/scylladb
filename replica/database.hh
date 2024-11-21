@@ -1422,7 +1422,7 @@ public:
         const std::unordered_map<table_id, lw_shared_ptr<table>> get_column_families_copy() const;
 
         auto filter(std::function<bool(std::pair<table_id, lw_shared_ptr<table>>)> f) const {
-            return _column_families | boost::adaptors::filtered(std::move(f));
+            return _column_families | std::views::filter(std::move(f));
         }
     };
 private:

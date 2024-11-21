@@ -13,7 +13,6 @@
 #include "service/storage_proxy.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
-#include <boost/range/adaptor/filtered.hpp>
 
 using namespace std::chrono_literals;
 
@@ -23,10 +22,10 @@ namespace statements {
 
 static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, std::vector<query::clustering_range> clustering_bounds, view_ptr view,
         service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql_stats& stats, db::timeout_clock::duration timeout_duration) {
-    auto key_columns = boost::copy_range<std::vector<const column_definition*>>(
+    auto key_columns = std::ranges::to<std::vector<const column_definition*>>(
         view->all_columns()
-        | boost::adaptors::filtered([] (const column_definition& cdef) { return cdef.is_primary_key(); })
-        | boost::adaptors::transformed([] (const column_definition& cdef) { return &cdef; } ));
+        | std::views::filter([] (const column_definition& cdef) { return cdef.is_primary_key(); })
+        | std::views::transform([] (const column_definition& cdef) { return &cdef; } ));
     auto selection = cql3::selection::selection::for_columns(view, key_columns);
 
     query::partition_slice partition_slice(std::move(clustering_bounds), {},  {}, selection->get_query_options());
