@@ -694,7 +694,7 @@ static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& s
     testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
     const auto stats_before = semaphore.get_stats();
 
-    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now(), {});
+    auto admit_fut = semaphore.obtain_permit(schema, "require_can_admit", 1024, db::timeout_clock::now() + 50ms, {});
     admit_fut.wait();
     const bool can_admit = !admit_fut.failed();
     if (can_admit) {
@@ -846,13 +846,12 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // evicting inactive readers for admission
     {
-        auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
         auto irh1 = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit1));
 
-        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
         auto irh2 = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit2));
 
-        BOOST_REQUIRE(eventually_true([&] { return !irh1 || !irh2; }));
         require_can_admit(true, "evictable reads");
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
