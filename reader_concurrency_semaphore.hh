@@ -42,7 +42,7 @@ using mutation_reader_opt = optimized_optional<mutation_reader>;
 /// number of waiting readers becomes equal or greater than
 /// `max_queue_length` (upon calling `obtain_permit()`) an exception of
 /// type `std::runtime_error` is thrown. Optionally, some additional
-/// code can be executed just before throwing (`prethrow_action` 
+/// code can be executed just before throwing (`prethrow_action`
 /// constructor parameter).
 ///
 /// The semaphore has 3 layers of defense against consuming more memory
@@ -89,6 +89,7 @@ public:
         // Total number of failed reads executed through this semaphore.
         uint64_t total_failed_reads = 0;
         // Total number of reads rejected because the admission queue reached its max capacity
+        // or rejected due to a high probability of not getting finalized on time.
         uint64_t total_reads_shed_due_to_overload = 0;
         // Total number of reads killed due to the memory consumption reaching the kill limit.
         uint64_t total_reads_killed_due_to_kill_limit = 0;
@@ -249,6 +250,8 @@ private:
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
+
+    void on_permit_preemptive_aborted() noexcept;
 
     void on_permit_need_cpu() noexcept;
     void on_permit_not_need_cpu() noexcept;
