@@ -238,18 +238,23 @@ private:
                 _aux_data.pr.set_exception(ex);
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out", this);
                 _semaphore.dequeue_permit(*this);
+                _semaphore.on_permit_aborted();
                 break;
             case state::active:
             case state::active_need_cpu:
             case state::active_await:
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out", this);
+                _semaphore.on_permit_aborted();
                 break;
             case state::inactive:
                 _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
                 break;
             case state::evicted:
+            case state::aborted:
                 break;
         }
+
+        _state = reader_permit::state::aborted;
     }
 
 public:
@@ -364,6 +369,15 @@ public:
 
     void on_executing() {
         on_permit_active();
+    }
+
+    void on_abort() {
+        auto keepalive = std::exchange(_aux_data.permit_keepalive, std::nullopt);
+
+        _ttl_timer.cancel();
+        _state = reader_permit::state::aborted;
+        _aux_data.pr.set_exception(named_semaphore_aborted(_semaphore._name));
+        _semaphore.on_permit_aborted();
     }
 
     void on_register_as_inactive() {
@@ -696,6 +710,9 @@ auto fmt::formatter<reader_permit::state>::format(reader_permit::state s, fmt::f
             break;
         case reader_permit::state::evicted:
             name = "evicted";
+            break;
+        case reader_permit::state::aborted:
+            name = "aborted";
             break;
     }
     return formatter<string_view>::format(name, ctx);
@@ -1131,6 +1148,10 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(mutation_reader reader,
         const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
+    if (permit->get_state() == reader_permit::state::aborted) {
+        return inactive_read_handle();
+    }
+
     if (permit->get_state() == reader_permit::state::waiting_for_memory) {
         // Kill all outstanding memory requests, the read is going to be evicted.
         permit->aux_data().pr.set_exception(std::make_exception_ptr(std::bad_alloc{}));
@@ -1549,10 +1570,15 @@ void reader_concurrency_semaphore::dequeue_permit(reader_permit::impl& permit) {
         case reader_permit::state::active:
         case reader_permit::state::active_need_cpu:
         case reader_permit::state::active_await:
+        case reader_permit::state::aborted:
             on_internal_error_noexcept(rcslog, format("reader_concurrency_semaphore::dequeue_permit(): unrecognized queued state: {}", permit.get_state()));
     }
     permit.unlink();
     _permit_list.push_back(permit);
+}
+
+void reader_concurrency_semaphore::on_permit_aborted() noexcept {
+    ++_stats.total_reads_shed_due_to_overload;
 }
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
