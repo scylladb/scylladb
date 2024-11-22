@@ -2438,7 +2438,7 @@ future<> repair_service::repair_tablet(locator::tablet_metadata_guard& guard, lo
     co_await task->done();
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
-        rlogger.debug("Exceute tablet_repair_add_delay_in_ms={}", *delay);
+        rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
         co_await seastar::sleep(std::chrono::milliseconds(*delay));
     }
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
