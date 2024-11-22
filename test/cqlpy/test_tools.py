@@ -653,14 +653,14 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
     def test_table_dir_data_dir(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_data_dir):
         self.check(
                 scylla_path,
-                ["--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
+                ["--schema-tables", "--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
     def test_table_dir_data_dir_deduced_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_data_dir):
         self.check(
                 scylla_path,
-                ["--scylla-data-dir", scylla_data_dir],
+                ["--schema-tables", "--scylla-data-dir", scylla_data_dir],
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
@@ -668,7 +668,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check(
                 scylla_path,
-                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
+                ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
@@ -676,7 +676,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check(
                 scylla_path,
-                ["--scylla-yaml-file", scylla_yaml_file],
+                ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file],
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
@@ -701,7 +701,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
         self.check(
                 scylla_path,
-                ["--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
+                ["--schema-tables", "--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
                 ext_sstable,
                 system_scylla_local_reference_dump)
 
@@ -710,9 +710,19 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check(
                 scylla_path,
-                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
+                ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
                 ext_sstable,
                 system_scylla_local_reference_dump)
+
+    def test_external_dir_sstable_serialization_header_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        # It is important to use a controlled workdir, so scylla-sstable doesn't accidentally pick up a scylla.yaml.
+        self.check(
+                scylla_path,
+                ["--sstable-schema", "--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump,
+                cwd=temp_workdir)
 
     def test_external_dir_autodetect_schema_file(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, system_scylla_local_schema_file):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
@@ -777,7 +787,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check_fail(
                 scylla_path,
-                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", "non-existent-keyspace", "--table", self.table],
+                ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", "non-existent-keyspace", "--table", self.table],
                 ext_sstable,
                 error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find non-existent-keyspace.scylla_local in schema tables)")
 
@@ -786,7 +796,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
         scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
         self.check_fail(
                 scylla_path,
-                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", "non-existent-table"],
+                ["--schema-tables", "--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", "non-existent-table"],
                 ext_sstable,
                 error_msg="error processing arguments: could not load schema via schema-tables: std::runtime_error (Failed to find system.non-existent-table in schema tables)")
 

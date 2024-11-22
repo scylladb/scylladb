@@ -34,19 +34,14 @@ You can specify more than one SStable.
 Schema
 ------
 
-All operations need a schema to interpret the SStables with.
-This tool tries to auto-detect the location of the ScyllaDB data directories and the name of the table the SStable belongs to.
-If the SStable is located in a ScyllaDB data directory, it works out-of-the-box, without any additional input from the user.
-If the SStable is located at an external path, you need to specify the names of the keyspace and table to which the SStable belongs. In addition, some hints as to where the ScyllaDB data directory is located may also be required.
+All operations need a schema to interpret the SStables with. By default the tool tries to auto-detect the schema of the SSTable. This should work out-of-the-box in most cases.
 
-The schema can be obtained in the following ways:
+Although the tool tries to auto-detect the schema of the SStable by default, it provides options for the user to control where it obtains the schema from. The following schema-sources can be provided (more details on each one below):
 
-* Auto-detected - If the SStable is located in the table's directory within the ScyllaDB data directory.
-* ``--keyspace=KEYSPACE --table=TABLE`` - If the SStable is located at an external location, but the ScyllaDB data directory or the config file are located at the standard location. The tool also reads the ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables to try to locate the configuration file.
-* ``--schema-file FILENAME`` - Read the schema definition from a file.
+* ``--schema-file FILENAME`` - Read the schema definition from a file containing DDL for the table and optionally the keyspace.
 * ``--system-schema --keyspace=KEYSPACE --table=TABLE`` - Use the known definition of built-in tables (only works for system tables).
-* ``--scylla-data-dir SCYLLA_DATA_DIR_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory at the provided location, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
-* ``--scylla-yaml-file SCYLLA_YAML_FILE_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory path obtained from the configuration, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
+* ``--schema-tables [--keyspace KEYSPACE_NAME --table TABLE_NAME] [--scylla-yaml-file SCYLLA_YAML_FILE_PATH] [--scylla-data-dir SCYLLA_DATA_DIR_PATH]`` - Read the schema tables from the data directory.
+* ``--sstable-schema --keyspace=KEYSPACE --table=TABLE`` - Read the schema from the SSTable's own serialization headers (statistics component).
 
 By default (no schema-related options are provided), the tool will try the following sequence:
 
@@ -56,12 +51,13 @@ By default (no schema-related options are provided), the tool will try the follo
   ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables are also checked.
   If the configuration file cannot be located, the default ScyllaDB data directory path (``/var/lib/scylla``) is used.
   For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+* Try to load the schema from the SSTable serialization headers.
 
 The tool stops after the first successful attempt. If none of the above succeed, an error message will be printed.
 A user provided schema in ``schema.cql`` (if present) always takes precedence over other methods. This is deliberate, to allow to manually override the schema to be used.
 
-schema.cql
-^^^^^^^^^^
+Schema file
+^^^^^^^^^^^
 
 The schema file should contain all definitions needed to interpret data belonging to the table.
 
@@ -89,6 +85,7 @@ Note:
 * In addition to the table itself, the definition also has to includes any user defined types the table uses.
 * The keyspace definition is optional, if missing one will be auto-generated.
 * The schema file doesn't have to be called ``schema.cql``, this is just the default name. Any file name is supported (with any extension).
+* The schema file is allowed to contain a single ``CREATE TABLE`` statement. If the table is a view, the schema file can contain a ``CREATE TABLE`` and a ``CREATE INDEX`` or ``CREATE MATERIALIZED VIEW`` statements.
 
 Dropped columns
 ~~~~~~~~~~~~~~~
@@ -114,14 +111,37 @@ Dropped columns can be provided to the tool in the form of insert statements int
 
     CREATE TABLE ks.cf (pk int PRIMARY KEY, v2 int);
 
-System tables
+System schema
 ^^^^^^^^^^^^^
 
-If the examined table is a system table -- it belongs to one of the system keyspaces (``system``, ``system_schema``, ``system_distributed`` or ``system_distributed_everywhere``) -- you can just tell the tool to use the known built-in definition of said table. This is possible with the ``--system-schema`` flag. Example:
+If the examined table is a system table -- it belongs to one of the system keyspaces (``system``, ``system_schema``, ``system_distributed`` or ``system_distributed_everywhere``) -- the tool can be instructed to use the known built-in definition of said table. This is possible with the ``--system-schema`` flag. Example:
 
 .. code-block:: console
 
-    scylla sstable dump-data --system-schema system.local ./path/to/md-123456-big-Data.db
+    scylla sstable dump-data --system-schema --keyspace system --table local ./path/to/md-123456-big-Data.db
+
+Schema tables
+^^^^^^^^^^^^^
+
+Load the schema from ScyllaDB's schema tables, located on the disk. The tool has to be able to locate ScyllaDB data directory for this to work. The path to the data directory can be provided the following ways:
+
+* Deduced from the SSTable's path. This only works if the SSTable itself is located in the ScyllaDB's data directory.
+* Provided directly via ``--scylla-data-dir`` parameter.
+* Provided indirectly via ``--scylla-yaml-file`` parameter. The path to the data directory is obtained from the configuration.
+* Provided indirectly via the ``SCYLLA_HOME`` environment variable. The ``scylla.yaml`` file is expected to be found at the ``SCYLLA_HOME/conf/scylla.yaml`` path.
+* Provided indirectly via the ``SCYLLA_CONF`` environment variable. The ``scylla.yaml`` file is expected to be found at the ``SCYLLA_CONF/scylla.yaml`` path.
+
+In all except the first case, the keyspace and table names have to be provided via the ``--keyspace`` and ``--table`` parameters respectively.
+
+Common problems:
+
+* If the schema tables are read while the ScyllaDB node is running, ScyllaDB might compact an SStable that the tool is trying to read, resulting in failure to load the schema. The simplest solution is to retry the operation. To avoid the problem, disable autocompation on the ``system_schema`` keyspace, or stop the node. This is intrusive and might not be possible, in this case use another schema source.
+* The schema of the SSTable could be still in memtables, not yet flushed to disk. In this case, simply flush the ``system_schema`` keyspace memtables and retry the operation.
+
+SStable schema
+^^^^^^^^^^^^^^
+
+Each SStable contains a schema in its Statistics component. This schema is incomplete: it doesn't contain names for primary key columns and contains no schema options. That said, this schema is good enough for most operations and is always available.
 
 .. _scylla-sstable-sstable-content:
 

@@ -197,6 +197,26 @@ std::pair<sstring, sstring> get_keyspace_and_table_options(const bpo::variables_
     }
 }
 
+struct path_with_source {
+    fs::path path;
+    sstring source;
+};
+
+path_with_source obtain_data_dir(const bpo::variables_map& app_config, db::config& cfg) {
+    if (app_config.contains("scylla-data-dir")) {
+        return {.path = fs::path(app_config["scylla-data-dir"].as<sstring>()), .source = "--scylla-data-dir parameter"};
+    } else if (app_config.contains("scylla-yaml-file")) {
+        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "--scylla-yaml-file parameter"};
+    } else if (std::getenv("SCYLLA_CONF")) {
+        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_CONF environment variable"};
+    } else if (std::getenv("SCYLLA_HOME")) {
+        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_HOME environment variable"};
+    } else {
+        const auto info = extract_from_sstable_path(app_config);
+        return {.path = info.data_dir_path, .source = seastar::format("autodetected from sstable path ({})", info.sstable_path.native())};
+    }
+}
+
 struct schema_with_source {
     schema_ptr schema;
     sstring source;
@@ -223,21 +243,20 @@ std::optional<schema_with_source> try_load_schema_from_user_provided_source(cons
                 .source = schema_source_opt,
                 .obtained_from = "--system-schema parameter"};
         }
-        if (app_config.contains("scylla-data-dir")) {
+        if (app_config.contains("schema-tables")) {
+            const auto path_with_source = obtain_data_dir(app_config, cfg);
             schema_source_opt = "schema-tables";
-            const auto data_dir_path = std::filesystem::path(app_config["scylla-data-dir"].as<sstring>());
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
+            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, path_with_source.path, keyspace_name, table_name).get(),
                 .source= schema_source_opt,
-                .path = data_dir_path,
-                .obtained_from = "--scylla-data-dir parameter"};
+                .path = path_with_source.path,
+                .obtained_from = format("--schema-tables parameter (data-dir path obtained via {})", path_with_source.source)};
         }
-        if (app_config.contains("scylla-yaml-file")) {
-            schema_source_opt = "schema-tables";
-            const auto data_dir_path = std::filesystem::path(cfg.data_file_directories()[0]);
-            return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
-                .source = schema_source_opt,
-                .path = data_dir_path,
-                .obtained_from = "--scylla-yaml-file parameter"};
+        if (app_config.contains("sstable-schema")) {
+            const auto sst_path = fs::path(app_config["sstables"].as<std::vector<sstring>>().front());
+            return schema_with_source{.schema = tools::load_schema_from_sstable(cfg, sst_path, keyspace_name, table_name).get(),
+                .source= schema_source_opt,
+                .path = sst_path,
+                .obtained_from = "--sstable-schema parameter"};
         }
     } catch (...) {
         fmt::print(std::cerr, "error processing arguments: could not load schema via {}: {}\n", schema_source_opt, std::current_exception());
@@ -2726,11 +2745,15 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
 }
 
 const std::vector<operation_option> global_options {
-    typed_option<sstring>("schema-file", "schema.cql", "file containing the schema description"),
+    typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),
     typed_option<sstring>("table", "table name"),
-    typed_option<>("system-schema", "the table designated by --keyspace and --table is a system table, use the hard-coded in-memory hard-coded schema for it"),
-    typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from, this can be also provided directly with --scylla-data-dir"),
+    typed_option<>("system-schema", "the table designated by --keyspace and --table is a system table, use the hard-coded in-memory hard-coded schema as the schema source"),
+    typed_option<>("schema-tables", "use the schema-tables as the schema source (see --scylla-yaml-file and --scylla-data-dir)"
+            ", the name of the table can be provided with --keyspace and --table or left to auto-detect if possible"),
+    typed_option<>("sstable-schema", "use the schema stored in the sstable itself as the schema source"),
+    typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from,"
+            " this can be also provided directly with --scylla-data-dir"),
     typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
 };
 
@@ -3039,6 +3062,8 @@ To be able to interpret the sstables, their schema is required. There
 are multiple ways to obtain the schema:
 * system schema
 * schema file
+* schema tables
+* schema from the sstable itself
 
 ## System schema
 
@@ -3077,6 +3102,25 @@ Example scylla.cql:
 In general you should be able to use the output of `DESCRIBE TABLE` or
 the relevant parts of `DESCRIBE KEYSPACE` of `cqlsh` as well as the
 `schema.cql` produced by snapshots.
+
+## schema tables
+
+The schema can be read from the schema tables located on disk.
+The path to the data directory can be provided via multiple ways:
+* autodetected from the sstable's path -- if the sstable(s) are located in their
+  native table directory.
+* --scylla-data-dir
+* --scylla-yaml-file -- the scylla.yaml contains the data directory path(s).
+* The SCYLLA_HOME and/or SCYLLA_CONF environment variables. These allow locating
+  the scylla.yaml file.
+
+This is the most complete method, which should always result in a complete schema.
+
+## schema from the sstable itself
+
+The sstable stores a basic schema in the statistics component, which can be used
+for most operations on the sstable. This schema should be enough for all dump-
+operations.
 
 # Examples
 
@@ -3145,19 +3189,17 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             unsigned schema_sources = 0;
             schema_sources += !app_config["schema-file"].defaulted();
             schema_sources += app_config.contains("system-schema");
-            schema_sources += app_config.contains("scylla-data-dir");
-            schema_sources += app_config.contains("scylla-yaml-file");
+            schema_sources += app_config.contains("schema-tables");
+            schema_sources += app_config.contains("sstable-schema");
 
             if (!schema_sources) {
                 sst_log.debug("No user-provided schema source, attempting to auto-detect it");
                 schema_with_source = try_load_schema_autodetect(app_config, dbcfg);
-            } else if (schema_sources == 1 || (schema_sources == 2 && app_config.contains("scylla-yaml-file"))) {
-                // We make an exception for the case where 2 schema sources are provided, but one of them is scylla-yaml file.
-                // We want to always accept the --scylla-yaml-file option.
+            } else if (schema_sources == 1) {
                 sst_log.debug("Single schema source provided");
                 schema_with_source = try_load_schema_from_user_provided_source(app_config, dbcfg);
             } else {
-                fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --scylla-data-dir or --scylla-yaml-file (with the accompanying --keyspace and --table if necessary)\n");
+                fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --schema-tables or --sstable-schema (with the accompanying --keyspace and --table if necessary)\n");
             }
         }
         if (schema_with_source) {
