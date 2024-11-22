@@ -381,7 +381,7 @@ future<> storage_service::wait_for_ring_to_settle() {
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-static locator::node::state to_topology_node_state(node_state ns) {
+locator::node::state to_topology_node_state(node_state ns) {
     switch (ns) {
         case node_state::bootstrapping: return locator::node::state::bootstrapping;
         case node_state::decommissioning: return locator::node::state::being_decommissioned;
