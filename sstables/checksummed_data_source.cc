@@ -53,7 +53,7 @@ public:
         // address range, and open a file input stream to read that
         // range. The _underlying_pos always points to the current
         // chunk-aligned position of the file input stream.
-        auto chunk_size = checksum.chunk_size;
+        uint64_t chunk_size = checksum.chunk_size;
         if (chunk_size == 0 || (chunk_size & (chunk_size - 1)) != 0) {
             on_internal_error(sstlog, format("Invalid chunk size: {}", chunk_size));
         }
@@ -81,14 +81,14 @@ public:
                 _digests = {true, *digest, ChecksumType::init_checksum()};
             }
         }
-        auto start = _beg_pos & ~(chunk_size - 1);
-        auto end = (_end_pos & ~(chunk_size - 1)) + chunk_size;
+        auto start = align_down(_beg_pos, chunk_size);
+        auto end = std::min(_file_len, align_up(_end_pos, chunk_size));
         _input_stream = make_file_input_stream(std::move(f), start, end - start, std::move(options));
         _underlying_pos = start;
     }
 
     virtual future<temporary_buffer<char>> get() override {
-        auto chunk_size = _checksum.chunk_size;
+        uint64_t chunk_size = _checksum.chunk_size;
         if (_pos >= _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
@@ -139,7 +139,7 @@ public:
                 _digests.can_calculate_digest = false;
             }
         }
-        auto chunk_size = _checksum.chunk_size;
+        uint64_t chunk_size = _checksum.chunk_size;
         if (_pos + n > _end_pos) {
             on_internal_error(sstlog, format("Skipping over the end position is disallowed: current pos={}, end pos={}, skip len={}", _pos, _end_pos, n));
         }
@@ -147,7 +147,7 @@ public:
         if (_pos == _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
-        auto underlying_n = (_pos & ~(chunk_size - 1)) - _underlying_pos;
+        auto underlying_n = align_down(_pos, chunk_size) - _underlying_pos;
         _beg_pos = _pos;
         _underlying_pos += underlying_n;
         return _input_stream->skip(underlying_n).then([] {
