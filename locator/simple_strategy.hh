@@ -27,7 +27,7 @@ public:
 
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
-    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const override;
+    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
 private:
     size_t _replication_factor = 1;
 };

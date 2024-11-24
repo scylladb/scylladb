@@ -127,18 +127,7 @@ void validate_read_replicas(const locator::effective_replication_map& erm, const
         return;
     }
 
-    // there can be an endpoint that are already left if a tablet still use it.
-    // Filter it out before converting to ip set since we no longer have ip for it.
-    // FIXME: drop when moving sanity_check_read_replicas to host id
-    auto replicas = read_replicas | std::views::filter([&] (locator::host_id id) {
-        auto n = erm.get_topology().find_node(id);
-        if (n) {
-            return !n->left();
-        }
-        return true;
-    }) | std::ranges::to<host_id_vector_replica_set>();
-
-    const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, id_vector_to_addr(erm, replicas));
+    const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, read_replicas);
     if (!error.empty()) {
         on_internal_error(slogger, error);
     }

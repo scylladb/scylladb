@@ -100,7 +100,7 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     // Check that the read replica set does not exceed what's allowed by the schema.
-    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const = 0;
+    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const = 0;
 
     abstract_replication_strategy(
         replication_strategy_params params,

@@ -557,7 +557,7 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
 }
 
 sstring network_topology_strategy::sanity_check_read_replicas(const effective_replication_map& erm,
-                                                              const inet_address_vector_replica_set& read_replicas) const {
+                                                              const host_id_vector_replica_set& read_replicas) const {
     const auto& topology = erm.get_topology();
 
     struct rf_node_count {
