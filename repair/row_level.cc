@@ -48,7 +48,6 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
-#include "service/raft/raft_address_map.hh"
 #include "db/batchlog_manager.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty_v2.hh"
@@ -3253,7 +3252,6 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         netw::messaging_service& ms,
         sharded<replica::database>& db,
         sharded<service::storage_proxy>& sp,
-        sharded<service::raft_address_map>& addr_map,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_builder>& vb,
@@ -3265,7 +3263,6 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _messaging(ms)
     , _db(db)
     , _sp(sp)
-    , _addr_map(addr_map)
     , _bm(bm)
     , _sys_ks(sys_ks)
     , _view_builder(vb)

@@ -5931,7 +5931,7 @@ future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        co_await _repair.local().repair_tablet(guard, tablet);
+        co_await _repair.local().repair_tablet(_address_map, guard, tablet);
         co_return;
     });
 }

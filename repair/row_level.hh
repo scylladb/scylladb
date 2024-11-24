@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 
 #include <vector>
+#include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
@@ -18,7 +19,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
-#include "service/raft/raft_address_map.hh"
 #include "utils/user_provided_param.hh"
 #include "locator/tablet_metadata_guard.hh"
 
@@ -95,7 +95,6 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     netw::messaging_service& _messaging;
     sharded<replica::database>& _db;
     sharded<service::storage_proxy>& _sp;
-    sharded<service::raft_address_map>& _addr_map;
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::view::view_builder>& _view_builder;
@@ -133,7 +132,6 @@ public:
             netw::messaging_service& ms,
             sharded<replica::database>& db,
             sharded<service::storage_proxy>& sp,
-            sharded<service::raft_address_map>& addr_map,
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_keyspace>& sys_ks,
             sharded<db::view::view_builder>& vb,
@@ -154,7 +152,7 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
-    future<int> do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+    future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
     // all repair-based node operation entry points must be called on shard 0
@@ -179,7 +177,7 @@ private:
 public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<gms::inet_address> hosts = {}, std::unordered_set<gms::inet_address> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
-    future<> repair_tablet(locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
+    future<> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
