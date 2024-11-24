@@ -299,7 +299,6 @@ public:
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
-    const raft_address_map& address_map() const;
     raft_address_map& modifiable_address_map();
 
     // Returns scheduling group group0 is configured to run with

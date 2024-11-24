@@ -1775,10 +1775,6 @@ void raft_group0::register_metrics() {
     });
 }
 
-const raft_address_map& raft_group0::address_map() const {
-    return _raft_gr.address_map();
-}
-
 raft_address_map& raft_group0::modifiable_address_map(){
     return _raft_gr.address_map();
 }
