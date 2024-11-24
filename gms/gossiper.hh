@@ -439,6 +439,7 @@ public:
     }
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
+    const versioned_value* get_application_state_ptr(locator::host_id id, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip.

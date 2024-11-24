@@ -2494,6 +2494,18 @@ const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint
     return eps->get_application_state_ptr(appstate);
 }
 
+const versioned_value* gossiper::get_application_state_ptr(locator::host_id id, application_state appstate) const noexcept {
+    auto endpoint = _address_map.find(id);
+    if (!endpoint) {
+        return nullptr;
+    }
+    auto eps = get_endpoint_state_ptr(std::move(*endpoint));
+    if (!eps) {
+        return nullptr;
+    }
+    return eps->get_application_state_ptr(appstate);
+}
+
 sstring gossiper::get_application_state_value(inet_address endpoint, application_state appstate) const {
     auto v = get_application_state_ptr(endpoint, appstate);
     if (!v) {
