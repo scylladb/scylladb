@@ -359,7 +359,7 @@ filter_for_query(consistency_level cl,
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,
-                         const inet_address_vector_replica_set& live_endpoints) {
+                         const host_id_vector_replica_set& live_endpoints) {
     using namespace locator;
     const auto& topo = erm.get_topology();
 

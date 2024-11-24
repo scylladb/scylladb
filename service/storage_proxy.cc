@@ -5990,8 +5990,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     host_id_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
                     // Check if there is enough endpoint for the merge to be possible.
-                    // FIXME: provide is_sufficient_live_nodes that works on host ids
-                    if (!is_sufficient_live_nodes(cl, *erm, id_vector_to_addr(*erm, merged))) {
+                    if (!is_sufficient_live_nodes(cl, *erm, merged)) {
                         break;
                     }
 
