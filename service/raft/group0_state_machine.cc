@@ -36,7 +36,6 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "service/raft/raft_address_map.hh"
 #include "partition_slice_builder.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
@@ -55,9 +54,9 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        const raft_address_map& address_map, group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
+        group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
         bool topology_change_enabled)
-    : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
+    : _client(client), _mm(mm), _sp(sp), _ss(ss), _topology_change_enabled(topology_change_enabled)
     , _state_id_handler(sp.local_db(), gossiper, server_accessor)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots

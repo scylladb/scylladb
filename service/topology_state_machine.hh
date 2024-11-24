@@ -239,7 +239,7 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // request to stream data, return when streaming is
                                 // done
-          wait_for_ip           // wait for a joining node IP to appear in raft_address_map
+          wait_for_ip           // wait for a joining node IP to appear in gossiper
       };
       command cmd;
 

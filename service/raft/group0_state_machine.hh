@@ -29,9 +29,6 @@ class storage_proxy;
 class storage_service;
 struct group0_state_machine_merger;
 
-template <typename C> class address_map_t;
-using raft_address_map = address_map_t<seastar::lowres_clock>;
-
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
     // e.g. computed from a DDL statement (keyspace/table/type create/drop/alter etc.)
@@ -104,7 +101,6 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
-    const raft_address_map& _address_map;
     seastar::gate _gate;
     abort_source _abort_source;
     bool _topology_change_enabled;
@@ -115,7 +111,7 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, const raft_address_map& address_map,
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
