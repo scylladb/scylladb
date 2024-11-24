@@ -574,7 +574,16 @@ void topology::sort_by_proximity(inet_address address, inet_address_vector_repli
     }
 }
 
-std::weak_ordering topology::compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
+    if (_sort_by_proximity) {
+        std::sort(addresses.begin(), addresses.end(), [this, &address](locator::host_id& a1, locator::host_id& a2) {
+            return compare_endpoints(address, a1, a2) < 0;
+        });
+    }
+}
+
+template<typename T>
+std::weak_ordering topology::compare_endpoints(const T& address, const T& a1, const T& a2) const {
     const auto& loc = get_location(address);
     const auto& loc1 = get_location(a1);
     const auto& loc2 = get_location(a2);
