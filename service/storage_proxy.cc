@@ -4055,12 +4055,11 @@ bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const
             std::ranges::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
-template<typename NodesContainer>
 future<> storage_proxy::send_to_endpoint(
         std::unique_ptr<mutation_holder> m,
         locator::effective_replication_map_ptr ermp,
-        NodesContainer::value_type target,
-        NodesContainer pending_endpoints,
+        locator::host_id target,
+        host_id_vector_topology_change pending_endpoints,
         db::write_type type,
         tracing::trace_state_ptr tr_state,
         write_stats& stats,
@@ -4077,24 +4076,8 @@ future<> storage_proxy::send_to_endpoint(
         timeout = clock_type::now() + 5min;
     }
 
-    locator::host_id target_id;
-    host_id_vector_topology_change pending_replicas;
-    if constexpr (!std::is_same_v<NodesContainer, host_id_vector_topology_change>) {
-        // FIXME: the function is called from hint manager and view builder
-        //        host use host ids but views use addresses still
-        auto n = ermp->get_topology().find_node(target);
-        if (!n) {
-            on_internal_error(slogger, fmt::format("Node {} was not found in topology", target));
-        }
-        target_id = n->host_id();
-        pending_replicas = addr_vector_to_id(ermp->get_topology(), pending_endpoints);
-    } else {
-        target_id = target;
-        pending_replicas = std::move(pending_endpoints);
-    }
-
     return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
-            [this, tr_state, erm = std::move(ermp), target = std::array{target_id}, pending_endpoints = std::move(pending_replicas), &stats, cancellable] (
+            [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints, &stats, cancellable] (
                 std::unique_ptr<mutation_holder>& m,
                 db::consistency_level cl,
                 db::write_type type, service_permit permit) mutable {
@@ -4131,8 +4114,8 @@ future<> storage_proxy::send_to_endpoint(
 future<> storage_proxy::send_to_endpoint(
         frozen_mutation_and_schema fm_a_s,
         locator::effective_replication_map_ptr ermp,
-        gms::inet_address target,
-        inet_address_vector_topology_change pending_endpoints,
+        locator::host_id target,
+        host_id_vector_topology_change pending_endpoints,
         db::write_type type,
         tracing::trace_state_ptr tr_state,
         allow_hints allow_hints,
