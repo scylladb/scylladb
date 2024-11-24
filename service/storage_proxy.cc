@@ -101,12 +101,6 @@ static logging::logger mlogger("mutation_data");
 namespace {
 
 
-// Helper function needed only at the time of transition from ips to host ids
-inet_address_vector_replica_set id_vector_to_addr(const locator::effective_replication_map& erm, const host_id_vector_replica_set& set) {
-    return set | std::views::transform([&] (locator::host_id id) {
-        return erm.get_token_metadata().get_endpoint_for_host_id_if_known(id).value();
-    }) | std::ranges::to<inet_address_vector_replica_set>();
-}
 template<size_t N>
 utils::small_vector<locator::host_id, N> addr_vector_to_id(const locator::topology& topo, const utils::small_vector<gms::inet_address, N>& set) {
     return set | std::views::transform([&] (gms::inet_address ip) {
