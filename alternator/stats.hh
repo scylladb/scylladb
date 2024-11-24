@@ -67,6 +67,7 @@ public:
         uint64_t get_shard_iterator = 0;
         uint64_t get_records = 0;
 
+
         utils::timed_rate_moving_average_summary_and_histogram put_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram delete_item_latency;
@@ -83,6 +84,8 @@ public:
     uint64_t shard_bounce_for_lwt = 0;
     uint64_t requests_blocked_memory = 0;
     uint64_t requests_shed = 0;
+    uint64_t rcu_total = 0;
+    uint64_t wcu_total = 0;
     // CQL-derived stats
     cql3::cql_stats cql_stats;
 private:
