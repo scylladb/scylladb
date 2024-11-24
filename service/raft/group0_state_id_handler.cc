@@ -7,7 +7,6 @@
  */
 #include "service/raft/group0_state_id_handler.hh"
 #include "db/config.hh"
-#include "service/raft/raft_address_map.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/gossiper.hh"
 #include "utils/log.hh"
@@ -50,13 +49,7 @@ void group0_state_id_handler::refresh() {
     std::vector<raft::server_id> group0_members_missing_state_id;
 
     const auto& group0_members_state_ids = group0_members | std::ranges::views::transform([&](const auto& member) -> std::optional<utils::UUID> {
-        const auto endpoint_addr = _address_map.find(locator::host_id{member.addr.id.uuid()});
-        if (!endpoint_addr) {
-            group0_members_missing_endpoint.push_back(member.addr.id);
-            return std::nullopt;
-        }
-
-        const auto* state_id_ptr = _gossiper.get_application_state_ptr(*endpoint_addr, gms::application_state::GROUP0_STATE_ID);
+        const auto* state_id_ptr = _gossiper.get_application_state_ptr(locator::host_id{member.addr.id.uuid()}, gms::application_state::GROUP0_STATE_ID);
         if (!state_id_ptr) {
             group0_members_missing_state_id.push_back(member.addr.id);
             return std::nullopt;
@@ -108,10 +101,9 @@ void group0_state_id_handler::refresh() {
 }
 
 group0_state_id_handler::group0_state_id_handler(
-        replica::database& local_db, gms::gossiper& gossiper, const raft_address_map& address_map, group0_server_accessor server_accessor)
+        replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor)
     : _local_db(local_db)
     , _gossiper(gossiper)
-    , _address_map(address_map)
     , _server_accessor(server_accessor)
     , _refresh_interval(get_refresh_interval(local_db)) {
 }
