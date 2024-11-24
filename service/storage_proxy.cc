@@ -64,6 +64,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/all.hh>
+#include <type_traits>
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation/mutation_partition_view.hh"
@@ -4054,11 +4055,12 @@ bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const
             std::ranges::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
+template<typename NodesContainer>
 future<> storage_proxy::send_to_endpoint(
         std::unique_ptr<mutation_holder> m,
         locator::effective_replication_map_ptr ermp,
-        gms::inet_address target,
-        inet_address_vector_topology_change pending_endpoints,
+        NodesContainer::value_type target,
+        NodesContainer pending_endpoints,
         db::write_type type,
         tracing::trace_state_ptr tr_state,
         write_stats& stats,
@@ -4075,14 +4077,21 @@ future<> storage_proxy::send_to_endpoint(
         timeout = clock_type::now() + 5min;
     }
 
-    // FIXME: the function is called from hint manager and view builder
-    //        both need to be amended to pass host ids and then this can be dropped
-    auto n = ermp->get_topology().find_node(target);
-    if (!n) {
-        on_internal_error(slogger, fmt::format("Node {} was not found in topology", target));
+    locator::host_id target_id;
+    host_id_vector_topology_change pending_replicas;
+    if constexpr (!std::is_same_v<NodesContainer, host_id_vector_topology_change>) {
+        // FIXME: the function is called from hint manager and view builder
+        //        host use host ids but views use addresses still
+        auto n = ermp->get_topology().find_node(target);
+        if (!n) {
+            on_internal_error(slogger, fmt::format("Node {} was not found in topology", target));
+        }
+        target_id = n->host_id();
+        pending_replicas = addr_vector_to_id(ermp->get_topology(), pending_endpoints);
+    } else {
+        target_id = target;
+        pending_replicas = std::move(pending_endpoints);
     }
-    auto target_id = n->host_id();
-    auto pending_replicas = addr_vector_to_id(ermp->get_topology(), pending_endpoints);
 
     return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
             [this, tr_state, erm = std::move(ermp), target = std::array{target_id}, pending_endpoints = std::move(pending_replicas), &stats, cancellable] (
@@ -4140,12 +4149,12 @@ future<> storage_proxy::send_to_endpoint(
             cancellable);
 }
 
-future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target) {
+future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, locator::host_id target) {
     return send_to_endpoint(
             std::make_unique<hint_mutation>(std::move(fm_a_s)),
             std::move(ermp),
             std::move(target),
-            { },
+            host_id_vector_topology_change{},
             db::write_type::SIMPLE,
             tracing::trace_state_ptr(),
             get_stats(),

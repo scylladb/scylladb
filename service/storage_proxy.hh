@@ -442,11 +442,12 @@ private:
 
     future<result<>> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
+    template<typename NodesContainer>
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
             locator::effective_replication_map_ptr ermp,
-            gms::inet_address target,
-            inet_address_vector_topology_change pending_endpoints,
+            NodesContainer::value_type target,
+            NodesContainer pending_endpoints,
             db::write_type type,
             tracing::trace_state_ptr tr_state,
             write_stats& stats,
@@ -638,7 +639,7 @@ public:
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection
     // and use different RPC verb.
-    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, gms::inet_address target);
+    future<> send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, locator::host_id target);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
