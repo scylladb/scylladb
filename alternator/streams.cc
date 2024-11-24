@@ -981,7 +981,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             case cdc::operation::post_image:
             {
                 auto item = rjson::empty_object();
-                describe_single_item(*selection, row, attr_names, item, true);
+                describe_single_item(*selection, row, attr_names, item, nullptr, true);
                 describe_single_item(*selection, row, key_names, item);
                 rjson::add(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
                 break;
