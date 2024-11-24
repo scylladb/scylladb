@@ -1185,9 +1185,9 @@ std::set<inet_address> gossiper::get_live_members() const {
     return live_members;
 }
 
-std::set<inet_address> gossiper::get_live_token_owners() const {
-    std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners_ips();
+std::set<locator::host_id> gossiper::get_live_token_owners() const {
+    std::set<locator::host_id> token_owners;
+    auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners();
     for (auto& node: normal_token_owners) {
         if (is_alive(node)) {
             token_owners.insert(node);

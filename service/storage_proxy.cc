@@ -458,7 +458,6 @@ public:
                     live_members));
         }
 
-        // FIXME: provide get_live_token_owners version that returns host ids
         auto all_endpoints = _gossiper.get_live_token_owners();
         auto timeout = clock_type::now() + timeout_in_ms;
 
@@ -466,7 +465,7 @@ public:
 
         try {
             co_await coroutine::parallel_for_each(all_endpoints, [&] (auto ep) {
-                return send_truncate(_gossiper.get_host_id(ep), timeout, keyspace, cfname);
+                return send_truncate(ep, timeout, keyspace, cfname);
             });
            } catch (rpc::timeout_error& e) {
                slogger.trace("Truncation of {} timed out: {}", cfname, e.what());

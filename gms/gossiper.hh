@@ -298,7 +298,7 @@ public:
 
     std::set<inet_address> get_live_members() const;
 
-    std::set<inet_address> get_live_token_owners() const;
+    std::set<locator::host_id> get_live_token_owners() const;
 
     /**
      * @return a list of unreachable gossip participants, including fat clients
