@@ -26,6 +26,7 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
@@ -1139,5 +1140,21 @@ SEASTAR_TEST_CASE(test_schema_get_reversed) {
         BOOST_REQUIRE_EQUAL(schema->get_reversed().get(), reversed_schema.get());
 
         return make_ready_future<>();
+    });
+}
+
+// The purpose of the test is to avoid unintended changes of schema version
+// of system tables due to changes in generic code in schema_builder.
+//
+// It's enough to check only one system table as all tables share the version
+// calculation code. The test chooses to check system.batchlog, whose schema
+// shouldn't change often and cause failures due to intended version changes.
+SEASTAR_TEST_CASE(test_system_schema_version_is_stable) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto s = db::system_keyspace::batchlog();
+
+        // If you changed the schema of system.batchlog then this is expected to fail.
+        // Just replace expected version with the new version.
+        BOOST_REQUIRE_EQUAL(s->version(), table_schema_version(utils::UUID("9621f170-f101-3459-a8d3-f342c83ad86e")));
     });
 }

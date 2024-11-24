@@ -11,6 +11,7 @@
 #include <concepts>
 #include <map>
 #include <optional>
+#include <memory>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
@@ -76,6 +77,22 @@ struct appending_hash<bool> {
     }
 };
 
+template<>
+struct appending_hash<double> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, double d) const noexcept {
+        // Mimics serializer for CQL double type, for inter-machine stability.
+        if (std::isnan(d)) {
+            d = std::numeric_limits<double>::quiet_NaN();
+        }
+        static_assert(sizeof(double) == sizeof(uint64_t));
+        uint64_t i;
+        memcpy(&i, &d, sizeof(i));
+        feed_hash(h, cpu_to_le(i));
+    }
+};
+
 template<typename T>
 requires std::is_enum_v<T>
 struct appending_hash<T> {
@@ -91,6 +108,20 @@ struct appending_hash<std::optional<T>>  {
     template<typename H>
     requires Hasher<H>
     void operator()(H& h, const std::optional<T>& value) const noexcept {
+        if (value) {
+            feed_hash(h, true);
+            feed_hash(h, *value);
+        } else {
+            feed_hash(h, false);
+        }
+    }
+};
+
+template<typename T>
+struct appending_hash<std::unique_ptr<T>>  {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const std::unique_ptr<T>& value) const noexcept {
         if (value) {
             feed_hash(h, true);
             feed_hash(h, *value);
@@ -132,6 +163,16 @@ struct appending_hash<std::map<K, V>> {
             appending_hash<K>()(h, e.first);
             appending_hash<V>()(h, e.second);
         }
+    }
+};
+
+template<typename K, typename V>
+struct appending_hash<std::unordered_map<K, V>> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const std::unordered_map<K, V>& value) const noexcept {
+        std::map<K, V> sorted(value.begin(), value.end());
+        feed_hash(h, sorted);
     }
 };
 

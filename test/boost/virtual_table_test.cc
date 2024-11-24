@@ -29,7 +29,6 @@ public:
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type)
-            .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }
 

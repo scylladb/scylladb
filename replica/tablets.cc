@@ -56,7 +56,6 @@ schema_ptr make_tablets_schema() {
     // replica_set_type = frozen<list<tablet_replica>>
     auto id = generate_legacy_id(db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     // Bump the schema version offset for tablet repair scheduler columns
-    constexpr uint16_t schema_version_offset = 1;
     return schema_builder(db::system_keyspace::NAME, db::system_keyspace::TABLETS, id)
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("tablet_count", int32_type, column_kind::static_column)
@@ -73,7 +72,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
-            .with_version(db::system_keyspace::generate_schema_version(id, schema_version_offset))
+            .with_hash_version()
             .build();
 }
 

@@ -70,7 +70,7 @@ schema_ptr view_build_status() {
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -107,7 +107,7 @@ schema_ptr cdc_generations_v2() {
                  * For a given generation it's equal to the number of ranges in this generation;
                  * thus, after the generation is fully inserted, it must be equal to the number of rows in the partition. */
                 .with_column("num_ranges", int32_type, column_kind::static_column)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -126,7 +126,7 @@ schema_ptr cdc_desc() {
                 /* The set of stream identifiers used in this CDC generation for the token range
                  * ending on `range_end`. */
                 .with_column("streams", cdc_streams_set_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -143,7 +143,7 @@ schema_ptr cdc_timestamps() {
                 .with_column("time", reversed_type_impl::get_instance(timestamp_type), column_kind::clustering_key)
                 /* Expiration time of this CDC generation (or null if not expired). */
                 .with_column("expired", timestamp_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -156,7 +156,7 @@ schema_ptr service_levels() {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
         return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
                 .with_column("service_level", utf8_type, column_kind::partition_key)
-                .with_version(db::system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
     }();
     return schema;
@@ -232,6 +232,7 @@ static schema_ptr get_updated_service_levels(data_dictionary::database db) {
         }
         b.with_column(options_name, col_type, column_kind::regular_column);
     }
+    b.with_hash_version();
     return b.build();
 }
 
