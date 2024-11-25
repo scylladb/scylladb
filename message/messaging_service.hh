@@ -379,6 +379,10 @@ public:
     gms::inet_address broadcast_address() const noexcept {
         return _cfg.broadcast_address;
     }
+    locator::host_id host_id() const noexcept {
+        return _cfg.id;
+    }
+
     future<> shutdown();
     future<> stop();
     static rpc::no_wait_type no_wait();

@@ -1982,6 +1982,27 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
     co_return ret;
 }
 
+future<std::vector<locator::host_id>> system_keyspace::load_peers_ids() {
+    co_await peers_table_read_fixup();
+
+    const auto res = co_await execute_cql(format("SELECT rpc_address, host_id FROM system.{}", PEERS));
+    SCYLLA_ASSERT(res);
+
+    std::vector<locator::host_id> ret;
+    for (const auto& row: *res) {
+        if (!row.has("rpc_address")) {
+            // In the Raft-based topology, we store the Host ID -> IP mapping
+            // of joining nodes in PEERS. We want to ignore such rows. To achieve
+            // it, we check the presence of rpc_address, but we could choose any
+            // column other than host_id and tokens (rows with no tokens can
+            // correspond to zero-token nodes).
+            continue;
+        }
+        ret.emplace_back(locator::host_id(row.get_as<utils::UUID>("host_id")));
+    }
+    co_return ret;
+}
+
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
     co_await peers_table_read_fixup();
 
