@@ -221,6 +221,8 @@ public:
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
+        // Use of BUILT_VIEWS as filtering table should be in sync with
+        // cf::get_built_indexes's filtering with load_built_views()
         return make_mutation_reader<built_indexes_reader>(
                 _db,
                 s,
