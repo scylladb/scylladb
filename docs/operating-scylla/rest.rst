@@ -32,7 +32,7 @@ The following example shows using the Swagger UI with Docker.
 
     .. code:: sh
 
-      docker run --name some-scylla -p 10000:10000 -d scylladb/scylla:5.0.4 --api-address 0.0.0.0
+      docker run --name some-scylla -p 10000:10000 -d scylladb/scylla:latest --api-address 0.0.0.0
 
 
 #. Go to http://localhost:10000/ui/.
