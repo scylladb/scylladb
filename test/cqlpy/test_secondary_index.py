@@ -478,7 +478,6 @@ def test_index_weird_chars_in_col_name(cql, test_keyspace):
 # so the following test is marked xfail. It's also cassandra_bug because
 # Cassandra doesn't support it either (it gives the message "not yet
 # supported" suggesting it may be fixed in the future).
-@pytest.mark.xfail
 def test_index_in_restriction(cql, test_keyspace, cassandra_bug):
     schema = 'pk int, ck int, x int, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema) as table:

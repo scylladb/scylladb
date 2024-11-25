@@ -784,21 +784,20 @@ bool is_empty_restriction(const expression& e) {
     return !contains_non_conjunction;
 }
 
-bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
+std::vector<bytes_opt> value_for(const column_definition& cdef, const expression& e, const query_options& options) {
     value_set possible_vals = possible_column_values(&cdef, e, options);
     return std::visit(overloaded_functor {
-        [&](const value_list& val_list) -> bytes_opt {
+        [&](const value_list& val_list) -> std::vector<bytes_opt> {
+            std::vector<bytes_opt> ret_vals;
             if (val_list.empty()) {
-                return std::nullopt;
+                return {};
             }
-
-            if (val_list.size() != 1) {
-                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", e));
+            for (auto& v : val_list) {
+                ret_vals.emplace_back(to_bytes(v));
             }
-
-            return to_bytes(val_list.front());
+            return ret_vals;
         },
-        [&](const interval<managed_bytes>&) -> bytes_opt {
+        [&](const interval<managed_bytes>&) -> std::vector<bytes_opt> {
             on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", e));
         }
     }, possible_vals);
