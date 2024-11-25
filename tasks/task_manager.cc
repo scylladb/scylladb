@@ -621,9 +621,7 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
 
 task_manager::task_manager(config cfg, class abort_source& as) noexcept
     : _cfg(std::move(cfg))
-    , _update_task_ttl_action([this] { return update_task_ttl(); })
-    , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
-    , _task_ttl(_cfg.task_ttl.get())
+    , _task_ttl(_cfg.task_ttl)
     , _user_task_ttl(_cfg.user_task_ttl)
 {
     _abort_subscription = as.subscribe([this] () noexcept {
@@ -633,9 +631,7 @@ task_manager::task_manager(config cfg, class abort_source& as) noexcept
 }
 
 task_manager::task_manager() noexcept
-    : _update_task_ttl_action([this] { return update_task_ttl(); })
-    , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
-    , _task_ttl(0)
+    : _task_ttl(0)
     , _user_task_ttl(0)
 {}
 

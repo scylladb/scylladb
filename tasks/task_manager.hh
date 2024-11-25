@@ -82,9 +82,7 @@ private:
     config _cfg;
     seastar::abort_source _as;
     optimized_optional<seastar::abort_source::subscription> _abort_subscription;
-    serialized_action _update_task_ttl_action;
-    utils::observer<uint32_t> _task_ttl_observer;
-    uint32_t _task_ttl;
+    utils::updateable_value<uint32_t> _task_ttl;
     utils::updateable_value<uint32_t> _user_task_ttl;
     netw::messaging_service* _messaging = nullptr;
 public:
@@ -437,11 +435,6 @@ public:
 public:
     std::chrono::seconds get_task_ttl() const noexcept;
     std::chrono::seconds get_user_task_ttl() const noexcept;
-private:
-    future<> update_task_ttl() noexcept {
-        _task_ttl = _cfg.task_ttl.get();
-        return make_ready_future<>();
-    }
 protected:
     void unregister_module(std::string name) noexcept;
     void register_task(task_ptr task);
