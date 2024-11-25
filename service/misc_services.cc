@@ -268,6 +268,10 @@ future<> view_update_backlog_broker::stop() {
 
 future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
     return on_application_state_change(endpoint, states, gms::application_state::VIEW_BACKLOG, pid, [this] (gms::inet_address endpoint, const gms::versioned_value& value, gms::permit_id) {
+        if (utils::get_local_injector().enter("skip_updating_local_backlog_via_view_update_backlog_broker")) {
+            return make_ready_future<>();
+        }
+
         size_t current;
         size_t max;
         api::timestamp_type ticks;
