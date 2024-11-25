@@ -492,9 +492,13 @@ static bool endpoint_downtime_not_bigger_than(const gms::gossiper& gossiper, con
 
     gossiper.for_each_endpoint_state_until(
             [&info] (const gms::inet_address& ip, const gms::endpoint_state& state) {
-        const auto app_state = state.get_application_state_ptr(gms::application_state::HOST_ID);
+        const auto* app_state = state.get_application_state_ptr(gms::application_state::HOST_ID);
+        if (!app_state) {
+            manager_logger.error("Host ID application state for {} has not been found. Endpoint state: {}", ip, state);
+            return stop_iteration::no;
+        }
         const auto host_id = locator::host_id{utils::UUID{app_state->value()}};
-        if (!app_state || host_id != info.host_id) {
+        if (host_id != info.host_id) {
             return stop_iteration::no;
         }
         if (info.gossiper.get_endpoint_downtime(ip) <= info.max_hint_window_us) {
