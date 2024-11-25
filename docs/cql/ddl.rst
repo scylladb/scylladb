@@ -684,6 +684,10 @@ A table supports the following options:
      - simple
      - 0
      - The default expiration time (“TTL”) in seconds for a table.
+   * - ``memtable_flush_period_in_ms``
+     - simple
+     - 0
+     - Flush the memtables associated with this table every ``memtable_flush_period_in_ms`` milliseconds. When set to ``0``, periodic flush is disabled. Cannot set to values lower than ``60000`` (1 minute). Default: ``0``.
    * - ``compaction``
      - map
      - see below
