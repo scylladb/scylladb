@@ -33,6 +33,30 @@ namespace service {
 
 static logging::logger logger("group0_client");
 
+group0_upgrade_state string_to_group0_upgrade_state(const std::optional<sstring>& s) {
+    if (!s || *s == "use_pre_raft_procedures") {
+        return service::group0_upgrade_state::use_pre_raft_procedures;
+    }
+    else if (*s == "synchronize") {
+        return service::group0_upgrade_state::synchronize;
+    }
+    else if (*s == "use_post_raft_procedures") {
+        return service::group0_upgrade_state::use_post_raft_procedures;
+    }
+    else if (*s == "recovery") {
+        return service::group0_upgrade_state::recovery;
+    }
+
+    logger.error("load_group0_upgrade_state(): unknown value '{}' for key 'group0_upgrade_state' in Scylla local table."
+                 " Did you change the value manually?"
+                 " Correct values are: 'use_pre_raft_procedures', 'synchronize', 'use_post_raft_procedures', 'recovery'."
+                 " Assuming 'recovery'.",
+            *s);
+    // We don't call `on_internal_error` which would probably prevent the node from starting, but enter `recovery`
+    // allowing the user to fix their cluster.
+    return service::group0_upgrade_state::recovery;
+}
+
 /* *** Linearizing group 0 operations ***
  *
  * Group 0 changes (e.g. schema changes) are performed through Raft commands, which are executing in the same order
@@ -356,30 +380,9 @@ size_t raft_group0_client::max_command_size() const {
 }
 
 future<> raft_group0_client::init() {
-    auto value = [] (std::optional<sstring> s) {
-        if (!s || *s == "use_pre_raft_procedures") {
-            return service::group0_upgrade_state::use_pre_raft_procedures;
-        } else if (*s == "synchronize") {
-            return service::group0_upgrade_state::synchronize;
-        } else if (*s == "use_post_raft_procedures") {
-            return service::group0_upgrade_state::use_post_raft_procedures;
-        } else if (*s == "recovery") {
-            return service::group0_upgrade_state::recovery;
-        }
-
-        logger.error(
-                "load_group0_upgrade_state(): unknown value '{}' for key 'group0_upgrade_state' in Scylla local table."
-                " Did you change the value manually?"
-                " Correct values are: 'use_pre_raft_procedures', 'synchronize', 'use_post_raft_procedures', 'recovery'."
-                " Assuming 'recovery'.", *s);
-        // We don't call `on_internal_error` which would probably prevent the node from starting, but enter `recovery`
-        // allowing the user to fix their cluster.
-        return service::group0_upgrade_state::recovery;
-    };
-
     _upgrade_state = _maintenance_mode
         ? group0_upgrade_state::recovery
-        : value(co_await _sys_ks.load_group0_upgrade_state());
+        : string_to_group0_upgrade_state(co_await _sys_ks.load_group0_upgrade_state());
     if (_upgrade_state == group0_upgrade_state::recovery) {
         logger.warn("RECOVERY mode.");
     }

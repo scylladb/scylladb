@@ -595,6 +595,47 @@ void dump_performance_profiles() {
     }
 }
 
+namespace {
+
+// Check whether raft based topology is enabled.
+future<bool> raft_topology_enabled(sharded<db::system_keyspace>& sys_ks) {
+    co_return service::string_to_group0_upgrade_state(sys_ks.local().load_group0_upgrade_state().get()) ==
+            service::group0_upgrade_state::use_post_raft_procedures;
+}
+
+// Get local node state from the system tables.
+std::optional<locator::node::state> get_local_node_state(sharded<db::system_keyspace>& sys_ks, const locator::host_id host_id) {
+    if (!raft_topology_enabled(sys_ks).get()) {
+        return std::nullopt;
+    }
+
+    std::optional<locator::node::state> node_state;
+    auto topo_state = sys_ks.local().load_topology_state({}).get();
+    const auto* res = topo_state.find(raft::server_id{host_id.id});
+    if (res) {
+        node_state = service::to_topology_node_state(res->second.state);
+    }
+    return node_state;
+}
+
+// Propagate the local node ID to topology.
+future<> add_local_node_to_topology(sharded<db::system_keyspace>& sys_ks, const locator::host_id host_id, const auto broadcast_addr,
+        sharded<locator::shared_token_metadata>& token_metadata) {
+    const auto node_state = get_local_node_state(sys_ks, host_id);
+
+    locator::shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr, node_state](locator::token_metadata& tm) {
+        // Makes local host id available in topology cfg as soon as possible.
+        // Raft topology discard the endpoint-to-id map, so the local id can
+        // still be found in the config.
+        tm.get_topology().set_host_id_cfg(host_id);
+        tm.get_topology().add_or_update_endpoint(host_id, endpoint, std::nullopt, node_state);
+        return make_ready_future<>();
+    }).get();
+    co_return;
+}
+
+} // namespace
+
 static int scylla_main(int ac, char** av) {
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
@@ -1338,14 +1379,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
-          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
-              // Makes local host id available in topology cfg as soon as possible.
-              // Raft topology discard the endpoint-to-id map, so the local id can
-              // still be found in the config.
-              tm.get_topology().set_host_id_cfg(host_id);
-              tm.get_topology().add_or_update_endpoint(host_id, endpoint);
-              return make_ready_future<>();
-          }).get();
+            add_local_node_to_topology(sys_ks, host_id, broadcast_addr, token_metadata).get();
 
             netw::messaging_service::config mscfg;
 

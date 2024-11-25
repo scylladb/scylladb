@@ -83,6 +83,8 @@ public:
     {}
 };
 
+group0_upgrade_state string_to_group0_upgrade_state(const std::optional<sstring>& s);
+
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;

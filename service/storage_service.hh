@@ -992,6 +992,8 @@ private:
     friend class node_ops::task_manager_module;
 };
 
+locator::node::state to_topology_node_state(node_state ns);
+
 }
 
 template <>

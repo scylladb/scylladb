@@ -259,9 +259,9 @@ void hint_sender::start() {
 future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     auto ermp = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
-    inet_address_vector_replica_set natural_endpoints = ermp->get_natural_endpoints(std::move(token));
+    inet_address_vector_replica_set natural_endpoints = ermp->get_natural_endpoints(token);
 
-    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
+    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, token] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         const auto& tm = ermp->get_token_metadata();
@@ -269,7 +269,7 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
 
         if (maybe_addr && boost::range::find(natural_endpoints, *maybe_addr) != natural_endpoints.end() && !tm.is_leaving(end_point_key())) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), *maybe_addr);
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), *maybe_addr, token);
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
                 if (tm.is_leaving(end_point_key())) {
