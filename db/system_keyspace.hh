@@ -406,6 +406,7 @@ public:
         sstring error;
         db_clock::time_point end_time;
         db_clock::time_point ts;
+        table_id truncate_table_id;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 
