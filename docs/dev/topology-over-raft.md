@@ -4,7 +4,8 @@ The topology state machine tracks all the nodes in a cluster,
 their state, properties (topology, tokens, etc) and requested actions.
 
 Node state can be one of those:
-- `none`             - the new node joined group0 but did not bootstrapped yet (has no tokens and data to serve)
+
+- `none`             - the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
 - `bootstrapping`    - the node is currently in the process of streaming its part of the ring
 - `decommissioning`  - the node is being decommissioned and stream its data to nodes that took over
 - `removing`         - the node is being removed and its data is streamed to nodes that took over from still alive owners
@@ -20,6 +21,7 @@ Nodes in state `left` may still appear as tablet replicas in host_id-based repli
 `effective_replication_map::get_natural_endpoints()`.
 
 State transition diagram for nodes:
+
 ```mermaid
 stateDiagram-v2
     none --> bootstrapping: join
@@ -104,7 +106,6 @@ stateDiagram-v2
     removing --> left: operation succeeded
     removing --> normal: operation failed
 ```
-
 
 A node state may have additional parameters associated with it. For instance
 'replacing' state has host id of a node been replaced as a parameter.
@@ -220,22 +221,23 @@ e.g. run full table repair with tablet migration disabled.
 Tablets can undergo a process called "transition", which performs some maintenance action on the tablet which is
 globally driven by the topology change coordinator and serialized per-tablet. Transition can be one of:
 
- * migration - tablet replica is moved from one shard to another on a different node
+- migration - tablet replica is moved from one shard to another on a different node
 
- * intranode_migration - tablet replica is moved from one shard to another within the same node
+- intranode_migration - tablet replica is moved from one shard to another within the same node
 
- * rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
+- rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
 
- * repair - tablet replicas are repaired
+- repair - tablet replicas are repaired
 
 Each tablet has its own state machine for keeping state of transition stored in group0 which is part of the tablet state. It involves
 these properties of a tablet:
-  - replicas: the old replicas of a table (also set when not in transition)
-  - new_replicas: the new replicas of a tablet which will become current after transition
-  - stage: determines which replicas should be used by requests on the coordinator side, and which
-           action should be taken by the state machine executor.
-  - transition: the kind of tablet transition (migration, rebuild, etc.). Affects the behavior of stages and actions
-    performed in those stages.
+
+- replicas: the old replicas of a table (also set when not in transition)
+- new_replicas: the new replicas of a tablet which will become current after transition
+- stage: determines which replicas should be used by requests on the coordinator side, and which
+  action should be taken by the state machine executor.
+- transition: the kind of tablet transition (migration, rebuild, etc.). Affects the behavior of stages and actions
+  performed in those stages.
 
 Currently, the tablet state machine is driven forward by the tablet migration track of the
 topology state machine.
@@ -289,6 +291,7 @@ The invariants of stages, which hold as soon as the stage is committed to group0
     Precondition: The old and new replica set should be the same if the tablet transition kind is repair.
 
 State transition diagram for tablet migration stages:
+
 ```mermaid
 stateDiagram-v2
     state if_state <<choice>>
@@ -335,9 +338,10 @@ Invariants:
 Each table has its resize metadata stored in group0.
 
 Resize metadata is composed of:
-  - resize_type: it's the resize decision type, and can be either of 'split', 'merge' or 'none'
-  - resize_seq_number: a sequence number that globally identifies the resize; it's monotonically increasing
-and increased by one on every new decision.
+
+- resize_type: it's the resize decision type, and can be either of 'split', 'merge' or 'none'
+- resize_seq_number: a sequence number that globally identifies the resize; it's monotonically increasing
+  and increased by one on every new decision.
 
 In order to determine if a table needs resize, the load balancer will calculate the average tablet size
 for a given table, which can be done by dividing average table size[1] by the tablet count.
@@ -384,9 +388,11 @@ from table's tablet_map.
 Generic code should not use static sharders, which only work with vnode-based tables. So it should not use
 schema::get_sharder() or dht::static_shard_of(). It should use erm::get_sharder() instead:
 
-    table& t;
-    auto erm = t.erm();
-    dht::sharder& sharder = erm->get_sharder(); // valid as long as erm is alive
+```cpp
+table& t;
+auto erm = t.erm();
+dht::sharder& sharder = erm->get_sharder(); // valid as long as erm is alive
+```
 
 A sharder obtained from effective_replication_map reflects the tablet_map in that particular version of topology.
 
@@ -394,7 +400,9 @@ Since effective_replication_map_ptr blocks topology barriers, it should not be h
 code is long-running but doesn't need to work with a particular topology version, it should use auto_refreshing_sharder.
 It is a sharder implementation which automatically switches to the latest effective_replication_map_ptr of the table when it changes.
 
-   dht::auto_refreshing_sharder sharder(table.shared_from_this());
+```cpp
+dht::auto_refreshing_sharder sharder(table.shared_from_this());
+```
 
 If you use auto_refreshing_sharder, the results of sharder methods may be invalid after preemption point,
 since effective_replication_map instance used to obtain the results may no longer be alive. This
@@ -484,15 +492,17 @@ e.g. old streaming can resurrect deleted data.
 
 Example scenario:
 
-    1. Tablet T has replicas {A, B, C}
-    2. Write (w1) of key K1 is replicated everywhere
-    3. Start migration of tablet T replica from A to D
-    4. Migration fails, but leaves behind an async part (s1) which later sends w1 to D
-    5. Migration is retried and completes
-    6. Write (w2) of Key K1 which deletes the key is replicated everywhere {D, B, C}
-    7. Tablet T is repaired
-    8. Tombstone for w2 is garbage-collected on D
-    9. s1 is applied to D, and resurrects K1 (bad!)
+```text
+1. Tablet T has replicas {A, B, C}
+2. Write (w1) of key K1 is replicated everywhere
+3. Start migration of tablet T replica from A to D
+4. Migration fails, but leaves behind an async part (s1) which later sends w1 to D
+5. Migration is retried and completes
+6. Write (w2) of Key K1 which deletes the key is replicated everywhere {D, B, C}
+7. Tablet T is repaired
+8. Tombstone for w2 is garbage-collected on D
+9. s1 is applied to D, and resurrects K1 (bad!)
+```
 
 For tablets, the time window of those migrations is much smaller than with vnodes, because tablet migrations
 are started automatically and tablets themselves are smaller so operations complete faster.
@@ -539,7 +549,8 @@ need any parallelism.
 
 The in memory state's machine state is persisted in a local table `system.topology`.
 The schema of the table is:
-```
+
+```sql
 CREATE TABLE system.topology (
     key text,
     host_id uuid,
@@ -566,9 +577,11 @@ CREATE TABLE system.topology (
     PRIMARY KEY (key, host_id)
 )
 ```
+
 This is a single-partition table, with `key = 'topology'`.
 
 Each node has a clustering row in the table where its `host_id` is the clustering key. The row contains:
+
 - `host_id`            -  id of the node
 - `datacenter`         -  a name of the datacenter the node belongs to
 - `rack`               -  a name of the rack the node belongs to
@@ -584,6 +597,7 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `num_tokens`         -  the requested number of tokens when the node bootstraps
 
 There are also a few static columns for cluster-global properties:
+
 - `transition_state` - the transitioning state of the cluster (as described earlier), may be null
 - `committed_cdc_generations` - the IDs of the committed CDC generations
 - `unpublished_cdc_generations` - the IDs of the committed yet unpublished CDC generations
@@ -591,8 +605,8 @@ There are also a few static columns for cluster-global properties:
 - `global_topology_request_id` - if set, contains global topology request's id, which is a new group0's state id
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
-- 'new_keyspace_rf_change_ks_name' - the name of the KS that is being the target of the scheduled ALTER KS statement 
-- 'new_keyspace_rf_change_data' - the KS options to be used when executing the scheduled ALTER KS statement
+- `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
+- `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
 
 # Join procedure
 
@@ -623,10 +637,11 @@ The procedure is not retryable. If the joining node crashes before finishing it,
 it might get rejected after restart. In order to retry adding the node, the data
 directory must be deleted first.
 
-*The procedure*
+## The procedure
 
 If the node didn't join group 0, it sends `JOIN_NODE_REQUEST` to any existing
 node in the cluster. The receiving node can either:
+
 - Accept the request and tell the new node to wait for `JOIN_NODE_RESPONSE`.
 - Reject the request. This can happen if:
   - The request does not satisfy some validity checks done by the receiving node
@@ -648,6 +663,7 @@ The topology coordinator will read the request from `system.topology`. It will
 perform additional verification that couldn't be done by the recipient
 of `JOIN_NODE_REQUEST` (e.g. check whether the node supports all cluster
 features). Then:
+
 - If verification was successful, the node will be transitioned to `join_group0`
   state, then added to group 0 and `JOIN_NODE_RESPONSE` will be sent by
   the topology coordinator. Afterwards, the usual bootstrap/replace procedure

@@ -4,18 +4,19 @@ Date: 2022-05-06
 
 When we began implementing Raft we wanted to create a reusable and
 well tested component which we could utilize for data, schema and topology
-operations. This is why the Raft library in raft/ has the only dependency
-- on seastar. It provides its own design documents and a README.
+operations. This is why the Raft library in raft/ has the only dependency -
+on seastar. It provides its own design documents and a README.
 
 # Raft application in Scylla
 
 In order to use the library, the client (Scylla server) needs to
 provide implementations for three key interfaces:
-    - persistence - to persist Raft state
-    - rpc - to exchange messages with instances of the library
-      on other machines
-    - the client state machine - to execute commands once
-    they were replicated and committed on a majority of nodes.
+
+- persistence - to persist Raft state
+- rpc - to exchange messages with instances of the library
+  on other machines
+- the client state machine - to execute commands once
+  they were replicated and committed on a majority of nodes.
 
 Depending on the application (data, topology, or schema) Scylla can use
 separate instantiations of the library with different parameters.
@@ -34,18 +35,19 @@ with Raft peers of the group on other nodes.
 For example, to persist the changes to schema and topology, Scylla
 can (and does) use node-local system tables.
 There are three such tables:
-    - `raft`, the main table which stores the Raft log for each
-       group. The table partition key is group id, so each log
-       forms its own partition. Since the table is local, this
-       works fine with many groups.
-    - `raft_snapshots`, a supporting table storing the so-called
-       snapshot descriptors,
-    - `raft_snapshot_config`, a normalized part of raft
-       `raft_snapshots`, storing the cluster configuration
-       at the time of taking the snapshot. May be out of date with
-       the real cluster configuration, e.g. when configuration
-       change happens after a snapshot and is only present  in
-       `raft` log table.
+
+- `raft`, the main table which stores the Raft log for each
+   group. The table partition key is group id, so each log
+   forms its own partition. Since the table is local, this
+   works fine with many groups.
+- `raft_snapshots`, a supporting table storing the so-called
+   snapshot descriptors,
+- `raft_snapshot_config`, a normalized part of raft
+   `raft_snapshots`, storing the cluster configuration
+   at the time of taking the snapshot. May be out of date with
+   the real cluster configuration, e.g. when configuration
+   change happens after a snapshot and is only present  in
+   `raft` log table.
 
 The system tables are capable of storing the state of an arbitrary
 number of groups, provided the group is happy with the relatively
@@ -135,32 +137,33 @@ in the same order on every node. However, while Raft guarantees
 that if an operation succeeds, it's stored in the logs on the
 majority of nodes, it doesn't provide an API for strictly ordered
 schema changes out of the box, for two reasons:
-    - Raft only stores a log of the operations. The operations
-      themselves - the schema changes - are applied to the client
-      state machine once they are committed to the log. In order
-      to construct a new operation it's necessary to read the
-      latest state of the client state machine.
-      E.g. if a client wants to create a table, it's necessary to
-      learn first that the table hasn't been created already. We
-      could store entire CQL statements in the log and read
-      the state of the schema when the command is already committed
-      to the Raft log and is being applied: but that would make
-      reporting errors back to the client difficult. Besides, that
-      would require that each participant of the cluster performs
-      the same reads and checks, that would be an unwanted
-      overhead.
-      Instead, we read the schema state when constructing the raft
-      command, on the node which received the DDL statement from
-      the client. With this approach, two nodes could read their
-      local state machines, decide that the table does not exist
-      yet, and append identical commands for creating the table to
-      the Raft log. The second command will fail to apply to the
-      client state machine.
-    - if a leader or network fails when committing an operation to
-      Raft log, the client has no way of knowing its status. E.g. a
-      network can time out, and establishing whether or not the
-      majority of Raft nodes store the command in its log or have applied it
-      may be difficult.
+
+- Raft only stores a log of the operations. The operations
+  themselves - the schema changes - are applied to the client
+  state machine once they are committed to the log. In order
+  to construct a new operation it's necessary to read the
+  latest state of the client state machine.
+  E.g. if a client wants to create a table, it's necessary to
+  learn first that the table hasn't been created already. We
+  could store entire CQL statements in the log and read
+  the state of the schema when the command is already committed
+  to the Raft log and is being applied: but that would make
+  reporting errors back to the client difficult. Besides, that
+  would require that each participant of the cluster performs
+  the same reads and checks, that would be an unwanted
+  overhead.
+  Instead, we read the schema state when constructing the raft
+  command, on the node which received the DDL statement from
+  the client. With this approach, two nodes could read their
+  local state machines, decide that the table does not exist
+  yet, and append identical commands for creating the table to
+  the Raft log. The second command will fail to apply to the
+  client state machine.
+- if a leader or network fails when committing an operation to
+  Raft log, the client has no way of knowing its status. E.g. a
+  network can time out, and establishing whether or not the
+  majority of Raft nodes store the command in its log or have applied it
+  may be difficult.
 
 For the two reasons above, Scylla uses an additional
 algorithm for all schema changes which it propagates through Raft
