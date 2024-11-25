@@ -16,7 +16,6 @@
 #include "dht/ring_position.hh"
 #include <optional>
 #include <memory>
-#include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include "interval.hh"
 #include <seastar/core/shared_future.hh>
@@ -132,31 +131,38 @@ public:
     }
 };
 
+class tokens_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using iterator_concept = std::input_iterator_tag;
+    using value_type = token;
+    using difference_type = std::ptrdiff_t;
+    using pointer = token*;
+    using reference = token&;
+public:
+    tokens_iterator() = default;
+    tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
+    bool operator==(const tokens_iterator& it) const;
+    const token& operator*() const;
+    tokens_iterator& operator++();
+    tokens_iterator operator++(int) {
+        auto tmp = *this;
+        ++*this;
+        return tmp;
+    }
+private:
+    std::vector<token>::const_iterator _cur_it;
+    size_t _remaining = 0;
+    const token_metadata_impl* _token_metadata = nullptr;
+
+    friend class token_metadata_impl;
+};
+
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
 private:
     friend class token_metadata_ring_splitter;
-    class tokens_iterator {
-    public:
-        using iterator_category = std::input_iterator_tag;
-        using value_type = token;
-        using difference_type = std::ptrdiff_t;
-        using pointer = token*;
-        using reference = token&;
-    public:
-        tokens_iterator() = default;
-        tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
-        bool operator==(const tokens_iterator& it) const;
-        const token& operator*() const;
-        tokens_iterator& operator++();
-    private:
-        std::vector<token>::const_iterator _cur_it;
-        size_t _remaining = 0;
-        const token_metadata_impl* _token_metadata = nullptr;
-
-        friend class token_metadata_impl;
-    };
-
+    using tokens_iterator = locator::tokens_iterator;
 public:
     struct config {
         topology::config topo_cfg;
@@ -203,12 +209,12 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
+    std::ranges::subrange<tokens_iterator> ring_range(const token& start) const;
 
     /**
      * Returns a range of tokens such that the first token t satisfies dht::ring_position_view::ending_at(t) >= start.
      */
-    boost::iterator_range<tokens_iterator> ring_range(dht::ring_position_view start) const;
+    std::ranges::subrange<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
     topology& get_topology();
     const topology& get_topology() const;
