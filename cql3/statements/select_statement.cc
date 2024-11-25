@@ -1081,22 +1081,24 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     auto& last_base_pk = last_pos.partition;
     auto* last_base_ck = last_pos.position.has_key() ? &last_pos.position.key() : nullptr;
 
-    bytes_opt indexed_column_value = restrictions::value_for(*cdef, _used_index_restrictions, options);
+    std::vector<bytes_opt> indexed_column_vector = restrictions::value_for(*cdef, _used_index_restrictions, options);
 
     auto index_pk = [&]() {
         if (_index.metadata().local()) {
             return last_base_pk;
         } else {
-            return partition_key::from_single_value(*_view_schema, *indexed_column_value);
+            return partition_key::from_single_value(*_view_schema, *indexed_column_vector.back());
         }
     }();
 
     std::vector<managed_bytes_view> exploded_index_ck;
-    exploded_index_ck.reserve(_view_schema->clustering_key_size());
+    exploded_index_ck.reserve(_view_schema->clustering_key_size() * indexed_column_vector.size());
 
     bytes token_bytes;
     if (_index.metadata().local()) {
-        exploded_index_ck.push_back(bytes_view(*indexed_column_value));
+        for (const auto& value : indexed_column_vector) {
+            exploded_index_ck.push_back(bytes_view(*value));
+        }
     } else {
         token_bytes = compute_idx_token(last_base_pk);
         exploded_index_ck.push_back(bytes_view(token_bytes));
@@ -1286,14 +1288,15 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    bytes_opt value = restrictions::value_for(*cdef, _used_index_restrictions, options);
-    if (value) {
-        auto pk = partition_key::from_single_value(*_view_schema, *value);
-        auto dk = dht::decorate_key(*_view_schema, pk);
-        auto range = dht::partition_range::make_singular(dk);
-        partition_ranges.emplace_back(range);
+    std::vector<bytes_opt> values = restrictions::value_for(*cdef, _used_index_restrictions, options);
+    for (const auto& value : values) {
+        if (value) {
+            auto pk = partition_key::from_single_value(*_view_schema, *value);
+            auto dk = dht::decorate_key(*_view_schema, pk);
+            auto range = dht::partition_range::make_singular(dk);
+            partition_ranges.emplace_back(range);
+        }
     }
-
     return partition_ranges;
 }
 

@@ -216,6 +216,8 @@ def testIndexOnComposite(cql, test_keyspace):
 
 # Test for the validation bug of CASSANDRA-4709,
 # migrated from cql_tests.py:TestCQL.refuse_in_with_indexes_test()
+# We've decided to add this feature in Scylla, so this behavior is no longer invalid. See issue #21430
+"""
 def testInvalidIndexSelect(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk varchar primary key, col1 varchar, col2 varchar)") as table:
         execute(cql, table, "create index on %s (col1)")
@@ -233,7 +235,7 @@ def testInvalidIndexSelect(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, a int, b int)") as table:
         execute(cql, table, "CREATE INDEX ON %s (a)")
         assert_invalid(cql, table, "SELECT * FROM %s WHERE a = 3 AND b IN (1, 3)")
-
+"""
 # Migrated from cql_tests.py:TestCQL.edge_2i_on_complex_pk_test()
 def testIndexesOnComplexPrimaryKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk0 int, pk1 int, ck0 int, ck1 int, ck2 int, value int, PRIMARY KEY ((pk0, pk1), ck0, ck1, ck2))") as table:
