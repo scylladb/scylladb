@@ -277,4 +277,4 @@ future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false);
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false, repair_meta* rm = nullptr);
