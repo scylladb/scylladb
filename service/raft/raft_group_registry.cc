@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/raft_group_registry.hh"
+#include "raft/raft.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_address_map.hh"
 #include "db/system_keyspace.hh"
@@ -329,7 +330,7 @@ raft_server_with_timeouts raft_group_registry::get_server_with_timeouts(raft::gr
     if (!group_server.server.get()) {
         on_internal_error(rslog, format("get_server(): no server for group {}", gid));
     }
-    return raft_server_with_timeouts(group_server, *this);
+    return raft_server_with_timeouts(group_server, failure_detector());
 }
 
 raft::server* raft_group_registry::find_server(raft::group_id gid) {
@@ -428,9 +429,9 @@ namespace {
     };
 }
 
-raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry)
+raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd)
     : _group_server(group_server)
-    , _registry(registry)
+    , _fd(fd)
 {
 }
 
@@ -467,14 +468,12 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         }
         sstring quorum_message;
         {
-            auto fd = _registry.failure_detector();
-            const auto& am = _registry.address_map();
             unsigned voters_count = 0;
             std::vector<raft::server_id> dead_voters;
             for (const auto& c: _group_server.server->get_configuration().current) {
                 if (c.can_vote) {
                     ++voters_count;
-                    if (!fd->is_alive(c.addr.id)) {
+                    if (!_fd->is_alive(c.addr.id)) {
                         dead_voters.push_back(c.addr.id);
                     }
                 }
@@ -482,12 +481,7 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
             if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
                 std::string dead_voters_str;
                 for (const auto id: dead_voters) {
-                    const auto ip = am.find(locator::host_id{id.uuid()});
-                    if (ip) {
-                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", *ip);
-                    } else {
-                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
-                    }
+                    fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
                     if (dead_voters_str.size() > 512) {
                         dead_voters_str.append("...");
                         break;

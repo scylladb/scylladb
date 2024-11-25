@@ -81,13 +81,13 @@ class raft_operation_timeout_error : public std::runtime_error {
 // this will have the same end effect as not having a timeout at all.
 class raft_server_with_timeouts {
     raft_server_for_group& _group_server;
-    raft_group_registry& _registry;
+    shared_ptr<raft::failure_detector> _fd;
 
     template <std::invocable<abort_source*> Op>
     std::invoke_result_t<Op, abort_source*>
     run_with_timeout(Op&& op, const char* op_name, seastar::abort_source* as, std::optional<raft_timeout> timeout);
 public:
-    raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry);
+    raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd);
     future<> add_entry(raft::command command, raft::wait_type type, seastar::abort_source& as, std::optional<raft_timeout> timeout);
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<bool> trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout);
