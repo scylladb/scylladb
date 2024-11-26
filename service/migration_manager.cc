@@ -1136,13 +1136,13 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     co_return s;
 }
 
-future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {
-    using schema_and_hosts = std::unordered_map<table_schema_version, std::vector<gms::inet_address>>;
+future<> migration_manager::sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes) {
+    using schema_and_hosts = std::unordered_map<table_schema_version, std::vector<locator::host_id>>;
     schema_and_hosts schema_map;
-    co_await coroutine::parallel_for_each(nodes, [this, &schema_map, &db] (const gms::inet_address& node) -> future<> {
+    co_await coroutine::parallel_for_each(nodes, [this, &schema_map, &db] (const locator::host_id& node) -> future<> {
         const auto& my_version = db.get_version();
         abort_source as;
-        auto remote_version = co_await ser::migration_manager_rpc_verbs::send_schema_check(&_messaging, netw::msg_addr(node), as);
+        auto remote_version = co_await ser::migration_manager_rpc_verbs::send_schema_check(&_messaging, node, as);
         if (my_version != remote_version) {
             schema_map[remote_version].emplace_back(node);
         }
@@ -1159,7 +1159,7 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
         const auto& src = hosts.front();
         mlogger.debug("Pulling schema {} from {}", schema, src);
         bool can_ignore_down_node = false;
-        return submit_migration_task(_gossiper.get_host_id(src), can_ignore_down_node);
+        return submit_migration_task(src, can_ignore_down_node);
     });
 }
 

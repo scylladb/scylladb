@@ -22,6 +22,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 
+#include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
 #include "mutation/frozen_mutation.hh"
@@ -127,11 +128,11 @@ public:
     uint64_t tx_row_bytes = 0;
     uint64_t rx_row_bytes = 0;
 
-    std::map<gms::inet_address, uint64_t> row_from_disk_bytes;
-    std::map<gms::inet_address, uint64_t> row_from_disk_nr;
+    std::map<locator::host_id, uint64_t> row_from_disk_bytes;
+    std::map<locator::host_id, uint64_t> row_from_disk_nr;
 
-    std::map<gms::inet_address, uint64_t> tx_row_nr_peer;
-    std::map<gms::inet_address, uint64_t> rx_row_nr_peer;
+    std::map<locator::host_id, uint64_t> tx_row_nr_peer;
+    std::map<locator::host_id, uint64_t> rx_row_nr_peer;
 
     lowres_clock::time_point start_time = lowres_clock::now();
 
@@ -142,21 +143,21 @@ public:
 
 class repair_neighbors {
 public:
-    std::vector<gms::inet_address> all;
-    std::vector<gms::inet_address> mandatory;
-    std::unordered_map<gms::inet_address, shard_id> shard_map;
+    std::vector<locator::host_id> all;
+    std::vector<locator::host_id> mandatory;
+    std::unordered_map<locator::host_id, shard_id> shard_map;
     repair_neighbors() = default;
-    explicit repair_neighbors(std::vector<gms::inet_address> a)
+    explicit repair_neighbors(std::vector<locator::host_id> a)
         : all(std::move(a)) {
     }
     explicit repair_neighbors(const std::unordered_map<locator::host_id, gms::inet_address>& a)
-        : all(a | std::views::values | std::ranges::to<std::vector<gms::inet_address>>()) {
+        : all(a | std::views::keys | std::ranges::to<std::vector<locator::host_id>>()) {
     }
-    repair_neighbors(std::vector<gms::inet_address> a, std::vector<gms::inet_address> m)
+    repair_neighbors(std::vector<locator::host_id> a, std::vector<locator::host_id> m)
         : all(std::move(a))
         , mandatory(std::move(m)) {
     }
-    repair_neighbors(std::vector<gms::inet_address> nodes, std::vector<shard_id> shards);
+    repair_neighbors(std::vector<locator::host_id> nodes, std::vector<shard_id> shards);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, const sstring& keyspace,
@@ -188,7 +189,7 @@ struct get_sync_boundary_response {
 using get_combined_row_hash_response = repair_hash;
 
 struct node_repair_meta_id {
-    gms::inet_address ip;
+    locator::host_id ip;
     uint32_t repair_meta_id;
     bool operator==(const node_repair_meta_id& x) const {
         return x.ip == ip && x.repair_meta_id == repair_meta_id;
