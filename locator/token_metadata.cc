@@ -261,9 +261,12 @@ public:
     size_t count_normal_token_owners() const;
 
     std::unordered_map<sstring, std::unordered_set<inet_address>> get_datacenter_token_owners_ips() const;
+    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
 
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
     get_datacenter_racks_token_owners_ips() const;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    get_datacenter_racks_token_owners() const;
 
     std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> get_datacenter_token_owners_nodes() const;
 
@@ -813,6 +816,17 @@ token_metadata_impl::get_datacenter_token_owners_ips() const {
     return datacenter_token_owners;
 }
 
+std::unordered_map<sstring, std::unordered_set<host_id>>
+token_metadata_impl::get_datacenter_token_owners() const {
+    std::unordered_map<sstring, std::unordered_set<host_id>> datacenter_token_owners;
+    _topology.for_each_node([&] (const node& n) {
+        if (is_normal_token_owner(n.host_id())) {
+            datacenter_token_owners[n.dc_rack().dc].insert(n.host_id());
+        }
+    });
+    return datacenter_token_owners;
+}
+
 std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
 token_metadata_impl::get_datacenter_racks_token_owners_ips() const {
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> dc_racks_token_owners;
@@ -820,6 +834,18 @@ token_metadata_impl::get_datacenter_racks_token_owners_ips() const {
         const auto& dc_rack = n.dc_rack();
         if (is_normal_token_owner(n.host_id())) {
             dc_racks_token_owners[dc_rack.dc][dc_rack.rack].insert(n.endpoint());
+        }
+    });
+    return dc_racks_token_owners;
+}
+
+std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+token_metadata_impl::get_datacenter_racks_token_owners() const {
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>> dc_racks_token_owners;
+    _topology.for_each_node([&] (const node& n) {
+        const auto& dc_rack = n.dc_rack();
+        if (is_normal_token_owner(n.host_id())) {
+            dc_racks_token_owners[dc_rack.dc][dc_rack.rack].insert(n.host_id());
         }
     });
     return dc_racks_token_owners;
@@ -1186,9 +1212,18 @@ std::unordered_map<sstring, std::unordered_set<inet_address>> token_metadata::ge
     return _impl->get_datacenter_token_owners_ips();
 }
 
+std::unordered_map<sstring, std::unordered_set<host_id>> token_metadata::get_datacenter_token_owners() const {
+    return _impl->get_datacenter_token_owners();
+}
+
 std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
 token_metadata::get_datacenter_racks_token_owners_ips() const {
     return _impl->get_datacenter_racks_token_owners_ips();
+}
+
+std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+token_metadata::get_datacenter_racks_token_owners() const {
+    return _impl->get_datacenter_racks_token_owners();
 }
 
 std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> token_metadata::get_datacenter_token_owners_nodes() const {

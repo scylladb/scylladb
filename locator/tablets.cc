@@ -919,6 +919,23 @@ public:
         co_return ret;
     }
 
+    virtual future<dht::token_range_vector> get_ranges(host_id ep) const override {
+        dht::token_range_vector ret;
+
+        auto& tablet_map = get_tablet_map();
+        for (auto tablet_id : tablet_map.tablet_ids()) {
+            auto endpoints = get_natural_replicas(tablet_map.get_last_token(tablet_id));
+            auto should_add_range = std::find(std::begin(endpoints), std::end(endpoints), ep) != std::end(endpoints);
+
+            if (should_add_range) {
+                ret.push_back(tablet_map.get_token_range(tablet_id));
+            }
+            co_await coroutine::maybe_yield();
+        }
+
+        co_return ret;
+    }
+
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
         return get_pending_helper<inet_address_vector_topology_change>(search_token);
     }

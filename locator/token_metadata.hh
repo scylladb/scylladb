@@ -336,11 +336,14 @@ public:
     // Returns the map: DC -> addresses of token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
     std::unordered_map<sstring, std::unordered_set<inet_address>> get_datacenter_token_owners_ips() const;
+    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
 
     // Returns the map: DC -> (map: rack -> addresses of token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
     get_datacenter_racks_token_owners_ips() const;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    get_datacenter_racks_token_owners() const;
 
     // Returns the map: DC -> token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.

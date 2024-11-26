@@ -163,6 +163,7 @@ public:
 
     // Caller must ensure that token_metadata will not change throughout the call.
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
+    future<std::unordered_map<dht::token_range, host_id_vector_replica_set>> get_range_host_ids(const token_metadata& tm) const;
 
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
@@ -288,6 +289,7 @@ public:
     //
     // Note: must be called after token_metadata has been initialized.
     virtual future<dht::token_range_vector> get_ranges(inet_address ep) const = 0;
+    virtual future<dht::token_range_vector> get_ranges(host_id ep) const = 0;
 
     shard_id shard_for_reads(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_reads(t);
@@ -363,6 +365,7 @@ public: // effective_replication_map
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
     future<dht::token_range_vector> get_ranges(inet_address ep) const override;
+    future<dht::token_range_vector> get_ranges(host_id ep) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
@@ -395,6 +398,7 @@ public:
     //
     // Note: must be called after token_metadata has been initialized.
     future<dht::token_range_vector> get_primary_ranges(inet_address ep) const;
+    future<dht::token_range_vector> get_primary_ranges(locator::host_id ep) const;
 
     // get_primary_ranges_within_dc() is similar to get_primary_ranges()
     // except it assigns a primary node for each range within each dc,
@@ -402,9 +406,13 @@ public:
     //
     // Note: must be called after token_metadata has been initialized.
     future<dht::token_range_vector> get_primary_ranges_within_dc(inet_address ep) const;
+    future<dht::token_range_vector> get_primary_ranges_within_dc(locator::host_id ep) const;
 
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
     get_range_addresses() const;
+
+    future<std::unordered_map<dht::token_range, host_id_vector_replica_set>>
+    get_range_host_ids() const;
 
     // Returns a set of dirty endpoint. An endpoint is dirty if it may have a data
     // for a range it does not own any longer. Will be empty if there is no topology
@@ -417,9 +425,11 @@ public:
 
 private:
     future<dht::token_range_vector> do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    future<dht::token_range_vector> do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const host_id& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
     host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
     stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
+    stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const host_id&)>& func) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);

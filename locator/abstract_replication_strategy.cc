@@ -307,11 +307,48 @@ vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iterati
 }
 
 future<dht::token_range_vector>
+vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const host_id&)> consider_range_for_endpoint) const {
+    dht::token_range_vector ret;
+    const auto& tm = *_tmptr;
+    const auto& sorted_tokens = tm.sorted_tokens();
+    if (sorted_tokens.empty()) {
+        on_internal_error(rslogger, "Token metadata is empty");
+    }
+    auto prev_tok = sorted_tokens.back();
+    for (const auto& tok : sorted_tokens) {
+        bool add_range = false;
+        for_each_natural_endpoint_until(tok, [&] (const host_id& ep) {
+            return consider_range_for_endpoint(add_range, ep);
+        });
+        if (add_range) {
+            insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+        }
+        prev_tok = tok;
+        co_await coroutine::maybe_yield();
+    }
+    co_return ret;
+}
+
+future<dht::token_range_vector>
 vnode_effective_replication_map::get_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is found in the token's natural endpoints
     return do_get_ranges([ep] (bool& add_range, const inet_address& e) {
+        if ((add_range = (e == ep))) {
+            // stop iteration a match is found
+            return stop_iteration::yes;
+        }
+        return stop_iteration::no;
+    });
+}
+
+future<dht::token_range_vector>
+vnode_effective_replication_map::get_ranges(host_id ep) const {
+    // The callback function below is called for each endpoint
+    // in each token natural endpoints.
+    // Add the range if `ep` is found in the token's natural endpoints
+    return do_get_ranges([ep] (bool& add_range, const host_id& e) {
         if ((add_range = (e == ep))) {
             // stop iteration a match is found
             return stop_iteration::yes;
@@ -370,6 +407,19 @@ vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
 }
 
 future<dht::token_range_vector>
+vnode_effective_replication_map::get_primary_ranges(locator::host_id ep) const {
+    // The callback function below is called for each endpoint
+    // in each token natural endpoints.
+    // Add the range if `ep` is the primary replica in the token's natural endpoints.
+    // The primary replica is first in the natural endpoints list.
+    return do_get_ranges([ep] (bool& add_range, const locator::host_id& e) {
+        add_range = (e == ep);
+        // stop the iteration once the first node was considered.
+        return stop_iteration::yes;
+    });
+}
+
+future<dht::token_range_vector>
 vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
@@ -379,6 +429,28 @@ vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) c
     // Add the range if `ep` is the datacenter primary replica in the token's natural endpoints.
     // The primary replica in each datacenter is determined by the natural endpoints list order.
     return do_get_ranges([ep, local_dc_nodes = std::move(local_dc_nodes)] (bool& add_range, const inet_address& e) {
+        // Unlike get_primary_ranges() which checks if ep is the first
+        // owner of this range, here we check if ep is the first just
+        // among nodes which belong to the local dc of ep.
+        if (!local_dc_nodes.contains(e)) {
+            return stop_iteration::no;
+        }
+        add_range = (e == ep);
+        // stop the iteration once the first node contained the local datacenter was considered.
+        return stop_iteration::yes;
+    });
+}
+
+future<dht::token_range_vector>
+vnode_effective_replication_map::get_primary_ranges_within_dc(locator::host_id ep) const {
+    const topology& topo = _tmptr->get_topology();
+    sstring local_dc = topo.get_datacenter(ep);
+    std::unordered_set<locator::host_id> local_dc_nodes = _tmptr->get_datacenter_token_owners().at(local_dc);
+    // The callback function below is called for each endpoint
+    // in each token natural endpoints.
+    // Add the range if `ep` is the datacenter primary replica in the token's natural endpoints.
+    // The primary replica in each datacenter is determined by the natural endpoints list order.
+    return do_get_ranges([ep, local_dc_nodes = std::move(local_dc_nodes)] (bool& add_range, const locator::host_id& e) {
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.
@@ -405,12 +477,39 @@ vnode_effective_replication_map::get_range_addresses() const {
     co_return ret;
 }
 
+future<std::unordered_map<dht::token_range, host_id_vector_replica_set>>
+vnode_effective_replication_map::get_range_host_ids() const {
+    const token_metadata& tm = *_tmptr;
+    std::unordered_map<dht::token_range, host_id_vector_replica_set> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+        for (auto& r : ranges) {
+            ret.emplace(r, do_get_replicas(t, true));
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return ret;
+}
+
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         auto eps = co_await calculate_natural_ips(t, tm);
+        for (auto& r : ranges) {
+            ret.emplace(r, eps.get_vector());
+        }
+    }
+    co_return ret;
+}
+
+future<std::unordered_map<dht::token_range, host_id_vector_replica_set>>
+abstract_replication_strategy::get_range_host_ids(const token_metadata& tm) const {
+    std::unordered_map<dht::token_range, host_id_vector_replica_set> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
+        auto eps = co_await calculate_natural_endpoints(t, tm);
         for (auto& r : ranges) {
             ret.emplace(r, eps.get_vector());
         }
@@ -580,6 +679,15 @@ host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
     for (const auto& ep : do_get_natural_endpoints(vnode_tok, true)) {
+        if (func(ep) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
+}
+
+stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const host_id&)>& func) const {
+    for (const auto& ep : do_get_replicas(vnode_tok, true)) {
         if (func(ep) == stop_iteration::yes) {
             return stop_iteration::yes;
         }
