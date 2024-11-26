@@ -633,6 +633,7 @@ scylla_tests = set([
     'test/unit/row_cache_alloc_stress_test',
     'test/unit/row_cache_stress_test',
     'test/unit/cross_shard_barrier_test',
+    'test/boost/address_map_test',
 ])
 
 perf_tests = set([
@@ -652,7 +653,6 @@ raft_tests = set([
     'test/raft/fsm_test',
     'test/raft/etcd_test',
     'test/raft/raft_sys_table_storage_test',
-    'test/raft/raft_address_map_test',
     'test/raft/discovery_test',
     'test/raft/failure_detector_test',
 ])
@@ -1505,7 +1505,7 @@ deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + scylla_tests_generic_dependencies
-deps['test/raft/raft_address_map_test'] = ['test/raft/raft_address_map_test.cc'] + scylla_core
+deps['test/boost/address_map_test'] = ['test/boost/address_map_test.cc'] + scylla_core
 deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',

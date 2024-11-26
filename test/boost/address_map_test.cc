@@ -41,7 +41,7 @@ future<> ping_shards() {
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
+SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
     server_id id1{utils::UUID(0, 1)};
     server_id id2{utils::UUID(0, 2)};
     gms::inet_address addr1("127.0.0.1");
@@ -248,7 +248,7 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
+SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
