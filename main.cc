@@ -2021,10 +2021,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
-
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(raft_address_map.local(), generation_number).get();
+            ss.local().init_address_map(gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
                 ss.local().uninit_address_map().get();
             });
@@ -2045,6 +2043,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
             }).get();
+
+            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);

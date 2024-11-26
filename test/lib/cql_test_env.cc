@@ -973,10 +973,8 @@ private:
                 _cdc.stop().get();
             });
 
-            const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
-
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            _ss.local().init_address_map(_raft_address_map.local(), generation_number).get();
+            _ss.local().init_address_map(_gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer([this] {
                 _ss.local().uninit_address_map().get();
             });
@@ -986,6 +984,8 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 
             try {
                 _ss.local().join_cluster(_sys_dist_ks, _proxy, service::start_hint_manager::no, generation_number).get();
