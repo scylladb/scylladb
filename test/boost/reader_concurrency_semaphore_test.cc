@@ -1330,7 +1330,7 @@ public:
         if (_admission_fut) {
             co_await std::move(_admission_fut).value();
         }
-        co_await coroutine::parallel_for_each(_pending_resource_units.begin(), _pending_resource_units.end(), [] (future<reader_permit::resource_units>& fut) {
+        co_await coroutine::parallel_for_each(_pending_resource_units, [] (future<reader_permit::resource_units>& fut) {
             return std::move(fut).then_wrapped([] (future<reader_permit::resource_units>&& fut) {
                 try {
                     fut.get();

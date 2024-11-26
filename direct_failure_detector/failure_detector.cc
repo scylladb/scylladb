@@ -629,7 +629,7 @@ future<> endpoint_worker::notify_fiber() noexcept {
             endpoint_liveness.marked_alive = alive;
 
             try {
-                co_await coroutine::parallel_for_each(listeners.begin(), listeners.end(), [this, endpoint = _id, alive] (const listener_info& listener) {
+                co_await coroutine::parallel_for_each(listeners, [this, endpoint = _id, alive] (const listener_info& listener) {
                     return _fd._parent.container().invoke_on(listener.shard, [listener = listener.id, endpoint, alive] (failure_detector& fd) {
                         return fd._impl->mark(listener, endpoint, alive);
                     });

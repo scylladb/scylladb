@@ -486,7 +486,7 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
     auto& role_manager = _auth_service.local().underlying_role_manager();
     auto attributes = co_await role_manager.query_attribute_for_all("service_level");
 
-    co_await coroutine::parallel_for_each(attributes.begin(), attributes.end(), [&role_manager, name, &mc] (auto&& attr) {
+    co_await coroutine::parallel_for_each(attributes, [&role_manager, name, &mc] (auto&& attr) {
         if (attr.second == name) {
             return do_with(attr.first, [&role_manager, &mc] (const sstring& role_name) {
                 return role_manager.remove_attribute(role_name, "service_level", mc);
