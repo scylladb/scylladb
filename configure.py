@@ -2556,7 +2556,10 @@ def configure_using_cmake(args):
         settings['Scylla_CLANG_INLINE_THRESHOLD'] = args.clang_inline_threshold
 
     source_dir = os.path.realpath(os.path.dirname(__file__))
-    build_dir = os.path.join(source_dir, 'build')
+    if os.path.isabs(args.build_dir):
+        build_dir = args.build_dir
+    else:
+        build_dir = os.path.join(source_dir, args.build_dir)
 
     if not args.dist_only:
         for mode in selected_modes:
