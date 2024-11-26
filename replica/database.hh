@@ -145,6 +145,8 @@ class table_for_tests;
 class database_test;
 using sstable_list = sstables::sstable_list;
 
+class sigquit_handler;
+
 extern logging::logger dblog;
 
 namespace replica {
@@ -1589,6 +1591,7 @@ private:
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
+    friend class ::sigquit_handler; // wants access to all semaphores to dump diagnostics
 public:
     static table_schema_version empty_version;
 

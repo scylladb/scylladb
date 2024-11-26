@@ -122,6 +122,8 @@ using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
+logging::logger diaglog("diagnostics");
+
 // Must live in a seastar::thread
 class stop_signal {
     bool _caught = false;
@@ -344,6 +346,58 @@ public:
         _stopping = true;
         _cond.broadcast();
         return std::move(_done);
+    }
+};
+
+class sigquit_handler {
+    bool _stopping = false;
+    bool _pending = false;
+    condition_variable _cond;
+    future<> _done;
+
+    sharded<replica::database>& _db;
+
+    future<> execution_loop() {
+        while (!_stopping) {
+            co_await _cond.wait([this] { return _pending || _stopping; });
+
+            if (_stopping) {
+                break;
+            }
+            _pending = false;
+
+            try {
+                co_await _db.invoke_on_all([] (replica::database& db) -> future<> {
+                    diaglog.info("Diagnostics dump requested via SIGQUIT:\n{}", memory::generate_memory_diagnostics_report());
+
+                    co_await db.foreach_reader_concurrency_semaphore([] (reader_concurrency_semaphore& semaphore) {
+                        diaglog.info("Diagnostics dump requested via SIGQUIT:\n{}", semaphore.dump_diagnostics());
+                        return make_ready_future<>();
+                    });
+                });
+            } catch (...) {
+                diaglog.error("Failed to dump diagnostics: {}", std::current_exception());
+            }
+        }
+    }
+
+public:
+    explicit sigquit_handler(sharded<replica::database>& db)
+        : _done(execution_loop())
+        , _db(db)
+    {
+        handle_signal(SIGQUIT, [this] {
+            _pending = true;
+            _cond.broadcast();
+        });
+    }
+
+    ~sigquit_handler() {
+        handle_signal(SIGQUIT, [] {});
+        _pending = false;
+        _stopping = true;
+        _cond.broadcast();
+        _done.get();
     }
 };
 
@@ -1159,6 +1213,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
             db.invoke_on_all(&replica::database::start).get();
+
+            ::sigquit_handler sigquit_handler(db);
 
 // FIXME: The stall detector uses glibc backtrace function to
 // collect backtraces, this causes ASAN failures on ARM.
