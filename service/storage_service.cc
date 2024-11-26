@@ -1272,7 +1272,7 @@ public:
                              " for the response from the topology coordinator");
 
                 if (utils::get_local_injector().enter("pre_server_start_drop_expiring")) {
-                    _ss._group0->modifiable_address_map().force_drop_expiring_entries();
+                    _ss._gossiper.get_mutable_address_map().force_drop_expiring_entries();
                 }
 
                 _ss._join_node_request_done.set_value();
@@ -6842,7 +6842,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }
 
     if (utils::get_local_injector().enter("join_node_response_drop_expiring")) {
-        _group0->modifiable_address_map().force_drop_expiring_entries();
+        _gossiper.get_mutable_address_map().force_drop_expiring_entries();
     }
 
     try {

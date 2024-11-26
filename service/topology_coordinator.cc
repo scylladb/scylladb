@@ -2226,7 +2226,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto validation_result = validate_joining_node(node);
 
                     if (utils::get_local_injector().enter("handle_node_transition_drop_expiring")) {
-                        _group0.modifiable_address_map().force_drop_expiring_entries();
+                        _gossiper.get_mutable_address_map().force_drop_expiring_entries();
                     }
 
                     // When the validation succeeded, it's important that all nodes in the
