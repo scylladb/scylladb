@@ -471,7 +471,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             update_topology(host_id, std::nullopt, t.left_nodes_rs.at(id));
         }
 
-        _group0->modifiable_address_map().set_expiring(host_id);
         // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
         co_await _messaging.local().ban_host(host_id);
     };
@@ -626,9 +625,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
         for (const auto& [id, rs]: t.transition_nodes) {
             co_await process_transition_node(id, rs);
-        }
-        for (const auto& [id, rs]: t.new_nodes) {
-            _group0->modifiable_address_map().set_nonexpiring(locator::host_id{id.uuid()});
         }
         for (auto id : t.get_excluded_nodes()) {
             locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
