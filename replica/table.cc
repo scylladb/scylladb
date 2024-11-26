@@ -1764,16 +1764,19 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
                               const std::vector<sstables::shared_sstable>& old_sstables) {
     std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
 
-    // this might seem dangerous, but "move" here just avoids constness,
-    // making the two ranges compatible when compiling with boost 1.55.
-    // No one is actually moving anything...
+    // add sstables from the current list into the new list except the ones that are in the old list
     std::vector<sstables::shared_sstable> removed_sstables;
-    for (auto all = current_sstables.all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
+    co_await current_sstables.for_each_sstable_gently([&s, &removed_sstables, &new_sstable_list] (const sstables::shared_sstable& tab) {
         if (s.contains(tab)) {
             removed_sstables.push_back(tab);
         } else {
             new_sstable_list.insert(tab);
         }
+    });
+
+    // add new sstables into the new list
+    for (auto& tab : new_sstables) {
+        new_sstable_list.insert(tab);
         co_await coroutine::maybe_yield();
     }
     co_return table::sstable_list_builder::result {
