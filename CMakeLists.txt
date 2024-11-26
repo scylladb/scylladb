@@ -103,12 +103,12 @@ endif()
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
 
 find_package(Sanitizers QUIET)
-set(sanitizer_cxx_flags
+list(APPEND absl_cxx_flags
     $<$<CONFIG:Debug,Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_COMPILE_OPTIONS>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_COMPILE_OPTIONS>>)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(ABSL_GCC_FLAGS ${sanitizer_cxx_flags})
+    list(APPEND ABSL_GCC_FLAGS ${absl_cxx_flags})
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set(ABSL_LLVM_FLAGS ${sanitizer_cxx_flags})
+    list(APPEND ABSL_LLVM_FLAGS ${absl_cxx_flags})
 endif()
 set(ABSL_DEFAULT_LINKOPTS
     $<$<CONFIG:Debug,Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_LINK_LIBRARIES>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_LINK_LIBRARIES>>)
