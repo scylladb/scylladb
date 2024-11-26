@@ -25,11 +25,13 @@ target_include_directories(alternator
   PRIVATE
     ${RAPIDJSON_INCLUDE_DIRS})
 target_link_libraries(alternator
-  cql3
-  idl
-  Seastar::seastar
-  xxHash::xxhash
-  absl::headers)
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    cql3
+    idl
+    absl::headers)
 
 check_headers(check-headers alternator
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

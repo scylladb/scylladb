@@ -6,10 +6,12 @@ target_include_directories(types
   PUBLIC
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(types
-    cql3
-    idl
+  PUBLIC
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    cql3
+    idl)
 
 check_headers(check-headers types
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

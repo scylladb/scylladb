@@ -96,11 +96,13 @@ target_include_directories(api
     ${CMAKE_SOURCE_DIR}
     ${scylla_gen_build_dir})
 target_link_libraries(api
-  idl
-  wasmtime_bindings
-  Seastar::seastar
-  xxHash::xxhash
-  absl::headers)
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    idl
+    wasmtime_bindings
+    absl::headers)
 
 check_headers(check-headers api
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
