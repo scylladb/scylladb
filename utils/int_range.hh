@@ -10,7 +10,7 @@
 
 #include "utils/assert.hh"
 #include "interval.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include "seastarx.hh"
 

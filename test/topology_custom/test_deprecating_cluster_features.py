@@ -51,11 +51,11 @@ async def check_features_status(cql, features, enabled):
 
 
 @pytest.mark.asyncio
-async def test_features_suppress_works(manager: ManagerClient, mode) -> None:
+async def test_features_suppress_works(manager: ManagerClient, build_mode) -> None:
     """ `suppress_features` error injection allows to revoke support for
         specified cluster features. It can be used to simulate upgrade process.
     """
-    if mode == "release":
+    if build_mode == "release":
         return
 
     features_to_suppress = ["PARALLELIZED_AGGREGATION", "UDA_NATIVE_PARALLELIZED_AGGREGATION"]

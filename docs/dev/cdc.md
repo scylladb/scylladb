@@ -233,7 +233,7 @@ The `cdc_streams_descriptions_v2` table in the `system_distributed` keyspace all
                 /* The set of stream identifiers used in this CDC generation for the token range
                  * ending on `range_end`. */
                 .with_column("streams", cdc_streams_set_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
 ```
 where
@@ -252,7 +252,7 @@ There is a second table that contains just the generations' timestamps, `cdc_gen
                 .with_column("time", timestamp_type, column_kind::clustering_key)
                 /* Expiration time of this CDC generation (or null if not expired). */
                 .with_column("expired", timestamp_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
 ```
 It is a single-partition table, containing the timestamps of generations found in `cdc_streams_descriptions_v2` in separate clustered rows. It allows clients to efficiently query if there are any new generations, e.g.:
@@ -298,7 +298,7 @@ As the name suggests, `cdc_streams_descriptions_v2` is the second version of the
                 .with_column("streams", cdc_streams_set_type)
                 /* Expiration time of this CDC generation (or null if not expired). */
                 .with_column("expired", timestamp_type)
-                .with_version(system_keyspace::generate_schema_version(id))
+                .with_hash_version()
                 .build();
 ```
 

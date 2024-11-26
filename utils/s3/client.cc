@@ -24,6 +24,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/pipe.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/coroutine/exception.hh>
@@ -81,20 +82,12 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-static future<> look_for_errors(const http::reply&, input_stream<char>&& in_) {
-    auto in = std::move(in_);
-    auto body = co_await util::read_entire_stream_contiguous(in);
-    auto possible_error = aws::aws_error::parse(std::move(body));
-    if (possible_error.get_error_type() != aws::aws_error_type::OK) {
-        throw std::system_error(std::error_code(EIO, std::generic_category()), possible_error.get_error_message());
-    }
-}
-
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _gf(std::move(gf))
         , _memory(mem)
+        , _retry_strategy(std::move(rs))
 {
 }
 
@@ -214,50 +207,100 @@ inline bool is_redirect_status(http::reply::status_type st) {
     return st_i >= 300 && st_i < 400;
 }
 
-future<> map_s3_client_exception(std::exception_ptr ex) {
+storage_io_error map_s3_client_exception(std::exception_ptr ex) {
     seastar::memory::scoped_critical_alloc_section alloc;
 
     try {
         std::rethrow_exception(std::move(ex));
+    } catch (const aws::aws_exception& e) {
+        int error_code;
+        switch (e.error().get_error_type()) {
+        case aws::aws_error_type::HTTP_NOT_FOUND:
+        case aws::aws_error_type::RESOURCE_NOT_FOUND:
+        case aws::aws_error_type::NO_SUCH_BUCKET:
+        case aws::aws_error_type::NO_SUCH_KEY:
+        case aws::aws_error_type::NO_SUCH_UPLOAD:
+            error_code = ENOENT;
+            break;
+        case aws::aws_error_type::HTTP_FORBIDDEN:
+        case aws::aws_error_type::HTTP_UNAUTHORIZED:
+        case aws::aws_error_type::ACCESS_DENIED:
+            error_code = EACCES;
+            break;
+        default:
+            error_code = EIO;
+        }
+        return {error_code, format("S3 request failed. Code: {}. Reason: {}", e.error().get_error_type(), e.what())};
     } catch (const httpd::unexpected_status_error& e) {
         auto status = e.status();
 
         if (is_redirect_status(status) || status == http::reply::status_type::not_found) {
-            return make_exception_future<>(storage_io_error(ENOENT, format("S3 object doesn't exist ({})", status)));
+            return {ENOENT, format("S3 object doesn't exist ({})", status)};
         }
         if (status == http::reply::status_type::forbidden || status == http::reply::status_type::unauthorized) {
-            return make_exception_future<>(storage_io_error(EACCES, format("S3 access denied ({})", status)));
+            return {EACCES, format("S3 access denied ({})", status)};
         }
 
-        return make_exception_future<>(storage_io_error(EIO, format("S3 request failed with ({})", status)));
+        return {EIO, format("S3 request failed with ({})", status)};
     } catch (...) {
         auto e = std::current_exception();
-        return make_exception_future<>(storage_io_error(EIO, format("S3 error ({})", e)));
+        return {EIO, format("S3 error ({})", e)};
     }
-
 }
 
-future<> client::do_make_request(group_client& gc, http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected_opt, seastar::abort_source* as) {
-    // TODO: the http client does not check abort status on entry, and if 
-    // we're already aborted when we get here we will paradoxally not be 
+future<> client::do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) const {
+    // TODO: the http client does not check abort status on entry, and if
+    // we're already aborted when we get here we will paradoxally not be
     // interrupted, because no registration etc will be done. So do a quick
     // preemptive check already.
     if (as && as->abort_requested()) {
-        return make_exception_future<>(as->abort_requested_exception_ptr());
+        co_await coroutine::return_exception_ptr(as->abort_requested_exception_ptr());
     }
-    auto expected = expected_opt.value_or(http::reply::status_type::ok);
-    return (as
-        ? gc.http.make_request(std::move(req), std::move(handle), *as, expected)
-        : gc.http.make_request(std::move(req), std::move(handle), expected)
-        ).handle_exception([] (auto ex) {
-            return map_s3_client_exception(std::move(ex));
-        });
+    uint32_t retries = 0;
+    std::exception_ptr e;
+    aws::aws_exception request_ex{aws::aws_error{aws::aws_error_type::OK, aws::retryable::yes}};
+    while (true) {
+        try {
+            e = {};
+            co_return co_await (as ? gc.http.make_request(req, handler, *as, std::nullopt) : gc.http.make_request(req, handler, std::nullopt));
+        } catch (const aws::aws_exception& ex) {
+            e = std::current_exception();
+            request_ex = ex;
+        }
+
+        if (!_retry_strategy->should_retry(request_ex.error(), retries)) {
+            break;
+        }
+        co_await seastar::sleep(_retry_strategy->delay_before_retry(request_ex.error(), retries));
+        ++retries;
+    }
+
+    if (e) {
+        throw map_s3_client_exception(e);
+    }
 }
 
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     authorize(req);
     auto& gc = find_or_create_client();
-    return do_make_request(gc, std::move(req), std::move(handle), expected, as);
+    return do_retryable_request(
+        gc, std::move(req), [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
+            auto payload = std::move(in);
+            auto status_class = http::reply::classify_status(rep._status);
+
+            if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
+                std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
+                if (possible_error) {
+                    co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
+                }
+                co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
+            }
+
+            if (rep._status != expected) {
+                co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+            }
+            co_await handler(rep, std::move(payload));
+        }, as);
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
@@ -266,7 +309,7 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, st
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return do_make_request(gc, std::move(req), std::move(handle), expected, as);
+    return make_request(std::move(req), std::move(handle), expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -714,7 +757,13 @@ future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content)
+        .handle_exception([this](const std::exception_ptr& ex) -> future<> {
+            // Here we discard whatever exception is thrown when aborting multipart upload since we don't care about cleanly aborting it since there are other
+            // means to clean up dangling parts, for example `rclone cleanup` or S3 bucket's Lifecycle Management Policy
+            s3l.warn("Failed to abort multipart upload. Object: '{}'. Reason: {})", _object_name, ex);
+            co_return;
+        });
 }
 
 future<> client::multipart_upload::finalize_upload() {
@@ -734,7 +783,24 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req), look_for_errors);
+    co_await _client->make_request(std::move(req), [](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        auto payload = std::move(in);
+        auto status_class = http::reply::classify_status(rep._status);
+        std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
+        if (possible_error) {
+            co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
+        }
+
+        if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
+            co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
+        }
+
+        if (rep._status != http::reply::status_type::ok) {
+            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+        }
+        // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
+        // this point it is ok since we are not interested in parsing this particular response
+    });
     _upload_id = ""; // now upload_started() returns false
 }
 
@@ -1057,8 +1123,8 @@ class client::do_upload_file : private multipart_upload {
         if (_tag) {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
-        req.write_body("bin", len, [f = std::move(f), &progress = _progress] (output_stream<char>&& out_) mutable {
-            auto input = make_file_input_stream(std::move(f), input_stream_options());
+        req.write_body("bin", len, [f = std::move(f), &progress = _progress] (output_stream<char>&& out_) {
+            auto input = make_file_input_stream(f, input_stream_options());
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });

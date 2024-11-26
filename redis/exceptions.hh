@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include "bytes.hh"
 

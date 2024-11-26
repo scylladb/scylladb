@@ -726,6 +726,7 @@ public:
     future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override {
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
     }
+    dht::token_range get_token_range_after_split(const dht::token&) const noexcept override { return dht::token_range(); }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
@@ -835,6 +836,9 @@ public:
     future<> split_all_storage_groups() override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override;
+    dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
+        return tablet_map().get_token_range_after_split(token);
+    }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
@@ -1025,6 +1029,10 @@ future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
 future<std::vector<sstables::shared_sstable>> table::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     auto holder = async_gate().hold();
     co_return co_await _sg_manager->maybe_split_sstable(sst);
+}
+
+dht::token_range table::get_token_range_after_split(const dht::token& token) const noexcept {
+    return _sg_manager->get_token_range_after_split(token);
 }
 
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
@@ -2276,6 +2284,10 @@ public:
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _cg.get_staging_done_condition();
     }
+
+    dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
+        return _t.get_token_range_after_split(t);
+    }
 };
 
 compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range)
@@ -2589,7 +2601,7 @@ table::sstables_as_snapshot_source() {
                 std::move(reader),
                 gc_clock::now(),
                 get_max_purgeable_fn_for_cache_underlying_reader(),
-                _compaction_manager.get_tombstone_gc_state(),
+                _compaction_manager.get_tombstone_gc_state().with_commitlog_check_disabled(),
                 fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);

@@ -26,6 +26,7 @@
  * or calling Size() on a non-array value.
  */
 
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <type_traits>

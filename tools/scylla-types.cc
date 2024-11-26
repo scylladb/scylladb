@@ -141,7 +141,7 @@ void compare_handler(type_variant type, std::vector<bytes> values, const bpo::va
     } compare_visitor{values[0], values[1]};
 
     const auto res = std::visit(compare_visitor, type);
-    sstring_view res_str;
+    std::string_view res_str;
 
     if (res == 0) {
         res_str = "==";
@@ -399,7 +399,7 @@ $ scylla types {{action}} --help
         }
         type_variant type = [&app_config] () -> type_variant {
             auto types = boost::copy_range<std::vector<data_type>>(app_config["type"].as<std::vector<sstring>>()
-                    | boost::adaptors::transformed([] (const sstring_view type_name) { return db::marshal::type_parser::parse(type_name); }));
+                    | boost::adaptors::transformed([] (const std::string_view type_name) { return db::marshal::type_parser::parse(type_name); }));
             if (app_config.contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
             } else if (app_config.contains("full-compound")) {

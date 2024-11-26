@@ -47,6 +47,7 @@
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
@@ -69,7 +70,7 @@ enum class table_status {
     deleting
 };
 
-static sstring_view table_status_to_sstring(table_status tbl_status) {
+static std::string_view table_status_to_sstring(table_status tbl_status) {
     switch(tbl_status) {
         case table_status::active:
             return "ACTIVE";
@@ -83,7 +84,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -104,7 +105,7 @@ std::string make_jsonable::to_json() const {
 }
 
 json::json_return_type make_streamed(rjson::value&& value) {
-    // CMH. json::json_return_type uses std::function, not noncopyable_function. 
+    // CMH. json::json_return_type uses std::function, not noncopyable_function.
     // Need to make a copyable version of value. Gah.
     auto rs = make_shared<rjson::value>(std::move(value));
     std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
@@ -284,8 +285,8 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
     auto schema = executor::find_table(proxy, request);
     if (!schema) {
-        // if we get here then the name was missing, since syntax or missing actual CF 
-        // checks throw. Slow path, but just call get_table_name to generate exception. 
+        // if we get here then the name was missing, since syntax or missing actual CF
+        // checks throw. Slow path, but just call get_table_name to generate exception.
         get_table_name(request);
     }
     return schema;
@@ -513,10 +514,10 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
-   
+
 
     data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
-    
+
     if (tbl_status != table_status::deleting) {
         rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
         std::unordered_map<std::string,std::string> key_attribute_types;
@@ -1287,7 +1288,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
-    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map);
+    auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
     // Alternator Streams doesn't yet work when the table uses tablets (#16317)
     if (stream_specification && stream_specification->IsObject()) {
         auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -1372,10 +1373,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     elogger.trace("Updating table {}", request);
 
     static const std::vector<sstring> unsupported = {
-        "GlobalSecondaryIndexUpdates", 
+        "GlobalSecondaryIndexUpdates",
         "ProvisionedThroughput",
         "ReplicaUpdates",
-        "SSESpecification", 
+        "SSESpecification",
     };
 
     for (auto& s : unsupported) {
@@ -1534,6 +1535,10 @@ private:
     // PutItem: engaged _cells, write these cells to item (_pk, _ck).
     // DeleteItem: disengaged _cells, delete the entire item (_pk, _ck).
     std::optional<std::vector<cell>> _cells;
+    // WCU calculation takes into account some length in bytes,
+    // that length can have different meaning depends on the operation but the
+    // the calculation of length in bytes to WCU is the same.
+    uint64_t _length_in_bytes = 0;
 public:
     struct delete_item {};
     struct put_item {};
@@ -1544,6 +1549,9 @@ public:
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
     const partition_key& pk() const { return _pk; }
     const clustering_key& ck() const { return _ck; }
+    uint64_t length_in_bytes() const noexcept {
+        return _length_in_bytes;
+    }
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -1575,14 +1583,32 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
+        _length_in_bytes += column_name.size();
         if (!cdef) {
             bytes value = serialize_item(it->value);
+            if (value.size()) {
+                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                _length_in_bytes += value.size() - 1;
+            }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
             // Fixed-type regular column can be used for GSI key
+            bytes value = get_key_from_typed_value(it->value, *cdef);
             _cells->push_back({std::move(column_name),
-                    get_key_from_typed_value(it->value, *cdef)});
+                    value});
+            if (value.size()) {
+                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                _length_in_bytes += value.size() - 1;
+            }
         }
+    }
+    if (_pk.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _length_in_bytes += _pk.representation().size() - 2;
+    }
+    if (_ck.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _length_in_bytes += _ck.representation().size() - 2;
     }
 }
 
@@ -1642,7 +1668,7 @@ thread_local utils::updateable_value<uint32_t> executor::s_default_timeout_in_ms
 db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
-        
+
 static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
@@ -1730,6 +1756,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
     : _request(std::move(request))
     , _schema(get_table(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
+    , _consumed_capacity(_request)
     , _returnvalues(parse_returnvalues(_request))
     , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request))
 {
@@ -1785,8 +1812,10 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
 // Build the return value from the different RMW operations (UpdateItem,
 // PutItem, DeleteItem). All these return nothing by default, but can
 // optionally return Attributes if requested via the ReturnValues option.
-static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes) {
+static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
     rjson::value ret = rjson::empty_object();
+    consumed_capacity.add_consumed_capacity_to_response_if_needed(ret);
+    metric += consumed_capacity.get_half_units();
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
@@ -1807,7 +1836,6 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(proxy, schema, ck, selection);
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
-
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
@@ -1834,21 +1862,21 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats).then(
-                    [this, &proxy, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    [this, &proxy, &stats, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes));
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&stats] () mutable {
+                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
                 });
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this] () mutable {
-            return rmw_operation_return(std::move(_return_attributes));
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &stats] () mutable {
+            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
         });
     }
     // If we're still here, we need to do this write using LWT:
@@ -1860,11 +1888,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             nullptr;
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &stats] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
-        return rmw_operation_return(std::move(_return_attributes));
+        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
     });
 }
 
@@ -1942,6 +1970,7 @@ public:
                 throw api_error::validation("ExpressionAttributeValues cannot be used without ConditionExpression");
             }
         }
+        _consumed_capacity += _mutation_builder.length_in_bytes();
     }
     bool needs_read_before_write() const {
         return _request.HasMember("Expected") ||
@@ -2596,31 +2625,39 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
 }
 
 /**
- * Helper routine to extract data when we already have 
+ * Helper routine to extract data when we already have
  * row, etc etc.
- * 
+ *
  * Note: include_all_embedded_attributes means we should
  * include all values in the `ATTRS_COLUMN_NAME` map column.
- * 
- * We could change the behaviour to simply include all values 
- * from this column if the `ATTRS_COLUMN_NAME` is explicit in 
- * `attrs_to_get`, but I am scared to do that now in case 
+ *
+ * We could change the behaviour to simply include all values
+ * from this column if the `ATTRS_COLUMN_NAME` is explicit in
+ * `attrs_to_get`, but I am scared to do that now in case
  * there is some corner case in existing code.
- * 
- * Explicit bool means we can be sure all previous calls are 
+ *
+ * Explicit bool means we can be sure all previous calls are
  * as before.
- */ 
+ */
 void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
-    bool include_all_embedded_attributes) 
+    consumed_capacity_counter* consumed_capacity_collector,
+    bool include_all_embedded_attributes)
 {
     const auto& columns = selection.get_columns();
     auto column_it = columns.begin();
     for (const managed_bytes_opt& cell : result_row) {
+        if (!cell) {
+            ++column_it;
+            continue;
+        }
         std::string column_name = (*column_it)->name_as_text();
-        if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+        if (column_name != executor::ATTRS_COLUMN_NAME) {
+            if (consumed_capacity_collector) {
+                (*consumed_capacity_collector) += column_name.length() + cell->size();
+            }
             if (!attrs_to_get || attrs_to_get->contains(column_name)) {
                 // item is expected to start empty, and column_name are unique
                 // so add() makes sense
@@ -2630,13 +2667,20 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(linearized_cell, **column_it));
                 });
             }
-        } else if (cell) {
+        } else {
             auto deserialized = attrs_type()->deserialize(*cell);
             auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
             for (auto entry : keys_and_values) {
                 std::string attr_name = value_cast<sstring>(entry.first);
+                if (consumed_capacity_collector) {
+                    (*consumed_capacity_collector) += attr_name.length();
+                }
                 if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
+                    if (consumed_capacity_collector && value.length()) {
+                        // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                        (*consumed_capacity_collector) += value.length() - 1;
+                    }
                     rjson::value v = deserialize_item(value);
                     if (attrs_to_get) {
                         auto it = attrs_to_get->find(attr_name);
@@ -2652,6 +2696,8 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     // item is expected to start empty, and attribute
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
+                } else if (consumed_capacity_collector) {
+                    (*consumed_capacity_collector) += value_cast<bytes>(entry.second).length() - 1;
                 }
             }
         }
@@ -2663,7 +2709,8 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter* consumed_capacity_collector) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now());
@@ -2671,6 +2718,10 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
 
     auto result_set = builder.build();
     if (result_set->empty()) {
+        if (consumed_capacity_collector) {
+            // empty results is counted as having a minimal length (e.g. 1 byte).
+            (*consumed_capacity_collector) += 1;
+        }
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
         return {};
@@ -2680,7 +2731,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         // called describe_multi_item(), not this function.
         throw std::logic_error("describe_single_item() asked to describe multiple items");
     }
-    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item);
+    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item, consumed_capacity_collector);
     return item;
 }
 
@@ -3087,7 +3138,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         any_updates = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
             rjson::replace_with_string_name(_return_attributes,
-                to_sstring_view(column_name), rjson::copy(json_value));
+                to_string_view(column_name), rjson::copy(json_value));
         } else if (_returnvalues == returnvalues::UPDATED_NEW) {
             rjson::value&& v = rjson::copy(json_value);
             if (h) {
@@ -3098,14 +3149,14 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     // empty and the attribute names are unique, so we can
                     // use add().
                     rjson::add_with_string_name(_return_attributes,
-                        to_sstring_view(column_name), std::move(v));
+                        to_string_view(column_name), std::move(v));
                 }
             } else {
                 rjson::add_with_string_name(_return_attributes,
-                    to_sstring_view(column_name), std::move(v));
+                    to_string_view(column_name), std::move(v));
             }
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_sstring_view(column_name);
+            std::string_view cn =  to_string_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::value&& v = rjson::copy(*col);
@@ -3133,9 +3184,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto do_delete = [&] (bytes&& column_name) {
         any_deletes = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
-            rjson::remove_member(_return_attributes, to_sstring_view(column_name));
+            rjson::remove_member(_return_attributes, to_string_view(column_name));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_sstring_view(column_name);
+            std::string_view cn =  to_string_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 // In the UPDATED_OLD case the item starts empty and column
@@ -3238,7 +3289,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     // check_needs_read_before_write_attribute_updates()
                     // returns true in this case, and previous_item is
                     // available to us when the item exists.
-                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
                     const rjson::value& v2 = (it->value)["Value"];
                     validate_value(v2, "AttributeUpdates");
                     std::string v2_type = get_item_type_string(v2);
@@ -3273,7 +3324,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 // Note that check_needs_read_before_write_attribute_updates()
                 // made sure we retrieved previous_item (if exists) when there
                 // is an ADD action.
-                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_sstring_view(column_name)) : nullptr;
+                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
                 const rjson::value& v2 = (it->value)["Value"];
                 validate_value(v2, "AttributeUpdates");
                 // An ADD can be used to create a new attribute (when
@@ -3396,15 +3447,16 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get) {
-    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
-    if (!opt_item) {
-        // If there is no matching item, we're supposed to return an empty
-        // object without an Item member - not one with an empty Item member
-        return rjson::empty_object();
-    }
+        const std::optional<attrs_to_get>& attrs_to_get,
+        consumed_capacity_counter& consumed_capacity,
+        uint64_t& metric) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity);
     rjson::value item_descr = rjson::empty_object();
-    rjson::add(item_descr, "Item", std::move(*opt_item));
+    if (opt_item) {
+        rjson::add(item_descr, "Item", std::move(*opt_item));
+    }
+    consumed_capacity.add_consumed_capacity_to_response_if_needed(item_descr);
+    metric += consumed_capacity.get_half_units();
     return item_descr;
 }
 
@@ -3447,12 +3499,15 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
+    rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
+
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
+
+        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_total)));
     });
 }
 
@@ -4676,7 +4731,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     // is an implicit order of elements that Dynamo imposes.
     auto table_names_it = [&table_names, &exclusive_start] {
         if (!exclusive_start.empty()) {
-            auto it = boost::find_if(table_names, [&exclusive_start] (const sstring& table_name) { return table_name == exclusive_start; });
+            auto it = std::ranges::find_if(table_names, [&exclusive_start] (const sstring& table_name) { return table_name == exclusive_start; });
             return std::next(it, it != table_names.end());
         } else {
             return table_names.begin();
@@ -4769,7 +4824,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -4795,7 +4850,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     // used by default on new Alternator tables. Change this initialization
     // to 0 enable tablets by default, with automatic number of tablets.
     std::optional<unsigned> initial_tablets;
-    if (sp.get_db().local().get_config().enable_tablets()) {
+    if (feat.tablets) {
         auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
         if (it != tags_map.end()) {
             // Tag set. If it's a valid number, use it. If not - e.g., it's

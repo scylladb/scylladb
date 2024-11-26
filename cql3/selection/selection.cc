@@ -143,6 +143,10 @@ protected:
             on_internal_error(cql_logger, "simple_selectors::add_input_row() called, but we don't support aggregation");
         }
 
+        virtual std::uint64_t get_input_row_count() const override {
+            on_internal_error(cql_logger, "simple_selectors::get_input_row_count() called, but we don't support aggregation");
+        }
+
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
             return std::move(rs.current);
         }
@@ -344,6 +348,7 @@ protected:
         const selection_with_processing& _sel;
         std::vector<raw_value> _temporaries;
         bool _requires_thread;
+        std::uint64_t _input_row_count;
     public:
         explicit selectors_with_processing(const selection_with_processing& sel)
             : _sel(sel)
@@ -353,6 +358,7 @@ protected:
                     return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
                 });
              }))
+            , _input_row_count(0)
         { }
 
         virtual bool requires_thread() const override {
@@ -361,6 +367,7 @@ protected:
 
         virtual void reset() override {
             _temporaries = _sel._initial_values_for_temporaries;
+            _input_row_count = 0;
         }
 
         virtual bool is_aggregate() const override {
@@ -421,6 +428,11 @@ protected:
             for (size_t i = 0; i != _sel._inner_loop.size(); ++i) {
                 _temporaries[i] = expr::evaluate(_sel._inner_loop[i], inputs);
             }
+            ++_input_row_count;
+        }
+
+        virtual std::uint64_t get_input_row_count() const override {
+            return _input_row_count;
         }
 
         std::vector<shared_ptr<functions::function>> used_functions() const {
@@ -505,11 +517,14 @@ selection::collect_metadata(const schema& schema, const std::vector<prepared_sel
 
 result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now,
                                        std::vector<size_t> group_by_cell_indices,
-                                       uint64_t limit)
+                                       uint64_t limit, uint64_t per_partition_limit)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _group_by_cell_indices(std::move(group_by_cell_indices))
     , _limit(limit)
+    , _per_partition_limit(per_partition_limit)
+    , _per_partition_remaining(per_partition_limit)
+    , _per_partition_remaining_previous_partition(per_partition_limit)
     , _last_group(_group_by_cell_indices.size())
     , _group_began(false)
     , _now(now)
@@ -580,8 +595,14 @@ void result_set_builder::flush_selectors() {
         // handled by process_current_row
         return;
     }
+    if (_selectors->get_input_row_count() == 0) {
+        return;
+    }
     if (_result_set->size() < _limit) {
-        _result_set->add_row(_selectors->get_output_row());
+        if (_per_partition_remaining > 0) {
+            _result_set->add_row(_selectors->get_output_row());
+            --_per_partition_remaining;
+        }
         _selectors->reset();
     }
 }
@@ -599,14 +620,71 @@ void result_set_builder::complete_row() {
     _selectors->add_input_row(*this);
 }
 
+void result_set_builder::accept_new_partition(const std::vector<bytes>& key)
+{
+    if (!_selectors->is_aggregate() || _group_by_cell_indices.empty()) {
+        // No need to do anything if we're not aggregating. PER PARTITION LIMIT
+        // for non-aggregating queries is handled earlier in the process.
+        // If we're aggregating, but not grouping, we don't need to do anything either
+        return;
+    }
+
+    if (key == current_partition_key) {
+        // We're still in the same partition, which means that the query_pager
+        // has called us with a new page of results. We need to reset the
+        // per_partition_remaining to its previous value.
+        _per_partition_remaining = _per_partition_remaining_previous_partition;
+        return;
+    }
+
+    if (_per_partition_remaining_previous_partition > 0) {
+        // We're on a new partition, and we have not exhausted the previous
+        // partition's limit. We need to flush the selectors if there are any
+        // rows left to process.
+        _per_partition_remaining = _per_partition_remaining_previous_partition;
+        flush_selectors();
+        // We need to reset the limit here, because we're starting a new
+        // partition.
+        _per_partition_remaining_previous_partition = _per_partition_remaining;
+        _per_partition_remaining = _per_partition_limit;
+    } else {
+        _selectors->reset();
+    }
+}
+
+void result_set_builder::accept_partition_end() {
+    if (!_selectors->is_aggregate() || _group_by_cell_indices.empty()) {
+        // No need to do anything if we're not aggregating. PER PARTITION LIMIT
+        // is for non-aggregating queries is handled earlier in the process.
+        // If we're aggregating, but not grouping, we don't need to do anything either
+        return;
+    }
+    // We're at the end of a partition OR at the end of the page. We cannot
+    // flush the selectors here, because we might have more rows to process in
+    // the same partition.
+
+    // _per_partition_remaining_previous_partition is the variable we use to
+    // keep track of the remaining rows in the previous partition, should we
+    // encounter the same partition in the next page.
+    _per_partition_remaining_previous_partition = _per_partition_remaining;
+    _per_partition_remaining = _per_partition_limit;
+}
+
 void result_set_builder::start_new_row() {
     current.clear();
 }
 
 std::unique_ptr<result_set> result_set_builder::build() {
-    if (_group_began && _selectors->is_aggregate()) {
-        flush_selectors();
+    if (_selectors->is_aggregate() && _per_partition_remaining_previous_partition > 0) {
+        // We verify _per_partition_remaining_previous_partition here, because
+        // we have finished the last page which means accept_partition_end() has
+        // been called. So the value to check is _per_partition_remaining_previous_partition.
+
+        if (_group_began || (!_group_by_cell_indices.empty() && last_group_ended())) {
+            flush_selectors();
+        }
     }
+
     if (_result_set->empty() && _selectors->is_aggregate() && _group_by_cell_indices.empty()) {
         _result_set->add_row(_selectors->get_output_row());
     }

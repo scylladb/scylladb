@@ -11,7 +11,7 @@
 #include "bytes.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/scattered_message.hh>
 #include "redis/exceptions.hh"
 #include "utils/fmt-compat.hh"

@@ -23,9 +23,10 @@
 #include "db/system_keyspace.hh"
 #include "schema/schema.hh"
 #include "gms/gossiper.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "db/config.hh"
 #include "data_dictionary/keyspace_metadata.hh"
+#include "replica/database.hh"
 
 using namespace seastar;
 
@@ -49,7 +50,7 @@ schema_ptr strings_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -70,7 +71,7 @@ schema_ptr lists_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -91,7 +92,7 @@ schema_ptr hashes_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -112,7 +113,7 @@ schema_ptr sets_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -133,7 +134,7 @@ schema_ptr zsets_schema(sstring ks_name) {
     );
     builder.set_gc_grace_seconds(0);
     builder.with(schema_builder::compact_storage::yes);
-    builder.with_version(db::system_keyspace::generate_schema_version(builder.uuid()));
+    builder.with_hash_version();
     return builder.build(schema_builder::compact_storage::yes);
 }
 
@@ -188,7 +189,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
             attrs.validate();
 
-            ksms.push_back(attrs.as_ks_metadata(ks_name, *tm, proxy.local().features()));
+            ksms.push_back(attrs.as_ks_metadata(ks_name, *tm, proxy.local().features(), proxy.local().local_db().get_config()));
         }
 
         auto group0_guard = co_await mml.start_group0_operation();

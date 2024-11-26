@@ -33,6 +33,8 @@
 #include "db/tags/utils.hh"
 #include "db/tags/extension.hh"
 #include "index/target_parser.hh"
+#include "utils/hashing.hh"
+#include "utils/hashers.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -355,7 +357,7 @@ schema::raw_schema::raw_schema(table_id id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> raw_view_info, const schema_static_props& props)
+schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props)
     : _raw(raw)
     , _static_props(props)
     , _offsets([this] {
@@ -438,8 +440,8 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
     }
 
     rebuild();
-    if (raw_view_info) {
-        _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
+    if (_raw._view_info) {
+        _view_info = std::make_unique<::view_info>(*this, *_raw._view_info);
     }
 }
 
@@ -532,9 +534,94 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._indices_by_name == y._raw._indices_by_name
         && x._raw._is_counter == y._raw._is_counter
         ;
-#if 0
-        && Objects.equal(triggers, other.triggers)
-#endif
+}
+
+
+template<>
+struct appending_hash<index_metadata>  {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const index_metadata& x) const noexcept {
+        feed_hash(h, x.id());
+        feed_hash(h, x.name());
+        feed_hash(h, x.kind());
+        feed_hash(h, x.options());
+    }
+};
+
+
+template<>
+struct appending_hash<column_definition>  {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const column_definition& x) const noexcept {
+        feed_hash(h, x.name());
+        feed_hash(h, x.type);
+        feed_hash(h, x.id);
+        feed_hash(h, x.kind);
+        feed_hash(h, x.dropped_at());
+    }
+};
+
+template<>
+struct appending_hash<raw_view_info>  {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const raw_view_info& x) const noexcept {
+        feed_hash(h, x.base_id());
+        feed_hash(h, x.base_name());
+        feed_hash(h, x.include_all_columns());
+        feed_hash(h, x.where_clause());
+    }
+};
+
+template<>
+struct appending_hash<schema::dropped_column> {
+    template<typename H>
+    requires Hasher<H>
+    void operator()(H& h, const schema::dropped_column& x) const noexcept {
+        feed_hash(h, x.type);
+        feed_hash(h, x.timestamp);
+    }
+};
+
+table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
+    md5_hasher h;
+    feed_hash(h, r._id);
+    feed_hash(h, r._ks_name);
+    feed_hash(h, r._cf_name);
+    feed_hash(h, r._columns);
+    feed_hash(h, r._comment);
+    feed_hash(h, r._default_time_to_live.count());
+    feed_hash(h, r._regular_column_name_type);
+    feed_hash(h, r._bloom_filter_fp_chance);
+    feed_hash(h, r._compressor_params.get_options());
+    feed_hash(h, r._is_dense);
+    feed_hash(h, r._is_compound);
+    feed_hash(h, r._gc_grace_seconds);
+    feed_hash(h, r._paxos_grace_seconds);
+    feed_hash(h, r._min_compaction_threshold);
+    feed_hash(h, r._max_compaction_threshold);
+    feed_hash(h, r._min_index_interval);
+    feed_hash(h, r._max_index_interval);
+    feed_hash(h, r._memtable_flush_period);
+    feed_hash(h, r._speculative_retry.to_sstring());
+    feed_hash(h, r._compaction_strategy);
+    feed_hash(h, r._compaction_strategy_options);
+    feed_hash(h, r._compaction_enabled);
+    feed_hash(h, r._caching_options.to_map());
+    feed_hash(h, r._dropped_columns);
+    feed_hash(h, r._collections);
+    feed_hash(h, r._view_info);
+    feed_hash(h, r._indices_by_name);
+    feed_hash(h, r._is_counter);
+
+    for (auto&& [name, ext] : r._extensions) {
+        feed_hash(h, name);
+        feed_hash(h, ext->options_to_string());
+    }
+
+    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
 index_metadata::index_metadata(const sstring& name,
@@ -549,6 +636,7 @@ index_metadata::index_metadata(const sstring& name,
 {}
 
 bool index_metadata::operator==(const index_metadata& other) const {
+    // Keep consistent with appending_hash<index_metadata>.
     return _id == other._id
            && _name == other._name
            && _kind == other._kind
@@ -1262,6 +1350,11 @@ schema_builder& schema_builder::with_version(table_schema_version v) {
     return *this;
 }
 
+schema_builder& schema_builder::with_hash_version() {
+    _version = from_hash();
+    return *this;
+}
+
 static const sstring default_partition_key_name = "key";
 static const sstring default_clustering_name = "column";
 static const sstring default_compact_value_name = "value";
@@ -1335,7 +1428,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 }
 
 schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
-    _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    _raw._view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
 
@@ -1383,12 +1476,6 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
         }
     }
 
-    if (_version) {
-        new_raw._version = *_version;
-    } else {
-        new_raw._version = table_schema_version(utils::UUID_gen::get_time_UUID());
-    }
-
     if (new_raw._is_counter) {
         new_raw._default_validation_class = counter_type;
     }
@@ -1434,7 +1521,19 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
         new_raw._sharder = get_sharder(1, 0);
     }
 
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info, static_props);
+    std::visit(make_visitor(
+        [&] (from_time) {
+            new_raw._version = table_schema_version(utils::UUID_gen::get_time_UUID());
+        },
+        [&] (from_hash) {
+            new_raw._version = schema::calculate_digest(new_raw);
+        },
+        [&] (table_schema_version v) {
+            new_raw._version = v;
+        }
+    ), _version);
+
+    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props);
 }
 
 auto schema_builder::static_configurators() -> std::vector<static_configurator>& {
@@ -1554,7 +1653,7 @@ void read_collections(schema_builder& builder, sstring comparator)
     // The format of collection entries in the comparator is:
     // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name1>:<type1>, ...)
 
-    auto find_closing_parenthesis = [] (sstring_view str, size_t start) {
+    auto find_closing_parenthesis = [] (std::string_view str, size_t start) {
         auto pos = start;
         auto nest_level = 0;
         do {
@@ -1591,10 +1690,10 @@ void read_collections(schema_builder& builder, sstring comparator)
             throw marshal_exception("read_collections - colon not found");
         }
 
-        auto name = from_hex(sstring_view(comparator.c_str() + pos, colon - pos));
+        auto name = from_hex(std::string_view(comparator.c_str() + pos, colon - pos));
 
         colon++;
-        auto type_str = sstring_view(comparator.c_str() + colon, end - colon);
+        auto type_str = std::string_view(comparator.c_str() + colon, end - colon);
         auto type = db::marshal::type_parser::parse(type_str);
 
         builder.with_collection(name, type);
@@ -1919,7 +2018,7 @@ bytes collection_column_computation::serialize() const {
             break;
     }
     rjson::add(serialized, "type", rjson::from_string(type));
-    rjson::add(serialized, "collection_name", rjson::from_string(to_sstring_view(_collection_name)));
+    rjson::add(serialized, "collection_name", rjson::from_string(to_string_view(_collection_name)));
     return to_bytes(rjson::print(serialized));
 }
 
@@ -2055,6 +2154,7 @@ std::vector<db::view::view_key_and_action> collection_column_computation::comput
 }
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {
+    // Keep consistent with appending_hash<raw_view_info>
     return x._base_id == y._base_id
         && x._base_name == y._base_name
         && x._include_all_columns == y._include_all_columns

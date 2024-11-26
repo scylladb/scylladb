@@ -115,12 +115,6 @@ def backport(repo, pr, version, commits, backport_base_branch):
                     is_draft = True
                     repo_local.git.add(A=True)
                     repo_local.git.cherry_pick('--continue')
-            if not repo.private and not repo.has_in_collaborators(pr.user.login):
-                repo.add_to_collaborators(pr.user.login, permission="push")
-                comment = f':warning:  @{pr.user.login} you have been added as collaborator to scylladbbot fork '
-                comment += f'Please check your inbox and approve the invitation, once it is done, please add the backport labels again'
-                create_pr_comment_and_remove_label(pr, comment)
-                return
             repo_local.git.push(fork_repo, new_branch_name, force=True)
             create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
                                 is_draft=is_draft)
@@ -129,13 +123,29 @@ def backport(repo, pr, version, commits, backport_base_branch):
             logging.warning(f"GitCommandError: {e}")
 
 
+def with_github_keyword_prefix(repo, pr):
+    pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
+    match = re.findall(pattern, pr.body, re.IGNORECASE)
+    if not match:
+        print(f'No valid close reference for {pr.number}')
+        comment = f':warning:  @{pr.user.login} PR body does not contain a Fixes reference to an issue '
+        comment += ' and can not be backported\n\n'
+        comment += 'The following labels were removed:\n'
+        create_pr_comment_and_remove_label(pr, comment)
+        return False
+    else:
+        return True
+
+
 def main():
     args = parse_args()
     base_branch = args.base_branch.split('/')[2]
     promoted_label = 'promoted-to-master'
     repo_name = args.repo
+    fork_repo_name = 'scylladbbot/scylladb'
     if 'scylla-enterprise' in args.repo:
         promoted_label = 'promoted-to-enterprise'
+        fork_repo_name = 'scylladbbot/scylla-enterprise'
     stable_branch = base_branch
     backport_branch = 'branch-'
 
@@ -143,6 +153,7 @@ def main():
 
     g = Github(github_token)
     repo = g.get_repo(repo_name)
+    scylladbbot_repo = g.get_repo(fork_repo_name)
     closed_prs = []
     start_commit = None
 
@@ -168,6 +179,15 @@ def main():
             continue
         if not backport_labels:
             print(f'no backport label: {pr.number}')
+            continue
+        if args.commits and not with_github_keyword_prefix(repo, pr):
+            continue
+        if not repo.private and not scylladbbot_repo.has_in_collaborators(pr.user.login):
+            logging.info(f"Sending an invite to {pr.user.login} to become a collaborator to {scylladbbot_repo.full_name} ")
+            scylladbbot_repo.add_to_collaborators(pr.user.login)
+            comment = f':warning:  @{pr.user.login} you have been added as collaborator to scylladbbot fork '
+            comment += f'Please check your inbox and approve the invitation, once it is done, please add the backport labels again\n'
+            create_pr_comment_and_remove_label(pr, comment)
             continue
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")

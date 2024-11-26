@@ -30,7 +30,7 @@ raw_value make_tinyint_raw(int8_t val);
 raw_value make_smallint_raw(int16_t val);
 raw_value make_int_raw(int32_t val);
 raw_value make_bigint_raw(int64_t val);
-raw_value make_text_raw(const sstring_view& text);
+raw_value make_text_raw(const std::string_view& text);
 raw_value make_float_raw(float val);
 raw_value make_double_raw(double val);
 
@@ -40,7 +40,7 @@ constant make_tinyint_const(int8_t val);
 constant make_smallint_const(int16_t val);
 constant make_int_const(int32_t val);
 constant make_bigint_const(int64_t val);
-constant make_text_const(const sstring_view& text);
+constant make_text_const(const std::string_view& text);
 constant make_float_const(float val);
 constant make_double_const(double val);
 
@@ -102,7 +102,7 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
                                             data_type key_type,
                                             data_type element_type);
 tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
-usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_view, constant>> field_values);
+usertype_constructor make_usertype_constructor(std::vector<std::pair<std::string_view, constant>> field_values);
 
 ::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");
 

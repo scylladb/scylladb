@@ -1109,7 +1109,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         api::req_param<unsigned> list_size(*req, "list_size", 10);
 
         apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
-            name, duration.param, list_size.param, capacity.param);
+            name, duration.value, list_size.value, capacity.value);
 
         return seastar::do_with(db::toppartitions_query(ctx.db, {{ks, cf}}, {}, duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
             return run_toppartitions_query(q, ctx, true);

@@ -20,6 +20,7 @@
 #include <seastar/util/bool_class.hh>
 #include "service/raft/raft_address_map.hh"
 #include "utils/user_provided_param.hh"
+#include "locator/tablet_metadata_guard.hh"
 
 using namespace seastar;
 
@@ -178,6 +179,7 @@ private:
 public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<gms::inet_address> hosts = {}, std::unordered_set<gms::inet_address> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
+    future<> repair_tablet(locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
@@ -275,4 +277,4 @@ future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false);
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false, repair_meta* rm = nullptr);

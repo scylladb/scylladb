@@ -103,6 +103,9 @@ public:
             tracing::trace_state_ptr trace_ptr) = 0;
 };
 
+using multishard_reader_buffer_hint = bool_class<struct multishard_reader_buffer_hint_tag>;
+using read_ahead = bool_class<struct read_ahead_tag>;
+
 /// Make a multishard_combining_reader.
 ///
 /// multishard_combining_reader takes care of reading a range from all shards
@@ -117,8 +120,9 @@ public:
 /// has to move between shards often. When concurrency is > 1, the reader
 /// issues background read-aheads to the next shards so that by the time it
 /// needs to move to them they have the data ready.
-/// For dense tables (where we rarely cross shards) we rely on the
-/// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
+/// Read-ahead can be disabled to reduce the multishard reader's footprint.
+/// Useful when the reader operates in the context of a possibly congested
+/// semaphore, and the avoidance of evictions is more important than low latencies.
 ///
 /// The readers' life-cycles are managed through the supplied lifecycle policy.
 mutation_reader make_multishard_combining_reader_v2(
@@ -129,7 +133,9 @@ mutation_reader make_multishard_combining_reader_v2(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state = nullptr,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+        multishard_reader_buffer_hint buffer_hint = multishard_reader_buffer_hint::no,
+        read_ahead read_ahead = read_ahead::yes);
 
 mutation_reader make_multishard_combining_reader_v2_for_tests(
         const dht::sharder& sharder,
@@ -139,5 +145,7 @@ mutation_reader make_multishard_combining_reader_v2_for_tests(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state = nullptr,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+        multishard_reader_buffer_hint buffer_hint = multishard_reader_buffer_hint::no,
+        read_ahead read_ahead = read_ahead::yes);
 

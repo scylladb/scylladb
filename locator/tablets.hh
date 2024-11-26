@@ -18,6 +18,7 @@
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
+#include "utils/UUID.hh"
 
 #include <ranges>
 #include <seastar/core/reactor.hh>
@@ -34,6 +35,8 @@ class topology;
 extern seastar::logger tablet_logger;
 
 using token = dht::token;
+
+using tablet_task_id = utils::tagged_uuid<struct tablet_task_id_tag>;
 
 // Identifies tablet within the scope of a single tablet_map,
 // which has a scope of (table_id, token metadata version).
@@ -141,9 +144,34 @@ bool contains(const tablet_replica_set& rs, const tablet_replica& r) {
     return std::ranges::any_of(rs, [&] (auto&& r_) { return r_ == r; });
 }
 
+
+enum class tablet_task_type {
+    none,
+    user_repair,
+    auto_repair,
+};
+
+sstring tablet_task_type_to_string(tablet_task_type);
+tablet_task_type tablet_task_type_from_string(const sstring&);
+
+struct tablet_task_info {
+    tablet_task_type request_type = tablet_task_type::none;
+    locator::tablet_task_id tablet_task_id;
+    db_clock::time_point request_time;
+    int64_t sched_nr = 0;
+    db_clock::time_point sched_time;
+    bool operator==(const tablet_task_info&) const = default;
+    bool is_valid() const;
+    bool is_user_request() const;
+    static tablet_task_info make_user_request();
+    static tablet_task_info make_auto_request();
+};
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
+    db_clock::time_point repair_time;
+    locator::tablet_task_info repair_task_info;
 
     bool operator==(const tablet_info&) const = default;
 };
@@ -171,6 +199,8 @@ enum class tablet_transition_stage {
     cleanup_target,
     revert_migration,
     end_migration,
+    repair,
+    end_repair,
 };
 
 enum class tablet_transition_kind {
@@ -186,6 +216,9 @@ enum class tablet_transition_kind {
     // The new replica is (tablet_transition_info::next - tablet_info::replicas).
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     rebuild,
+
+    // Repair the tablet replicas
+    repair,
 };
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
@@ -236,13 +269,20 @@ tablet_replica_set get_primary_replicas(const tablet_info&, const tablet_transit
 tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
 
 /// Describes streaming required for a given tablet transition.
+constexpr int tablet_migration_stream_weight_default = 1;
+constexpr int tablet_migration_stream_weight_repair = 2;
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;
+    // The stream_weight for repair migration is set to 2, because it requires
+    // more work than just moving the tablet around. The stream_weight for all
+    // other migrations are set to 1.
+    int stream_weight = tablet_migration_stream_weight_default;
 };
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
+bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {
@@ -298,6 +338,14 @@ struct load_stats {
     }
 };
 
+struct repair_scheduler_config {
+    bool auto_repair_enabled = false;
+    // If the time since last repair is bigger than auto_repair_threshold
+    // seconds, the tablet is eligible for auto repair.
+    std::chrono::seconds auto_repair_threshold{10 * 24 * 3600};
+    bool operator==(const repair_scheduler_config&) const = default;
+};
+
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
 
 /// Stores information about tablets of a single table.
@@ -327,6 +375,14 @@ private:
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
     resize_decision _resize_decision;
+    repair_scheduler_config _repair_scheduler_config;
+
+    /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
+    dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
+
+    /// Returns token_range which contains all tokens owned by the specified tablet
+    /// when the tablet_count is `1 << log2_tablets`.
+    dht::token_range get_token_range(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
     ///
@@ -427,11 +483,16 @@ public:
 
     bool needs_split() const;
 
+    /// Returns the token_range in which the given token will belong to after a tablet split
+    dht::token_range get_token_range_after_split(const token& t) const noexcept;
+
     const locator::resize_decision& resize_decision() const;
+    const locator::repair_scheduler_config& repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
+    void set_repair_scheduler_config(locator::repair_scheduler_config config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
@@ -592,4 +653,19 @@ struct fmt::formatter<locator::tablet_metadata> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_metadata_change_hint> : fmt::formatter<string_view> {
     auto format(const locator::tablet_metadata_change_hint&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::repair_scheduler_config> : fmt::formatter<string_view> {
+    auto format(const locator::repair_scheduler_config&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_task_info> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_task_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_task_type> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_task_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

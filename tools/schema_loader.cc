@@ -274,7 +274,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto* statement = prepared_statement->statement.get();
         auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement);
         SCYLLA_ASSERT(p);
-        real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service));
+        real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service, cfg));
         return db.find_keyspace(name);
     };
 
@@ -298,7 +298,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         auto* statement = prepared_statement->statement.get();
 
         if (auto p = dynamic_cast<cql3::statements::create_keyspace_statement*>(statement)) {
-            real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service));
+            real_db.keyspaces.emplace_back(p->get_keyspace_metadata(*token_metadata.local().get(), feature_service, cfg));
         } else if (auto p = dynamic_cast<cql3::statements::create_type_statement*>(statement)) {
             dd_impl.unwrap(ks).metadata->add_user_type(p->create_type(db));
         } else if (auto p = dynamic_cast<cql3::statements::create_table_statement*>(statement)) {
@@ -603,7 +603,7 @@ schema_ptr load_system_schema(const db::config& cfg, std::string_view keyspace, 
     if (ks_it == schemas.end()) {
         throw std::invalid_argument(fmt::format("unknown system keyspace: {}", keyspace));
     }
-    auto tb_it = boost::find_if(ks_it->second, [&] (const schema_ptr& s) {
+    auto tb_it = std::ranges::find_if(ks_it->second, [&] (const schema_ptr& s) {
         return s->cf_name() == table;
     });
     if (tb_it == ks_it->second.end()) {

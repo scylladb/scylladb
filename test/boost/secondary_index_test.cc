@@ -41,6 +41,23 @@ SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
         });
     });
 }
+// Reproduces scylladb/scylladb#20722
+// Because group0_service was initialized after (and destroyed before) view_builder
+// and view_builder depends on group0, there was a possible use after free.
+// The test injects sleep in read barrier, increasing reproducibility of the bug.
+SEASTAR_TEST_CASE(test_view_builder_use_after_free) {
+#ifndef DEBUG
+    fmt::print("Skipping test as it depends on error injection and ASAN. Please run in mode where they're enabled (debug).\n");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        utils::get_local_injector().enable("sleep_in_read_barrier");
+
+        co_await e.execute_cql("CREATE TABLE users (userid int, name text, email text, country text, PRIMARY KEY (userid));");
+        co_await e.execute_cql("CREATE INDEX ON users (email);");
+    });
+#endif
+}
 
 SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
     return do_with_cql_env([] (cql_test_env& e) -> future<> {

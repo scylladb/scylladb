@@ -17,7 +17,7 @@
 #include <compare>
 
 #include <seastar/core/sstring.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
 #include "utils/assert.hh"
@@ -36,9 +36,9 @@ public:
         : most_sig_bits(most_sig_bits), least_sig_bits(least_sig_bits) {}
 
     // May throw marshal_exception is failed to parse uuid string.
-    explicit UUID(const sstring& uuid_string) : UUID(sstring_view(uuid_string)) { }
-    explicit UUID(const char * s) : UUID(sstring_view(s)) {}
-    explicit UUID(sstring_view uuid_string);
+    explicit UUID(const sstring& uuid_string) : UUID(std::string_view(uuid_string)) { }
+    explicit UUID(const char * s) : UUID(std::string_view(s)) {}
+    explicit UUID(std::string_view uuid_string);
 
     int64_t get_most_significant_bits() const noexcept {
         return most_sig_bits;

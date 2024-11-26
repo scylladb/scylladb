@@ -21,6 +21,22 @@ if '--aws' in sys.argv:
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+
+# If the first option is "--release", download that release (see
+# fetch_scylla.py for supported release numbers), and use that.
+# The downloaded Scylla will be cached in the directory build/<release>,
+# where <release> is the specific release downloaded - E.g., if the user
+# asks "--release 2022.1" and the downloaded release is 2022.1.9, it
+# will be stored in build/2022.1.9.
+if len(sys.argv) > 1 and sys.argv[1] == '--release':
+    release = sys.argv[2]
+    exe = run.download_precompiled_scylla(release)
+    run_scylla_cmd = lambda pid, dir: run.run_precompiled_scylla_cmd(exe, pid, dir)
+    sys.argv = sys.argv[0:1] + sys.argv[3:]
+    os.environ['SCYLLA'] = exe # so find_scylla() prints the right one
+else:
+    run_scylla_cmd = run.run_scylla_cmd
+
 print('Scylla is: ' + run.find_scylla() + '.')
 
 extra_scylla_options = []
@@ -46,7 +62,7 @@ run.omit_scylla_output = "--omit-scylla-output" in sys.argv
 # parameters, so in particular both CQL and Alternator will be enabled.
 # This is useful for us because we need CQL to setup authentication.
 def run_alternator_cmd(pid, dir):
-    (cmd, env) = run.run_scylla_cmd(pid, dir)
+    (cmd, env) = run_scylla_cmd(pid, dir)
     ip = run.pid_to_ip(pid)
     cmd += [
         '--alternator-address', ip,

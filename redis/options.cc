@@ -9,7 +9,7 @@
 #include "redis/options.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "redis/keyspace_utils.hh"
 
 using namespace seastar;

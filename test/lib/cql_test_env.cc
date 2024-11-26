@@ -220,7 +220,7 @@ public:
         adjust_rlimit();
     }
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
@@ -230,7 +230,7 @@ public:
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
-        sstring_view text,
+        std::string_view text,
         std::unique_ptr<cql3::query_options> qo) override
     {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
@@ -909,6 +909,13 @@ private:
                 _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
+            group0_service.start().get();
+            auto stop_group0_service = defer([&group0_service] {
+                group0_service.abort().get();
+            });
+
+            _ss.local().set_group0(group0_service);
+
             _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([this] {
@@ -957,13 +964,6 @@ private:
             auto stop_cdc_service = defer([this] {
                 _cdc.stop().get();
             });
-
-            group0_service.start().get();
-            auto stop_group0_service = defer([&group0_service] {
-                group0_service.abort().get();
-            });
-
-            _ss.local().set_group0(group0_service);
 
             const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 
@@ -1067,7 +1067,7 @@ private:
 
 public:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
-        const std::vector<sstring_view>& queries, std::unique_ptr<cql3::query_options> qo) override {
+        const std::vector<std::string_view>& queries, std::unique_ptr<cql3::query_options> qo) override {
         using cql3::statements::batch_statement;
         using cql3::statements::modification_statement;
         std::vector<batch_statement::single_statement> modifications;

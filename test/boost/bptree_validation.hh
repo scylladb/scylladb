@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <iostream>
 #include "utils/bptree.hh"
 
 namespace bplus {

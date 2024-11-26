@@ -2632,11 +2632,11 @@ void storage_proxy_stats::write_stats::register_stats() {
                            {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
             sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_replicas.count();},
-                           sm::description("number of write requests which were rejected by replicas because rate limit for the partition was reached."),
+                           sm::description("number of write requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                            {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
             sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_coordinator.count();},
-                           sm::description("number of write requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
+                           sm::description("number of write requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                            {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
             sm::make_total_operations("background_writes_failed", background_writes_failed,
@@ -2727,11 +2727,11 @@ void storage_proxy_stats::stats::register_stats() {
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_replicas.count(); },
-                       sm::description("number of read requests which were rejected by replicas because rate limit for the partition was reached."),
+                       sm::description("number of read requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
         sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_coordinator.count(); },
-                       sm::description("number of read requests which were rejected directly on the coordinator because rate limit for the partition was reached."),
+                       sm::description("number of read requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
         sm::make_total_operations("range_timeouts", [this]{return range_slice_timeouts.count(); },
@@ -2845,15 +2845,15 @@ void storage_proxy_stats::stats::register_stats() {
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_data_reads,
-                       sm::description("number of remote data read requests this Node received"),
+                       sm::description("number of remote reads this Node received. op_type label could be data, mutation_data or digest"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("data")}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_mutation_data_reads,
-                       sm::description("number of remote mutation data read requests this Node received"),
+                       sm::description("number of remote reads this Node received. op_type label could be data, mutation_data or digest"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("mutation_data")}).set_skip_when_empty(),
 
         sm::make_total_operations("reads", replica_digest_reads,
-                       sm::description("number of remote digest read requests this Node received"),
+                       sm::description("number of remote reads this Node received. op_type label could be data, mutation_data or digest"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::op_type_label("digest")}).set_skip_when_empty(),
 
         sm::make_total_operations("cross_shard_ops", replica_cross_shard_ops,

@@ -122,8 +122,8 @@ UUID UUID_gen::get_name_UUID(bytes_view b) {
     return get_name_UUID(reinterpret_cast<const unsigned char*>(b.begin()), b.size());
 }
 
-UUID UUID_gen::get_name_UUID(sstring_view s) {
-    static_assert(sizeof(char) == sizeof(sstring_view::value_type), "Assumed that str.size() counts in chars");
+UUID UUID_gen::get_name_UUID(std::string_view s) {
+    static_assert(sizeof(char) == sizeof(std::string_view::value_type), "Assumed that str.size() counts in chars");
     return get_name_UUID(reinterpret_cast<const unsigned char*>(s.begin()), s.size());
 }
 

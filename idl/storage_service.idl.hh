@@ -64,4 +64,5 @@ verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_s
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
+verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id);
 }

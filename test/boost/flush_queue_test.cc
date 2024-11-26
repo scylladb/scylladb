@@ -19,7 +19,7 @@
 
 #include "seastarx.hh"
 #include "test/lib/scylla_test_case.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "utils/flush_queue.hh"
 
 SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {

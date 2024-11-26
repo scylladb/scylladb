@@ -121,13 +121,13 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     BOOST_CHECK(v2.unset);
     BOOST_CHECK_EQUAL(to_bytes(req.read_value_view(version).value), value);
 
-    std::vector<sstring_view> names;
+    std::vector<std::string_view> names;
     std::vector<cql3::raw_value_view> values;
     cql3::unset_bind_variable_vector unset;
     req.read_name_and_value_list(version, names, values, unset);
     BOOST_CHECK(std::none_of(unset.begin(), unset.end(), std::identity()));
     BOOST_CHECK_EQUAL(names, names_and_values | boost::adaptors::transformed([] (auto& name_and_value) {
-        return sstring_view(name_and_value.first);
+        return std::string_view(name_and_value.first);
     }));
     BOOST_CHECK_EQUAL(values, names_and_values | boost::adaptors::transformed([] (auto& name_and_value) {
         if (!name_and_value.second) {

@@ -111,14 +111,14 @@ class cql_test_env {
 public:
     virtual ~cql_test_env() {};
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) = 0;
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) = 0;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
-            sstring_view text, std::unique_ptr<cql3::query_options> qo) = 0;
+            std::string_view text, std::unique_ptr<cql3::query_options> qo) = 0;
 
     /// Processes queries (which must be modifying queries) as a batch.
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
-        const std::vector<sstring_view>& queries, std::unique_ptr<cql3::query_options> qo) = 0;
+        const std::vector<std::string_view>& queries, std::unique_ptr<cql3::query_options> qo) = 0;
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) = 0;
 

@@ -19,7 +19,7 @@
 #include <fmt/ranges.h>
 
 #include <seastar/core/coroutine.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/log-cli.hh>
 #include <seastar/net/tls.hh>
@@ -980,6 +980,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , repair_partition_count_estimation_ratio(this, "repair_partition_count_estimation_ratio", liveness::LiveUpdate, value_status::Used, 0.1,
         "Specify the fraction of partitions written by repair out of the total partitions. The value is currently only used for bloom filter estimation. Value is between 0 and 1.")
     , repair_hints_batchlog_flush_cache_time_in_ms(this, "repair_hints_batchlog_flush_cache_time_in_ms", liveness::LiveUpdate, value_status::Used, 60 * 1000, "The repair hints and batchlog flush request cache time. Setting 0 disables the flush cache. The cache reduces the number of hints and batchlog flushes during repair when tombstone_gc is set to repair mode. When the cache is on, a slightly smaller repair time will be used with the benefits of dropped hints and batchlog flushes.")
+    , repair_multishard_reader_buffer_hint_size(this, "repair_multishard_reader_buffer_hint_size", liveness::LiveUpdate, value_status::Used, 1 * 1024 * 1024,
+        "The buffer size to use for the buffer-hint feature of the multishard reader when running repair in mixed-shard clusters. This can help the performance of mixed-shard repair (including RBNO). Set to 0 to disable the hint feature altogether.")
+    , repair_multishard_reader_enable_read_ahead(this, "repair_multishard_reader_enable_read_ahead", liveness::LiveUpdate, value_status::Used, false,
+        "The multishard reader has a read-ahead feature to improve latencies of range-scans. This feature can be detrimental when the multishard reader is used under repair, as is the case in repair in mixed-shard clusters."
+        " This know allows disabling this read-ahead (default), this can help the performance of mixed-shard repair (including RBNO).")
+    , enable_small_table_optimization_for_rbno(this, "enable_small_table_optimization_for_rbno", liveness::LiveUpdate, value_status::Used, false, "Set true to enable small table optimization for repair based node operations")
     , ring_delay_ms(this, "ring_delay_ms", value_status::Used, 30 * 1000, "Time a node waits to hear from other nodes before joining the ring in milliseconds. Same as -Dcassandra.ring_delay_ms in cassandra.")
     , shadow_round_ms(this, "shadow_round_ms", value_status::Used, 300 * 1000, "The maximum gossip shadow round time. Can be used to reduce the gossip feature check time during node boot up.")
     , fd_max_interval_ms(this, "fd_max_interval_ms", value_status::Used, 2 * 1000, "The maximum failure_detector interval time in milliseconds. Interval larger than the maximum will be ignored. Larger cluster may need to increase the default.")
@@ -1142,7 +1148,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , index_cache_fraction(this, "index_cache_fraction", liveness::LiveUpdate, value_status::Used, 0.2,
         "The maximum fraction of cache memory permitted for use by index cache. Clamped to the [0.0; 1.0] range. Must be small enough to not deprive the row cache of memory, but should be big enough to fit a large fraction of the index. The default value 0.2 means that at least 80\% of cache memory is reserved for the row cache, while at most 20\% is usable by the index cache.")
     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
-    , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Used, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.")
+    , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Used, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
     , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory.")
     , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache.")
     , wasm_cache_instance_size_limit(this, "wasm_cache_instance_size_limit", value_status::Used, 1024*1024, "Instances with size above this limit will not be stored in the cache.")
@@ -1173,7 +1179,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
-    , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces")
+    , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")

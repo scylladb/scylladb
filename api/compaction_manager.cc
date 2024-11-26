@@ -113,9 +113,6 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
     cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto ks_name = validate_keyspace(ctx, req);
         auto table_names = parse_tables(ks_name, ctx, req->query_parameters, "tables");
-        if (table_names.empty()) {
-            table_names = map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
-        }
         auto type = req->get_query_param("type");
         co_await ctx.db.invoke_on_all([&] (replica::database& db) {
             auto& cm = db.get_compaction_manager();

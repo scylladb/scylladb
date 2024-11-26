@@ -18,7 +18,6 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
-from test.pylib.report_plugin import ReportPlugin
 
 # Use the util.py library from ../cqlpy:
 sys.path.insert(1, sys.path[0] + '/test/cqlpy')
@@ -36,10 +35,6 @@ def pytest_addoption(parser):
         help='Connect to CQL via an encrypted TLSv1.2 connection')
     parser.addoption('--api-port', action='store', default='10000',
         help='server REST API port to connect to')
-    parser.addoption('--mode', action='store', required=True,
-                     help='Scylla build mode. Tests can use it to adjust their behavior.')
-    parser.addoption('--run_id', action='store', default=1,
-                     help='Run id for the test run')
 
 class RestApiSession:
     def __init__(self, host, port):
@@ -162,7 +157,3 @@ def test_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     yield name
     cql.execute("DROP KEYSPACE " + name)
-
-
-def pytest_configure(config):
-    config.pluginmanager.register(ReportPlugin())

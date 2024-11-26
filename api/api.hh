@@ -219,11 +219,10 @@ template <class T, class Base = T>
 class req_param {
 public:
     sstring name;
-    sstring param;
     T value;
 
     req_param(const request& req, sstring name, T default_val) : name(name) {
-        param = req.get_query_param(name);
+        sstring param = req.get_query_param(name);
         if (param.empty()) {
             value = default_val;
             return;

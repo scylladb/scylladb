@@ -108,6 +108,7 @@ private:
     std::vector<tablet_repair_task_meta> _metas;
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
+    size_t _metas_size = 0;
 public:
     tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
@@ -121,6 +122,10 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override {
         return tasks::is_abortable(!_abort_subscription);
     }
+
+    virtual void release_resources() noexcept override;
+private:
+    size_t get_metas_size() const noexcept;
 protected:
     future<> run() override;
 
@@ -153,6 +158,7 @@ public:
     bool _hints_batchlog_flushed = false;
     std::unordered_set<gms::inet_address> nodes_down;
     bool _small_table_optimization = false;
+    size_t small_table_optimization_ranges_reduced_factor = 1;
 private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;
@@ -222,7 +228,6 @@ private:
     // Map repair id into repair_info.
     std::unordered_map<int, tasks::task_id> _repairs;
     std::unordered_set<tasks::task_id> _pending_repairs;
-    std::unordered_set<tasks::task_id> _aborted_pending_repairs;
     // The semaphore used to control the maximum
     // ranges that can be repaired in parallel.
     named_semaphore _range_parallelism_semaphore;
@@ -257,7 +262,7 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress();
-    bool is_aborted(const tasks::task_id& uuid);
+    future<bool> is_aborted(const tasks::task_id& uuid, shard_id shard);
 };
 
 }

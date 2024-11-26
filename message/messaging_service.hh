@@ -11,8 +11,7 @@
 #include "db/config.hh"
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
 #include <seastar/rpc/rpc_types.hh>
@@ -202,7 +201,8 @@ enum class messaging_verb : int32_t {
     TABLE_LOAD_STATS = 72,
     JOIN_NODE_QUERY = 73,
     TASKS_GET_CHILDREN = 74,
-    LAST = 75,
+    TABLET_REPAIR = 75,
+    LAST = 76,
 };
 
 } // namespace netw

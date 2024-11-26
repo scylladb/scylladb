@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(test_query_counters) {
         };
 
         // Executes a batch of (modifying) statements and waits for it to complete.
-        auto process_batch = [&e](const std::vector<sstring_view>& queries, clevel cl) mutable {
+        auto process_batch = [&e](const std::vector<std::string_view>& queries, clevel cl) mutable {
             e.execute_batch(queries, make_options(cl)).get();
         };
 

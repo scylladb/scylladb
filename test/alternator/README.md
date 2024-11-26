@@ -57,6 +57,25 @@ region = us-east-1
 You don't need these files to run the tests against a local installation
 of ScyllaDB.
 
+The "run" script also has an ability to run tests against a specific old
+release of Scylla downloaded (pre-compiled) from ScyllaDB's official
+release collection. For example:
+
+```
+test/alternator/run --release 6.0 test_streams.py::test_stream_list_tables
+test/alternator/run --release 6.1 test_streams.py::test_stream_list_tables
+```
+
+can demonstrate that a bug (reproduced by that test) was fixed in the latest
+official release of 6.1, but not in the latest 6.0 release. The `--release`
+option (which must be the first option to "run") downloads the requested
+official release and caches it in the `build/` directory (e.g.,
+`build/6.0.4`), and then runs the requested tests against that version.
+The `--release` option supports various version specifiers, such as 5.4.7
+(a specific version), 5.4 (asking for the latest version in the 5.4 branch),
+5.4.0~rc2 (a pre-release), or Enterprise releases such as 2021.1.9 or 2023.1
+(the latest in that branch).
+
 ## HTTPS support
 
 In order to run tests over HTTPS instead of the default HTTP, run

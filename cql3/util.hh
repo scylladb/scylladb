@@ -25,10 +25,10 @@ namespace cql3 {
 namespace util {
 
 
-void do_with_parser_impl(const sstring_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
+void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
 
 template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::invoke_result_t<Func, cql3_parser::CqlParser&>>>
-Result do_with_parser(const sstring_view& cql, dialect d, Func&& f) {
+Result do_with_parser(const std::string_view& cql, dialect d, Func&& f) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, d, [&] (cql3_parser::CqlParser& parser) {
         ret.emplace(f(parser));
@@ -38,16 +38,16 @@ Result do_with_parser(const sstring_view& cql, dialect d, Func&& f) {
 
 sstring relations_to_where_clause(const expr::expression& e);
 
-expr::expression where_clause_to_relations(const sstring_view& where_clause, dialect d);
+expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d);
 
-sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d);
+sstring rename_column_in_where_clause(const std::string_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d);
 
 /// build a CQL "select" statement with the desired parameters.
 /// If select_all_columns==true, all columns are selected and the value of
 /// selected_columns is ignored.
 std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
-        const sstring_view& cf_name,
-        const sstring_view& where_clause,
+        const std::string_view& cf_name,
+        const std::string_view& where_clause,
         bool select_all_columns,
         const std::vector<column_definition>& selected_columns);
 

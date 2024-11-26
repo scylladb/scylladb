@@ -20,11 +20,12 @@ from test.topology.util import log_run_time, wait_until_last_generation_is_in_us
 
 @pytest.mark.asyncio
 @log_run_time
-async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient):
+async def test_topology_upgrade_basic(request, build_mode: str, manager: ManagerClient):
     # First, force the first node to start in legacy mode
     cfg = {
         'force_gossip_topology_changes': True,
-        'ring_delay_ms': 15000 if mode == 'debug' else 5000,
+        'enable_tablets': False,
+        'ring_delay_ms': 15000 if build_mode == 'debug' else 5000,
     }
 
     servers = [await manager.server_add(config=cfg)]

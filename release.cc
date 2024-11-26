@@ -13,7 +13,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 static const char scylla_product_str[] = SCYLLA_PRODUCT;
 static const char scylla_version_str[] = SCYLLA_VERSION;

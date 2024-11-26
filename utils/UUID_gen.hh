@@ -19,6 +19,7 @@
 
 #include "UUID.hh"
 #include "on_internal_error.hh"
+#include "db_clock.hh"
 
 namespace utils {
 
@@ -96,8 +97,7 @@ private:
     // need monotonicity between time UUIDs created at different
     // shards and UUID code uses thread local state on each shard.
     int64_t create_time_safe() {
-        using std::chrono::system_clock;
-        auto millis = duration_cast<milliseconds>(system_clock::now().time_since_epoch());
+        auto millis = duration_cast<milliseconds>(db_clock::now().time_since_epoch());
         decimicroseconds when = from_unix_timestamp(millis);
         if (when > _last_used_time) {
             _last_used_time = when;
@@ -246,7 +246,7 @@ public:
      * Creates a type 3 (name based) UUID based on the specified byte array.
      */
     static UUID get_name_UUID(bytes_view b);
-    static UUID get_name_UUID(sstring_view str);
+    static UUID get_name_UUID(std::string_view str);
     static UUID get_name_UUID(const unsigned char* s, size_t len);
 
     /** decomposes a uuid into raw bytes. */

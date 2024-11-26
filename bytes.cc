@@ -7,7 +7,8 @@
  */
 
 #include "bytes.hh"
-#include <seastar/core/print.hh>
+#include <fmt/ostream.h>
+#include <seastar/core/format.hh>
 
 static inline int8_t hex_to_int(unsigned char c) {
     switch (c) {
@@ -32,7 +33,7 @@ static inline int8_t hex_to_int(unsigned char c) {
     }
 }
 
-bytes from_hex(sstring_view s) {
+bytes from_hex(std::string_view s) {
     if (s.length() % 2 == 1) {
         throw std::invalid_argument("An hex string representing bytes must have an even length");
     }

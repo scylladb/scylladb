@@ -169,7 +169,7 @@ database::existing_index_names(std::string_view ks_name, std::string_view cf_to_
 }
 
 schema_ptr
-database::get_cdc_base_table(sstring_view ks_name, std::string_view table_name) const {
+database::get_cdc_base_table(std::string_view ks_name, std::string_view table_name) const {
     return get_cdc_base_table(*find_table(ks_name, table_name).schema());
 }
 
@@ -421,6 +421,8 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
                 os << " AND tablets = {'enabled': false}";
             } else if (_initial_tablets.value() > 0) {
                 os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
+            } else {
+                os << " AND tablets = {'enabled': true}";
             }
         }
         os << ";";

@@ -23,8 +23,6 @@ def pytest_addoption(parser):
 
     parser.addoption('--manager-api', action='store', required=True,
                      help='Manager unix socket path')
-    parser.addoption('--tmpdir', action='store', type=str, dest='tmpdir',
-                     help='Temporary directory where logs are stored')
     parser.addoption("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                      help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                           "with logs")

@@ -17,7 +17,6 @@
 #include <vector>
 #include <algorithm>
 
-#include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -167,7 +166,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_c
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_regular_columns_in_view_pk;
 }
@@ -176,7 +175,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_static_co
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_static_columns_in_view_pk;
 }
@@ -185,7 +184,7 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
                 seastar::format("base_schema(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
+                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_schema;
 }
@@ -217,8 +216,8 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             base_static_columns_in_view_pk.push_back(base_col->id);
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
-                    to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
-            if (to_sstring_view(view_col_name) == "idx_token") {
+                    to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
+            if (to_string_view(view_col_name) == "idx_token") {
                 vlogger.warn("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
                         "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
             }
@@ -1046,6 +1045,14 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
+
+        // If the view has a regular column (i.e. a column that's NOT part of the base table's PK)
+        // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
+        // Because of that, we don't generate view updates when the value in an unselected column is created
+        // or changes.
+        if (!column_is_selected && _base_info->has_base_non_pk_columns_in_view_pk) {
+            return true;
+        }
 
         //TODO(sarna): Optimize collections case - currently they do not go under optimization
         if (!cdef.is_atomic()) {
@@ -2498,7 +2505,7 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
         if (step_it == _base_to_build_step.end()) {
             return;// In case all the views for this CF have finished building already.
         }
-        auto status_it = boost::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+        auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
             return bs.view->id() == view->id();
         });
         if (status_it != step_it->second.build_status.end()) {

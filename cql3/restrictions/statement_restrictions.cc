@@ -195,7 +195,7 @@ const auto deref = boost::adaptors::transformed([] (const managed_bytes_opt& b) 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
         const expression& e, const query_options& options, const serialized_compare& comparator,
-        sstring_view column_name) {
+        std::string_view column_name) {
     const cql3::raw_value in_list = evaluate(e, options);
     if (in_list.is_null()) {
         return value_list();
@@ -320,7 +320,7 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             if (!cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto found = boost::find_if(
+                            const auto found = std::ranges::find_if(
                                     tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
                                 return unbounded_value_set;

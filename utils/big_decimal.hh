@@ -26,7 +26,7 @@ public:
         HALF_EVEN,
     };
 
-    explicit big_decimal(sstring_view text);
+    explicit big_decimal(std::string_view text);
     big_decimal();
     big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value);
     big_decimal(std::integral auto v) : big_decimal(0, v) {}

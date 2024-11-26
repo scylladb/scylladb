@@ -606,6 +606,7 @@ private:
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::static_sharder> _sharder;
+        std::optional<raw_view_info> _view_info;
     };
     raw_schema _raw;
     schema_static_props _static_props;
@@ -661,7 +662,7 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, std::optional<raw_view_info>, const schema_static_props& props);
+    schema(private_tag, const raw_schema&, const schema_static_props& props);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
@@ -947,6 +948,10 @@ public:
     bool wait_for_sync_to_commitlog() const {
         return _static_props.wait_for_sync_to_commitlog;
     }
+
+    // The calculated version should be machine-independent, so that all nodes
+    // arrive at the same version for the same schema definition.
+    static table_schema_version calculate_digest(const raw_schema& r);
 private:
     // Print all schema properties in CQL syntax
     std::ostream& schema_properties(const schema_describe_helper& helper, std::ostream& os) const;

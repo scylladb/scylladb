@@ -938,6 +938,7 @@ public:
     virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
+    dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
 };
 
 void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
@@ -996,7 +997,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
             throw std::invalid_argument("missing mandatory command-line argument --scrub-mode");
         }
         const auto mode_name = vm["scrub-mode"].as<std::string>();
-        auto mode_it = boost::find_if(scrub_modes, [&mode_name] (const std::pair<std::string, compaction_type_options::scrub::mode>& v) {
+        auto mode_it = std::ranges::find_if(scrub_modes, [&mode_name] (const std::pair<std::string, compaction_type_options::scrub::mode>& v) {
             return v.first == mode_name;
         });
         if (mode_it == scrub_modes.end()) {
@@ -2550,7 +2551,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     mutation_fragment_stream_validation_level validation_level;
     {
         const auto vl_name = vm["validation-level"].as<std::string>();
-        auto vl_it = boost::find_if(valid_validation_levels, [&vl_name] (const std::pair<std::string, mutation_fragment_stream_validation_level>& v) {
+        auto vl_it = std::ranges::find_if(valid_validation_levels, [&vl_name] (const std::pair<std::string, mutation_fragment_stream_validation_level>& v) {
             return v.first == vl_name;
         });
         if (vl_it == valid_validation_levels.end()) {

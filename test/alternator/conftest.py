@@ -14,7 +14,6 @@ import boto3
 import requests
 import re
 
-from test.pylib.report_plugin import ReportPlugin
 from test.alternator.util import create_test_table, is_aws, scylla_log
 from urllib.parse import urlparse
 from functools import cache
@@ -50,13 +49,8 @@ def pytest_addoption(parser):
         help='Omit scylla\'s output from the test output')
     parser.addoption('--host', action='store', default='localhost',
         help='Scylla server host to connect to')
-    parser.addoption('--mode', action='store', default=None,
-                     help='Scylla build mode. Tests can use it to adjust their behavior.')
-    parser.addoption('--run_id', action='store', default=None,
-                     help='Run id for the test run')
 def pytest_configure(config):
     config.addinivalue_line("markers", "veryslow: mark test as very slow to run")
-    config.pluginmanager.register(ReportPlugin())
 
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--runveryslow"):

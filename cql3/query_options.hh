@@ -78,7 +78,7 @@ public:
 private:
     const cql_config& _cql_config;
     const db::consistency_level _consistency;
-    const std::optional<std::vector<sstring_view>> _names;
+    const std::optional<std::vector<std::string_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
     unset_bind_variable_vector _unset;
@@ -127,14 +127,14 @@ public:
 
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
-                           std::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<std::string_view>> names,
                            raw_value_vector_with_unset values,
                            bool skip_metadata,
                            specific_options options
                            );
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
-                           std::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<std::string_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
                            unset_bind_variable_vector unset,
@@ -143,7 +143,7 @@ public:
                            );
     explicit query_options(const cql_config& cfg,
                            db::consistency_level consistency,
-                           std::optional<std::vector<sstring_view>> names,
+                           std::optional<std::vector<std::string_view>> names,
                            raw_value_view_vector_with_unset value_views,
                            bool skip_metadata,
                            specific_options options
@@ -223,7 +223,7 @@ public:
     }
 
 
-    const std::optional<std::vector<sstring_view>>& get_names() const noexcept {
+    const std::optional<std::vector<std::string_view>>& get_names() const noexcept {
         return _names;
     }
 

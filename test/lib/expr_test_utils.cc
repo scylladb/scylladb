@@ -53,7 +53,7 @@ raw_value make_bigint_raw(int64_t val) {
     return make_raw(val);
 }
 
-raw_value make_text_raw(const sstring_view& text) {
+raw_value make_text_raw(const std::string_view& text) {
     return raw_value::make_value(utf8_type->decompose(text));
 }
 
@@ -95,7 +95,7 @@ constant make_bigint_const(int64_t val) {
     return make_const(val);
 }
 
-constant make_text_const(const sstring_view& text) {
+constant make_text_const(const std::string_view& text) {
     return constant(make_text_raw(text), utf8_type);
 }
 
@@ -353,7 +353,7 @@ tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::
                              .type = tuple_type_impl::get_instance(std::move(element_types))};
 }
 
-usertype_constructor make_usertype_constructor(std::vector<std::pair<sstring_view, constant>> field_values) {
+usertype_constructor make_usertype_constructor(std::vector<std::pair<std::string_view, constant>> field_values) {
     usertype_constructor::elements_map_type elements_map;
     std::vector<bytes> field_names;
     std::vector<data_type> field_types;

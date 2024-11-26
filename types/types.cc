@@ -17,7 +17,7 @@
 #include "concrete_types.hh"
 #include <exception>
 #include <iterator>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "types/types.hh"
 #include "utils/assert.hh"
@@ -171,7 +171,7 @@ template <typename T> static bytes decompose_value(T v) {
     return b;
 }
 
-template <typename T> static T parse_int(const integer_type_impl<T>& t, sstring_view s) {
+template <typename T> static T parse_int(const integer_type_impl<T>& t, std::string_view s) {
     try {
         auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
         auto value = static_cast<T>(value64);
@@ -264,7 +264,7 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-int64_t timestamp_from_string(sstring_view s) {
+int64_t timestamp_from_string(std::string_view s) {
     try {
         std::string str;
         str.resize(s.size());
@@ -311,7 +311,7 @@ int64_t timestamp_from_string(sstring_view s) {
     }
 }
 
-db_clock::time_point timestamp_type_impl::from_sstring(sstring_view s) {
+db_clock::time_point timestamp_type_impl::from_string_view(std::string_view s) {
     return db_clock::time_point(db_clock::duration(timestamp_from_string(s)));
 }
 
@@ -327,7 +327,7 @@ static date::year_month_day get_simple_date_time(const boost::match_results<Cons
     auto day = boost::lexical_cast<unsigned>(sm[3]);
     return date::year_month_day{date::year{year}, date::month{month}, date::day{day}};
 }
-static uint32_t serialize(sstring_view input, int64_t days) {
+static uint32_t serialize(std::string_view input, int64_t days) {
     if (days < std::numeric_limits<int32_t>::min()) {
         throw marshal_exception(seastar::format("Input date {} is less than min supported date -5877641-06-23", input));
     }
@@ -337,13 +337,13 @@ static uint32_t serialize(sstring_view input, int64_t days) {
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
 }
-uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
+uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
     char* end;
     errno = 0;
     auto v = std::strtoll(s.begin(), &end, 10);
     if(end != s.end()) {
         static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
-        boost::match_results<sstring_view::const_iterator> dsm;
+        boost::match_results<std::string_view::const_iterator> dsm;
         if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
         throw marshal_exception(seastar::format("Unable to coerce '{}' to a formatted date (long)", s));
         }
@@ -361,7 +361,7 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
 
 time_type_impl::time_type_impl() : simple_type_impl{kind::time, time_type_name, {}} {}
 
-int64_t time_type_impl::from_sstring(sstring_view s) {
+int64_t time_type_impl::from_string_view(std::string_view s) {
     static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
     auto hours_end = s.find(':');
     if (hours_end == std::string::npos) {
@@ -2509,7 +2509,7 @@ bool abstract_type::equal(bytes_view v1, managed_bytes_view v2) const {
 }
 
 // Count number of ':' which are not preceded by '\'.
-static std::size_t count_segments(sstring_view v) {
+static std::size_t count_segments(std::string_view v) {
     std::size_t segment_count = 1;
     char prev_ch = '.';
     for (char ch : v) {
@@ -2522,11 +2522,11 @@ static std::size_t count_segments(sstring_view v) {
 }
 
 // Split on ':', unless it's preceded by '\'.
-static std::vector<sstring_view> split_field_strings(sstring_view v) {
+static std::vector<std::string_view> split_field_strings(std::string_view v) {
     if (v.empty()) {
-        return std::vector<sstring_view>();
+        return std::vector<std::string_view>();
     }
-    std::vector<sstring_view> result;
+    std::vector<std::string_view> result;
     result.reserve(count_segments(v));
     std::size_t prev = 0;
     char prev_ch = '.';
@@ -2542,12 +2542,12 @@ static std::vector<sstring_view> split_field_strings(sstring_view v) {
 }
 
 // Replace "\:" with ":" and "\@" with "@".
-static std::string unescape(sstring_view s) {
+static std::string unescape(std::string_view s) {
     return boost::regex_replace(std::string(s), boost::regex("\\\\([@:])"), "$1");
 }
 
 // Replace ":" with "\:" and "@" with "\@".
-static std::string escape(sstring_view s) {
+static std::string escape(std::string_view s) {
     return boost::regex_replace(std::string(s), boost::regex("[@:]"), "\\\\$0");
 }
 
@@ -2691,7 +2691,7 @@ static bytes serialize_value(const T& t, const typename T::native_type& v) {
     return b;
 }
 
-seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
+seastar::net::inet_address inet_addr_type_impl::from_string_view(std::string_view s) {
     try {
         return inet_address(std::string(s.data(), s.size()));
     } catch (...) {
@@ -2699,7 +2699,7 @@ seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
     }
 }
 
-utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
+utils::UUID uuid_type_impl::from_string_view(std::string_view s) {
     static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
     if (!boost::regex_match(s.begin(), s.end(), re)) {
         throw marshal_exception(seastar::format("Cannot parse uuid from '{}'", s));
@@ -2707,7 +2707,7 @@ utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
     return utils::UUID(s);
 }
 
-utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
+utils::UUID timeuuid_type_impl::from_string_view(std::string_view s) {
     static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
     if (!boost::regex_match(s.begin(), s.end(), re)) {
         throw marshal_exception(seastar::format("Invalid UUID format ({})", s));
@@ -2721,7 +2721,7 @@ utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
 
 namespace {
 struct from_string_visitor {
-    sstring_view s;
+    std::string_view s;
     bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
     bytes operator()(const counter_type_impl&) { return long_type->from_string(s); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
@@ -2754,31 +2754,31 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return timeuuid_type_impl::from_sstring(s).serialize();
+        return timeuuid_type_impl::from_string_view(s).serialize();
     }
     bytes operator()(const timestamp_date_base_class& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, timestamp_type_impl::from_sstring(s));
+        return serialize_value(t, timestamp_type_impl::from_string_view(s));
     }
     bytes operator()(const simple_date_type_impl& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, simple_date_type_impl::from_sstring(s));
+        return serialize_value(t, simple_date_type_impl::from_string_view(s));
     }
     bytes operator()(const time_type_impl& t) {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, time_type_impl::from_sstring(s));
+        return serialize_value(t, time_type_impl::from_string_view(s));
     }
     bytes operator()(const uuid_type_impl&) {
         if (s.empty()) {
             return bytes();
         }
-        return uuid_type_impl::from_sstring(s).serialize();
+        return uuid_type_impl::from_string_view(s).serialize();
     }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (s.empty()) {
@@ -2831,10 +2831,10 @@ struct from_string_visitor {
         if (s.empty()) {
             return bytes();
         }
-        return serialize_value(t, t.from_sstring(s));
+        return serialize_value(t, t.from_string_view(s));
     }
     bytes operator()(const tuple_type_impl& t) {
-        std::vector<sstring_view> field_strings = split_field_strings(s);
+        std::vector<std::string_view> field_strings = split_field_strings(s);
         if (field_strings.size() > t.size()) {
             throw marshal_exception(
                     format("Invalid tuple literal: too many elements. Type {} expects {:d} but got {:d}",
@@ -2859,7 +2859,7 @@ struct from_string_visitor {
 };
 }
 
-bytes abstract_type::from_string(sstring_view s) const { return visit(*this, from_string_visitor{s}); }
+bytes abstract_type::from_string(std::string_view s) const { return visit(*this, from_string_visitor{s}); }
 
 static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::native_type& b) {
     std::ostringstream out;

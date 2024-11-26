@@ -10,7 +10,7 @@
 
 #include <seastar/util/file.hh>
 #include <boost/range/adaptor/map.hpp>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include <seastar/util/backtrace.hh>
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"

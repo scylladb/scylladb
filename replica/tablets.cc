@@ -27,6 +27,12 @@ namespace replica {
 
 using namespace locator;
 
+static thread_local auto repair_scheduler_config_type = user_type_impl::get_instance(
+        "system", "repair_scheduler_config", {"auto_repair_enabled", "auto_repair_threshold"},
+        {boolean_type, long_type}, false);
+static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
+        "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time"},
+        {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type}, false);
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
@@ -39,11 +45,17 @@ data_type get_tablet_info_type() {
     return tablet_info_type;
 }
 
+void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db) {
+    db.find_keyspace(ks).add_user_type(repair_scheduler_config_type);
+    db.find_keyspace(ks).add_user_type(tablet_task_info_type);
+}
+
 schema_ptr make_tablets_schema() {
     // FIXME: Allow UDTs in system keyspace:
     // CREATE TYPE tablet_replica (replica_id uuid, shard int);
     // replica_set_type = frozen<list<tablet_replica>>
     auto id = generate_legacy_id(db::system_keyspace::NAME, db::system_keyspace::TABLETS);
+    // Bump the schema version offset for tablet repair scheduler columns
     return schema_builder(db::system_keyspace::NAME, db::system_keyspace::TABLETS, id)
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("tablet_count", int32_type, column_kind::static_column)
@@ -57,7 +69,10 @@ schema_ptr make_tablets_schema() {
             .with_column("session", uuid_type)
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
-            .with_version(db::system_keyspace::generate_schema_version(id))
+            .with_column("repair_time", timestamp_type)
+            .with_column("repair_task_info", tablet_task_info_type)
+            .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
+            .with_hash_version()
             .build();
 }
 
@@ -70,6 +85,25 @@ std::vector<data_value> replicas_to_data_value(const tablet_replica_set& replica
                 data_value(int(replica.shard))
         }));
     }
+    return result;
+};
+
+data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info) {
+    data_value result = make_user_value(tablet_task_info_type, {
+        data_value(locator::tablet_task_type_to_string(info.request_type)),
+        data_value(info.tablet_task_id.uuid()),
+        data_value(info.request_time),
+        data_value(info.sched_nr),
+        data_value(info.sched_time)
+    });
+    return result;
+};
+
+data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler_config& config) {
+    data_value result = make_user_value(repair_scheduler_config_type, {
+        data_value(config.auto_repair_enabled),
+        data_value(int64_t(config.auto_repair_threshold.count())),
+    });
     return result;
 };
 
@@ -89,6 +123,7 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
+    m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
 
     tablet_id tid = tablets.first_tablet();
     for (auto&& tablet : tablets.tablets()) {
@@ -167,6 +202,31 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
     return *this;
 }
 
+tablet_mutation_builder&
+tablet_mutation_builder::set_repair_scheduler_config(locator::repair_scheduler_config config) {
+    _m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(config), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_repair_time(dht::token last_token, db_clock::time_point repair_time) {
+    _m.set_clustered_cell(get_ck(last_token), "repair_time", data_value(repair_time), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info) {
+    _m.set_clustered_cell(get_ck(last_token), "repair_task_info", tablet_task_info_to_data_value(repair_task_info), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_repair_task_info(dht::token last_token) {
+    auto col = _s->get_column_definition("repair_task_info");
+    _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    return *this;
+}
+
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
     mutation m(s, partition_key::from_single_value(*s,
@@ -194,6 +254,39 @@ static
 tablet_replica_set deserialize_replica_set(cql3::untyped_result_set_row::view_type raw_value) {
     return tablet_replica_set_from_cell(
             replica_set_type->deserialize_value(raw_value));
+}
+
+locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
+    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
+    auto result = locator::tablet_task_info{
+        locator::tablet_task_type_from_string(value_cast<sstring>(dv[0])),
+        locator::tablet_task_id(value_cast<utils::UUID>(dv[1])),
+        value_cast<db_clock::time_point>(dv[2]),
+        value_cast<int64_t>(dv[3]),
+        value_cast<db_clock::time_point>(dv[4]),
+    };
+    return result;
+}
+
+static
+locator::tablet_task_info deserialize_tablet_task_info(cql3::untyped_result_set_row::view_type raw_value) {
+    return tablet_task_info_from_cell(
+            tablet_task_info_type->deserialize_value(raw_value));
+}
+
+locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
+    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
+    auto result = locator::repair_scheduler_config{
+        value_cast<bool>(dv[0]),
+        std::chrono::seconds(value_cast<int64_t>(dv[1])),
+    };
+    return result;
+}
+
+static
+locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyped_result_set_row::view_type raw_value) {
+    return repair_scheduler_config_from_cell(
+            repair_scheduler_config_type->deserialize_value(raw_value));
 }
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
@@ -343,6 +436,16 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
         new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
     }
 
+    db_clock::time_point repair_time;
+    if (row.has("repair_time")) {
+        repair_time = row.get_as<db_clock::time_point>("repair_time");
+    }
+
+    locator::tablet_task_info repair_task_info;
+    if (row.has("repair_task_info")) {
+        repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
+    }
+
     if (row.has("stage")) {
         auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
         auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
@@ -364,7 +467,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
                 std::move(new_tablet_replicas), pending_replica, session_id});
     }
 
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas)});
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info});
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
     auto current_last_token = map.get_last_token(tid);
@@ -404,6 +507,11 @@ struct tablet_metadata_builder {
 
                 locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
                 current->map.set_resize_decision(std::move(resize_decision));
+            }
+
+            if (row.has("repair_scheduler_config")) {
+                auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
+                current->map.set_repair_scheduler_config(std::move(config));
             }
         }
 

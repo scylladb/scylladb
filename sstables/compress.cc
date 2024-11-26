@@ -9,7 +9,6 @@
 #include <stdexcept>
 #include <cstdlib>
 
-#include <boost/range/algorithm/find_if.hpp>
 #include <seastar/core/align.hh>
 #include <seastar/core/bitops.hh>
 #include <seastar/core/byteorder.hh>
@@ -76,7 +75,7 @@ inline bit_displacement displacement_for(uint64_t prefix_bits, uint8_t size_bits
 std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) {
     const uint8_t chunk_size_log2 = log2ceil(chunk_size);
 
-    auto it = boost::find_if(bucket_infos, [&] (const bucket_info& bi) {
+    auto it = std::ranges::find_if(bucket_infos, [&] (const bucket_info& bi) {
         return bi.chunk_size_log2 == chunk_size_log2;
     });
 
@@ -89,7 +88,7 @@ std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) 
     }
 
     auto b = *it;
-    auto s = *boost::find_if(segment_infos, [&] (const segment_info& si) {
+    auto s = *std::ranges::find_if(segment_infos, [&] (const segment_info& si) {
         return si.data_size_log2 == b.best_data_size_log2 && si.chunk_size_log2 == b.chunk_size_log2;
     });
 
@@ -386,11 +385,12 @@ public:
                 on_internal_error(sstables::sstlog, "Requested digest check but no digest was provided.");
             }
             if (_end_pos - _pos < _compression_metadata->uncompressed_file_length()) {
-                on_internal_error(sstables::sstlog, seastar::format(
-                        "Cannot check digest with a partial read: current pos={}, end pos={}, uncompressed file len={}",
-                        _pos, _end_pos, _compression_metadata->uncompressed_file_length()));
+                sstables::sstlog.debug("Compressed reader cannot calculate digest with partial read: current pos={}, end pos={}, uncompressed file len={}. Disabling digest check.",
+                        _pos, _end_pos, _compression_metadata->uncompressed_file_length());
+                _digests = {false};
+            } else {
+                _digests = {true, *digest, ChecksumType::init_checksum()};
             }
-            _digests = {*digest, ChecksumType::init_checksum()};
         }
         // _beg_pos and _end_pos specify positions in the compressed stream.
         // We need to translate them into a range of uncompressed chunks,
@@ -434,11 +434,13 @@ public:
                 }
 
                 if constexpr (check_digest) {
-                    _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
-                    if constexpr (mode == compressed_checksum_mode::checksum_all) {
-                        uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-                        _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
-                                reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+                    if (_digests.can_calculate_digest) {
+                        _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
+                        if constexpr (mode == compressed_checksum_mode::checksum_all) {
+                            uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+                            _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
+                                    reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+                        }
                     }
                 }
 
@@ -457,7 +459,8 @@ public:
                 _underlying_pos += addr.chunk_len;
 
                 if constexpr (check_digest) {
-                    if (_pos == _compression_metadata->uncompressed_file_length()
+                    if (_digests.can_calculate_digest
+                            && _pos == _compression_metadata->uncompressed_file_length()
                             && _digests.expected_digest != _digests.actual_digest) {
                         throw sstables::malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
                     }
@@ -476,7 +479,10 @@ public:
 
     virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         if constexpr (check_digest) {
-            on_internal_error(sstables::sstlog, "Tried to skip on a data source for which digest check has been requested.");
+            if (_digests.can_calculate_digest) {
+                sstables::sstlog.debug("Compressed reader cannot calculate digest with skipped data: current pos={}, end pos={}, skip len={}. Disabling digest check.", _pos, _end_pos, n);
+                _digests.can_calculate_digest = false;
+            }
         }
         if (_pos + n > _end_pos) {
             on_internal_error(sstables::sstlog, format("Skipping over the end position is disallowed: current pos={}, end pos={}, skip len={}", _pos, _end_pos, n));

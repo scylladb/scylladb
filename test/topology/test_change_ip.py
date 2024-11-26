@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_change_two(manager, random_tables, mode):
+async def test_change_two(manager, random_tables, build_mode):
     """Stop two nodes, change their IPs and start, check the cluster is
     functional"""
     servers = await manager.running_servers()
@@ -104,7 +104,7 @@ async def test_change_two(manager, random_tables, mode):
     # We're checking the crash scenario here - the servers[0] crashes just after
     # saving s1_new_ip but before removing s1_old_ip. After its restart we should
     # see s1_new_ip.
-    if mode != 'release':
+    if build_mode != 'release':
         await manager.api.enable_injection(servers[0].ip_addr, 'crash-before-prev-ip-removed', one_shot=True)
         # There is a code in raft_ip_address_updater::on_endpoint_change which
         # calls gossiper.force_remove_endpoint for an endpoint if it sees
@@ -117,7 +117,7 @@ async def test_change_two(manager, random_tables, mode):
         await manager.api.enable_injection(servers[0].ip_addr, 'ip-change-raft-sync-delay', one_shot=False)
     await manager.server_start(servers[1].server_id)
     servers[1] = ServerInfo(servers[1].server_id, s1_new_ip, s1_new_ip, servers[1].datacenter, servers[1].rack)
-    if mode != 'release':
+    if build_mode != 'release':
         s0_logs = await manager.server_open_log(servers[0].server_id)
         await s0_logs.wait_for('crash-before-prev-ip-removed hit, killing the node')
         await manager.server_stop(servers[0].server_id)

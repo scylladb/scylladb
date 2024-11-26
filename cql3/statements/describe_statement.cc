@@ -41,6 +41,7 @@
 #include "cql3/functions/functions.hh"
 #include "types/user.hh"
 #include "view_info.hh"
+#include "validation.hh"
 #include "index/secondary_index_manager.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -254,6 +255,11 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     auto table = db.try_find_table(ks, name);
     if (!table) {
         throw exceptions::invalid_request_exception(format("Table '{}' not found in keyspace '{}'", name, ks));
+    }
+    
+    auto s = validation::validate_column_family(db, ks, name);
+    if (s->is_view()) { 
+        throw exceptions::invalid_request_exception("Cannot use DESC TABLE on materialized View");
     }
 
     auto schema = table->schema();

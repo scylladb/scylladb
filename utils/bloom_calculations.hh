@@ -11,7 +11,7 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 #include "exceptions/exceptions.hh"
 
 namespace utils {

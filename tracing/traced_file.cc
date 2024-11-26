@@ -7,7 +7,7 @@
  */
 
 #include <seastar/core/future.hh>
-#include <seastar/core/print.hh>
+#include <seastar/core/format.hh>
 
 #include "tracing/traced_file.hh"
 

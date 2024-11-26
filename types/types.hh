@@ -51,7 +51,7 @@ class cql3_type;
 
 }
 
-int64_t timestamp_from_string(sstring_view s);
+int64_t timestamp_from_string(std::string_view s);
 
 struct runtime_exception : public std::exception {
     sstring _why;
@@ -435,7 +435,7 @@ public:
         return to_string(bytes_view(b));
     }
     sstring to_string_impl(const data_value& v) const;
-    bytes from_string(sstring_view text) const;
+    bytes from_string(std::string_view text) const;
     bool is_counter() const;
     bool is_string() const;
     bool is_collection() const;
