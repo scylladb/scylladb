@@ -1,7 +1,7 @@
 SSTableMetadata
 ===============
 
-.. warning:: SSTableMetadata is deprecated since ScyllaDB 5.4, and will be removed in a future release.
+.. warning:: SSTableMetadata is deprecated since ScyllaDB 5.4, and will be removed in the next release.
              Please consider switching to :ref:`scylla sstable dump-statistics` and :ref:`scylla sstable dump-summary`.
 
 SSTableMetadata prints metadata in ``Statistics.db`` and ``Summary.db`` about the specified SSTables to the console.
