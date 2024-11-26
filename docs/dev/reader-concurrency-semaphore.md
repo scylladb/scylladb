@@ -77,58 +77,58 @@ Reader concurrency semaphore diagnostic dumps
 When a read waiting to obtain a permit times out, or if the wait queue of the reader concurrency semaphore overflows, the reader concurrency semaphore will dump diagnostics to the logs, with the aim of helping users to diagnose the problem.
 Example diagnostics dump:
 
-INFO  2024-09-12 08:09:48,046 [shard  0:main] reader_concurrency_semaphore - Semaphore reader_concurrency_semaphore_dump_reader_diganostics with 8/10 count and 106192275/32768 memory resources: timed out, dumping permit diagnostics:
-Trigger permit: count=0, memory=0, table=ks.tbl0, operation=mutation-query, state=waiting_for_admission
-Identified bottleneck(s): memory
+    INFO  2024-09-12 08:09:48,046 [shard  0:main] reader_concurrency_semaphore - Semaphore reader_concurrency_semaphore_dump_reader_diganostics with 8/10 count and 106192275/32768 memory resources: timed out, dumping permit diagnostics:
+    Trigger permit: count=0, memory=0, table=ks.tbl0, operation=mutation-query, state=waiting_for_admission
+    Identified bottleneck(s): memory
 
-permits count   memory  table/operation/state
-3       2       26M     *.*/push-view-updates-2/active
-3       2       16M     ks.tbl1/push-view-updates-1/active
-1       1       15M     ks.tbl2/push-view-updates-1/active
-1       0       13M     ks.tbl1/multishard-mutation-query/active
-1       0       12M     ks.tbl0/push-view-updates-1/active
-1       1       10M     ks.tbl3/push-view-updates-2/active
-1       1       6060K   ks.tbl3/multishard-mutation-query/active
-2       1       1930K   ks.tbl0/push-view-updates-2/active
-1       0       1216K   ks.tbl0/multishard-mutation-query/active
-6       0       0B      ks.tbl1/shard-reader/waiting_for_admission
-3       0       0B      *.*/data-query/waiting_for_admission
-9       0       0B      ks.tbl0/mutation-query/waiting_for_admission
-2       0       0B      ks.tbl2/shard-reader/waiting_for_admission
-4       0       0B      ks.tbl0/shard-reader/waiting_for_admission
-9       0       0B      ks.tbl0/data-query/waiting_for_admission
-7       0       0B      ks.tbl3/mutation-query/waiting_for_admission
-5       0       0B      ks.tbl1/mutation-query/waiting_for_admission
-2       0       0B      ks.tbl2/mutation-query/waiting_for_admission
-8       0       0B      ks.tbl1/data-query/waiting_for_admission
-1       0       0B      *.*/mutation-query/waiting_for_admission
-26      0       0B      permits omitted for brevity
+    permits count   memory  table/operation/state
+    3       2       26M     *.*/push-view-updates-2/active
+    3       2       16M     ks.tbl1/push-view-updates-1/active
+    1       1       15M     ks.tbl2/push-view-updates-1/active
+    1       0       13M     ks.tbl1/multishard-mutation-query/active
+    1       0       12M     ks.tbl0/push-view-updates-1/active
+    1       1       10M     ks.tbl3/push-view-updates-2/active
+    1       1       6060K   ks.tbl3/multishard-mutation-query/active
+    2       1       1930K   ks.tbl0/push-view-updates-2/active
+    1       0       1216K   ks.tbl0/multishard-mutation-query/active
+    6       0       0B      ks.tbl1/shard-reader/waiting_for_admission
+    3       0       0B      *.*/data-query/waiting_for_admission
+    9       0       0B      ks.tbl0/mutation-query/waiting_for_admission
+    2       0       0B      ks.tbl2/shard-reader/waiting_for_admission
+    4       0       0B      ks.tbl0/shard-reader/waiting_for_admission
+    9       0       0B      ks.tbl0/data-query/waiting_for_admission
+    7       0       0B      ks.tbl3/mutation-query/waiting_for_admission
+    5       0       0B      ks.tbl1/mutation-query/waiting_for_admission
+    2       0       0B      ks.tbl2/mutation-query/waiting_for_admission
+    8       0       0B      ks.tbl1/data-query/waiting_for_admission
+    1       0       0B      *.*/mutation-query/waiting_for_admission
+    26      0       0B      permits omitted for brevity
 
-96      8       101M    total
+    96      8       101M    total
 
-Stats:
-permit_based_evictions: 0
-time_based_evictions: 0
-inactive_reads: 0
-total_successful_reads: 0
-total_failed_reads: 0
-total_reads_shed_due_to_overload: 0
-total_reads_killed_due_to_kill_limit: 0
-reads_admitted: 1
-reads_enqueued_for_admission: 82
-reads_enqueued_for_memory: 0
-reads_admitted_immediately: 1
-reads_queued_because_ready_list: 0
-reads_queued_because_need_cpu_permits: 82
-reads_queued_because_memory_resources: 0
-reads_queued_because_count_resources: 0
-reads_queued_with_eviction: 0
-total_permits: 97
-current_permits: 96
-need_cpu_permits: 0
-awaits_permits: 0
-disk_reads: 0
-sstables_read: 0
+    Stats:
+    permit_based_evictions: 0
+    time_based_evictions: 0
+    inactive_reads: 0
+    total_successful_reads: 0
+    total_failed_reads: 0
+    total_reads_shed_due_to_overload: 0
+    total_reads_killed_due_to_kill_limit: 0
+    reads_admitted: 1
+    reads_enqueued_for_admission: 82
+    reads_enqueued_for_memory: 0
+    reads_admitted_immediately: 1
+    reads_queued_because_ready_list: 0
+    reads_queued_because_need_cpu_permits: 82
+    reads_queued_because_memory_resources: 0
+    reads_queued_because_count_resources: 0
+    reads_queued_with_eviction: 0
+    total_permits: 97
+    current_permits: 96
+    need_cpu_permits: 0
+    awaits_permits: 0
+    disk_reads: 0
+    sstables_read: 0
 
 Note that the diagnostics dump logging is rate limited to 1 in 30 seconds (as timeouts usually come in bursts). You might also see a message to this effect.
 
