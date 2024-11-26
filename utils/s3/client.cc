@@ -16,7 +16,6 @@
 #else
 #include <rapidxml/rapidxml.hpp>
 #endif
-#include <boost/algorithm/string/classification.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
