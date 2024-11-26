@@ -7,6 +7,7 @@
 
 # S3 proxy server to inject retryable errors for fuzzy testing.
 
+import logging
 import os
 import random
 import sys
@@ -91,6 +92,15 @@ class InjectingHandler(BaseHTTPRequestHandler):
         self.max_retries = max_retries
         super().__init__(*args, **kwargs)
         self.close_connection = False
+
+    def log_message(self, format, *args):
+        if not self.logger.isEnabledFor(logging.INFO):
+            return
+        self.logger.info("%s - - [%s] %s",
+                         self.client_address[0],
+                         self.log_date_time_string(),
+                         format % args)
+
 
     def parsed_qs(self):
         parsed_url = urlparse(self.path)
