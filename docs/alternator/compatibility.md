@@ -119,7 +119,7 @@ To create a user for authentication, use the CQL "CREATE ROLE" command.
 When a client signs a request, it uses the name of this role as the access
 key ID, and the _salted hash_ of the role's password is the secret key.
 This secret key for role XYZ can be retrieved by the CQL request
-`SELECT salted_hash from system.roles WHERE role = XYZ;`.
+`SELECT salted_hash from system_auth.roles WHERE role = XYZ;`.
 
 Alternator also implements authorization, or _access control_ - defining
 which authenticated user is allowed to do which operation, such as reading
