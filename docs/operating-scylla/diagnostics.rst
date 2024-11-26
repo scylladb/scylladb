@@ -87,6 +87,15 @@ ScyllaDB has various internal system tables containing valuable information on i
 Some of these are virtual tables, tables whose content is derived from in-memory state, rather than on-disk storage as is the case for regular tables. Virtual tables look like and act like regular tables.
 For a complete list of all internal tables (including virtual ones), see `System Keyspace <https://github.com/scylladb/scylladb/blob/master/docs/dev/system_keyspace.md>`_.
 
+Diagnostics dump on SIGQUIT
+---------------------------
+
+Sending ``SIGQUIT`` to ScyllaDB will result in a diagnostics dump to the logs. The diagnostics logs are logged via the dedicated ``diagnostics`` logger.
+The diagnostics is dumped on every shard. The diagnostics dump of a shard has multiple parts:
+
+* A summary of the state of the memory allocator and some other stats. The format is very similar to that used by ``scylla memory`` (from ``scylla-gdb.py``). See `Debugging Out Of Memory (OOM) crashes <https://github.com/scylladb/scylladb/blob/master/docs/dev/debugging.md#debugging-out-of-memory-oom-crashes>`_.
+* Reader semaphore concurrency diagnostics dump for each semaphore in the database, see `reader_concurrency_semaphore.md <https://github.com/scylladb/scylladb/blob/master/docs/dev/reader-concurrency-semaphore.md#reader-concurrency-semaphore-diagnostic-dumps>`_ for more details.
+
 Other Tools
 -----------
 
