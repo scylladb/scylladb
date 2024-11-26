@@ -83,4 +83,8 @@ struct direct_fd_ping_reply {
     std::variant<std::monostate, wrong_destination, group_liveness_info> result;
 };
 
+using raft_ticker_type = seastar::timer<lowres_clock>;
+// TODO: should be configurable.
+static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::milliseconds(100);
+
 } // namespace service

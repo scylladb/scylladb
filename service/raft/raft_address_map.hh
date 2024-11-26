@@ -14,10 +14,6 @@
 
 namespace service {
 
-using raft_ticker_type = seastar::timer<lowres_clock>;
-// TODO: should be configurable.
-static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::milliseconds(100);
-
 using raft_address_map = address_map_t<seastar::lowres_clock>;
 
 } // end of namespace service
