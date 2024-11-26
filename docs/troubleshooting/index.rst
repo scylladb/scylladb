@@ -14,6 +14,7 @@ Troubleshooting ScyllaDB
    storage/index
    CQL/index
    monitor/index
+   install-remove/index
 
 
 ScyllaDB's troubleshooting section contains articles which are targeted to pinpoint and answer problems with ScyllaDB. For broader issues and workarounds, consult the :doc:`Knowledge base </kb/index>`.
@@ -33,6 +34,7 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   * :doc:`Data Storage and SSTables <storage/index>`
   * :doc:`CQL errors <CQL/index>`
   * :doc:`ScyllaDB Monitoring and ScyllaDB Manager <monitor/index>`
+  * :doc:`Installation and Removal <install-remove/index>`
 
 Also check out the `Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on ScyllaDB University, which covers how to troubleshoot different issues when running a ScyllaDB cluster.
 
