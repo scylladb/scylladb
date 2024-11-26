@@ -481,32 +481,6 @@ public:
     future<> unregister_node_ops_cmd();
     future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
 
-    // Wrapper for DEFINITIONS_UPDATE
-    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
-                rpc::optional<std::vector<canonical_mutation>> cm)>&& func);
-    future<> unregister_definitions_update();
-    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
-
-    // Wrapper for MIGRATION_REQUEST
-    void register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> (
-                const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
-    future<> unregister_migration_request();
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
-            schema_pull_options options);
-    future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
-            abort_source& as, schema_pull_options options);
-
-    // Wrapper for GET_SCHEMA_VERSION
-    void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
-    future<> unregister_get_schema_version();
-    future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
-
-    // Wrapper for SCHEMA_CHECK
-    void register_schema_check(std::function<future<table_schema_version>()>&& func);
-    future<> unregister_schema_check();
-    future<table_schema_version> send_schema_check(msg_addr);
-    future<table_schema_version> send_schema_check(msg_addr, abort_source&);
-
     // Wrapper for TASKS_GET_CHILDREN
     void register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func);
     future<> unregister_tasks_get_children();
