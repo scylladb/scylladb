@@ -6,3 +6,5 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
     enable_tablets: true
+    experimental_features:
+      - 'keyspace-storage-options'

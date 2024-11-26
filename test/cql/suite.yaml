@@ -1,1 +1,4 @@
 type: Approval
+extra_scylla_cmdline_options:
+  - '--experimental-features=udf'
+  - '--enable-user-defined-functions=1'

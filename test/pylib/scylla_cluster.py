@@ -94,14 +94,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
         'developer_mode': True,
 
-        # Allow testing experimental features. Following issue #9467, we need
-        # to add here specific experimental features as they are introduced.
-        'enable_user_defined_functions': True,
-        'experimental_features': ['udf',
-                                  'alternator-streams',
-                                  'broadcast-tables',
-                                  'keyspace-storage-options'],
-
         'skip_wait_for_gossip_to_settle': 0,
         'ring_delay_ms': 0,
         'num_tokens': 16,
