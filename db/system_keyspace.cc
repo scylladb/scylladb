@@ -1687,7 +1687,7 @@ future<> system_keyspace::drop_truncation_rp_records() {
     auto rs = co_await execute_cql(req);
 
     bool any = false;
-    co_await coroutine::parallel_for_each(rs->begin(), rs->end(), [&] (const cql3::untyped_result_set_row& row) -> future<> {
+    co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
         auto shard = row.get_as<int32_t>("shard");
         auto segment_id = row.get_as<int64_t>("segment_id");
@@ -1740,7 +1740,7 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     sstring req = format("SELECT shard from system.{}", COMMITLOG_CLEANUPS);
     auto rs = co_await execute_cql(req);
 
-    co_await coroutine::parallel_for_each(rs->begin(), rs->end(), [&] (const cql3::untyped_result_set_row& row) -> future<> {
+    co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto shard = row.get_as<int32_t>("shard");
         co_await execute_cql(format("DELETE FROM system.{} WHERE shard = {}", COMMITLOG_CLEANUPS, shard));
     });

@@ -574,7 +574,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     retrying_dispatcher dispatcher(*this, tr_state);
     query::mapreduce_result result;
 
-    co_await coroutine::parallel_for_each(vnodes_per_addr.begin(), vnodes_per_addr.end(),
+    co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
         netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
         query::mapreduce_result& result_ = result;

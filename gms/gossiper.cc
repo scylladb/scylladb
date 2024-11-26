@@ -2097,7 +2097,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
 
     for (;;) {
         size_t nodes_down = 0;
-        co_await coroutine::parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) -> future<> {
+        co_await coroutine::parallel_for_each(nodes, [this, &request, &responses, &nodes_talked, &nodes_down] (gms::inet_address node) -> future<> {
             logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
             try {
                 auto response = co_await ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(&_messaging, msg_addr(node), netw::messaging_service::clock_type::now() + std::chrono::seconds(5), request);
