@@ -299,8 +299,6 @@ public:
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
-    raft_address_map& modifiable_address_map();
-
     // Returns scheduling group group0 is configured to run with
     seastar::scheduling_group get_scheduling_group() {
         return _sg;

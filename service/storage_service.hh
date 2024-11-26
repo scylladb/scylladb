@@ -43,7 +43,6 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 #include "utils/user_provided_param.hh"

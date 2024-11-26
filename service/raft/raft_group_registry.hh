@@ -108,8 +108,6 @@ private:
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
-    // inet_address:es for remote raft servers known to us
-    raft_address_map& _address_map;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
@@ -131,7 +129,7 @@ private:
     raft::server_id _my_id;
 
 public:
-    raft_group_registry(raft::server_id my_id, raft_address_map&, netw::messaging_service& ms,
+    raft_group_registry(raft::server_id my_id, netw::messaging_service& ms,
             direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
@@ -183,7 +181,6 @@ public:
     void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
-    raft_address_map& address_map() { return _address_map; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 };
 

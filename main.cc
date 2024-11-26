@@ -109,7 +109,6 @@
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -1552,16 +1551,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_gossip(ctx).get();
             });
 
-            static sharded<service::raft_address_map> raft_address_map;
-            supervisor::notify("starting Raft address map");
-            raft_address_map.start().get();
-            auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
-                raft_address_map.stop().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_raft_address_map",
-                [] { std::raise(SIGSTOP); });
-
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");
             fd_pinger.start(std::ref(messaging)).get();
@@ -1582,8 +1571,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(raft::server_id{host_id.id}, std::ref(raft_address_map),
-                    std::ref(messaging), std::ref(fd)).get();
+            raft_gr.start(raft::server_id{host_id.id}, std::ref(messaging), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during

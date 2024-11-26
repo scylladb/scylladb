@@ -94,7 +94,6 @@
 #include "locator/util.hh"
 #include "idl/storage_service.dist.hh"
 #include "service/storage_proxy.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/join_node.hh"
 #include "idl/join_node.dist.hh"
 #include "idl/migration_manager.dist.hh"

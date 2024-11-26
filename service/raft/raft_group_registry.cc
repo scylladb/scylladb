@@ -8,7 +8,6 @@
 #include "service/raft/raft_group_registry.hh"
 #include "raft/raft.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_address_map.hh"
 #include "db/system_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
@@ -79,10 +78,8 @@ public:
 
 raft_group_registry::raft_group_registry(
         raft::server_id my_id,
-        raft_address_map& address_map,
         netw::messaging_service& ms, direct_failure_detector::failure_detector& fd)
     : _ms(ms)
-    , _address_map{address_map}
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(my_id))
     , _my_id(my_id)

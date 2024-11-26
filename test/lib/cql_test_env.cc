@@ -31,7 +31,6 @@
 #include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
-#include "service/raft/raft_address_map.hh"
 #include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
@@ -162,7 +161,6 @@ private:
     sharded<streaming::stream_manager> _stream_manager;
     sharded<service::mapreduce_service> _mapreduce_service;
     sharded<direct_failure_detector::failure_detector> _fd;
-    sharded<service::raft_address_map> _raft_address_map;
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
@@ -778,11 +776,6 @@ private:
             });
             _gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            _raft_address_map.start().get();
-            auto stop_address_map = defer([this] {
-                _raft_address_map.stop().get();
-            });
-
             _fd_pinger.start(std::ref(_ms)).get();
             auto stop_fd_pinger = defer([this] { _fd_pinger.stop().get(); });
 
@@ -798,7 +791,6 @@ private:
 
             _group0_registry.start(
                 raft::server_id{host_id.id},
-                std::ref(_raft_address_map),
                 std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 

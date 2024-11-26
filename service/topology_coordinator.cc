@@ -38,7 +38,6 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
-#include "service/raft/raft_address_map.hh" // needed for raft_tick_interval (FIXME: move it somewhere else)
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/tablet_allocator.hh"

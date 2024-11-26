@@ -15,7 +15,6 @@
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "service/raft/raft_address_map.hh"
 
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
@@ -1722,10 +1721,6 @@ void raft_group0::register_metrics() {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
             sm::description("status of the raft group, 1 - normal, 2 - aborted"))
     });
-}
-
-raft_address_map& raft_group0::modifiable_address_map(){
-    return _raft_gr.address_map();
 }
 
 std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
