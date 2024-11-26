@@ -188,10 +188,11 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
 ])
 @pytest.mark.parametrize("merge", [True, False])
 @pytest.mark.parametrize("output_format", ["text", "json"])
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
-def test_scylla_sstable_dump_data(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, merge, output_format):
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, merge, output_format):
+    if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
+        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
+
     with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
         args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
         if merge:
@@ -485,9 +486,10 @@ def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_dat
         clustering_table_with_udt,
         table_with_counters,
 ])
-def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory, has_tablets):
-    if has_tablets and table_factory == table_with_counters: # issue #18180
-        return
+def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_data_dir, table_factory):
+    if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
+        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
+
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     slice_script_path = os.path.join(scripts_path, 'slice.lua')
     dump_script_path = os.path.join(scripts_path, 'dump.lua')
