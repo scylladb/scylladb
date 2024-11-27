@@ -190,3 +190,40 @@ def test_number_magnitude_key(test_table_sn):
             response = test_table_sn.put_item(Item={'p': p, 'c': num, 'a': x, 'val2': val2 + 'a'*10}, ReturnConsumedCapacity='TOTAL')
             assert 2 == response.get('ConsumedCapacity')["CapacityUnits"]
 
+# The simple delete item validates that when deleting a short item from a table
+# we will get 1 WCU
+def test_simple_delete_item(test_table_sb):
+    p = random_string()
+    val = random_string()
+    c = random_bytes()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'att': val}, ReturnConsumedCapacity='TOTAL')
+    response = test_table_sb.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 1 == response['ConsumedCapacity']["CapacityUnits"]
+
+# The delete missing item validates that when deleting a missing item
+# we will get 1 WCU
+def test_delete_missing_item(test_table_sb):
+    p = random_string()
+    val = random_string()
+    c = random_bytes()
+    response = test_table_sb.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 1 == response['ConsumedCapacity']["CapacityUnits"]
+
+# Validates that when the old value is returned the WCU takes
+# Its size into account in the WCU calculation.
+# WCU is calculated based on 1KB block size.
+# The test uses Return value so that the API
+# would take the previous item length into account
+def test_long_delete(test_table):
+    p = random_string()
+    c = random_string()
+    val = random_string()
+    combined_keys = "pcattanother" # Takes all the keys and make one single string out of them
+    total_length = len(p) + len(c) + len(val) + len(combined_keys)
+
+    val2 = 'a' * (1 + 2*KB - total_length)  # val2 is a string that makes the total message length equals to 2KB+1
+    test_table.put_item(Item={'p': p, 'c': c, 'att': val, 'another': val2}, ReturnConsumedCapacity='TOTAL')
+    response = test_table.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='TOTAL', ReturnValues='ALL_OLD')
+    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
