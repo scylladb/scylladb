@@ -1546,8 +1546,8 @@ async def create_and_populate_table(manager: ManagerClient, rf: int = 3, initial
 
     cql = manager.get_cql()
     try:
-        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}}")
-        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}}")
+        await cql.run_async(f"CREATE TABLE IF NOT EXISTS {ks}.{table} (pk int PRIMARY KEY, c int)")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({k}, 1);") for k in range(num_keys)])
         yield TestContext(ks, table, rf, initial_tablets, num_keys)
     finally:
