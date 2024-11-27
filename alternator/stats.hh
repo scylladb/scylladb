@@ -85,7 +85,17 @@ public:
     uint64_t requests_blocked_memory = 0;
     uint64_t requests_shed = 0;
     uint64_t rcu_total = 0;
-    uint64_t wcu_total = 0;
+    // wcu can results from put, update, delete and index
+    // Index related will be done on top of the operation it comes with
+    enum wcu_types {
+        PUT_ITEM,
+        UPDATE_ITEM,
+        DELETE_ITEM,
+        INDEX,
+        NUM_TYPES
+    };
+
+    uint64_t wcu_total[NUM_TYPES] = {0};
     // CQL-derived stats
     cql3::cql_stats cql_stats;
 private:

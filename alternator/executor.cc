@@ -1853,7 +1853,8 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         tracing::trace_state_ptr trace_state,
         service_permit permit,
         bool needs_read_before_write,
-        stats& stats) {
+        stats& stats,
+        uint64_t& wcu_total) {
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
@@ -1863,21 +1864,21 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats).then(
-                    [this, &proxy, &stats, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&stats] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&wcu_total] () mutable {
+                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &stats] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
+            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
     // If we're still here, we need to do this write using LWT:
@@ -1889,11 +1890,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             nullptr;
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &stats] (bool is_applied) mutable {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &wcu_total] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
-        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, stats.wcu_total);
+        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
     });
 }
 
@@ -2027,7 +2028,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::PUT_ITEM]).finally([op, start_time, this] {
         _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
@@ -2119,7 +2120,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::DELETE_ITEM]).finally([op, start_time, this] {
         _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
@@ -3417,7 +3418,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
+    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::UPDATE_ITEM]).finally([op, start_time, this] {
         _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     });
 }
