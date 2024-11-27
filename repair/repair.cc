@@ -1334,6 +1334,10 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     co_return id.id;
 }
 
+tasks::is_user_task repair::user_requested_repair_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
+}
+
 future<> repair::user_requested_repair_task_impl::run() {
     auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = module->get_repair_service();
@@ -2477,6 +2481,10 @@ future<> repair_service::repair_tablet(locator::tablet_metadata_guard& guard, lo
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid);
+}
+
+tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
 }
 
 void repair::tablet_repair_task_impl::release_resources() noexcept {

@@ -93,6 +93,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"user_task",
+                     "description":"A flag indicating whether a task was started by user (false by default)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             },

@@ -1054,6 +1054,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
                     .task_ttl = cfg->task_ttl_seconds,
+                    .user_task_ttl = cfg->user_task_ttl_seconds,
                     .broadcast_address = broadcast_addr
                 };
             });

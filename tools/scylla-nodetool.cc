@@ -2911,6 +2911,18 @@ void tasks_abort_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 }
 
+void tasks_user_ttl_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (!vm.contains("set")) {
+        auto res = client.get("/task_manager/user_ttl");
+        fmt::print("Current user ttl: {}\n", res);
+        return;
+    }
+    auto new_ttl = vm["set"].as<uint32_t>();
+    std::unordered_map<sstring, sstring> params = {{ "user_ttl", fmt::to_string(new_ttl) }};
+
+    auto res = client.post("/task_manager/user_ttl", std::move(params));
+}
+
 void tasks_list_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.contains("module")) {
         throw std::invalid_argument("required parameter is missing: module");
@@ -4219,6 +4231,20 @@ For more information, see: {}"
                             },
                         },
                         {
+                            "user-ttl",
+                            "Gets or sets user task ttl",
+fmt::format(R"(
+Gets or sets the time in seconds for which tasks started by user will be kept in task manager after
+they are finished.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/user-ttl.html")),
+                            {
+                                typed_option<uint32_t>("set", "New user_task_ttl value", -1),
+                            },
+                            { },
+                        },
+                        {
                             "list",
                             "Gets a list of tasks in a given module",
 fmt::format(R"(
@@ -4317,6 +4343,9 @@ For more information, see: {}"
                 {
                     {
                         "abort", { tasks_abort_operation }
+                    },
+                    {
+                        "user-ttl", { tasks_user_ttl_operation }
                     },
                     {
                         "list", { tasks_list_operation }

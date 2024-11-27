@@ -488,6 +488,10 @@ public:
     virtual tasks::is_internal is_internal() const noexcept override {
         return tasks::is_internal::no;
     }
+
+    virtual tasks::is_user_task is_user_task() const noexcept override {
+        return tasks::is_user_task::yes;
+    }
 };
 
 future<> sstables_loader::download_task_impl::run() {

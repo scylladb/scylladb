@@ -543,8 +543,11 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Set to `false` to fall-back to the old algorithm.
 # enable_parallelized_aggregation: true
 
-# Time for which task manager task is kept in memory after it completes.
+# Time for which task manager task started internally is kept in memory after it completes.
 # task_ttl_in_seconds: 0
+
+# Time for which task manager task started by user is kept in memory after it completes.
+# user_task_ttl_in_seconds: 3600
 
 # In materialized views, restrictions are allowed only on the view's primary key columns.
 # In old versions Scylla mistakenly allowed IS NOT NULL restrictions on columns which were not part

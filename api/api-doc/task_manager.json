@@ -198,7 +198,7 @@
                "parameters":[
                   {
                      "name":"ttl",
-                     "description":"The number of seconds for which the tasks will be kept in memory after it finishes",
+                     "description":"The number of seconds for which the task started internally will be kept in memory after it finishes",
                      "required":true,
                      "allowMultiple":false,
                      "type":"long",
@@ -211,6 +211,41 @@
                "summary":"Get current ttl value",
                "type":"long",
                "nickname":"get_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/user_ttl",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set user task ttl in seconds and get last value",
+               "type":"long",
+               "nickname":"get_and_update_user_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"user_ttl",
+                     "description":"The number of seconds for which the task started by user will be kept in memory after it finishes",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get current user task ttl value",
+               "type":"long",
+               "nickname":"get_user_ttl",
                "produces":[
                   "application/json"
                ],

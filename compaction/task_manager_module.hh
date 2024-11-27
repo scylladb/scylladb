@@ -94,6 +94,8 @@ public:
                 fm.value_or(flush_mode::all_tables), consider_only_existing_data)
         , _db(db)
     {}
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -125,6 +127,8 @@ public:
         , _cv(cv)
         , _current_task(current_task)
     {}
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -204,17 +208,22 @@ private:
     sharded<replica::database>& _db;
     std::vector<table_info> _table_infos;
     const flush_mode _flush_mode;
+    tasks::is_user_task _is_user_task;
 public:
     cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<table_info> table_infos,
-            flush_mode mode) noexcept
+            flush_mode mode,
+            tasks::is_user_task is_user_task) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _flush_mode(mode)
+        , _is_user_task(is_user_task)
     {}
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -231,6 +240,8 @@ public:
     std::string type() const final {
         return "global cleanup compaction";
     }
+
+    tasks::is_user_task is_user_task() const noexcept override;
 private:
     future<> run() final;
 };
@@ -316,6 +327,8 @@ public:
         , _table_infos(std::move(table_infos))
         , _needed(needed)
     {}
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -411,6 +424,8 @@ public:
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
     }
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };
@@ -495,6 +510,8 @@ public:
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
     }
+
+    tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
 };

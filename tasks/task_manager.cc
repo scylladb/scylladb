@@ -157,6 +157,10 @@ is_internal task_manager::task::impl::is_internal() const noexcept {
     return tasks::is_internal(bool(_parent_id));
 }
 
+tasks::is_user_task task_manager::task::impl::is_user_task() const noexcept {
+    return tasks::is_user_task::no;
+}
+
 static future<> abort_children(task_manager::module_ptr module, task_id parent_id) noexcept {
     co_await utils::get_local_injector().inject("tasks_abort_children", utils::wait_for_message(10s));
 
@@ -314,12 +318,13 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         auto module = _impl->_module;
+        auto user_task = is_user_task();
         bool drop_after_complete = (get_parent_id() && _impl->_parent_kind == task_kind::node) || is_internal();
-        (void)done().finally([module, drop_after_complete] {
+        (void)done().finally([module, drop_after_complete, user_task] {
             if (drop_after_complete) {
                 return make_ready_future<>();
             }
-            return sleep_abortable(module->get_task_manager().get_task_ttl(), module->abort_source());
+            return sleep_abortable(user_task ? module->get_task_manager().get_user_task_ttl() : module->get_task_manager().get_task_ttl(), module->abort_source());
         }).then_wrapped([module, id = id()] (auto f) {
             f.ignore_ready_future();
             module->unregister_task(id);
@@ -350,6 +355,10 @@ is_abortable task_manager::task::is_abortable() const noexcept {
 
 is_internal task_manager::task::is_internal() const noexcept {
     return _impl->is_internal();
+}
+
+is_user_task task_manager::task::is_user_task() const noexcept {
+    return _impl->is_user_task();
 }
 
 void task_manager::task::abort() noexcept {
@@ -621,20 +630,18 @@ future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_p
 
 task_manager::task_manager(config cfg, class abort_source& as) noexcept
     : _cfg(std::move(cfg))
-    , _update_task_ttl_action([this] { return update_task_ttl(); })
-    , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
-    , _task_ttl(_cfg.task_ttl.get())
+    , _task_ttl(_cfg.task_ttl)
+    , _user_task_ttl(_cfg.user_task_ttl)
 {
     _abort_subscription = as.subscribe([this] () noexcept {
         _as.request_abort();
     });
-    tmlogger.debug("Started task manager (TTL={})", get_task_ttl());
+    tmlogger.debug("Started task manager (TTL={}) (USER TTL={})", get_task_ttl(), get_user_task_ttl());
 }
 
 task_manager::task_manager() noexcept
-    : _update_task_ttl_action([this] { return update_task_ttl(); })
-    , _task_ttl_observer(_cfg.task_ttl.observe(_update_task_ttl_action.make_observer()))
-    , _task_ttl(0)
+    : _task_ttl(0)
+    , _user_task_ttl(0)
 {}
 
 gms::inet_address task_manager::get_broadcast_address() const noexcept {
@@ -740,6 +747,10 @@ abort_source& task_manager::abort_source() noexcept {
 
 std::chrono::seconds task_manager::get_task_ttl() const noexcept {
     return std::chrono::seconds(_task_ttl);
+}
+
+std::chrono::seconds task_manager::get_user_task_ttl() const noexcept {
+    return std::chrono::seconds(_user_task_ttl);
 }
 
 void task_manager::register_module(std::string name, module_ptr module) {

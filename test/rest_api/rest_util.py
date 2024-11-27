@@ -86,6 +86,17 @@ def set_tmp_task_ttl(rest_api, seconds):
         resp = rest_api.send("POST", "task_manager/ttl", { "ttl" : old_ttl })
         resp.raise_for_status()
 
+@contextmanager
+def set_tmp_user_task_ttl(rest_api, seconds):
+    resp = rest_api.send("POST", "task_manager/user_ttl", { "user_ttl" : seconds })
+    resp.raise_for_status()
+    old_ttl = resp.json()
+    try:
+        yield old_ttl
+    finally:
+        resp = rest_api.send("POST", "task_manager/user_ttl", { "user_ttl" : old_ttl })
+        resp.raise_for_status()
+
 # Unfortunately by default Python threads print their exceptions
 # (e.g., assertion failures) but don't propagate them to the join(),
 # so the overall test doesn't fail. The following Thread wrapper

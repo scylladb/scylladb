@@ -217,6 +217,21 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         uint32_t ttl = cfg.task_ttl_seconds();
         co_return json::json_return_type(ttl);
     });
+
+    tm::get_and_update_user_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        uint32_t user_ttl = cfg.user_task_ttl_seconds();
+        try {
+            co_await cfg.user_task_ttl_seconds.set_value_on_all_shards(req->query_parameters["user_ttl"], utils::config_file::config_source::API);
+        } catch (...) {
+            throw bad_param_exception(fmt::format("{}", std::current_exception()));
+        }
+        co_return json::json_return_type(user_ttl);
+    });
+
+    tm::get_user_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        uint32_t user_ttl = cfg.user_task_ttl_seconds();
+        co_return json::json_return_type(user_ttl);
+    });
 }
 
 void unset_task_manager(http_context& ctx, routes& r) {

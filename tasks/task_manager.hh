@@ -38,6 +38,7 @@ namespace tasks {
 
 using is_abortable = bool_class <struct abortable_tag>;
 using is_internal = bool_class<struct internal_tag>;
+using is_user_task = bool_class<struct user_task_tag>;
 
 extern logging::logger tmlogger;
 
@@ -58,6 +59,7 @@ public:
     enum class task_group;
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
+        utils::updateable_value<uint32_t> user_task_ttl;
         gms::inet_address broadcast_address;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
@@ -80,9 +82,8 @@ private:
     config _cfg;
     seastar::abort_source _as;
     optimized_optional<seastar::abort_source::subscription> _abort_subscription;
-    serialized_action _update_task_ttl_action;
-    utils::observer<uint32_t> _task_ttl_observer;
-    uint32_t _task_ttl;
+    utils::updateable_value<uint32_t> _task_ttl;
+    utils::updateable_value<uint32_t> _user_task_ttl;
     netw::messaging_service* _messaging = nullptr;
 public:
     class task_not_found : public std::exception {
@@ -199,6 +200,7 @@ public:
             virtual future<task_manager::task::progress> get_progress() const;
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
+            virtual tasks::is_user_task is_user_task() const noexcept;
             virtual void abort() noexcept;
             bool is_complete() const noexcept;
             bool is_done() const noexcept;
@@ -239,6 +241,7 @@ public:
         future<progress> get_progress() const;
         tasks::is_abortable is_abortable() const noexcept;
         tasks::is_internal is_internal() const noexcept;
+        tasks::is_user_task is_user_task() const noexcept;
         void abort() noexcept;
         bool abort_requested() const noexcept;
         future<> done() const noexcept;
@@ -330,18 +333,6 @@ public:
         void unregister_task(task_id id) noexcept;
         virtual future<> stop() noexcept;
     public:
-        template<typename T>
-        requires std::is_base_of_v<task_manager::task::impl, T>
-        future<task_id> make_task(unsigned shard, task_id id, std::string keyspace, std::string table, std::string entity, task_info parent_d) {
-            return _tm.container().invoke_on(shard, [id, module = _name, keyspace = std::move(keyspace), table = std::move(table), entity = std::move(entity), parent_d] (task_manager& tm) {
-                auto module_ptr = tm.find_module(module);
-                auto task_impl_ptr = seastar::make_shared<T>(module_ptr, id ? id : task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id);
-                return module_ptr->make_task(std::move(task_impl_ptr), parent_d).then([] (auto task) {
-                    return task->id();
-                });
-            });
-        }
-
         // Must be called on target shard.
         // If task has a parent, data concerning its children is updated and sequence number is inherited
         // from a parent and set. Otherwise, it must be set by caller.
@@ -431,11 +422,7 @@ public:
     seastar::abort_source& abort_source() noexcept;
 public:
     std::chrono::seconds get_task_ttl() const noexcept;
-private:
-    future<> update_task_ttl() noexcept {
-        _task_ttl = _cfg.task_ttl.get();
-        return make_ready_future<>();
-    }
+    std::chrono::seconds get_user_task_ttl() const noexcept;
 protected:
     void unregister_module(std::string name) noexcept;
     void register_task(task_ptr task);
