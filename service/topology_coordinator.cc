@@ -2592,7 +2592,7 @@ public:
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) {}
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
-    virtual void on_up(const gms::inet_address& endpoint) {};
+    virtual void on_up(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
     virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };
 
@@ -2602,12 +2602,19 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // we upgrade to v2.
     const auto view_builder_version = co_await _sys_ks.get_view_builder_version();
     if (view_builder_version == db::system_keyspace::view_builder_version_t::v1 && _feature_service.view_build_status_on_group0) {
+        rtlogger.info("Migrating view_builder to v1_5");
         auto tmptr = get_token_metadata_ptr();
         co_await db::view::view_builder::migrate_to_v1_5(tmptr, _sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
         co_return std::nullopt;
     }
 
     if (view_builder_version == db::system_keyspace::view_builder_version_t::v1_5) {
+        if (!get_dead_nodes().empty()) {
+            rtlogger.debug("Not all nodes are alive. Skipping system table migration until there are any dead nodes.");
+            co_return std::move(guard);
+        }
+
+        rtlogger.info("Migrating view_builder to v2");
         // do a barrier to ensure all nodes applied the migration to v1_5 before we continue to v2
         guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
 
