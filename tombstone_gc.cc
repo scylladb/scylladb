@@ -11,6 +11,7 @@
 #include "schema/schema.hh"
 #include "gc_clock.hh"
 #include "tombstone_gc.hh"
+#include "tombstone_gc-internals.hh"
 #include "locator/token_metadata.hh"
 #include "exceptions/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -20,7 +21,7 @@
 
 extern logging::logger dblog;
 
-seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_repair_history_for_table(const table_id& id) {
+repair_history_map_ptr tombstone_gc_state::get_or_create_repair_history_for_table(const table_id& id) {
     if (!_reconcile_history_maps) {
         return {};
     }
@@ -33,7 +34,7 @@ seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_or_create_rep
     return reconcile_history_maps[id];
 }
 
-seastar::lw_shared_ptr<repair_history_map> tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
+repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
     if (!_reconcile_history_maps) {
         return {};
     }

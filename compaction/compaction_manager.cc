@@ -26,6 +26,7 @@
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"
+#include "tombstone_gc-internals.hh"
 #include <cmath>
 #include <boost/range/algorithm/remove_if.hpp>
 

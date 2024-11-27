@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <boost/icl/interval_map.hpp>
-
 #include <seastar/core/shared_ptr.hh>
 #include "gc_clock.hh"
 #include "dht/token.hh"
@@ -35,11 +33,11 @@ class database;
 //
 // The map is used to determine the time when the tombstones can be safely removed from the table (for the tables with
 // the "repair" tombstone GC mode).
-using repair_history_map = boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max>;
+class repair_history_map_ptr;
 
 class per_table_history_maps {
 public:
-    std::unordered_map<table_id, seastar::lw_shared_ptr<repair_history_map>> _repair_maps;
+    std::unordered_map<table_id, repair_history_map_ptr> _repair_maps;
 
     // Separating the group0 GC time - it is not kept per table, but for the whole group0:
     // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
@@ -56,8 +54,8 @@ class tombstone_gc_state {
     per_table_history_maps* _reconcile_history_maps;
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
 
-    [[nodiscard]] seastar::lw_shared_ptr<repair_history_map> get_repair_history_for_table(const table_id& id) const;
-    [[nodiscard]] seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_for_table(const table_id& id);
+    [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
+    [[nodiscard]] repair_history_map_ptr get_or_create_repair_history_for_table(const table_id& id);
 
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_group0_gc_time() const;
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_or_create_group0_gc_time();
