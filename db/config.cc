@@ -830,7 +830,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "ZSTD compression of RPC will consume at most this fraction of each internode_compression_zstd_longterm_cpu_quota_refresh_period_ms time slice.")
     , internode_compression_zstd_longterm_cpu_quota_refresh_period_ms(this, "internode_compression_zstd_longterm_cpu_quota_refresh_period_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "Advanced. ZSTD compression of RPC will consume at most internode_compression_zstd_max_longterm_cpu_fraction (plus one message) of in each time slice of this length.")
-    , internode_compression_zstd_min_message_size(this, "internode_compression_zstd_min_message_size", liveness::LiveUpdate, value_status::Used, 0,
+    , internode_compression_zstd_min_message_size(this, "internode_compression_zstd_min_message_size", liveness::LiveUpdate, value_status::Used, 1024,
         "Minimum RPC message size which can be compressed with ZSTD. Messages smaller than this threshold will always be compressed with LZ4. "
         "ZSTD has high per-message overhead, and might be a bad choice for small messages. This knob allows for some experimentation with that. ")
     , internode_compression_zstd_max_message_size(this, "internode_compression_zstd_max_message_size", liveness::LiveUpdate, value_status::Used, std::numeric_limits<uint32_t>::max(),
