@@ -210,10 +210,10 @@ future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
     auto&& rs = co_await db::system_keyspace::query(proxy.local().get_db(), schema_table->ks_name(), schema_table->cf_name(), pkey);
-    co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
+    co_return rs->rows() | std::views::transform([schema_table] (const query::result_set_row& row) {
         const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
         return row.get_nonnull<sstring>(name);
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 // Applies deletion of the "version" column to system_schema.scylla_tables mutation rows

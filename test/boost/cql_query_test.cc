@@ -2965,16 +2965,16 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
         // Many singular ranges - to check that the right range is used for
         // determining the disk read-range upper bound.
         {
-            const auto select_query = format(
+            const auto select_query = fmt::format(
                     "SELECT * FROM test WHERE pk = {} and ck IN ({}) ORDER BY ck DESC BYPASS CACHE;",
                     pk,
-                    boost::algorithm::join(selected_cks | boost::adaptors::transformed([] (int ck) { return format("{}", ck); }), ", "));
+                    fmt::join(selected_cks | std::views::transform([] (int ck) { return format("{}", ck); }), ", "));
             assert_that(e.execute_cql(select_query).get())
                     .is_rows()
-                    .with_rows(boost::copy_range<std::vector<std::vector<bytes_opt>>>(
-                                selected_cks
-                                | boost::adaptors::reversed
-                                | boost::adaptors::transformed(make_expected_row)));
+                    .with_rows(selected_cks
+                                | std::views::reverse
+                                | std::views::transform(make_expected_row)
+                                | std::ranges::to<std::vector<std::vector<bytes_opt>>>());
         }
 
         // A single wide range - to check that the right range bound is used for

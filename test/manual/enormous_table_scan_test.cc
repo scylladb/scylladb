@@ -16,10 +16,6 @@
 #include "test/lib/cql_assertions.hh"
 #include "transport/messages/result_message.hh"
 
-#include <boost/range/adaptor/indirected.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "dht/i_partitioner.hh"
 #include "mutation/mutation_fragment.hh"
 #include "schema/schema_builder.hh"

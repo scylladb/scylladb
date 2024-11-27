@@ -186,12 +186,12 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                     .entity = task.task_status.entity,
                     .progress_units = task.task_status.progress_units,
                     .progress = task.task_progress,
-                    .children = boost::copy_range<std::vector<task_identity>>(task.failed_children | boost::adaptors::transformed([&tm = _tm] (auto& child) {
+                    .children = task.failed_children | std::views::transform([&tm = _tm] (auto& child) {
                         return task_identity{
                             .node = tm.get_broadcast_address(),
                             .task_id = child.task_status.id
                         };
-                    }))
+                    }) | std::ranges::to<std::vector<task_identity>>()
                 };
                 res.push_back(status);
 

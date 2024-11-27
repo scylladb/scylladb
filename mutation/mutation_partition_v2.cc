@@ -9,8 +9,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "mutation_partition_v2.hh"
 #include "clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -761,7 +759,7 @@ void mutation_partition_v2::for_each_row(const schema& schema, const query::clus
 // in the original range is prefxied with given string.
 template<typename RangeOfPrintable>
 static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
-    return r | boost::adaptors::transformed([&] (auto&& e) { return format("{}{}", prefix, e); });
+    return r | std::views::transform([&] (auto&& e) { return format("{}{}", prefix, e); });
 }
 
 auto fmt::formatter<mutation_partition_v2::printer>::format(const mutation_partition_v2::printer& p, fmt::format_context& ctx) const

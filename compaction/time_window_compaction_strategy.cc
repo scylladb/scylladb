@@ -16,7 +16,6 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 
 #include <ranges>
 
@@ -267,7 +266,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
 
     auto get_job_size = [] (const std::vector<shared_sstable>& ssts) {
-        return boost::accumulate(ssts | boost::adaptors::transformed(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0));
+        return std::ranges::fold_left(ssts | std::views::transform(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0), std::plus{});
     };
 
     // Targets a space overhead of 10%. All disjoint sstables can be compacted together as long as they won't

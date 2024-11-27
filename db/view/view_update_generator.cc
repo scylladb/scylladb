@@ -312,9 +312,9 @@ void view_update_generator::discover_staging_sstables() {
 }
 
 static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
-    return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
+    return std::ranges::fold_left(ms | std::views::transform([] (const frozen_mutation_and_schema& m) {
         return memory_usage_of(m);
-    }), 0);
+    }), 0, std::plus{});
 }
 
 /**

@@ -385,7 +385,7 @@ $ scylla types {{action}} --help
     const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
         .name = app_name,
-        .description = seastar::format(description_template, app_name, app_name, boost::algorithm::join(operations | boost::adaptors::transformed(
+        .description = seastar::format(description_template, app_name, app_name, fmt::join(operations | std::views::transform(
                 [] (const operation& op) { return fmt::format("* {} - {}", op.name(), op.summary()); } ), "\n")),
         .operations = std::move(operations),
         .global_options = &global_options,
@@ -398,8 +398,9 @@ $ scylla types {{action}} --help
             throw std::invalid_argument("error: missing required option '--type'");
         }
         type_variant type = [&app_config] () -> type_variant {
-            auto types = boost::copy_range<std::vector<data_type>>(app_config["type"].as<std::vector<sstring>>()
-                    | boost::adaptors::transformed([] (const std::string_view type_name) { return db::marshal::type_parser::parse(type_name); }));
+            auto types = app_config["type"].as<std::vector<sstring>>()
+                    | std::views::transform([] (const std::string_view type_name) { return db::marshal::type_parser::parse(type_name); })
+                    | std::ranges::to<std::vector<data_type>>();
             if (app_config.contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
             } else if (app_config.contains("full-compound")) {
@@ -420,9 +421,7 @@ $ scylla types {{action}} --help
         switch (handler.index()) {
             case 0:
                 {
-                    auto values = boost::copy_range<std::vector<bytes>>(
-                            app_config["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
-
+                    auto values = app_config["value"].as<std::vector<sstring>>() | std::views::transform(from_hex) | std::ranges::to<std::vector>();
                     std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);
                 }
                 break;

@@ -405,23 +405,23 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
     auto ms = module->get_task_manager()._messaging;
     if (!ms) {
         auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
-        co_return boost::copy_range<std::vector<task_identity>>(ids | boost::adaptors::transformed([&tm = module->get_task_manager()] (auto id) {
+        co_return ids | std::views::transform([&tm = module->get_task_manager()] (auto id) {
             return task_identity{
                 .node = tm.get_broadcast_address(),
                 .task_id = id
             };
-        }));
+        }) | std::ranges::to<std::vector<task_identity>>();
     }
 
     auto nodes = module->get_nodes();
     co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
         return ms->send_tasks_get_children(netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
-            return boost::copy_range<std::vector<task_identity>>(resp | boost::adaptors::transformed([addr] (auto id) {
+            return resp | std::views::transform([addr] (auto id) {
                 return task_identity{
                     .node = addr,
                     .task_id = id
                 };
-            }));
+            }) | std::ranges::to<std::vector<task_identity>>();
         });
     }, std::vector<task_identity>{}, concat<task_identity>);
 }

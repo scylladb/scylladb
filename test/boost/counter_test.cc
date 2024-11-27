@@ -14,8 +14,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/testing/random.hh>
 
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "schema/schema_builder.hh"
@@ -545,11 +543,9 @@ SEASTAR_TEST_CASE(test_counter_id_ordering) {
                 "ffeeddcc-aa99-8878-6655-443322110000",
         };
 
-        auto counter_ids = boost::copy_range<std::vector<counter_id>>(
-            ids | boost::adaptors::transformed([] (auto id) {
+        auto counter_ids = ids | std::views::transform([] (auto id) {
                 return counter_id(utils::UUID(id));
-            })
-        );
+            }) | std::ranges::to<std::vector<counter_id>>();
 
         for (auto it = counter_ids.begin(); it != counter_ids.end(); ++it) {
             BOOST_REQUIRE_EQUAL(*it, *it);

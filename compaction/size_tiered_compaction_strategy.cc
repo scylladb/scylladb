@@ -11,7 +11,6 @@
 #include "size_tiered_compaction_strategy.hh"
 #include "cql3/statements/property_definitions.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/algorithm.hpp>
 

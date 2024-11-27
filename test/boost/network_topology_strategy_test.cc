@@ -559,7 +559,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     }
 
     testlog.debug("num_dcs={} num_racks={} nodes_per_rack={} shards_per_node={} ring_points=[{}]", num_dcs, num_racks, nodes_per_rack, shard_count,
-            fmt::join(ring_points | boost::adaptors::transformed([] (const ring_point& rp) {
+            fmt::join(ring_points | std::views::transform([] (const ring_point& rp) {
                 return fmt::format("({}, {})", rp.id, rp.host);
             }), ", "));
 
@@ -815,12 +815,12 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     };
 
     my_network_topology_strategy nts(replication_strategy_params(
-                    boost::copy_range<std::map<sstring, sstring>>(
-                                    datacenters
-                                                    | boost::adaptors::transformed(
+                                    datacenters | std::views::transform(
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })), std::nullopt));
+                                                                    })
+                                                | std::ranges::to<std::map<sstring, sstring>>(),
+                                    std::nullopt));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {

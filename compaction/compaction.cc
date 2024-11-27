@@ -545,12 +545,12 @@ private:
         }
         auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
 
-        auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables
-                | boost::adaptors::transformed([] (const shared_sstable& sst) {
+        auto non_owned_ranges = sstables
+                | std::views::transform([] (const shared_sstable& sst) {
             seastar::thread::maybe_yield();
             return dht::partition_range::make({sst->get_first_decorated_key(), true},
                                               {sst->get_last_decorated_key(), true});
-        }));
+        })      | std::ranges::to<dht::partition_range_vector>();
 
         return dht::subtract_ranges(*_schema, non_owned_ranges, std::move(owned_ranges)).get();
     }
@@ -817,7 +817,7 @@ private:
                 _rp = std::max(_rp, sst_stats.position);
             }
         }
-        log_info("{} [{}]", report_start_desc(), fmt::join(_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, true); }), ","));
+        log_info("{} [{}]", report_start_desc(), fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
         if (ssts->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
@@ -931,7 +931,7 @@ protected:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(), _input_sstable_generations.size(),
-                fmt::join(ret.new_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, false); }), ","),
+                fmt::join(ret.new_sstables | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
                 utils::pretty_printed_data_size(_start_size), utils::pretty_printed_data_size(_end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), utils::pretty_printed_throughput(_start_size, duration),
                 _cdata.total_partitions, _cdata.total_keys_written);
@@ -1246,8 +1246,8 @@ private:
 
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
             log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
-                fmt::join(exhausted_ssts | boost::adaptors::transformed([] (auto sst) { return to_string(sst, false); }), ","),
-                fmt::join(_new_unused_sstables | boost::adaptors::transformed([] (auto sst) { return to_string(sst, true); }), ","));
+                fmt::join(exhausted_ssts | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
+                fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
@@ -1891,7 +1891,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto permit = table_s.make_compaction_reader_permit();
 
     uint64_t validation_errors = 0;
-    cdata.compaction_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed([] (auto& sst) { return sst->data_size(); }), int64_t(0));
+    cdata.compaction_size = std::ranges::fold_left(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->data_size(); }), int64_t(0), std::plus{});
 
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
@@ -1966,8 +1966,9 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
         }
     }
 
-    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<generation_type>>(table_s.compacted_undeleted_sstables()
-        | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
+    auto compacted_undeleted_gens = table_s.compacted_undeleted_sstables()
+        | std::views::transform(std::mem_fn(&sstables::sstable::generation))
+        | std::ranges::to<std::unordered_set>();
     auto has_undeleted_ancestor = [&compacted_undeleted_gens] (auto& candidate) {
         // Get ancestors from sstable which is empty after restart. It works for this purpose because
         // we only need to check that a sstable compacted *in this instance* hasn't an ancestor undeleted.
@@ -2010,11 +2011,12 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 }
 
 unsigned compaction_descriptor::fan_in() const {
-    return boost::copy_range<std::unordered_set<run_id>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
+    auto unique_run_identifiers = std::ranges::transform_view(sstables, &sstables::sstable::run_identifier) | std::ranges::to<std::unordered_set>();
+    return unique_run_identifiers.size();
 }
 
 uint64_t compaction_descriptor::sstables_size() const {
-    return boost::accumulate(sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
+    return std::ranges::fold_left(sstables | std::views::transform(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0), std::plus{});
 }
 
 }

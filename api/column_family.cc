@@ -200,7 +200,7 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
     };
     return ctx.db.map(fun).then([](const std::vector<utils::ihistogram> &res) {
         std::vector<httpd::utils_json::histogram> r;
-        boost::copy(res | boost::adaptors::transformed(to_json), std::back_inserter(r));
+        std::ranges::copy(res | std::views::transform(to_json), std::back_inserter(r));
         return make_ready_future<json::json_return_type>(r);
     });
 }
@@ -227,7 +227,7 @@ static future<json::json_return_type> get_cf_rate_and_histogram(http_context& ct
     };
     return ctx.db.map(fun).then([](const std::vector<utils::rate_moving_average_and_histogram> &res) {
         std::vector<httpd::utils_json::rate_moving_average_and_histogram> r;
-        boost::copy(res | boost::adaptors::transformed(timer_to_json), std::back_inserter(r));
+        std::ranges::copy(res | std::views::transform(timer_to_json), std::back_inserter(r));
         return make_ready_future<json::json_return_type>(r);
     });
 }
@@ -717,25 +717,25 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, req->get_path_param("name"), ratio_holder(), [] (replica::column_family& cf) {
-            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_false_positive_as_ratio_holder), ratio_holder());
+            return std::ranges::fold_left(*cf.get_sstables() | std::views::transform(filter_false_positive_as_ratio_holder), ratio_holder(), std::plus{});
         }, std::plus<>());
     });
 
     cf::get_all_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, ratio_holder(), [] (replica::column_family& cf) {
-            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_false_positive_as_ratio_holder), ratio_holder());
+            return std::ranges::fold_left(*cf.get_sstables() | std::views::transform(filter_false_positive_as_ratio_holder), ratio_holder(), std::plus{});
         }, std::plus<>());
     });
 
     cf::get_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, req->get_path_param("name"), ratio_holder(), [] (replica::column_family& cf) {
-            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_recent_false_positive_as_ratio_holder), ratio_holder());
+            return std::ranges::fold_left(*cf.get_sstables() | std::views::transform(filter_recent_false_positive_as_ratio_holder), ratio_holder(), std::plus{});
         }, std::plus<>());
     });
 
     cf::get_all_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, ratio_holder(), [] (replica::column_family& cf) {
-            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_recent_false_positive_as_ratio_holder), ratio_holder());
+            return std::ranges::fold_left(*cf.get_sstables() | std::views::transform(filter_recent_false_positive_as_ratio_holder), ratio_holder(), std::plus{});
         }, std::plus<>());
     });
 
@@ -1089,7 +1089,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) -> future<std::unordered_set<sstring>> {
             auto sstables = co_await db.find_column_family(uuid).get_sstables_by_partition_key(key);
-            co_return boost::copy_range<std::unordered_set<sstring>>(sstables | boost::adaptors::transformed([] (auto s) { return s->get_filename(); }));
+            co_return sstables | std::views::transform([] (auto s) { return s->get_filename(); }) | std::ranges::to<std::unordered_set>();
         }, std::unordered_set<sstring>(),
         [](std::unordered_set<sstring> a, std::unordered_set<sstring>&& b) mutable {
             a.merge(b);

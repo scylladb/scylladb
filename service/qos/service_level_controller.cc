@@ -598,7 +598,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     }
     
 
-    auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
+    auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = boost::algorithm::join(col_names, ", ");
     sstring val_binders_str = "?";
     for (size_t i = 1; i < col_names.size(); ++i) {

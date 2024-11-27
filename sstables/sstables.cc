@@ -52,9 +52,6 @@
 #include "index_reader.hh"
 #include "downsampling.hh"
 #include <boost/algorithm/string.hpp>
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <boost/regex.hpp>
 #include <seastar/core/align.hh>
 #include "mutation/range_tombstone_list.hh"
@@ -732,7 +729,7 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
         return { element.key, element.value };
     };
-    boost::copy(a.elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
+    std::ranges::copy(a.elements | std::views::transform(transform), std::inserter(sh.bin, sh.bin.end()));
 }
 
 void write(sstable_version_types v, file_writer& out, const utils::streaming_histogram& sh) {
@@ -740,8 +737,9 @@ void write(sstable_version_types v, file_writer& out, const utils::streaming_his
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
     disk_array<uint32_t, streaming_histogram_element> a;
-    a.elements = boost::copy_range<utils::chunked_vector<streaming_histogram_element>>(sh.bin
-        | boost::adaptors::transformed([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; }));
+    a.elements = sh.bin
+        | std::views::transform([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; })
+        | std::ranges::to<utils::chunked_vector<streaming_histogram_element>>();
 
     write(v, out, max_bin_size, a);
 }
@@ -3022,9 +3020,9 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
         };
-        token_ranges = boost::copy_range<dht::partition_range_vector>(
-                sm->token_ranges.elements
-                | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
+        token_ranges = sm->token_ranges.elements
+                | std::views::transform(disk_token_range_to_ring_position_range)
+                | std::ranges::to<dht::partition_range_vector>();
     }
     sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
     auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));

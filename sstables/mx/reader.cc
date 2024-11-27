@@ -304,7 +304,7 @@ public:
     }
 
     row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) {
-        auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+        auto key = clustering_key_prefix::from_range(ecp | std::views::transform(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
         _sst->get_stats().on_row_read();
@@ -477,7 +477,7 @@ public:
     data_consumer::proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             bound_kind kind,
                                             tombstone tomb) {
-        auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+        auto ck = clustering_key_prefix::from_range(ecp | std::views::transform(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             return consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
@@ -490,7 +490,7 @@ public:
                                             sstables::bound_kind_m kind,
                                             tombstone end_tombstone,
                                             tombstone start_tombstone) {
-        auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+        auto ck = clustering_key_prefix::from_range(ecp | std::views::transform(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
         switch (kind) {
         case bound_kind_m::incl_end_excl_start: {
@@ -1913,7 +1913,7 @@ private:
 
 private:
     clustering_key from_fragmented_buffer(const std::vector<fragmented_temporary_buffer>& ecp) {
-        return clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+        return clustering_key_prefix::from_range(ecp | std::views::transform(
                 [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
     }
     void validate_fragment_order(mutation_fragment_v2::kind kind, std::optional<tombstone> new_current_tombstone) {

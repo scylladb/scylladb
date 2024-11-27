@@ -8,9 +8,7 @@
 
 #include <seastar/core/thread.hh>
 #include <fmt/ranges.h>
-#include <boost/algorithm/string/join.hpp>
 #include <boost/make_shared.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 
 #include "db/config.hh"
 #include "db/extensions.hh"

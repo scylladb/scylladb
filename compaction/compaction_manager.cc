@@ -186,7 +186,7 @@ unsigned compaction_manager::current_compaction_fan_in_threshold() const {
     if (_tasks.empty()) {
         return 0;
     }
-    auto largest_fan_in = std::ranges::max(_tasks | boost::adaptors::transformed([] (auto& task) {
+    auto largest_fan_in = std::ranges::max(_tasks | std::views::transform([] (auto& task) {
         return task.compaction_running() ? task.compaction_data().compaction_fan_in : 0;
     }));
     // conservatively limit fan-in threshold to 32, such that tons of small sstables won't accumulate if
@@ -1363,9 +1363,9 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state&
     auto num_runs_for_compaction = [&, this] {
         auto& cs = t.get_compaction_strategy();
         auto desc = cs.get_sstables_for_compaction(t, get_strategy_control());
-        return boost::copy_range<std::unordered_set<sstables::run_id>>(
-            desc.sstables
-            | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier))).size();
+        return std::ranges::size(desc.sstables
+            | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
+            | std::ranges::to<std::unordered_set>());
     };
     const auto threshold = size_t(std::max(schema->max_compaction_threshold(), 32));
     auto count = num_runs_for_compaction();

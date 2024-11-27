@@ -494,7 +494,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata),
-                boost::copy_range<std::vector<expr::expression>>(prepared_selectors | boost::adaptors::transformed(std::mem_fn(&prepared_selector::expr))));
+                prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>());
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
     }
@@ -583,11 +583,9 @@ bool result_set_builder::last_group_ended() const {
     if (_last_group.empty()) {
         return !_selectors->is_aggregate();
     }
-    using boost::adaptors::reversed;
-    using boost::adaptors::transformed;
-    return !boost::equal(
-            _last_group | reversed,
-            _group_by_cell_indices | reversed | transformed([this](size_t i) { return current[i]; }));
+    return !std::ranges::equal(
+            _last_group | std::views::reverse,
+            _group_by_cell_indices | std::views::reverse | std::views::transform([this](size_t i) { return current[i]; }));
 }
 
 void result_set_builder::flush_selectors() {

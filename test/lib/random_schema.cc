@@ -1004,8 +1004,8 @@ sstring random_schema::cql() const {
 
     sstring udts_str;
     if (!udts.empty()) {
-        udts_str = boost::algorithm::join(udts |
-                boost::adaptors::transformed([] (const user_type_impl* const udt) { return udt_to_str(*udt); }), "\n");
+        udts_str = seastar::format("{}", fmt::join(udts |
+                std::views::transform([] (const user_type_impl* const udt) { return udt_to_str(*udt); }), "\n"));
     }
 
     std::vector<sstring> col_specs;
@@ -1048,8 +1048,9 @@ std::vector<data_model::mutation_description::key> random_schema::make_pkeys(siz
         ++i;
     }
 
-    return boost::copy_range<std::vector<data_model::mutation_description::key>>(keys |
-            boost::adaptors::transformed([] (const dht::decorated_key& dkey) { return dkey.key().explode(); }));
+    return keys
+        | std::views::transform([] (const dht::decorated_key& dkey) { return dkey.key().explode(); })
+        | std::ranges::to<std::vector<data_model::mutation_description::key>>();
 }
 
 data_model::mutation_description::key random_schema::make_ckey(uint32_t n) {
@@ -1065,8 +1066,9 @@ std::vector<data_model::mutation_description::key> random_schema::make_ckeys(siz
         keys.emplace(clustering_key::from_exploded(make_clustering_key(i, val_gen)));
     }
 
-    return boost::copy_range<std::vector<data_model::mutation_description::key>>(keys |
-            boost::adaptors::transformed([] (const clustering_key& ckey) { return ckey.explode(); }));
+    return keys
+        | std::views::transform([] (const clustering_key& ckey) { return ckey.explode(); })
+        | std::ranges::to<std::vector<data_model::mutation_description::key>>();
 }
 
 data_model::mutation_description random_schema::new_mutation(data_model::mutation_description::key pkey) {

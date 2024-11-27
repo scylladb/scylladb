@@ -27,8 +27,6 @@
 #include "index/secondary_index_manager.hh"
 #include "mutation/mutation.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/algorithm/string/join.hpp>
 #include <stdexcept>
 
 namespace cql3 {
@@ -179,7 +177,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
 void create_index_statement::validate_for_local_index(const schema& schema) const {
     if (!_raw_targets.empty()) {
             if (const auto* index_pk = std::get_if<std::vector<::shared_ptr<column_identifier::raw>>>(&_raw_targets.front()->value)) {
-                auto base_pk_identifiers = *index_pk | boost::adaptors::transformed([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
+                auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
                     return raw_ident->prepare_column_identifier(schema);
                 });
                 auto remaining_base_pk_columns = schema.partition_key_columns();

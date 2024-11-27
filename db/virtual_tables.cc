@@ -190,11 +190,11 @@ public:
             dht::decorated_key key;
         };
 
-        auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
-            _db.get_non_local_strategy_keyspaces()
-                | boost::adaptors::transformed([this] (auto&& ks) {
+        auto keyspace_names = _db.get_non_local_strategy_keyspaces()
+                | std::views::transform([this] (auto&& ks) {
                     return decorated_keyspace_name{ks, make_partition_key(ks)};
-        }));
+                  })
+                | std::ranges::to<std::vector>();
 
         std::ranges::sort(keyspace_names, dht::ring_position_less_comparator(*_s), std::mem_fn(&decorated_keyspace_name::key));
 
@@ -339,8 +339,9 @@ public:
     future<> execute(std::function<void(mutation)> mutation_sink) override {
         // Servers are registered on shard 0 only
         const auto server_infos = co_await smp::submit_to(0ul, [&ss = _ss.container()] {
-            return boost::copy_range<std::vector<protocol_server_info>>(ss.local().protocol_servers()
-                    | boost::adaptors::transformed([] (protocol_server* s) { return protocol_server_info(*s); }));
+            return ss.local().protocol_servers()
+                    | std::views::transform([] (protocol_server* s) { return protocol_server_info(*s); })
+                    | std::ranges::to<std::vector>();
         });
         for (auto server : server_infos) {
             auto dk = dht::decorate_key(*_s, partition_key::from_single_value(*schema(), data_value(server.name).serialize_nonnull()));

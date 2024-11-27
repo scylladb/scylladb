@@ -2346,10 +2346,9 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
         return {};
     }
     query::result_set computed_result(*sm.computed_columns_mutation());
-    return boost::copy_range<computed_columns_map>(
-            computed_result.rows() | boost::adaptors::transformed([] (const query::result_set_row& row) {
+    return computed_result.rows() | std::views::transform([] (const query::result_set_row& row) {
         return computed_columns_map::value_type{to_bytes(row.get_nonnull<sstring>("column_name")), column_computation::deserialize(row.get_nonnull<bytes>("computation"))};
-    }));
+    }) | std::ranges::to<computed_columns_map>();
 }
 
 static std::vector<column_definition> create_columns_from_column_rows(const schema_ctxt& ctxt,
@@ -2390,9 +2389,9 @@ static std::vector<index_metadata> create_indices_from_index_rows(const query::r
                                                            const sstring& keyspace,
                                                            const sstring& table)
 {
-    return boost::copy_range<std::vector<index_metadata>>(rows.rows() | boost::adaptors::transformed([&keyspace, &table] (auto&& row) {
+    return rows.rows() | std::views::transform([&keyspace, &table] (auto&& row) {
         return create_index_from_index_row(row, keyspace, table);
-    }));
+    }) | std::ranges::to<std::vector<index_metadata>>();
 }
 
 static index_metadata create_index_from_index_row(const query::result_set_row& row,
@@ -2622,8 +2621,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
 }
 
 std::vector<sstring> all_table_names(schema_features features) {
-    return boost::copy_range<std::vector<sstring>>(all_tables(features) |
-           boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
+    return all_tables(features)
+        | std::views::transform([] (auto schema) { return schema->cf_name(); })
+        | std::ranges::to<std::vector>();
 }
 
 void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema) {

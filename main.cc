@@ -470,7 +470,7 @@ public:
 // "[key1: value1_1 value1_2 ..., key2: value2_1 value 2_2 ..., (positional) value3, ...]"
 std::string format_parsed_options(const std::vector<bpo::option>& opts) {
     return fmt::format("[{}]",
-        boost::algorithm::join(opts | boost::adaptors::transformed([] (const bpo::option& opt) {
+        fmt::join(opts | std::views::transform([] (const bpo::option& opt) {
             if (opt.value.empty()) {
                 return opt.string_key;
             }

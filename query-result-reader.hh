@@ -9,8 +9,6 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/numeric.hpp>
 
 #include "query-result.hh"
 #include "full_position.hh"

@@ -2035,7 +2035,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto all_aggregates = [] (const std::vector<selection::prepared_selector>& prepared_selectors) {
         return std::ranges::all_of(
-            prepared_selectors | boost::adaptors::transformed(std::mem_fn(&selection::prepared_selector::expr)),
+            prepared_selectors | std::views::transform(std::mem_fn(&selection::prepared_selector::expr)),
             [] (const expr::expression& e) {
                 auto fn_expr = expr::as_if<expr::function_call>(&e);
                 if (!fn_expr) {
@@ -2587,8 +2587,9 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         // If the column name is not entirely lowercase (or digits or _),
         // when output to CQL it must be quoted to preserve case as well
         // as non alphanumeric characters.
-        auto cols = boost::copy_range<std::vector<sstring>>(selected_columns
-                | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_cql_string)));
+        auto cols = selected_columns
+                | std::views::transform(std::mem_fn(&column_definition::name_as_cql_string))
+                | std::ranges::to<std::vector>();
         fmt::print(out, "{}", fmt::join(cols, ", "));
     }
     // Note that cf_name may need to be quoted, just like column names above.

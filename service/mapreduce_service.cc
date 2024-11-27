@@ -172,7 +172,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
             }
         } else {
             auto& info = request.aggregation_infos.value()[i];
-            auto types = boost::copy_range<std::vector<data_type>>(info.column_names | boost::adaptors::transformed(name_as_type));
+            auto types = info.column_names | std::views::transform(name_as_type) | std::ranges::to<std::vector<data_type>>();
             
             auto func = cql3::functions::instance().mock_get(info.name, types);
             if (!func) {
@@ -345,7 +345,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         }
 
         auto reducible_aggr = aggr_function->reducible_aggregate_function();
-        auto arg_exprs =boost::copy_range<std::vector<cql3::expr::expression>>(info->column_names | boost::adaptors::transformed(name_as_expression));
+        auto arg_exprs = info->column_names | std::views::transform(name_as_expression) | std::ranges::to<std::vector<cql3::expr::expression>>();
         auto fc_expr = cql3::expr::function_call{reducible_aggr, arg_exprs};
         auto column_identifier = make_shared<cql3::column_identifier>(info->name.name, false);
         auto prepared_expr = cql3::expr::prepare_expression(fc_expr, db.as_data_dictionary(), "", schema.get(), nullptr);
@@ -505,7 +505,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
-        query::mapreduce_result res = { .query_results = boost::copy_range<std::vector<bytes_opt>>(rows[0] | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })) };
+        query::mapreduce_result res = { .query_results = rows[0] | std::views::transform([] (const managed_bytes_opt& x) { return to_bytes_opt(x); }) | std::ranges::to<std::vector<bytes_opt>>() };
 
         auto printer = seastar::value_of([&req, &res] {
             return query::mapreduce_result::printer {

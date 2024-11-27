@@ -21,7 +21,6 @@
 #include "timestamp.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
-#include <boost/range/adaptor/transformed.hpp>
 #include "cql3/util.hh"
 #include "view_info.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -141,7 +140,7 @@ static void validate_column_rename(data_dictionary::database db, const schema& s
             throw exceptions::invalid_request_exception(
                     seastar::format("Cannot rename column {} because it has dependent secondary indexes ({})",
                                     from,
-                                    fmt::join(dependent_indices | boost::adaptors::transformed([](const index_metadata& im) {
+                                    fmt::join(dependent_indices | std::views::transform([](const index_metadata& im) {
                                         return im.name();
                                     }), ", ")));
         }

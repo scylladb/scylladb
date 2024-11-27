@@ -22,8 +22,6 @@
 #include "cql3/statements/property_definitions.hh"
 #include "schema/schema.hh"
 #include <boost/range/algorithm/find.hpp>
-#include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include "size_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
@@ -49,10 +47,10 @@ compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::v
 std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
     // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
-    return boost::copy_range<std::vector<compaction_descriptor>>(candidates | boost::adaptors::transformed([] (const shared_sstable& sst) {
+    return candidates | std::views::transform([] (const shared_sstable& sst) {
         return compaction_descriptor({ sst },
             sst->get_sstable_level(), sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const table_state& t) {
@@ -246,9 +244,9 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
         if (!size_tiered_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
-        contrib.value += boost::accumulate(bucket | boost::adaptors::transformed([] (const shared_sstable& sst) -> double {
+        contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const shared_sstable& sst) -> double {
             return sst->data_size() * log4(sst->data_size());
-        }), double(0.0f));
+        }), double(0.0f), std::plus{});
         // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
         contrib.sstables.insert(bucket.begin(), bucket.end());
     }
@@ -259,7 +257,7 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
 double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     inflight_component compacted = compacted_backlog(oc);
 
-    auto total_backlog_bytes = boost::accumulate(_contrib.sstables | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0));
+    auto total_backlog_bytes = std::ranges::fold_left(_contrib.sstables | std::views::transform(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0), std::plus{});
 
     // Bail out if effective backlog is zero, which happens in a small window where ongoing compaction exhausted
     // input files but is still sealing output files or doing managerial stuff like updating history table

@@ -18,8 +18,6 @@
 #include "schema/schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 static std::vector<managed_bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<managed_bytes> result;
     for (auto&& v : values) {
@@ -328,9 +326,9 @@ SEASTAR_THREAD_TEST_CASE(test_composite_from_exploded) {
 
 SEASTAR_THREAD_TEST_CASE(test_composite_view_explode) {
     auto to_owning_vector = [] (std::vector<bytes_view> bvs) {
-        return boost::copy_range<std::vector<bytes>>(bvs | boost::adaptors::transformed([] (auto bv) {
+        return bvs | std::views::transform([] (auto bv) {
             return bytes(bv.begin(), bv.end());
-        }));
+        }) | std::ranges::to<std::vector<bytes>>();
     };
     {
         BOOST_REQUIRE_EQUAL(to_owning_vector(composite_view(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}))).explode()),
