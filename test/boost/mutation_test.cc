@@ -8,8 +8,6 @@
 
 
 #include <random>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
 #include "compaction/compaction_garbage_collector.hh"
@@ -3761,7 +3759,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
             auto msg = fmt::format("expected_is_valid ({}) != is_valid ({}), fragments:\n{}",
                     expected_is_valid,
                     is_valid,
-                    fmt::join(frag_refs | boost::adaptors::transformed([&] (std::reference_wrapper<const mutation_fragment_v2> mf) {
+                    fmt::join(frag_refs | std::views::transform([&] (std::reference_wrapper<const mutation_fragment_v2> mf) {
                         return fmt::format("{}", mutation_fragment_v2::printer(*s, mf.get()));
                     }), "\n"));
             BOOST_FAIL(msg);

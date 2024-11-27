@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <boost/range/algorithm.hpp>
+#include <boost/range/numeric.hpp>
 #include <functional>
 #include <ranges>
 #include <stdexcept>

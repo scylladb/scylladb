@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <chrono>
-#include <boost/range/adaptor/transformed.hpp>
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
 #include "timestamp.hh"
@@ -113,7 +112,7 @@ void trace_state::build_parameters_map() {
     params_values& vals = *_params_ptr;
 
     if (vals.batchlog_endpoints) {
-        auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | boost::adaptors::transformed([](gms::inet_address ep) {return seastar::format("/{}", ep);}), ","));
+        auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | std::views::transform([](gms::inet_address ep) {return seastar::format("/{}", ep);}), ","));
         params_map.emplace("batch_endpoints", std::move(batch_endpoints));
     }
 

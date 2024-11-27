@@ -23,8 +23,6 @@
 #include "test/lib/key_utils.hh"
 #include "mutation/atomic_cell_or_collection.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 // Helper for working with the following table:
 //
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
@@ -273,9 +271,9 @@ public:
     }
 
     static std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
-        return boost::copy_range<std::vector<dht::ring_position>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& key) {
+        return keys | std::views::transform([] (const dht::decorated_key& key) {
             return dht::ring_position(key);
-        }));
+        }) | std::ranges::to<std::vector>();
     }
 
     // Returns n clustering keys in their natural order

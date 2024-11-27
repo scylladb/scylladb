@@ -38,8 +38,6 @@
 #include "db/extensions.hh"
 #include "query-result-writer.hh"
 #include "db/view/view_update_generator.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "mutation/mutation_source_metadata.hh"
@@ -202,7 +200,7 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     }
     auto token_range = range.transform(std::mem_fn(&dht::ring_position::token));
     auto cgs = compaction_groups_for_token_range(token_range);
-    reserve_fn(boost::accumulate(cgs | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0)));
+    reserve_fn(std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0), std::plus{}));
     for (auto& cg : cgs) {
         add_memtables_from_cg(*cg);
     }
@@ -372,12 +370,11 @@ api::timestamp_type compaction_group::min_memtable_timestamp() const {
         return api::max_timestamp;
     }
 
-    return *boost::range::min_element(
+    return std::ranges::min(
         *_memtables
-        | boost::adaptors::transformed(
+        | std::views::transform(
             [](const shared_memtable& m) { return m->get_min_timestamp(); }
-        )
-    );
+        ));
 }
 
 api::timestamp_type compaction_group::min_memtable_live_timestamp() const {
@@ -385,12 +382,11 @@ api::timestamp_type compaction_group::min_memtable_live_timestamp() const {
         return api::max_timestamp;
     }
 
-    return *boost::range::min_element(
+    return std::ranges::min(
         *_memtables
-        | boost::adaptors::transformed(
+        | std::views::transform(
             [](const shared_memtable& m) { return m->get_min_live_timestamp(); }
-        )
-    );
+        ));
 }
 
 api::timestamp_type compaction_group::min_memtable_live_row_marker_timestamp() const {
@@ -398,12 +394,11 @@ api::timestamp_type compaction_group::min_memtable_live_row_marker_timestamp() c
         return api::max_timestamp;
     }
 
-    return *boost::range::min_element(
+    return std::ranges::min(
         *_memtables
-        | boost::adaptors::transformed(
+        | std::views::transform(
             [](const shared_memtable& m) { return m->get_min_live_row_marker_timestamp(); }
-        )
-    );
+        ));
 }
 
 bool compaction_group::memtable_has_key(const dht::decorated_key& key) const {
@@ -1732,11 +1727,11 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
 
 uint64_t storage_group::live_disk_space_used() const noexcept {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups();
-    return boost::accumulate(cgs | boost::adaptors::transformed(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0));
+    return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
 }
 
 uint64_t compaction_group::total_disk_space_used() const noexcept {
-    return live_disk_space_used() + boost::accumulate(_sstables_compacted_but_not_deleted | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0));
+    return live_disk_space_used() + std::ranges::fold_left(_sstables_compacted_but_not_deleted | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
 }
 
 void table::rebuild_statistics() {
@@ -2852,7 +2847,7 @@ size_t compaction_group::memtable_count() const noexcept {
 size_t storage_group::memtable_count() const noexcept {
     auto memtable_count = [] (const compaction_group_ptr& cg) { return cg ? cg->memtable_count() : 0; };
     return memtable_count(_main_cg) +
-            boost::accumulate(_split_ready_groups | boost::adaptors::transformed(std::mem_fn(&compaction_group::memtable_count)), size_t(0));
+            std::ranges::fold_left(_split_ready_groups | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {

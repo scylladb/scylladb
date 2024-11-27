@@ -12,7 +12,6 @@
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
 #include <boost/algorithm/string.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 
 logging::logger klog("keys");
 
@@ -111,8 +110,8 @@ const thread_local clustering_key_prefix bound_view::_empty_prefix = clustering_
 
 std::ostream&
 operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
-    // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
+    // Can't pass to_hex() to transform(), since it is overloaded, so wrap:
     auto enhex = [] (auto&& x) { return fmt_hex(x); };
-    fmt::print(os, "prefix{{{}}}", fmt::join(ecp._v | boost::adaptors::transformed(enhex), ":"));
+    fmt::print(os, "prefix{{{}}}", fmt::join(ecp._v | std::views::transform(enhex), ":"));
     return os;
 }

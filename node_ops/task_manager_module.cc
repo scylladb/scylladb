@@ -145,8 +145,8 @@ future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hin
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return boost::copy_range<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_user_task_ttl())
-            | boost::adaptors::transformed([] (const auto& e) {
+    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_user_task_ttl())
+            | std::views::transform([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
         return tasks::task_stats {

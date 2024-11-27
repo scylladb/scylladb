@@ -12,7 +12,6 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <charconv>
 
 namespace gms {
@@ -25,7 +24,7 @@ versioned_value versioned_value::network_version() {
 }
 
 sstring versioned_value::make_full_token_string(const std::unordered_set<dht::token>& tokens) {
-    return fmt::to_string(fmt::join(tokens | boost::adaptors::transformed([] (const dht::token& t) {
+    return fmt::to_string(fmt::join(tokens | std::views::transform([] (const dht::token& t) {
         return t.to_sstring(); }), ";"));
 }
 

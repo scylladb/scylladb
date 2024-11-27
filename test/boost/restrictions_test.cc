@@ -24,7 +24,6 @@
 namespace {
 
 using seastar::compat::source_location;
-using boost::adaptors::transformed;
 
 std::unique_ptr<cql3::query_options> to_options(
         const cql3::cql_config& cfg,
@@ -45,7 +44,7 @@ void require_rows(cql_test_env& e,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const seastar::compat::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
-    const auto rvals = values | transformed([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
+    const auto rvals = values | std::views::transform([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
     cql3::cql_config cfg(cql3::cql_config::default_tag{});
     auto opts = to_options(cfg, std::move(names), std::vector(rvals.begin(), rvals.end()));
     try {
@@ -746,7 +745,7 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
         auto bound_tuples = [] (std::vector<std::tuple<int32_t, float>> tuples) {
             const auto tuple_type = tuple_type_impl::get_instance({int32_type, float_type});
             const auto list_type = list_type_impl::get_instance(tuple_type, true);
-            const auto tvals = tuples | transformed([&] (const std::tuple<int32_t, float>& t) {
+            const auto tvals = tuples | std::views::transform([&] (const std::tuple<int32_t, float>& t) {
                 return make_tuple_value(tuple_type, tuple_type_impl::native_type({std::get<0>(t), std::get<1>(t)}));
             });
             return list_type->decompose(

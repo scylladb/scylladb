@@ -2038,8 +2038,9 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto mut = [&] (auto shard) {
                 return make_insert(tests::generate_partition_key(key_schema, shard));
             };
-            auto muts = boost::copy_range<std::vector<mutation>>(shards
-                | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
+            auto muts = shards
+                | std::views::transform([&] (auto shard) { return mut(shard); })
+                | std::ranges::to<std::vector<mutation>>();
             auto sst_gen = [&] () mutable {
                 auto schema = schema_builder(s).with_sharder(1, ignore_msb).build();
                 auto sst = env.make_sstable(std::move(schema));
@@ -2718,7 +2719,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
 
-        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0)) == 6);
+        BOOST_REQUIRE(std::ranges::fold_left(*compound->all() | std::views::transform([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0), std::plus{}) == 6);
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {

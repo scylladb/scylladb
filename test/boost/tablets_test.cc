@@ -2824,7 +2824,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
     };
 
     check_single(dht::partition_range::make_open_ended_both_sides(), included_ranges);
-    check(boost::copy_range<dht::partition_range_vector>(included_ranges | boost::adaptors::transformed([&] (auto& r) { return r.range; })), included_ranges);
+    check(included_ranges | std::views::transform([&] (auto& r) { return r.range; }) | std::ranges::to<dht::partition_range_vector>(), included_ranges);
     check(excluded_ranges, {});
 
     check_intersection_single({bound{dks[0], true}, bound{dks[1], false}});

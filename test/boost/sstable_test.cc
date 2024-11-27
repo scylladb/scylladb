@@ -77,8 +77,7 @@ test_using_reusable_sst(schema_ptr s, sstring dir, sstables::generation_type::in
 future<std::vector<partition_key>> index_read(schema_ptr schema, sstring path) {
     return test_using_reusable_sst(std::move(schema), std::move(path), 1, [] (test_env& env, sstable_ptr ptr) {
         auto indexes = sstables::test(ptr).read_indexes(env.make_reader_permit()).get();
-        return boost::copy_range<std::vector<partition_key>>(
-                indexes | boost::adaptors::transformed([] (const sstables::test::index_entry& e) { return e.key; }));
+        return indexes | std::views::transform([] (const sstables::test::index_entry& e) { return e.key; }) | std::ranges::to<std::vector<partition_key>>();
     });
 }
 

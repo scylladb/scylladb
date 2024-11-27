@@ -9,8 +9,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "mutation_partition.hh"
 #include "clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -838,7 +836,7 @@ operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_col
 // in the original range is prefxied with given string.
 template<typename RangeOfPrintable>
 static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
-    return r | boost::adaptors::transformed([&] (auto&& e) { return format("{}{}", prefix, e); });
+    return r | std::views::transform([&] (auto&& e) { return format("{}{}", prefix, e); });
 }
 
 std::ostream&

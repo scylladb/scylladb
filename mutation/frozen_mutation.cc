@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/coroutine.hh>
-#include <boost/range/adaptor/transformed.hpp>
 #include "frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_partition.hh"
@@ -119,15 +118,15 @@ frozen_mutation freeze(const mutation& m) {
 }
 
 std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
-    return boost::copy_range<std::vector<frozen_mutation>>(muts | boost::adaptors::transformed([] (const mutation& m) {
+    return muts | std::views::transform([] (const mutation& m) {
         return freeze(m);
-    }));
+    }) | std::ranges::to<std::vector<frozen_mutation>>();
 }
 
 std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
-    return boost::copy_range<std::vector<mutation>>(muts | boost::adaptors::transformed([] (const frozen_mutation& fm) {
+    return muts | std::views::transform([] (const frozen_mutation& fm) {
         return fm.unfreeze(local_schema_registry().get(fm.schema_version()));
-    }));
+    }) | std::ranges::to<std::vector<mutation>>();
 }
 
 

@@ -307,8 +307,7 @@ void test_sharding(const dht::sharder& sharder, unsigned shards, std::vector<dht
 
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
-        return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+        return v | std::views::transform(token_from_long) | std::ranges::to<std::vector<dht::token>>();
     };
     dht::static_sharder mm3p7s(7);
     auto mm3p7s_shard_limits = make_token_vector({
@@ -331,8 +330,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
 
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     auto make_token_vector = [] (std::vector<int64_t> v) {
-        return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(token_from_long));
+        return v | std::views::transform(token_from_long) | std::ranges::to<std::vector<dht::token>>();
     };
     dht::static_sharder mm3p7s2i(7, 2);
     auto mm3p7s2i_shard_limits = make_token_vector({

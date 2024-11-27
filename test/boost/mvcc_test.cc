@@ -8,8 +8,6 @@
 
 
 #include "utils/assert.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/size.hpp>
 #include <seastar/core/thread.hh>

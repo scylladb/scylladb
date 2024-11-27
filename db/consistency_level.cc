@@ -323,13 +323,13 @@ filter_for_query(consistency_level cl,
         float ht_min = 1;
         bool old_node = false;
 
-        auto epi = boost::copy_range<std::vector<std::pair<gms::inet_address, float>>>(live_endpoints | boost::adaptors::transformed([&] (gms::inet_address ep) {
+        auto epi = live_endpoints | std::views::transform([&] (gms::inet_address ep) {
             auto ht = get_hit_rate(ep);
             old_node = old_node || ht < 0;
             ht_max = std::max(ht_max, ht);
             ht_min = std::min(ht_min, ht);
             return std::make_pair(ep, ht);
-        }));
+        }) | std::ranges::to<std::vector<std::pair<gms::inet_address, float>>>();
 
         if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_endpoints_for_reading)

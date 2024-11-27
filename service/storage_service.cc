@@ -3004,9 +3004,9 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     auto seeds = _gossiper.get_seeds();
     auto initial_contact_nodes = loaded_endpoints.empty() ?
         std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
-        boost::copy_range<std::unordered_set<gms::inet_address>>(loaded_endpoints | boost::adaptors::transformed([] (const auto& x) {
+        loaded_endpoints | std::views::transform([] (const auto& x) {
             return x.second.endpoint;
-        }));
+        }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
             initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
@@ -3432,7 +3432,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     }
 
     slogger.info("Host {}/{} is replacing {}/{} ignore_nodes={}", get_token_metadata().get_my_id(), get_broadcast_address(), replace_host_id, replace_address,
-            fmt::join(ri.ignore_nodes | boost::adaptors::transformed ([] (const auto& x) {
+            fmt::join(ri.ignore_nodes | std::views::transform ([] (const auto& x) {
                 return fmt::format("{}/{}", x.first, x.second.endpoint);
             }), ","));
     co_await _gossiper.reset_endpoint_state_map();
@@ -3960,9 +3960,9 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     auto stop_ctl = deferred_stop(ctl);
     const auto& uuid = ctl.uuid();
     gms::inet_address replace_address = replace_info.address;
-    ctl.ignore_nodes = boost::copy_range<std::unordered_set<gms::inet_address>>(replace_info.ignore_nodes | boost::adaptors::transformed([] (const auto& x) {
+    ctl.ignore_nodes = replace_info.ignore_nodes | std::views::transform([] (const auto& x) {
         return x.second.endpoint;
-    }));
+    }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
     // Step 1: Decide who needs to sync data for replace operation
     // The replacing node is not a normal token owner yet
     // Add it back explicitly after checking all other nodes.
@@ -3998,9 +3998,9 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
             auto tmptr = get_token_metadata_ptr();
-            auto ignore_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(replace_info.ignore_nodes | boost::adaptors::transformed([] (const auto& x) {
+            auto ignore_nodes = replace_info.ignore_nodes | std::views::transform([] (const auto& x) {
                 return x.first;
-            }));
+            }) | std::ranges::to<std::unordered_set<locator::host_id>>();
             _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes), replace_info.host_id).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
@@ -5683,9 +5683,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
                                 }
                                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::replace)) {
-                                    auto ignored_nodes = boost::copy_range<std::unordered_set<locator::host_id>>(_topology_state_machine._topology.ignored_nodes | boost::adaptors::transformed([] (const auto& id) {
+                                    auto ignored_nodes = _topology_state_machine._topology.ignored_nodes | std::views::transform([] (const auto& id) {
                                         return locator::host_id(id.uuid());
-                                    }));
+                                    }) | std::ranges::to<std::unordered_set<locator::host_id>>();
                                     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                                     auto tmptr = get_token_metadata_ptr();
                                     auto replaced_node = locator::host_id(replaced_id.uuid());
@@ -7470,10 +7470,9 @@ bool storage_service::is_normal_state_handled_on_boot(gms::inet_address node) {
 future<> storage_service::wait_for_normal_state_handled_on_boot() {
     static logger::rate_limit rate_limit{std::chrono::seconds{5}};
     static auto fmt_nodes_with_statuses = [this] (const auto& eps) {
-        return boost::algorithm::join(
-                eps | boost::adaptors::transformed([this] (const auto& ep) {
+        return eps | std::views::transform([this] (const auto& ep) {
                     return ::format("({}, status={})", ep, _gossiper.get_gossip_status(ep));
-                }), ", ");
+                }) | std::views::join_with(',');
     };
 
     slogger.info("Started waiting for normal state handlers to finish");
@@ -7492,13 +7491,13 @@ future<> storage_service::wait_for_normal_state_handled_on_boot() {
 
         if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
             auto err = ::format("Timed out waiting for normal state handlers to finish for nodes {}",
-                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+                    fmt_nodes_with_statuses(std::ranges::subrange(it, eps.end())));
             slogger.error("{}", err);
             throw std::runtime_error{std::move(err)};
         }
 
         slogger.log(log_level::info, rate_limit, "Normal state handlers not yet finished for nodes {}",
-                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+                    fmt_nodes_with_statuses(std::ranges::subrange(it, eps.end())));
 
         co_await sleep_abortable(std::chrono::milliseconds{100}, _abort_source);
     }

@@ -21,9 +21,6 @@
 #include "db/consistency_level_validations.hh"
 #include <optional>
 #include <seastar/core/shared_ptr.hh>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/indirected.hpp>
 #include "transport/messages/result_message.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "replica/database.hh"

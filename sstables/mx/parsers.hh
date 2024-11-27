@@ -15,8 +15,6 @@
 #include "sstables/mx/types.hh"
 #include "mutation/position_in_partition.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 namespace sstables {
 namespace mc {
 
@@ -82,7 +80,7 @@ class clustering_parser {
     }
 
     position_in_partition make_position() {
-        auto key = clustering_key_prefix::from_range(clustering_key_values | boost::adaptors::transformed(
+        auto key = clustering_key_prefix::from_range(clustering_key_values | std::views::transform(
             [] (const FragmentedBuffer & b) { return typename FragmentedBuffer::view(b); }));
 
         if (kind == bound_kind_m::clustering) {

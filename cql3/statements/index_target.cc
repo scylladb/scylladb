@@ -12,8 +12,6 @@
 #include <stdexcept>
 #include "index_target.hh"
 #include "index/secondary_index.hh"
-#include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 
 namespace cql3 {
 
@@ -29,10 +27,10 @@ sstring index_target::column_name() const {
     struct as_string_visitor {
         const index_target* target;
         sstring operator()(const std::vector<::shared_ptr<column_identifier>>& columns) const {
-            return "(" + boost::algorithm::join(columns | boost::adaptors::transformed(
+            return seastar::format("({})", fmt::join(columns | std::views::transform(
                     [](const ::shared_ptr<cql3::column_identifier>& ident) -> sstring {
                         return ident->to_string();
-                    }), ",") + ")";
+                    }), ","));
         }
 
         sstring operator()(const ::shared_ptr<column_identifier>& column) const {
@@ -138,11 +136,10 @@ index_target::raw::prepare(const schema& s) const {
         target_type _type;
 
         ::shared_ptr<index_target> operator()(const std::vector<::shared_ptr<column_identifier::raw>>& columns) const {
-            auto prepared_idents = boost::copy_range<std::vector<::shared_ptr<column_identifier>>>(
-                    columns | boost::adaptors::transformed([this] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
+            auto prepared_idents =
+                    columns | std::views::transform([this] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
                         return raw_ident->prepare_column_identifier(_schema);
-                    })
-            );
+                    }) | std::ranges::to<std::vector>();
             return ::make_shared<index_target>(std::move(prepared_idents), _type);
         }
 

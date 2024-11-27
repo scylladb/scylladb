@@ -14,8 +14,6 @@
 #include "types/set.hh"
 #include "types/map.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 namespace db {
     extern thread_local data_type cdc_generation_ts_id_type;
 }
@@ -146,15 +144,15 @@ const schema& topology_node_mutation_builder::schema() const {
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<raft::server_id>& nodes_ids) {
-    return apply_set(cell, collection_apply_mode::overwrite, nodes_ids | boost::adaptors::transformed([] (const auto& node_id) { return node_id.id; }));
+    return apply_set(cell, collection_apply_mode::overwrite, nodes_ids | std::views::transform([] (const auto& node_id) { return node_id.id; }));
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
-    return apply_set(cell, collection_apply_mode::overwrite, tokens | boost::adaptors::transformed([] (const auto& t) { return t.to_sstring(); }));
+    return apply_set(cell, collection_apply_mode::overwrite, tokens | std::views::transform([] (const auto& t) { return t.to_sstring(); }));
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::set<sstring>& features) {
-    return apply_set(cell, collection_apply_mode::overwrite, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
+    return apply_set(cell, collection_apply_mode::overwrite, features | std::views::transform([] (const auto& f) { return sstring(f); }));
 }
 
 canonical_mutation topology_node_mutation_builder::build() {
@@ -211,7 +209,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_dat
 }
 
 topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
-    auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
+    auto dv = values | std::views::transform([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
     return apply_set("committed_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
@@ -227,7 +225,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change
 }
 
 topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
-    auto dv = values | boost::adaptors::transformed([&] (const auto& v) {
+    auto dv = values | std::views::transform([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
     return apply_set("unpublished_cdc_generations", collection_apply_mode::overwrite, std::move(dv));
@@ -246,7 +244,7 @@ topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology
 }
 
 topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<sstring>& features) {
-    return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
+    return apply_set("enabled_features", collection_apply_mode::update, features | std::views::transform([] (const auto& f) { return sstring(f); }));
 }
 
 topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_generation(const cdc::generation_id_v2& value) {
@@ -257,11 +255,11 @@ topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_gene
 }
 
 topology_mutation_builder& topology_mutation_builder::add_ignored_nodes(const std::unordered_set<raft::server_id>& value) {
-    return apply_set("ignore_nodes", collection_apply_mode::update, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+    return apply_set("ignore_nodes", collection_apply_mode::update, value | std::views::transform([] (const auto& id) { return id.uuid(); }));
 }
 
 topology_mutation_builder& topology_mutation_builder::set_ignored_nodes(const std::unordered_set<raft::server_id>& value) {
-    return apply_set("ignore_nodes", collection_apply_mode::overwrite, value | boost::adaptors::transformed([] (const auto& id) { return id.uuid(); }));
+    return apply_set("ignore_nodes", collection_apply_mode::overwrite, value | std::views::transform([] (const auto& id) { return id.uuid(); }));
 }
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request() {

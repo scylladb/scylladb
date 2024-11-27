@@ -1327,8 +1327,9 @@ private:
             }
         }
         if (update_hash_set) {
-            _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
-                    boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
+            _peer_row_hash_sets[node_idx] = row_diff
+                   | std::views::transform([] (repair_row& r) { thread::maybe_yield(); return r.hash(); })
+                   | std::ranges::to<repair_hash_set>();
         }
         // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
         // so we skip calling do_apply_rows here.

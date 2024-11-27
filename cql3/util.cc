@@ -138,8 +138,8 @@ sstring relations_to_where_clause(const expr::expression& e) {
         return fmt::format("{:user}", e);
     };
     auto relations = expr::boolean_factors(e);
-    auto expressions = relations | boost::adaptors::transformed(expr_to_pretty_string);
-    return boost::algorithm::join(expressions, " AND ");
+    auto expressions = relations | std::views::transform(expr_to_pretty_string);
+    return fmt::to_string(fmt::join(expressions, " AND "));
 }
 
 expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d) {

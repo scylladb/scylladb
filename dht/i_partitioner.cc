@@ -14,9 +14,6 @@
 #include "dht/token-sharding.hh"
 #include "utils/assert.hh"
 #include "utils/class_registrator.hh"
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/irange.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include "sstables/key.hh"
 #include <seastar/core/thread.hh>
 #include <seastar/core/on_internal_error.hh>

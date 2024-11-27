@@ -8,7 +8,6 @@
  */
 
 #include <boost/range/algorithm.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <fmt/ranges.h>
@@ -2526,12 +2525,12 @@ future<> system_keyspace::remove_built_view(sstring ks_name, sstring view_name) 
 
 future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views() {
     return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        return boost::copy_range<std::vector<view_name>>(*cql_result
-                | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
+        return *cql_result
+                | std::views::transform([] (const cql3::untyped_result_set::row& row) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
             auto cf_name = row.get_as<sstring>("view_name");
             return std::pair(std::move(ks_name), std::move(cf_name));
-        }));
+        }) | std::ranges::to<std::vector<view_name>>();
     });
 }
 

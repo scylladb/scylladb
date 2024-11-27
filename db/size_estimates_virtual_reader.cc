@@ -11,9 +11,6 @@
 #include <algorithm>
 
 #include "utils/assert.hh"
-#include <boost/range/adaptor/indirected.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 
 #include "clustering_bounds_comparator.hh"
 #include "replica/database_fwd.hh"
@@ -311,9 +308,9 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
     // For each specified range, estimate (crudely) mean partition size and partitions count.
     auto pkey = partition_key::from_single_value(*_schema, utf8_type->decompose(*_current_partition));
     auto cfs = _db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
-    auto cf_names = boost::copy_range<std::vector<bytes>>(cfs | boost::adaptors::transformed([] (auto&& cf) {
+    auto cf_names = cfs | std::views::transform([] (auto&& cf) {
         return utf8_type->decompose(cf.first);
-    }));
+    }) | std::ranges::to<std::vector<bytes>>();
     std::ranges::sort(cf_names, [] (auto&& n1, auto&& n2) {
         return utf8_type->less(n1, n2);
     });

@@ -667,7 +667,7 @@ SEASTAR_THREAD_TEST_CASE(test_make_forwardable) {
                    return s.make_row(permit, s.make_ckey(n), "value");
                }) | std::ranges::to<std::vector<mutation_fragment>>();
 
-    auto ms = keys | boost::adaptors::transformed([&](auto &key) {
+    auto ms = keys | std::views::transform([&](auto &key) {
         auto m = mutation(s.schema(), key);
         for (auto &mf : crs) {
             m.apply(mf);

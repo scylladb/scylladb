@@ -10,10 +10,6 @@
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
-
 #include <boost/test/unit_test.hpp>
 #include "query-result-set.hh"
 #include "query-result-writer.hh"

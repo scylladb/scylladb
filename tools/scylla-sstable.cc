@@ -1837,7 +1837,7 @@ class json_mutation_stream_parser {
         }
 
         std::string stack_to_string() const {
-            return boost::algorithm::join(_state_stack | boost::adaptors::transformed([] (state s) { return std::string(to_string(s)); }), "|");
+            return fmt::to_string(fmt::join(_state_stack | std::views::transform([] (state s) { return to_string(s); }), "|"));
         }
 
         template<typename... Args>
@@ -3142,7 +3142,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = seastar::format(description_template, app_name, sst_log.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            .description = seastar::format(description_template, app_name, sst_log.name(), fmt::join(operations | std::views::transform([] (const auto& op) {
                 return seastar::format("* {}: {}", op.name(), op.summary());
             }), "\n")),
             .logger_name = sst_log.name(),
