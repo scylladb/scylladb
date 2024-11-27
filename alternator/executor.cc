@@ -2645,7 +2645,7 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
-    consumed_capacity_counter* consumed_capacity_collector,
+    uint64_t* item_length_in_bytes,
     bool include_all_embedded_attributes)
 {
     const auto& columns = selection.get_columns();
@@ -2657,8 +2657,8 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
         }
         std::string column_name = (*column_it)->name_as_text();
         if (column_name != executor::ATTRS_COLUMN_NAME) {
-            if (consumed_capacity_collector) {
-                (*consumed_capacity_collector) += column_name.length() + cell->size();
+            if (item_length_in_bytes) {
+                (*item_length_in_bytes) += column_name.length() + cell->size();
             }
             if (!attrs_to_get || attrs_to_get->contains(column_name)) {
                 // item is expected to start empty, and column_name are unique
@@ -2674,14 +2674,14 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
             auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
             for (auto entry : keys_and_values) {
                 std::string attr_name = value_cast<sstring>(entry.first);
-                if (consumed_capacity_collector) {
-                    (*consumed_capacity_collector) += attr_name.length();
+                if (item_length_in_bytes) {
+                    (*item_length_in_bytes) += attr_name.length();
                 }
                 if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
-                    if (consumed_capacity_collector && value.length()) {
+                    if (item_length_in_bytes && value.length()) {
                         // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                        (*consumed_capacity_collector) += value.length() - 1;
+                        (*item_length_in_bytes) += value.length() - 1;
                     }
                     rjson::value v = deserialize_item(value);
                     if (attrs_to_get) {
@@ -2698,8 +2698,8 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     // item is expected to start empty, and attribute
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
-                } else if (consumed_capacity_collector) {
-                    (*consumed_capacity_collector) += value_cast<bytes>(entry.second).length() - 1;
+                } else if (item_length_in_bytes) {
+                    (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
                 }
             }
         }
@@ -2712,7 +2712,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const cql3::selection::selection& selection,
         const query::result& query_result,
         const std::optional<attrs_to_get>& attrs_to_get,
-        consumed_capacity_counter* consumed_capacity_collector) {
+        uint64_t* item_length_in_bytes) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now());
@@ -2720,9 +2720,9 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
 
     auto result_set = builder.build();
     if (result_set->empty()) {
-        if (consumed_capacity_collector) {
+        if (item_length_in_bytes) {
             // empty results is counted as having a minimal length (e.g. 1 byte).
-            (*consumed_capacity_collector) += 1;
+            (*item_length_in_bytes) += 1;
         }
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
@@ -2733,7 +2733,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         // called describe_multi_item(), not this function.
         throw std::logic_error("describe_single_item() asked to describe multiple items");
     }
-    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item, consumed_capacity_collector);
+    describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item, item_length_in_bytes);
     return item;
 }
 
@@ -3452,7 +3452,7 @@ static rjson::value describe_item(schema_ptr schema,
         const std::optional<attrs_to_get>& attrs_to_get,
         consumed_capacity_counter& consumed_capacity,
         uint64_t& metric) {
-    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity);
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity._total_bytes);
     rjson::value item_descr = rjson::empty_object();
     if (opt_item) {
         rjson::add(item_descr, "Item", std::move(*opt_item));
