@@ -8,7 +8,6 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include <boost/test/tools/old/interface.hpp>
-#define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
 #include <utility>
@@ -24,6 +23,8 @@
 #include "test/lib/test_utils.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+
+BOOST_AUTO_TEST_SUITE(expr_test)
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -4673,3 +4674,5 @@ BOOST_AUTO_TEST_CASE(test_levellize_aggregation_depth) {
     // Somewhat fragile, but easiest way to test entire structure
     BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e2), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(TTL(r))))");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

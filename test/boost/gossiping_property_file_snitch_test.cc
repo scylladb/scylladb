@@ -9,7 +9,8 @@
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/test_utils.hh"
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/reactor.hh>
@@ -18,6 +19,8 @@
 #include "gms/inet_address.hh"
 #include "seastarx.hh"
 #include "locator/production_snitch_base.hh"
+
+BOOST_AUTO_TEST_SUITE(gossiping_property_file_snitch_test)
 
 static std::filesystem::path test_files_subdir("test/resource/snitch_property_files");
 
@@ -78,3 +81,5 @@ GOSSIPING_TEST_CASE(bad_format_5,              false);
 GOSSIPING_TEST_CASE(bad_format_6,              false);
 GOSSIPING_TEST_CASE(good_1,                    true);
 GOSSIPING_TEST_CASE(good_2,                    true);
+
+BOOST_AUTO_TEST_SUITE_END()

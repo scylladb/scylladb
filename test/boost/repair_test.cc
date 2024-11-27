@@ -18,10 +18,13 @@
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "schema/schema_registry.hh"
+
+BOOST_AUTO_TEST_SUITE(repair_test)
 
 // Helper mutation_fragment_queue that stores the received stream of
 // mutation_fragments in a passed in deque of mutation_fragment_v2.
@@ -269,3 +272,5 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
         BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + boundary.pk.external_memory_usage() + boundary.position.external_memory_usage() + sizeof(repair_row));
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

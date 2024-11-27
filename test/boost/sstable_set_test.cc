@@ -7,7 +7,8 @@
  */
 
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include <fmt/ranges.h>
 #include "db/config.hh"
@@ -21,6 +22,8 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "readers/from_mutations_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_set_test)
 
 using namespace sstables;
 
@@ -197,3 +200,5 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
 
     }, std::move(cfg));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

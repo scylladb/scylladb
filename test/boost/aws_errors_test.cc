@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE object_storage
-
 #include "utils/s3/aws_error.hh"
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/sstring.hh>
@@ -43,6 +41,8 @@ build_xml_response(const std::string& exception, const std::string& message, con
                        style == message_style::plural ? "<RequestId>" + requestId + "</RequestId>" : "",
                        style == message_style::plural ? "</OtherRoot>" : "");
 }
+
+BOOST_AUTO_TEST_SUITE(aws_errors_test)
 
 BOOST_AUTO_TEST_CASE(TestXmlErrorPayload) {
     std::string message = "Test Message";
@@ -108,3 +108,5 @@ BOOST_AUTO_TEST_CASE(TestErrorsWithoutPrefixParse) {
     BOOST_REQUIRE_EQUAL("JunkMessage", error.get_error_message());
     BOOST_REQUIRE_EQUAL(error.is_retryable(), aws::retryable::no);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

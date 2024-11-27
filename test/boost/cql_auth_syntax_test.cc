@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <string_view>
 
 #include <boost/test/unit_test.hpp>
@@ -17,6 +15,8 @@
 #include "cql3/role_options.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/util.hh"
+
+BOOST_AUTO_TEST_SUITE(cql_auth_syntax_test)
 
 //
 // Test basic CQL identifier quoting
@@ -354,3 +354,5 @@ BOOST_AUTO_TEST_CASE(create_role_with_hashed_no_quotation_marks) {
         cql3::util::do_with_parser("CREATE ROLE jane WITH HASHED = something;", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
         exceptions::syntax_exception);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -7,6 +7,8 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <chrono>
@@ -21,6 +23,8 @@
 #include <seastar/core/manual_clock.hh>
 #include <seastar/util/later.hh>
 #include <seastar/util/defer.hh>
+
+BOOST_AUTO_TEST_SUITE(raft_address_map_test)
 
 using namespace raft;
 using namespace service;
@@ -341,3 +345,5 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         }).get();
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

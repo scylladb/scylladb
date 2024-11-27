@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include "utils/murmur_hash.hh"
 #include "bytes.hh"
 #include <seastar/core/format.hh>
+
+BOOST_AUTO_TEST_SUITE(murmur_hash_test)
 
 static const bytes full_sequence("012345678901234567890123456789012345678901234567890123456789");
 
@@ -109,3 +109,5 @@ BOOST_AUTO_TEST_CASE(test_hash_output) {
         }
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -7,13 +7,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE json
-
 #include <boost/test/unit_test.hpp>
 
 #include <seastar/core/sstring.hh>
 
 #include "utils/rjson.hh"
+
+BOOST_AUTO_TEST_SUITE(json_test)
 
 using namespace seastar;
 
@@ -54,3 +54,5 @@ BOOST_AUTO_TEST_CASE(test_parsing_map_from_null) {
     BOOST_REQUIRE(map1 == map2);
     BOOST_REQUIRE(map1 == empty_map);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

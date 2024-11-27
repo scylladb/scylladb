@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <memory>
 #include <vector>
 #include <boost/test/unit_test.hpp>
 
 #include "utils/anchorless_list.hh"
+
+BOOST_AUTO_TEST_SUITE(anchorless_list_test)
 
 struct object : anchorless_list_base_hook<object> {
     int value;
@@ -72,3 +72,5 @@ BOOST_AUTO_TEST_CASE(test_achorless_list) {
     }
     BOOST_REQUIRE_EQUAL(current, moved_objects.size() * 2 + 1);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

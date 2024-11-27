@@ -11,7 +11,9 @@
 #include <boost/range/combine.hpp>
 #include <boost/test/tools/old/interface.hpp>
 #include <fmt/ranges.h>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "dht/token.hh"
 #include "dht/i_partitioner.hh"
@@ -28,6 +30,8 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/boost/total_order_check.hh"
+
+BOOST_AUTO_TEST_SUITE(partitioner_test)
 
 template <typename... Args>
 static
@@ -785,3 +789,5 @@ SEASTAR_THREAD_TEST_CASE(test_split_token_range_msb) {
         }
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

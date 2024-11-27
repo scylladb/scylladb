@@ -12,7 +12,8 @@
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 
 #include <seastar/core/future-util.hh>
@@ -23,6 +24,8 @@
 #include "db/commitlog/commitlog.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_proxy.hh"
+
+BOOST_AUTO_TEST_SUITE(batchlog_manager_test)
 
 static atomic_cell make_atomic_cell(data_type dt, bytes value) {
     return atomic_cell::make_live(*dt, 0, std::move(value));
@@ -66,3 +69,4 @@ SEASTAR_TEST_CASE(test_execute_batch) {
     });
 }
 
+BOOST_AUTO_TEST_SUITE_END()

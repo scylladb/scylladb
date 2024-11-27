@@ -6,7 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/random_utils.hh"
@@ -19,6 +20,8 @@
 #include "dht/murmur3_partitioner.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
+
+BOOST_AUTO_TEST_SUITE(compound_test)
 
 static std::vector<managed_bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<managed_bytes> result;
@@ -391,3 +394,5 @@ SEASTAR_THREAD_TEST_CASE(test_prefix_compound_validity) {
     BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b', '\x00', '\x01', 'a'}), marshal_exception); // to many components
     BOOST_REQUIRE_THROW(validate({'\x00', '\x02', 'a', 'b', '\x00', '\x01', 0}), marshal_exception); // wrong order of components
 }
+
+BOOST_AUTO_TEST_SUITE_END()

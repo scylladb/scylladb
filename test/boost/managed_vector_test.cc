@@ -7,10 +7,14 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "utils/managed_vector.hh"
 #include "utils/logalloc.hh"
+
+BOOST_AUTO_TEST_SUITE(managed_vector_test)
 
 static constexpr unsigned count = 125;
 
@@ -142,3 +146,5 @@ SEASTAR_THREAD_TEST_CASE(test_compaction) {
         verify_filled(vec);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

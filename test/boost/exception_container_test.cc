@@ -8,7 +8,8 @@
 
 #include "utils/exception_container.hh"
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/sstring.hh>
 
 using namespace seastar;
@@ -32,6 +33,8 @@ using foo_bar_container = utils::exception_container<foo_exception, bar_exceptio
 static sstring foo_bar_what(const foo_bar_container& fbc) {
     return fbc.accept([] (const auto& ex) { return ex.what(); });
 }
+
+BOOST_AUTO_TEST_SUITE(exception_container_test)
 
 SEASTAR_TEST_CASE(test_exception_container) {
     auto empty = foo_bar_container();
@@ -94,3 +97,5 @@ SEASTAR_TEST_CASE(test_exception_container_empty_accept) {
 
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

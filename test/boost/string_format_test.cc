@@ -7,8 +7,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE string_format
-
 #include <boost/test/unit_test.hpp>
 
 #include <fmt/format.h>
@@ -16,6 +14,8 @@
 #include <fmt/std.h>
 
 #include "utils/to_string.hh"
+
+BOOST_AUTO_TEST_SUITE(string_format_test)
 
 // Test scylla's string formatters and printers defined in utils/to_string.hh
 
@@ -56,3 +56,5 @@ BOOST_AUTO_TEST_CASE(test_optional_string_format,
     s = fmt::format("{}", sopt);
     BOOST_TEST_MESSAGE(fmt::format("Engaged opt: {}", s));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

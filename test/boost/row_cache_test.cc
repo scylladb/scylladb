@@ -13,7 +13,8 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/closeable.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -42,6 +43,8 @@
 #include "readers/delegating_v2.hh"
 #include "readers/empty_v2.hh"
 #include <seastar/testing/thread_test_case.hh>
+
+BOOST_AUTO_TEST_SUITE(row_cache_test)
 
 using namespace std::chrono_literals;
 
@@ -2181,7 +2184,7 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
         cache.populate(m1);
 
         auto apply = [&] (mutation m) {
-            ::apply(cache, underlying, m);
+            row_cache_test::apply(cache, underlying, m);
         };
 
         auto make_reader = [&] (const query::partition_slice& slice) {
@@ -4892,3 +4895,5 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     auto close_rd = deferred_close(rd);
     read_mutation_from_mutation_reader(rd).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

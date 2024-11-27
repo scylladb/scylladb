@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
+#include <boost/test/unit_test.hpp>
 
 #include <ranges>
 #include <stdexcept>
@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <fmt/format.h>
 
-#include <boost/test/included/unit_test.hpp>
 #include <deque>
 #include <random>
 #include "utils/chunked_vector.hh"
@@ -24,6 +23,8 @@
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/range/irange.hpp>
+
+BOOST_AUTO_TEST_SUITE(chunked_vector_test)
 
 using disk_array = utils::chunked_vector<uint64_t, 1024>;
 
@@ -467,3 +468,5 @@ BOOST_AUTO_TEST_CASE(test_value_init_ctor) {
         BOOST_REQUIRE_EQUAL(*it, v);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

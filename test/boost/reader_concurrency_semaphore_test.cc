@@ -25,13 +25,16 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <boost/test/unit_test.hpp>
 #include "readers/empty_v2.hh"
 #include "readers/from_mutations_v2.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(reader_concurrency_semaphore_test)
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;
@@ -720,7 +723,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
+        reader_concurrency_semaphore_test::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
     };
 
     require_can_admit(true, "semaphore in initial state");
@@ -2108,7 +2111,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
             seastar::compat::source_location sl = seastar::compat::source_location::current()) {
-        ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
+        reader_concurrency_semaphore_test::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
     };
 
     auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
@@ -2139,3 +2142,5 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
     }
     require_can_admit(true, "!need_cpu");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

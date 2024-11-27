@@ -7,12 +7,12 @@
  */
 
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include "utils/histogram_metrics_helper.hh"
+
+BOOST_AUTO_TEST_SUITE(estimated_histogram_test)
 
 template<uint64_t MIN, uint64_t MAX, std::vector<uint64_t>::size_type NUM_BUCKETS>
 std::string validate_histogram(utils::approx_exponential_histogram<MIN, MAX, NUM_BUCKETS>& h, const std::vector<uint64_t>& r) {
@@ -141,3 +141,4 @@ BOOST_AUTO_TEST_CASE(test_summary_infinite_bucket) {
     BOOST_CHECK_EQUAL(sc.summary()[2], 33554432);
 }
 
+BOOST_AUTO_TEST_SUITE_END()

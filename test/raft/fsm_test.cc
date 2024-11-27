@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE raft
-
 #include "raft/tracker.hh"
 #include "test/raft/helpers.hh"
 
@@ -21,6 +19,8 @@ std::ostream& boost_test_print_type(std::ostream& os, const vote_result& v) {
 }
 
 }
+
+BOOST_AUTO_TEST_SUITE(fsm_test)
 
 BOOST_AUTO_TEST_CASE(test_votes) {
     auto id1 = id();
@@ -2366,3 +2366,5 @@ BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
     BOOST_CHECK(output.state_changed);
     BOOST_CHECK(fsm.is_leader());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

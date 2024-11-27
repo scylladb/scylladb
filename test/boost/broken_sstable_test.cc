@@ -6,12 +6,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
 #include "test/boost/sstable_test.hh"
 #include "test/lib/exception_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(broken_sstable_test)
 
 using namespace sstables;
 
@@ -238,3 +241,5 @@ SEASTAR_TEST_CASE(compression_bytes_flipped) {
     return broken_sst("test/resource/sstables/badcompression", 2,
                "test/resource/sstables/badcompression/la-2-big-Statistics.db: file not found");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

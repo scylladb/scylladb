@@ -7,12 +7,16 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/manual_clock.hh>
 #include <chrono>
 
 #include "utils/recent_entries_map.hh"
 #include "utils/UUID.hh"
+
+BOOST_AUTO_TEST_SUITE(recent_entries_map_test)
 
 // Utility struct to ensure that utils::recent_entries_map
 // prevents unnecessary copies of entries.
@@ -196,3 +200,5 @@ SEASTAR_THREAD_TEST_CASE(test_update_and_remove_least_recent_entries) {
     map.remove_least_recent_entries(10min);
     BOOST_CHECK_EQUAL(map.size(), 0);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

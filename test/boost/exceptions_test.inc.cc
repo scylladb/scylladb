@@ -10,22 +10,6 @@
 //   handle_exception_optimized_test.cc
 //   handle_exception_fallback_test.cc
 
-#include <exception>
-#include <stdexcept>
-#include <type_traits>
-#include <cxxabi.h>
-#include <boost/test/unit_test_log.hpp>
-#include <boost/test/tools/old/interface.hpp>
-#include <boost/test/unit_test.hpp>
-
-#include "seastarx.hh"
-#include <seastar/core/future.hh>
-#include <seastar/testing/test_case.hh>
-#include <seastar/util/log.hh>
-
-#include "utils/assert.hh"
-#include "utils/exceptions.hh"
-
 class base_exception : public std::exception {};
 class derived_exception : public base_exception {};
 

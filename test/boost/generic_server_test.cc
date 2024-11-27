@@ -9,6 +9,7 @@
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/with_timeout.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/log.hh>
 
@@ -31,7 +32,11 @@ protected:
     }
 };
 
+BOOST_AUTO_TEST_SUITE(generic_server_test)
+
 SEASTAR_TEST_CASE(stop_without_listening) {
     test_server srv;
     co_await with_timeout(lowres_clock::now() + 5min, srv.stop());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

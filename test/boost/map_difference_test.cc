@@ -6,14 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include "map_difference.hh"
 
 #include <map>
 #include <set>
+
+BOOST_AUTO_TEST_SUITE(map_difference_test)
 
 using std::map;
 using std::set;
@@ -117,3 +117,5 @@ BOOST_AUTO_TEST_CASE(differing_values) {
     BOOST_REQUIRE(diff.entries_in_common.empty());
     BOOST_REQUIRE(diff.entries_differing.size() == 2);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

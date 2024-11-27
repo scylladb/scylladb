@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -43,6 +45,8 @@ bool operator==(const cql3::raw_value_view& a, const cql3::raw_value_view& b) {
 }
 
 } // namespace cql3
+
+BOOST_AUTO_TEST_SUITE(transport_test)
 
 SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     auto stream_id = tests::random::get_int<int16_t>();
@@ -171,3 +175,5 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     BOOST_CHECK_EQUAL(req.read_short(), 1);
     BOOST_CHECK_EQUAL(req.read_string(), "zed");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

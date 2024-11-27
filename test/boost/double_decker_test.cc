@@ -7,7 +7,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include <seastar/core/format.hh>
@@ -17,6 +18,8 @@
 #include "utils/double-decker.hh"
 #include "utils/logalloc.hh"
 #include "test/lib/random_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(double_decker_test)
 
 class compound_key {
 public:
@@ -379,3 +382,5 @@ SEASTAR_THREAD_TEST_CASE(test_range_erase) {
         }
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -8,7 +8,8 @@
 
 
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -40,6 +41,8 @@
 #include "readers/forwardable_v2.hh"
 #include "readers/compacting.hh"
 #include "readers/nonforwardable.hh"
+
+BOOST_AUTO_TEST_SUITE(mutation_reader_another_test)
 
 struct mock_consumer {
     struct result {
@@ -1171,3 +1174,5 @@ SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
     // This reader is not closed, but didn't start any operations, so it's safe for it to be destroyed.
     auto reader_v2 = make_mutation_reader<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

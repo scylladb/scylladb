@@ -12,8 +12,11 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
+
+BOOST_AUTO_TEST_SUITE(wasm_test)
 
 SEASTAR_TEST_CASE(test_long_udf_yields) {
     auto wasm_engine = wasmtime::create_engine(1024 * 1024);
@@ -101,3 +104,5 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     BOOST_CHECK_EQUAL(rets->pop_val()->i64(), 267914296);
     co_return;
 }
+
+BOOST_AUTO_TEST_SUITE_END()
