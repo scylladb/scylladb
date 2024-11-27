@@ -1769,7 +1769,11 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
 std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {});
+        uint64_t item_length = 0;
+        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {}, &item_length);
+        if (_consumed_capacity._total_bytes < item_length) {
+            _consumed_capacity._total_bytes = item_length;
+        }
         if (previous_item) {
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
@@ -1830,7 +1834,8 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         const partition_key& pk,
         const clustering_key& ck,
         service_permit permit,
-        alternator::stats& stats)
+        alternator::stats& stats,
+        uint64_t& item_length)
 {
     stats.reads_before_write++;
     auto selection = cql3::selection::selection::wildcard(schema);
@@ -1838,8 +1843,8 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     auto cl = db::consistency_level::LOCAL_QUORUM;
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
         if (previous_item) {
             return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
         } else {
@@ -1863,7 +1868,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats).then(
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats, _consumed_capacity._total_bytes).then(
                     [this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
@@ -2087,6 +2092,9 @@ public:
             _return_attributes = std::move(*previous_item);
         } else {
             _return_attributes = {};
+        }
+        if (_consumed_capacity._total_bytes == 0) {
+            _consumed_capacity._total_bytes = 1;
         }
         return _mutation_builder.build(_schema, ts);
     }
