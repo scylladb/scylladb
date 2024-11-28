@@ -2735,7 +2735,7 @@ std::vector<query::clustering_range> get_equivalent_ranges(
 }
 
 /// Extracts raw multi-column bounds from exprs; last one wins.
-query::clustering_range range_from_raw_bounds(
+std::vector<query::clustering_range> range_from_raw_bounds(
         const std::vector<predicate>& exprs, const query_options& options, const schema& schema) {
     opt_bound lb, ub;
     for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
@@ -2755,7 +2755,7 @@ query::clustering_range range_from_raw_bounds(
             }
         }
     }
-    return {lb, ub};
+    return {{lb, ub}};
 }
 
 } // anonymous namespace
@@ -2774,7 +2774,7 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
             const auto& binop = expr::as<binary_operator>(r);
             if (is_clustering_order(binop)) {
               return [this] (const query_options& options) -> std::vector<query::clustering_range> {
-                return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
+                return range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema);
               };
             }
             for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
