@@ -50,6 +50,7 @@
 #include <utility>
 
 #include "idl/repair.dist.hh"
+#include "idl/node_ops.dist.hh"
 #include "utils/user_provided_param.hh"
 
 using namespace std::chrono_literals;
@@ -1372,7 +1373,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
                 parallel_for_each(participants, [&rs, uuid, &req] (gms::inet_address node) {
-                    return rs._messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -2527,7 +2528,7 @@ future<> repair::tablet_repair_task_impl::run() {
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
                 parallel_for_each(participants, [&rs, uuid, &req] (gms::inet_address node) {
-                    return rs._messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);

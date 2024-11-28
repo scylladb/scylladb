@@ -50,3 +50,5 @@ struct node_ops_cmd_response {
     bool ok;
     std::list<node_ops_id> pending_ops;
 };
+
+verb [[with_client_info]] node_ops_cmd(node_ops_cmd_request) -> node_ops_cmd_response

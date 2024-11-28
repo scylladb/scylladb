@@ -16,6 +16,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include "idl/node_ops.dist.hh"
 
 static logging::logger nlogger("node_ops");
 
@@ -104,7 +105,7 @@ void node_ops_ctl::start_heartbeat_updater(node_ops_cmd cmd) {
 future<> node_ops_ctl::query_pending_op() {
     req.cmd = node_ops_cmd::query_pending_ops;
     co_await coroutine::parallel_for_each(sync_nodes, [this] (const gms::inet_address& node) -> future<> {
-        auto resp = co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
+        auto resp = co_await ser::node_ops_rpc_verbs::send_node_ops_cmd(&ss._messaging.local(), netw::msg_addr(node), req);
         nlogger.debug("{}[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", desc, uuid(), node, resp.pending_ops);
         if (boost::find(resp.pending_ops, uuid()) == resp.pending_ops.end()) {
             throw std::runtime_error(::format("{}[{}]: Node {} no longer tracks the operation", desc, uuid(), node));
@@ -152,7 +153,7 @@ future<> node_ops_ctl::send_to_all(node_ops_cmd cmd) {
             co_return;
         }
         try {
-            co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
+            co_await ser::node_ops_rpc_verbs::send_node_ops_cmd(&ss._messaging.local(), netw::msg_addr(node), req);
             nlogger.debug("{}[{}]: Got {} response from node={}", desc, uuid(), op_desc, node);
         } catch (const seastar::rpc::unknown_verb_error&) {
             if (cmd_category == node_ops_cmd_category::prepare) {
@@ -195,7 +196,7 @@ future<> node_ops_ctl::heartbeat_updater(node_ops_cmd cmd) {
         auto req = node_ops_cmd_request{cmd, uuid(), {}, {}, {}};
         co_await coroutine::parallel_for_each(sync_nodes, [&] (const gms::inet_address& node) -> future<> {
             try {
-                co_await ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req);
+                co_await ser::node_ops_rpc_verbs::send_node_ops_cmd(&ss._messaging.local(), netw::msg_addr(node), req);
                 nlogger.debug("{}[{}]: Got heartbeat response from node={}", desc, uuid(), node);
             } catch (...) {
                 nlogger.warn("{}[{}]: Failed to get heartbeat response from node={}", desc, uuid(), node);

@@ -488,11 +488,6 @@ public:
     future<> unregister_repair_get_diff_algorithms();
     future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(msg_addr id);
 
-    // Wrapper for NODE_OPS_CMD
-    void register_node_ops_cmd(std::function<future<node_ops_cmd_response> (const rpc::client_info& cinfo, node_ops_cmd_request)>&& func);
-    future<> unregister_node_ops_cmd();
-    future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
-
     // Wrapper for TASKS_GET_CHILDREN
     void register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func);
     future<> unregister_tasks_get_children();

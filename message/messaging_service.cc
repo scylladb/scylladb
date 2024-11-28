@@ -1368,17 +1368,6 @@ future<std::vector<row_level_diff_detect_algorithm>> messaging_service::send_rep
     return send_message<future<std::vector<row_level_diff_detect_algorithm>>>(this, messaging_verb::REPAIR_GET_DIFF_ALGORITHMS, std::move(id));
 }
 
-// Wrapper for NODE_OPS_CMD
-void messaging_service::register_node_ops_cmd(std::function<future<node_ops_cmd_response> (const rpc::client_info& cinfo, node_ops_cmd_request)>&& func) {
-    register_handler(this, messaging_verb::NODE_OPS_CMD, std::move(func));
-}
-future<> messaging_service::unregister_node_ops_cmd() {
-    return unregister_handler(messaging_verb::NODE_OPS_CMD);
-}
-future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, node_ops_cmd_request req) {
-    return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
-}
-
 // Wrapper for TASKS_CHILDREN_REQUEST
 void messaging_service::register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func) {
     register_handler(this, messaging_verb::TASKS_GET_CHILDREN, std::move(func));
