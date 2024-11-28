@@ -196,6 +196,28 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
     }, cfg);
 }
 
+// Reproducer for:
+//   https://github.com/scylladb/scylla/issues/21719
+SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
+        BOOST_REQUIRE_GT(smp::count, 1);
+        const sstring ks_name = "ks";
+        const sstring cf_name = "cf";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (k TEXT PRIMARY KEY, v INT);", ks_name, cf_name)).get();
+        const table_id uuid = e.local_db().find_uuid(ks_name, cf_name);
+
+        replica::database::truncate_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, cf_name, db_clock::now(), false /* with_snapshot */).get();
+
+        auto res = e.execute_cql(fmt::format("SELECT * FROM system.truncated WHERE table_uuid = {}", uuid)).get();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+        BOOST_REQUIRE(rows);
+        auto row_count = rows->rs().result_set().size();
+        BOOST_REQUIRE_EQUAL(row_count, smp::count);
+    }, cfg);
+}
+
 SEASTAR_TEST_CASE(test_querying_with_limits) {
     return do_with_cql_env_and_compaction_groups([](cql_test_env& e) {
             // FIXME: restore indent.
