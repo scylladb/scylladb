@@ -2400,11 +2400,12 @@ std::vector<query::clustering_range> get_equivalent_ranges(
         const query::clustering_range& cql_order_range, const schema& schema);
 
 /// Calculates clustering bounds for the multi-column case.
-std::vector<query::clustering_range> get_multi_column_clustering_bounds(
-        const query_options& options,
+std::function<std::vector<query::clustering_range> (const query_options&)>
+build_get_multi_column_clustering_bounds_fn(
         schema_ptr schema,
         const std::vector<predicate>& multi_column_restrictions,
         bool all_natural, bool all_reverse) {
+  return [schema, multi_column_restrictions, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
     multi_column_range_accumulator acc{options, schema};
     for (const auto& restr : multi_column_restrictions | std::views::transform(&predicate::filter)) {
         expr::visit(acc, restr);
@@ -2425,6 +2426,7 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
         }
     }
     return bounds;
+  };
 }
 
 /// Reverses the range if the type is reversed.  Why don't we have interval::reverse()??
@@ -2766,10 +2768,8 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
                 }
             }
         }
-      return [this, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
-        return get_multi_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions,
+      return build_get_multi_column_clustering_bounds_fn(_schema, _clustering_prefix_restrictions,
                 all_natural, all_reverse);
-      };
     } else {
       return [&] (const query_options& options) -> std::vector<query::clustering_range> {
         return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
