@@ -83,6 +83,7 @@
 #include "db/operation_type.hh"
 #include "locator/util.hh"
 #include "tools/build_info.hh"
+#include "view_info.hh"
 
 namespace bi = boost::intrusive;
 
@@ -5735,6 +5736,14 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     exec.reserve(partition_ranges.size());
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+    if (schema->is_view() && !schema->view_info()->base_info()) {
+        // If this is a reverse read, the reverse schema might have just been added
+        // to the schema registry, and the base info might not be set yet, so we set it here.
+        // Reverse reads are not supported for partition range queries,
+        // so query_partition_key_range() doesn't require this adjustment.
+        schema_ptr base_schema = local_db().find_schema(schema->view_info()->base_id());
+        schema->view_info()->set_base_info(schema->view_info()->make_base_dependent_view_info(*base_schema));
+    }
 
     replica::table& table = _db.local().find_column_family(schema->id());
     auto erm = table.get_effective_replication_map();
