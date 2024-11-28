@@ -2252,14 +2252,20 @@ struct range_less {
     }
 };
 
-/// An expression visitor that translates multi-column atoms into clustering ranges.
+
 struct multi_column_range_accumulator {
-    const query_options& options;
-    const schema_ptr schema;
     std::vector<query::clustering_range> ranges{query::clustering_range::make_open_ended_both_sides()};
+};
+
+/// An expression visitor that translates multi-column atoms into functions that accumulate
+/// clustering ranges into multi_column_range_accumulator.
+struct multi_column_range_accumulator_builder {
+    const schema_ptr schema;
+    std::vector<std::function<void (multi_column_range_accumulator&, const query_options&)>> builders;
     const clustering_key_prefix::prefix_equal_tri_compare prefix3cmp = get_unreversed_tri_compare(*schema);
 
     void operator()(const binary_operator& binop) {
+      builders.emplace_back([binop, schema = schema, prefix3cmp = prefix3cmp] (multi_column_range_accumulator& acc, const query_options& options) {
         auto& lhs = expr::as<tuple_constructor>(binop.lhs);
         if (is_compare(binop.op)) {
             auto opt_values = expr::get_tuple_elements(expr::evaluate(binop.rhs, options), *type_of(binop.rhs));
@@ -2270,7 +2276,7 @@ struct multi_column_range_accumulator {
                         opt_values[i],
                         "Invalid null value in condition for column {}", col.col->name_as_text());
             }
-            intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
+            intersect_all(acc, prefix3cmp, to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
             const cql3::raw_value tup = expr::evaluate(binop.rhs, options);
             utils::chunked_vector<std::vector<managed_bytes_opt>> tuple_elems;
@@ -2289,10 +2295,11 @@ struct multi_column_range_accumulator {
                             "Invalid null value in condition for column {}", col.col->name_as_text());
                 }
             }   
-            process_in_values(std::move(tuple_elems));
+            process_in_values(acc, prefix3cmp, schema, std::move(tuple_elems));
         } else {
             on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
         }
+      });
     }
 
     void operator()(const conjunction& c) {
@@ -2300,6 +2307,9 @@ struct multi_column_range_accumulator {
     }
 
     void operator()(const constant& v) {
+      // We might have resolved this at prepare time, but...
+      builders.emplace_back([v] (multi_column_range_accumulator& acc, const query_options& options) {
+        auto& ranges = acc.ranges;
         std::optional<bool> bool_val = get_bool_value(v);
         if (!bool_val.has_value()) {
             on_internal_error(rlogger, "non-bool constant encountered outside binary operator");
@@ -2308,6 +2318,7 @@ struct multi_column_range_accumulator {
         if (*bool_val == false) {
             ranges.clear();
         }
+      });
     }
 
     void operator()(const column_value&) {
@@ -2363,7 +2374,8 @@ struct multi_column_range_accumulator {
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.
-    void intersect_all(const query::clustering_range& v) {
+    static void intersect_all(multi_column_range_accumulator& acc, const clustering_key_prefix::prefix_equal_tri_compare& prefix3cmp, const query::clustering_range& v) {
+        auto& ranges = acc.ranges;
         for (auto& r : ranges) {
             auto intrs = intersection(r, v, prefix3cmp);
             if (!intrs) {
@@ -2376,7 +2388,8 @@ struct multi_column_range_accumulator {
 
     template<std::ranges::range Range>
     requires std::convertible_to<typename Range::value_type::value_type, managed_bytes_opt>
-    void process_in_values(Range in_values) {
+    static void process_in_values(multi_column_range_accumulator& acc, const clustering_key_prefix::prefix_equal_tri_compare& prefix3cmp, const schema_ptr& schema, Range in_values) {
+        auto& ranges = acc.ranges;
         if (ranges.empty()) {
             return; // Shortcircuit an easy case.
         }
@@ -2405,10 +2418,15 @@ build_get_multi_column_clustering_bounds_fn(
         schema_ptr schema,
         const std::vector<predicate>& multi_column_restrictions,
         bool all_natural, bool all_reverse) {
-  return [schema, multi_column_restrictions, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
-    multi_column_range_accumulator acc{options, schema};
+    multi_column_range_accumulator_builder acc_builder{schema};
     for (const auto& restr : multi_column_restrictions | std::views::transform(&predicate::filter)) {
-        expr::visit(acc, restr);
+        expr::visit(acc_builder, restr);
+    }
+    auto range_builders = std::move(acc_builder.builders);
+  return [schema, range_builders, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
+    multi_column_range_accumulator acc;
+    for (auto& builder : range_builders) {
+        builder(acc, options);
     }
     auto bounds = std::move(acc.ranges);
 
