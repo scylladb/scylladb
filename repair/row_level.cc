@@ -49,7 +49,7 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
-#include "idl/partition_checksum.dist.hh"
+#include "idl/repair.dist.hh"
 #include "readers/empty_v2.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
@@ -2565,11 +2565,11 @@ future<> repair_service::init_ms_handlers() {
     ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
         return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
     });
-    ser::partition_checksum_rpc_verbs::register_repair_update_system_table(&ms, [this] (const rpc::client_info& cinfo, repair_update_system_table_request req) {
+    ser::repair_rpc_verbs::register_repair_update_system_table(&ms, [this] (const rpc::client_info& cinfo, repair_update_system_table_request req) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return repair_update_system_table_handler(from, std::move(req));
     });
-    ser::partition_checksum_rpc_verbs::register_repair_flush_hints_batchlog(&ms, [this] (const rpc::client_info& cinfo, repair_flush_hints_batchlog_request req) {
+    ser::repair_rpc_verbs::register_repair_flush_hints_batchlog(&ms, [this] (const rpc::client_info& cinfo, repair_flush_hints_batchlog_request req) {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return repair_flush_hints_batchlog_handler(from, std::move(req));
     });
@@ -2594,8 +2594,7 @@ future<> repair_service::uninit_ms_handlers() {
         ms.unregister_repair_get_estimated_partitions(),
         ms.unregister_repair_set_estimated_partitions(),
         ms.unregister_repair_get_diff_algorithms(),
-        ser::partition_checksum_rpc_verbs::unregister_repair_update_system_table(&ms),
-        ser::partition_checksum_rpc_verbs::unregister_repair_flush_hints_batchlog(&ms)
+        ser::repair_rpc_verbs::unregister(&ms)
         ).discard_result();
 }
 
@@ -3019,7 +3018,7 @@ private:
         co_await coroutine::parallel_for_each(all_nodes, [this, req] (gms::inet_address node) -> future<> {
             try {
                 auto& ms = _shard_task.messaging.local();
-                repair_update_system_table_response resp = co_await ser::partition_checksum_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
+                repair_update_system_table_response resp = co_await ser::repair_rpc_verbs::send_repair_update_system_table(&ms, netw::messaging_service::msg_addr(node), req);
                 (void)resp;  // nothing to do with the response yet
                 rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", _shard_task.global_repair_id.uuid(), node);
             } catch (...) {

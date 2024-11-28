@@ -35,7 +35,7 @@ set(idl_headers
   streaming.idl.hh
   paging_state.idl.hh
   frozen_schema.idl.hh
-  partition_checksum.idl.hh
+  repair.idl.hh
   replay_position.idl.hh
   mutation.idl.hh
   query.idl.hh

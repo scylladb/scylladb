@@ -49,7 +49,7 @@
 #include <atomic>
 #include <utility>
 
-#include "idl/partition_checksum.dist.hh"
+#include "idl/repair.dist.hh"
 #include "utils/user_provided_param.hh"
 
 using namespace std::chrono_literals;
@@ -408,7 +408,7 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
                         uuid, node, participants);
                 try {
                     auto& ms = get_messaging();
-                    auto resp = co_await ser::partition_checksum_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
+                    auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
                     if (resp.flush_time == gc_clock::time_point()) {
                         // This means the node does not support sending flush_time back. Use the time when the flush is requested for flush_time.
                         rlogger.debug("repair[{}]: Got empty flush_time from node={}. Please upgrade the node={}.", uuid, node, node);
