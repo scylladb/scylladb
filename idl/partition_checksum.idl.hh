@@ -73,58 +73,6 @@ struct repair_row_level_start_response {
     repair_row_level_start_status status;
 };
 
-enum class node_ops_cmd : uint32_t {
-     removenode_prepare,
-     removenode_heartbeat,
-     removenode_sync_data,
-     removenode_abort,
-     removenode_done,
-     replace_prepare,
-     replace_prepare_mark_alive,
-     replace_prepare_pending_ranges,
-     replace_heartbeat,
-     replace_abort,
-     replace_done,
-     decommission_prepare,
-     decommission_heartbeat,
-     decommission_abort,
-     decommission_done,
-     bootstrap_prepare,
-     bootstrap_heartbeat,
-     bootstrap_abort,
-     bootstrap_done,
-     query_pending_ops,
-     repair_updater,
-};
-
-class node_ops_id final {
-    utils::UUID uuid();
-};
-
-struct node_ops_cmd_request {
-    // Mandatory field, set by all cmds
-    node_ops_cmd cmd;
-    // Mandatory field, set by all cmds
-    node_ops_id ops_uuid;
-    // Optional field, list nodes to ignore, set by all cmds
-    std::list<gms::inet_address> ignore_nodes;
-    // Optional field, list leaving nodes, set by decommission and removenode cmd
-    std::list<gms::inet_address> leaving_nodes;
-    // Optional field, map existing nodes to replacing nodes, set by replace cmd
-    std::unordered_map<gms::inet_address, gms::inet_address> replace_nodes;
-    // Optional field, map bootstrapping nodes to bootstrap tokens, set by bootstrap cmd
-    std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
-    // Optional field, list uuids of tables being repaired, set by repair cmd
-    std::list<table_id> repair_tables;
-};
-
-struct node_ops_cmd_response {
-    // Mandatory field, set by all cmds
-    bool ok;
-    // Optional field, set by query_pending_ops cmd
-    std::list<node_ops_id> pending_ops;
-};
-
 struct repair_update_system_table_request {
     tasks::task_id repair_uuid;
     table_id table_uuid;

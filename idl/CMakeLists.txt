@@ -63,6 +63,7 @@ set(idl_headers
   utils.idl.hh
   gossip.idl.hh
   migration_manager.idl.hh
+  node_ops.idl.hh
   )
 
 foreach(idl_header ${idl_headers})

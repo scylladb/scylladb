@@ -1316,6 +1316,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/utils.idl.hh',
         'idl/gossip.idl.hh',
         'idl/migration_manager.idl.hh',
+        "idl/node_ops.idl.hh",
 
         ]
 
