@@ -21,6 +21,11 @@ class big_decimal {
 private:
     int32_t _scale;
     boost::multiprecision::cpp_int _unscaled_value;
+
+private:
+    std::strong_ordering tri_cmp_slow(const big_decimal& other) const;
+    std::strong_ordering tri_cmp_positive_nonzero_different_scale(const big_decimal& other) const;
+
 public:
     enum class rounding_mode {
         HALF_EVEN,
@@ -43,6 +48,7 @@ public:
     big_decimal& operator-=(const big_decimal& other);
     big_decimal operator+(const big_decimal& other) const;
     big_decimal operator-(const big_decimal& other) const;
+    big_decimal operator-() const;
     big_decimal div(const ::uint64_t y, const rounding_mode mode) const;
 };
 

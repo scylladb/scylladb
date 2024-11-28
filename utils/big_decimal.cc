@@ -134,13 +134,111 @@ sstring big_decimal::to_string() const
     return str;
 }
 
-std::strong_ordering big_decimal::operator<=>(const big_decimal& other) const
+std::strong_ordering big_decimal::tri_cmp_slow(const big_decimal& other) const
 {
     auto max_scale = std::max(_scale, other._scale);
     boost::multiprecision::cpp_int rescale(10);
     boost::multiprecision::cpp_int x = _unscaled_value * boost::multiprecision::pow(rescale, max_scale - _scale);
     boost::multiprecision::cpp_int y = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
     return x.compare(y) <=> 0;
+}
+
+std::strong_ordering big_decimal::operator<=>(const big_decimal& other) const
+{
+    if (_scale == other._scale) {
+        return _unscaled_value.compare(other._unscaled_value) <=> 0;
+    }
+
+    // boost::multiprecision::sign() returns -1, 0 or 1
+    const int sign = boost::multiprecision::sign(_unscaled_value);
+    const int sign_other = boost::multiprecision::sign(other._unscaled_value);
+    if (sign != sign_other) {
+        return sign <=> sign_other;
+    }
+    // At this point we know the two signs are equal, so if sign == 0, both signs
+    // and consequently both numbers are zeros.
+    if (sign == 0) {
+        return std::strong_ordering::equal;
+    }
+
+    // At this point we know that both numbers have the same sign, so if one is negative, the other is too.
+    // If the number are negative, we invert the sign and compare them in reverse.
+    // This creates a copy, but the copy cannot be avoided anyway, because
+    // boost::multiprecision::msb() (used below) doesn't work with negative numbers.
+    if (sign < 0) {
+        auto a = -*this;
+        auto b = -other;
+        return b.tri_cmp_positive_nonzero_different_scale(a);
+    }
+    return tri_cmp_positive_nonzero_different_scale(other);
+}
+
+std::strong_ordering big_decimal::tri_cmp_positive_nonzero_different_scale(const big_decimal& other) const
+{
+    // At this point we know that the numbers:
+    // * have different scale
+    // * are positive
+    // * neither is zero
+    //
+    // The numbers have the form:
+    //
+    //      auto number = _unscaled_value * std::pow(10, -_scale);
+    //      auto number_other = other._unscaled_value * std::pow(10, -other._scale);
+    //
+    // To compare them, we make the unscaled values the same (or close), so we can directly compare the scales.
+    // To do that we want to compute unscaled_ratio_log2:
+    //
+    //      auto unscaled_ratio = _unscaled_value / other._unscaled_value;
+    //      auto unscaled_ratio_log2 = log2(unscaled_ratio);
+    //
+    // To avoid using division and then calculating a log2(), we use the MSB of
+    // both numbers to infer unscaled_ratio_log2 directly.
+    const int64_t msb = boost::multiprecision::msb(_unscaled_value);
+    const int64_t msb_other = boost::multiprecision::msb(other._unscaled_value);
+    const int64_t unscaled_ratio_log2 = msb - msb_other;
+
+    // Now we can rewrite the original numbers as follows:
+    //
+    //      auto number = _unscaled_value * std::pow(10, -_scale);
+    //      auto number_other = other._unscaled_value * std::pow(10, -other._scale);
+    //      auto number_other_approx = _unscaled_value * std::pow(2, unscaled_ratio_log2) * std::pow(10, -other._scale);
+    //
+    // Notice that number_other_approx != number_other, but it is close, the following holds:
+    //
+    //      assert(number_other/2 <= number_other_approx && number_other_approx <= number_other*2);
+    //
+    // Now we can almost compare the two scales, we just need to bring the scale bases to the same base of 10.
+    // We can observe that:
+    //
+    //      std::pow(2, x) = std::pow(10, x / log2(10));
+    //
+    // Using this we can rewrite the above numbers again:
+    //
+    //      auto scale_adjustement = unscaled_ratio_log2 / log2_10;
+    //
+    //      auto number = _unscaled_value * std::pow(10, -_scale);
+    //      auto number_other = other._unscaled_value * std::pow(10, -other._scale);
+    //      auto number_other_approx = _unscaled_value * std::pow(10, scale_adjustement - other._scale);
+    const static double log2_10 = std::log2(10.0);
+    const double scale_adjustement = double(unscaled_ratio_log2) / log2_10;
+
+    // Now the scales are directly comparable.
+    double diff_scale = double(_scale) - double(other._scale);
+    // Note that diff_scale has inverted sign, because the implicit sign of _scale is negative,
+    // We have to use subtraction here to account for that.
+    diff_scale -= scale_adjustement;
+
+    // This is our confidence window for estimating the difference (in the power of 10) between the numbers.
+    // We have to account for two things here:
+    // * inaccuracy in the log2(10)
+    // * maximum difference between the unscaled values, after normalizing them to the same bit-count, which is order of 2
+    //
+    // If the numbers are closer than our confidence window, we fall back to slow but precise tri_cmp_slow().
+    if (-1.0 < diff_scale && diff_scale < 1.0) {
+        return tri_cmp_slow(other);
+    }
+    // Need to invert the sign, see comment above calculating diff_scale.
+    return int64_t(-diff_scale) <=> 0;
 }
 
 big_decimal& big_decimal::operator+=(const big_decimal& other)
@@ -181,6 +279,13 @@ big_decimal big_decimal::operator+(const big_decimal& other) const {
 big_decimal big_decimal::operator-(const big_decimal& other) const {
     big_decimal ret(*this);
     ret -= other;
+    return ret;
+}
+
+big_decimal big_decimal::operator-() const {
+    big_decimal ret;
+    ret._unscaled_value = -_unscaled_value;
+    ret._scale = _scale;
     return ret;
 }
 

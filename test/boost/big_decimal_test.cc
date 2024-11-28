@@ -203,3 +203,118 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_sub) {
     test_sub("9999999999999999999999999999999999999", "-1.000e0", "10000000000000000000000000000000000000.000");
     test_sub("+10.", "1.e+1", "0");
 }
+
+
+BOOST_AUTO_TEST_CASE(test_boost_multiprecision_sign) {
+    namespace bmp = boost::multiprecision;
+
+    // Validate assumption made about boost::multiprecision::sign
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(-10000)), -1);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(-55545456)), -1);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(-1)), -1);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(0)), 0);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(1)), 1);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(10000)), 1);
+    BOOST_REQUIRE_EQUAL(bmp::sign(bmp::cpp_int(55545456)), 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_big_decimal_cmp) {
+    const auto fmt_ordering = [] (std::strong_ordering r) {
+        if (r == std::strong_ordering::less) {
+            return "<";
+        } else if (r == std::strong_ordering::equal) {
+            return "=";
+        } else if (r == std::strong_ordering::greater) {
+            return ">";
+        } else {
+            return "?";
+        }
+    };
+    // Some of the numbers in this test are truly humongous, converting them to string will stress the machine and will make the test output unusable.
+    // So avoid rendering the numbers using big_decimal::to_string(), just print the unscaled value and the scale instead.
+    const auto fmt_decimal = [] (const big_decimal& x) {
+        return fmt::format("{}**{}", x.unscaled_value().str(), -int64_t(x.scale()));
+    };
+    auto test_cmp = [&] (const big_decimal& a, const big_decimal& b, std::strong_ordering expected_result, std::source_location sl = std::source_location::current()) {
+        fmt::print("checking {} {} {} @ {}:{}\n", fmt_decimal(a), fmt_ordering(expected_result), fmt_decimal(b), sl.file_name(), sl.line());
+        auto res = a <=> b;
+        if (res != expected_result) {
+            BOOST_FAIL(fmt::format("{} <=> {}: expected result: {}, but got {}", fmt_decimal(a), fmt_decimal(b), fmt_ordering(expected_result), fmt_ordering(res)));
+        }
+    };
+
+    // Test compare with same scale, should hit early return for same scale.
+    test_cmp(big_decimal("1"), big_decimal("-1"), std::strong_ordering::greater);
+    test_cmp(big_decimal("1.3345E3"), big_decimal("-1.3344E3"), std::strong_ordering::greater);
+    test_cmp(big_decimal("18E2"), big_decimal("2E2"), std::strong_ordering::greater);
+
+    // Test compare with different signs, should hit early return for different signs.
+    test_cmp(big_decimal("-1.3345E3"), big_decimal("1"), std::strong_ordering::less);
+    test_cmp(big_decimal("1.3345E3"), big_decimal("-1.3344E5"), std::strong_ordering::greater);
+
+    // Test compare against 0, should hit early return for different zero.
+    test_cmp(big_decimal("0"), big_decimal("0"), std::strong_ordering::equal);
+    test_cmp(big_decimal("0E6"), big_decimal("0E1"), std::strong_ordering::equal);
+    test_cmp(big_decimal("1"), big_decimal("0"), std::strong_ordering::greater);
+    test_cmp(big_decimal("1"), big_decimal("0E7"), std::strong_ordering::greater);
+    test_cmp(big_decimal("1.32432345E7"), big_decimal("0"), std::strong_ordering::greater);
+    test_cmp(big_decimal("-1"), big_decimal("0"), std::strong_ordering::less);
+    test_cmp(big_decimal("-1"), big_decimal("0E-4"), std::strong_ordering::less);
+    test_cmp(big_decimal("-1.3345E3"), big_decimal("0"), std::strong_ordering::less);
+    test_cmp(big_decimal("0"), big_decimal("1"), std::strong_ordering::less);
+    test_cmp(big_decimal("0"), big_decimal("187687E3"), std::strong_ordering::less);
+    test_cmp(big_decimal("0"), big_decimal("-187687E3"), std::strong_ordering::greater);
+
+    // Test compare scale-compare algorithm.
+    test_cmp(big_decimal("1.1221310000000023424234E9"), big_decimal("1.267687687968768686"), std::strong_ordering::greater);
+    test_cmp(big_decimal("1.267687687968768686"), big_decimal("1.1221310000000023424234E9"), std::strong_ordering::less);
+    test_cmp(big_decimal("134252342E9"), big_decimal("100023424234E19"), std::strong_ordering::less);
+    test_cmp(big_decimal("-1.1221310000000023424234E9"), big_decimal("-1.267687687968768686"), std::strong_ordering::less);
+    test_cmp(big_decimal("-1.267687687968768686"), big_decimal("-1.1221310000000023424234E9"), std::strong_ordering::greater);
+    test_cmp(big_decimal("-134252342E9"), big_decimal("-100023424234E19"), std::strong_ordering::greater);
+
+    const auto min_scale = std::numeric_limits<int32_t>::min();
+    const auto max_scale = std::numeric_limits<int32_t>::max();
+    const auto huge_unscaled_number = std::numeric_limits<uint64_t>::max();
+
+    // Test compare numbers with huge differences, this used to cause the comparison to allocate large amount of memory and generate stalls.
+    // Reproduces https://github.com/scylladb/scylladb/issues/21716
+    test_cmp(big_decimal("1789679678670986897698780986986E99999999"), big_decimal("1789679678670986897698780986986E-99999999"), std::strong_ordering::greater);
+    test_cmp(big_decimal(max_scale, 1), big_decimal("1"), std::strong_ordering::less);
+    test_cmp(big_decimal(min_scale, 1), big_decimal("1"), std::strong_ordering::greater);
+    test_cmp(big_decimal(max_scale, -1), big_decimal("-1"), std::strong_ordering::greater);
+    test_cmp(big_decimal(min_scale, -1), big_decimal("-1"), std::strong_ordering::less);
+
+    // Test the edges of the compare scale-compare algorithm.
+    // Note, scale has implicit inverted sign.
+    test_cmp(big_decimal(max_scale, huge_unscaled_number), big_decimal(min_scale, huge_unscaled_number), std::strong_ordering::less);
+    test_cmp(big_decimal(min_scale, huge_unscaled_number), big_decimal(max_scale, huge_unscaled_number), std::strong_ordering::greater);
+    test_cmp(big_decimal(max_scale - 3, huge_unscaled_number), big_decimal(max_scale, huge_unscaled_number), std::strong_ordering::greater);
+    test_cmp(big_decimal(max_scale, huge_unscaled_number), big_decimal(max_scale - 3, huge_unscaled_number), std::strong_ordering::less);
+    test_cmp(big_decimal(min_scale, huge_unscaled_number), big_decimal(min_scale + 3, huge_unscaled_number), std::strong_ordering::greater);
+    test_cmp(big_decimal(min_scale + 3, huge_unscaled_number), big_decimal(min_scale, huge_unscaled_number), std::strong_ordering::less);
+
+    // Test the comparison with numbers such that the difference is very close to the confidence window.
+    test_cmp(big_decimal("17.921310000000023424234"), big_decimal("1"), std::strong_ordering::greater); // just below
+    test_cmp(big_decimal("-18.891310000000023424234"), big_decimal("-1"), std::strong_ordering::less); // just above
+    test_cmp(big_decimal("-1"), big_decimal("-17.921310000000023424234"), std::strong_ordering::greater); // just below
+    test_cmp(big_decimal("1"), big_decimal("18.891310000000023424234"), std::strong_ordering::less); // just above
+
+    // Test fall-back to slow, should hit fall-back to slow and precise tri-compare.
+    test_cmp(big_decimal(-4, 1), big_decimal(-3, 15), std::strong_ordering::less);
+    test_cmp(big_decimal("1.1221310000000023424234"), big_decimal("1"), std::strong_ordering::greater);
+    test_cmp(big_decimal("1"), big_decimal("1.1221310000000023424234"), std::strong_ordering::less);
+    test_cmp(big_decimal("1.88796E-4"), big_decimal("2.024E-4"), std::strong_ordering::less);
+    // The two numbers used in the following tests will generate very different scales, so the scale-compare
+    // algorithm will engage but at the end it should realize that the numbers are too close.
+    test_cmp(big_decimal("1.0000000000000000000001"), big_decimal("1.00000000000000000000010000000000000007"), std::strong_ordering::less);
+    test_cmp(big_decimal("1.00000000000000000000010000000000000007"), big_decimal("1.0000000000000000000001"), std::strong_ordering::greater);
+    test_cmp(big_decimal("-1.0000000000000000000001"), big_decimal("-1.00000000000000000000010000000000000007"), std::strong_ordering::greater);
+    test_cmp(big_decimal("-1.00000000000000000000010000000000000007"), big_decimal("-1.0000000000000000000001"), std::strong_ordering::less);
+    test_cmp(big_decimal("1e1000000"), big_decimal("99e999998"), std::strong_ordering::greater);
+    test_cmp(big_decimal("-99e999998"), big_decimal("-1e1000000"), std::strong_ordering::greater);
+
+    // A test which is sensitive to the accuracy of log2 (will fail if using sqrt
+    // instead of log2, as an earlier version of the code did by mistake).
+    test_cmp(big_decimal("1"), big_decimal("2582249878086908589655919172003011874329705792829223512830659356540647622016841194629645353280137831435903171972747493376E-123"), std::strong_ordering::greater);
+}
