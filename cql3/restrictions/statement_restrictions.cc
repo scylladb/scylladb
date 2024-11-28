@@ -2735,11 +2735,15 @@ std::vector<query::clustering_range> get_equivalent_ranges(
 }
 
 /// Extracts raw multi-column bounds from exprs; last one wins.
-std::vector<query::clustering_range> range_from_raw_bounds(
-        const std::vector<predicate>& exprs, const query_options& options, const schema& schema) {
+get_clustering_bounds_fn_t
+build_range_from_raw_bounds_fn(
+        const std::vector<predicate>& exprs, const schema& schema) {
     opt_bound lb, ub;
+    std::vector<std::function<query::clustering_range (const query_options&)>> range_builders;
     for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
         if (auto b = find_clustering_order(e)) {
+          range_builders.emplace_back([bb = *b, &schema] (const query_options& options) {
+            auto* b = &bb;
             cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
             if (tup_val.is_null()) {
                 on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
@@ -2747,6 +2751,15 @@ std::vector<query::clustering_range> range_from_raw_bounds(
 
             const auto r = to_range(
                     b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
+            return r;
+          });
+        }
+    }
+    return [range_builders] (const query_options& options) -> std::vector<query::clustering_range> {
+        opt_bound lb, ub;
+        for (auto& builder : range_builders) {
+            auto r = builder(options);
+
             if (r.start()) {
                 lb = r.start();
             }
@@ -2754,8 +2767,8 @@ std::vector<query::clustering_range> range_from_raw_bounds(
                 ub = r.end();
             }
         }
-    }
-    return {{lb, ub}};
+        return {{lb, ub}};
+    };
 }
 
 } // anonymous namespace
@@ -2773,9 +2786,7 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
             using namespace expr;
             const auto& binop = expr::as<binary_operator>(r);
             if (is_clustering_order(binop)) {
-              return [this] (const query_options& options) -> std::vector<query::clustering_range> {
-                return range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema);
-              };
+                return build_range_from_raw_bounds_fn(_clustering_prefix_restrictions, *_schema);
             }
             for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
                 auto& cv = expr::as<column_value>(element);
