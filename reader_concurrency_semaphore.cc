@@ -967,6 +967,8 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             co_return;
         }
 
+        maybe_admit_waiters();
+
         while (!_ready_list.empty()) {
             auto& permit = _ready_list.front();
             dequeue_permit(permit);
@@ -1023,7 +1025,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
-    maybe_admit_waiters();
+    _ready_list_cv.signal();
 }
 
 namespace sm = seastar::metrics;
@@ -1139,7 +1141,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     permit->on_register_as_inactive();
     if (_blessed_permit == &*permit) {
         _blessed_permit = nullptr;
-        maybe_admit_waiters();
+        _ready_list_cv.signal();
     }
     if (!should_evict_inactive_read()) {
       try {
@@ -1568,7 +1570,7 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
     --_stats.current_permits;
     if (_blessed_permit == &permit) {
         _blessed_permit = nullptr;
-        maybe_admit_waiters();
+        _ready_list_cv.signal();
     }
 }
 
@@ -1580,13 +1582,13 @@ void reader_concurrency_semaphore::on_permit_not_need_cpu() noexcept {
     SCYLLA_ASSERT(_stats.need_cpu_permits);
     --_stats.need_cpu_permits;
     SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
-    maybe_admit_waiters();
+    _ready_list_cv.signal();
 }
 
 void reader_concurrency_semaphore::on_permit_awaits() noexcept {
     ++_stats.awaits_permits;
     SCYLLA_ASSERT(_stats.need_cpu_permits >= _stats.awaits_permits);
-    maybe_admit_waiters();
+    _ready_list_cv.signal();
 }
 
 void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
@@ -1652,7 +1654,7 @@ void reader_concurrency_semaphore::set_resources(resources r) {
     auto delta = r - _initial_resources;
     _initial_resources = r;
     _resources += delta;
-    maybe_admit_waiters();
+    _ready_list_cv.signal();
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
