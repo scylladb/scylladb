@@ -143,9 +143,9 @@ using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
 
 static std::vector<column_definition> create_columns_from_column_rows(
-                const schema_ctxt& ctxt,
                 const query::result_set& rows, const sstring& keyspace,
-                const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns);
+                const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns,
+                const data_dictionary::user_types_storage& user_types);
 
 
 static std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
@@ -1036,19 +1036,19 @@ future<std::vector<user_type>> create_types(replica::database& db, const std::ve
     co_return ret;
 }
 
-std::vector<data_type> read_arg_types(replica::database& db, const query::result_set_row& row, const sstring& keyspace) {
+std::vector<data_type> read_arg_types(const query::result_set_row& row, const sstring& keyspace, const data_dictionary::user_types_storage& user_types) {
     std::vector<data_type> arg_types;
     for (const auto& arg : get_list<sstring>(row, "argument_types")) {
-        arg_types.push_back(db::cql_type_parser::parse(keyspace, arg, db.user_types()));
+        arg_types.push_back(db::cql_type_parser::parse(keyspace, arg, user_types));
     }
     return arg_types;
 }
 
-future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
+future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row, const data_dictionary::user_types_storage& user_types) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
-    auto arg_types = read_arg_types(db, row, name.keyspace);
-    data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"), db.user_types());
+    auto arg_types = read_arg_types(row, name.keyspace, user_types);
+    data_type return_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("return_type"), user_types);
 
     // FIXME: We already computed the bitcode in
     // create_function_statement, but it is not clear how to get it
@@ -1070,11 +1070,11 @@ future<shared_ptr<cql3::functions::user_function>> create_func(replica::database
             row.get_nonnull<bool>("called_on_null_input"), std::move(*ctx));
 }
 
-shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch) {
+shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& db, const query::result_set_row& row, const query::result_set_row* scylla_row, cql3::functions::change_batch& batch, const data_dictionary::user_types_storage& user_types) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("aggregate_name")};
-    auto arg_types = read_arg_types(db, row, name.keyspace);
-    data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"), db.user_types());
+    auto arg_types = read_arg_types(row, name.keyspace, user_types);
+    data_type state_type = db::cql_type_parser::parse(name.keyspace, row.get_nonnull<sstring>("state_type"), user_types);
     sstring sfunc = row.get_nonnull<sstring>("state_func");
     auto ffunc = row.get<sstring>("final_func");
     auto initcond_str = row.get<sstring>("initcond");
@@ -1328,7 +1328,7 @@ seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_
         replica::database& db, lw_shared_ptr<query::result_set> result) {
     std::vector<shared_ptr<cql3::functions::user_function>> ret;
     for (const auto& row : result->rows()) {
-        ret.emplace_back(co_await create_func(db, row));
+        ret.emplace_back(co_await create_func(db, row, db.user_types()));
     }
     co_return ret;
 }
@@ -1346,16 +1346,16 @@ std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_
     std::vector<shared_ptr<cql3::functions::user_aggregate>> ret;
     for (const auto& row : result->rows()) {
         auto agg_name = row.get_nonnull<sstring>("aggregate_name");
-        auto agg_args = read_arg_types(db, row, row.get_nonnull<sstring>("keyspace_name"));
+        auto agg_args = read_arg_types(row, row.get_nonnull<sstring>("keyspace_name"), db.user_types());
         const query::result_set_row *scylla_row_ptr = nullptr;
         for (auto [it, end] = scylla_aggs.equal_range(agg_name); it != end; ++it) {
-            auto scylla_agg_args = read_arg_types(db, *it->second, it->second->get_nonnull<sstring>("keyspace_name"));
+            auto scylla_agg_args = read_arg_types(*it->second, it->second->get_nonnull<sstring>("keyspace_name"), db.user_types());
             if (agg_args == scylla_agg_args) {
                 scylla_row_ptr = it->second;
                 break;
             }
         }
-        ret.emplace_back(create_aggregate(db, row, scylla_row_ptr, batch));
+        ret.emplace_back(create_aggregate(db, row, scylla_row_ptr, batch, db.user_types()));
     }
     return ret;
 }
@@ -1995,7 +1995,8 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    co_return create_table_from_mutations(proxy, std::move(sm));
+    const schema_ctxt& ctxt = proxy;
+    co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types());
 }
 
 // Limit concurrency of user tables to prevent stalls.
@@ -2147,7 +2148,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 }
 
-schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
+schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, std::optional<table_schema_version> version)
 {
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
 
@@ -2182,14 +2183,14 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     auto computed_columns = get_computed_columns(sm);
     std::vector<column_definition> column_defs = create_columns_from_column_rows(
-            ctxt,
             query::result_set(sm.columns_mutation()),
             ks_name,
             cf_name,/*,
             fullRawComparator, */
             cf == cf_type::super,
             column_view_virtual::no,
-            computed_columns);
+            computed_columns,
+            user_types);
 
 
     builder.set_is_dense(is_dense);
@@ -2352,19 +2353,20 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm) {
     }) | std::ranges::to<computed_columns_map>();
 }
 
-static std::vector<column_definition> create_columns_from_column_rows(const schema_ctxt& ctxt,
+static std::vector<column_definition> create_columns_from_column_rows(
                                                                const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
                                                                AbstractType<?> rawComparator, */
                                                                bool is_super,
                                                                column_view_virtual is_view_virtual,
-                                                               const computed_columns_map& computed_columns)
+                                                               const computed_columns_map& computed_columns,
+                                                               const data_dictionary::user_types_storage& user_types)
 {
     std::vector<column_definition> columns;
     for (auto&& row : rows.rows()) {
         auto kind = deserialize_kind(row.get_nonnull<sstring>("kind"));
-        auto type = cql_type_parser::parse(keyspace, row.get_nonnull<sstring>("type"), ctxt.user_types());
+        auto type = cql_type_parser::parse(keyspace, row.get_nonnull<sstring>("type"), user_types);
         auto name_bytes = row.get_nonnull<bytes>("column_name_bytes");
         column_id position = row.get_nonnull<int32_t>("position");
 
@@ -2415,7 +2417,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
  * View metadata serialization/deserialization.
  */
 
-view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)  {
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, std::optional<table_schema_version> version)  {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row row = table_rs.row(0);
 
@@ -2427,12 +2429,12 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     prepare_builder_from_table_row(ctxt, builder, row);
 
     auto computed_columns = get_computed_columns(sm);
-    auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
+    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns, ctxt.user_types());
     for (auto&& cdef : column_defs) {
         builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(ctxt, query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
+        column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns, ctxt.user_types());
         for (auto&& cdef : column_defs) {
             builder.with_column_ordered(cdef);
         }
@@ -2459,7 +2461,8 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    co_return create_view_from_mutations(proxy, std::move(sm));
+    const schema_ctxt& ctxt = proxy;
+    co_return create_view_from_mutations(ctxt, std::move(sm), ctxt.user_types());
 }
 
 /**
