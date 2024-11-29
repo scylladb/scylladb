@@ -11,7 +11,6 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
-#include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
 #include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
@@ -168,7 +167,22 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
 
-using ring_mapping = boost::icl::interval_map<token, std::unordered_set<locator::host_id>>;
+struct ring_mapping_impl;
+
+class ring_mapping {
+    std::unique_ptr<ring_mapping_impl> _impl;
+public:
+    ring_mapping();
+    ring_mapping(ring_mapping&&) noexcept;
+    ring_mapping& operator=(ring_mapping&&) noexcept;
+    ~ring_mapping();
+    // Return auto since we don't want to expose the wrapped type, it's a complicated boost type
+    auto* operator->() const;
+    auto* operator->();
+    auto& operator*() const;
+    auto& operator*();
+};
+
 using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
 using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
