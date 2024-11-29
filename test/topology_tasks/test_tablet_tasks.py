@@ -129,3 +129,58 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
 
     await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name))
+
+async def prepare_migration_test(manager: ManagerClient):
+    servers = []
+    host_ids = []
+
+    async def make_server():
+        s = await manager.server_add()
+        servers.append(s)
+        host_ids.append(await manager.get_host_id(s.server_id))
+        await manager.api.disable_tablet_balancing(s.ip_addr)
+
+    await make_server()
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await make_server()
+
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({1}, {1});")
+
+    return (servers, host_ids)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_migration_task(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    servers, host_ids = await prepare_migration_test(manager)
+
+    injection = "handle_tablet_migration_end_migration"
+
+    async def move_tablet(old_replica, new_replica):
+        await manager.api.enable_injection(servers[0].ip_addr, injection, False)
+        await manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+
+    async def check(type):
+        # Wait until migration task is created.
+        migration_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, type)
+
+        assert len(migration_tasks) == 1
+        status = await tm.get_task_status(servers[0].ip_addr, migration_tasks[0].task_id)
+        check_task_status(status, ["created", "running"], type, "tablet", False)
+
+        await manager.api.disable_injection(servers[0].ip_addr, injection)
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+    intranode_migration_src = replicas[0].replicas[0]
+    intranode_migration_dst = (intranode_migration_src[0], 1 - intranode_migration_src[1])
+    await asyncio.gather(move_tablet(intranode_migration_src, intranode_migration_dst), check("intranode_migration"))
+
+    migration_src = intranode_migration_dst
+    assert migration_src[0] != host_ids[1]
+    migration_dst = (host_ids[1], 0)
+    await asyncio.gather(move_tablet(migration_src, migration_dst), check("migration"))
