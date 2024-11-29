@@ -1,0 +1,47 @@
+services:
+  node1:
+    image: scylladb/scylla:5.2.18
+    restart: always
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      # - /root/data/scylla:/var/lib/scylla
+      - ./create_table:/create_table
+      - ./compact.sh:/compact.sh
+    command: --smp 1 --cpuset 0 --memory 2GB --listen-address 10.6.0.5 --rpc-address 10.6.0.5 --alternator-port 8000 --alternator-address 10.6.0.5 --alternator-write-isolation only_rmw_uses_lwt --developer-mode=0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://10.6.0.5:8000"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+    networks:
+      vpcbr:
+        ipv4_address: 10.6.0.5
+
+  node2:
+    image: scylladb/scylla:5.2.18
+    restart: always
+    security_opt:
+      - seccomp:unconfined
+    # volumes:
+    #   - /root/data/scylla1:/var/lib/scylla
+    command: --smp 1 --cpuset 1 --memory 2GB --listen-address 10.6.0.6 --rpc-address 10.6.0.6 --alternator-port 8000 --alternator-address 10.6.0.6 --alternator-write-isolation only_rmw_uses_lwt --developer-mode=0 --seeds=10.6.0.5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://10.6.0.6:8000"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+    networks:
+      vpcbr:
+        ipv4_address: 10.6.0.6
+    depends_on:
+    - node1
+
+networks:
+  vpcbr:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 10.6.0.0/16
+         gateway: 10.6.0.1
+

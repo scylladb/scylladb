@@ -1,0 +1,120 @@
+[+] Running 3/3
+ ✔ Network repair_vpcbr      Created                                                                                                                   0.1s 
+ ✔ Container repair-node1-1  Started                                                                                                                   0.3s 
+ ✔ Container repair-node2-1  Started                                                                                                                   0.5s 
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is healthy
+Both URLs are healthy. Continuing with the script.
+start create table
+restart scylla
+scylla: stopped
+scylla: started
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is not healthy yet
+URL 10.6.0.5 is healthy
+URL 10.6.0.6 is healthy
+Both URLs are healthy. Continuing with the script.
+repair base table and flush GSI
+[2024-11-29 03:20:30,279] Starting repair command #1, repairing 1 ranges for keyspace repair_test (parallelism=SEQUENTIAL, full=true)
+[2024-11-29 03:20:32,378] Repair session 1 
+[2024-11-29 03:20:32,378] Repair session 1 finished
+WARN  03:20:34,641 Only 37.813GiB free across all data volumes. Consider adding more capacity to your cluster or removing obsolete snapshots
+[
+  {
+    "partition" : {
+      "key" : [ "example_sk" ],
+      "position" : 0
+    },
+    "rows" : [
+      {
+        "type" : "row",
+        "position" : 24,
+        "clustering" : [ "example_pk" ],
+        "liveness_info" : { "tstamp" : "2024-11-29T03:19:32.158384Z" },
+        "deletion_info" : { "marked_deleted" : "2024-11-29T03:19:32.156529Z", "local_delete_time" : "2024-11-29T03:19:32Z" },
+        "cells" : [ ]
+      }
+    ]
+  }
+]
+consitency level one
+ sk         | pk         | :attrs
+------------+------------+--------
+ example_sk | example_pk |   null
+
+(1 rows)
+consitency level all
+Consistency level set to ALL.
+
+ sk         | pk         | :attrs
+------------+------------+-------------------------
+ example_sk | example_pk | {'attr1': 0x48656c6c6f}
+
+(1 rows)
