@@ -866,8 +866,16 @@ bool is_empty_restriction(const expression& e) {
 }
 
 static
-bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
-    value_set possible_vals = possible_column_values(&cdef, e, options);
+std::function<bytes_opt (const query_options&)>
+build_value_for_fn(const column_definition& cdef, const expression& e) {
+  auto ac = predicate{
+      .solve_for = std::bind_front(possible_column_values, &cdef, e),
+      .filter = e,
+      .on = on_column{&cdef},
+      .is_singleton = false, // Code below assumes 0 or 1 results.
+  };
+  return [ac] (const query_options& options) -> bytes_opt {
+    value_set possible_vals = solve(ac, options);
     return std::visit(overloaded_functor {
         [&](const value_list& val_list) -> bytes_opt {
             if (val_list.empty()) {
@@ -875,15 +883,16 @@ bytes_opt value_for(const column_definition& cdef, const expression& e, const qu
             }
 
             if (val_list.size() != 1) {
-                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", e));
+                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", ac.filter));
             }
 
             return to_bytes(val_list.front());
         },
         [&](const interval<managed_bytes>&) -> bytes_opt {
-            on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", e));
+            on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", ac.filter));
         }
     }, possible_vals);
+  };
 }
 
 bool contains_multi_column_restriction(const expression& e) {
@@ -3143,9 +3152,7 @@ statement_restrictions::build_value_for_index_partition_key_fn() const {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-  return [this, cdef] (const query_options& options) {
-    return value_for(*cdef, _idx_restrictions, options);
-  };
+    return build_value_for_fn(*cdef, _idx_restrictions);
 }
 
 bytes_opt
