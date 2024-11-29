@@ -16,6 +16,7 @@
 #include "cql3/functions/function_name.hh"
 #include "schema/schema.hh"
 #include <unordered_map>
+#include "data_dictionary/user_types_metadata.hh"
 
 namespace cql3 {
 
