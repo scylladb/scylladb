@@ -235,6 +235,12 @@ static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& 
     return not_compacted_sstables;
 }
 
+static std::vector<basic_info> extract_basic_info_from_sstables(const std::vector<shared_sstable>& sstables) {
+    return sstables | std::views::transform([] (auto&& sst) {
+        return sstables::basic_info{.generation = sst->generation(), .origin = sst->get_origin(), .size = sst->bytes_on_disk()};
+    }) | std::ranges::to<std::vector<basic_info>>();
+}
+
 class compaction;
 
 class compaction_write_monitor final : public sstables::write_monitor, public backlog_write_progress_manager {
@@ -483,6 +489,7 @@ protected:
     const reader_permit _permit;
     std::vector<shared_sstable> _sstables;
     std::vector<generation_type> _input_sstable_generations;
+    std::vector<basic_info> _input_sstables_basic_info;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
     std::unordered_set<shared_sstable> _new_partial_sstables;
@@ -783,11 +790,14 @@ private:
 
         double sum_of_estimated_droppable_tombstone_ratio = 0;
         _input_sstable_generations.reserve(_sstables.size());
+        _input_sstables_basic_info.reserve(_sstables.size());
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
             timestamp_tracker.update(sst_stats.min_timestamp);
             timestamp_tracker.update(sst_stats.max_timestamp);
+
+            _input_sstables_basic_info.emplace_back(sst->generation(), sst->get_origin(), sst->bytes_on_disk());
 
             // Compacted sstable keeps track of its ancestors.
             _input_sstable_generations.push_back(sst->generation());
@@ -907,8 +917,13 @@ private:
 protected:
     virtual compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         compaction_result ret {
+            .shard_id = this_shard_id(),
+            .type = _type,
+            .sstables_in = std::move(_input_sstables_basic_info),
+            .sstables_out = extract_basic_info_from_sstables(_all_new_sstables),
             .new_sstables = std::move(_all_new_sstables),
             .stats {
+                .started_at = started_at,
                 .ended_at = ended_at,
                 .start_size = _start_size,
                 .end_size = _end_size,
