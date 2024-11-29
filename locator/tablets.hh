@@ -171,8 +171,18 @@ struct tablet_info {
     db_clock::time_point repair_time;
     locator::tablet_task_info repair_task_info;
 
+    tablet_info() = default;
+    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info);
+    tablet_info(tablet_replica_set);
+
     bool operator==(const tablet_info&) const = default;
 };
+
+// Merges tablet_info b into a, but with following constraints:
+//  - they cannot have active repair task, since each task has a different id
+//  - their replicas must be all co-located.
+// If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
 
 /// Represents states of the tablet migration state machine.
 ///

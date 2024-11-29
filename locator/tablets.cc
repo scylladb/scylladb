@@ -159,6 +159,32 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
+tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info)
+    : replicas(std::move(replicas))
+    , repair_time(repair_time)
+    , repair_task_info(std::move(repair_task_info))
+{}
+
+tablet_info::tablet_info(tablet_replica_set replicas)
+    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{})
+{}
+
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
+    if (a.repair_task_info.is_valid() || b.repair_task_info.is_valid()) {
+        return {};
+    }
+
+    auto sorted = [] (tablet_replica_set rs) {
+        std::ranges::sort(rs, std::less<tablet_replica>());
+        return rs;
+    };
+    if (sorted(a.replicas) != sorted(b.replicas)) {
+        return {};
+    }
+
+    auto repair_time = std::max(a.repair_time, b.repair_time);
+    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info);
+}
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     auto leaving = substract_sets(tinfo.replicas, trinfo.next);
