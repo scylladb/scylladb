@@ -31,12 +31,12 @@ schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<db
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
     auto sm = sv.mutations();
     if (sm.is_view()) {
-        return db::schema_tables::create_view_from_mutations(ctxt, std::move(sm), std::move(base_info), sv.version());
+        return db::schema_tables::create_view_from_mutations(ctxt, std::move(sm), ctxt.user_types(), std::move(base_info), sv.version());
     } else {
         if (base_info) {
             throw std::runtime_error("Trying to unfreeze regular table schema with base info");
         }
-        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), sv.version());
+        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), sv.version());
     }
 }
 

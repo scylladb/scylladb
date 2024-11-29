@@ -63,6 +63,31 @@ struct affected_user_types_per_shard {
 // groups UDTs based on what is happening to them during schema change
 using affected_user_types = sharded<affected_user_types_per_shard>;
 
+// In_progress_types_storage_per_shard contains current
+// types with in-progress modifications applied.
+// Important note: this storage can't be used directly in all cases,
+// e.g. it's legal to drop type together with dropping other entity
+// in such case we use existing storage instead so that whatever
+// is being dropped can reference this type (we remove it from in_progress storage)
+// in such cases get proper storage via committed_storage().
+class in_progress_types_storage_per_shard : public data_dictionary::user_types_storage {
+    std::shared_ptr<data_dictionary::user_types_storage> _stored_user_types;
+    std::map<sstring, data_dictionary::user_types_metadata> _in_progress_types;
+public:
+    in_progress_types_storage_per_shard(replica::database& db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types);
+    virtual const data_dictionary::user_types_metadata& get(const sstring& ks) const override;
+    std::shared_ptr<data_dictionary::user_types_storage> committed_storage();
+};
+
+class in_progress_types_storage {
+    // wrapped in foreign_ptr so they can be destroyed on the right shard
+    std::vector<foreign_ptr<shared_ptr<in_progress_types_storage_per_shard>>> shards;
+public:
+    in_progress_types_storage() : shards(smp::count) {}
+    future<> init(distributed<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types);
+    in_progress_types_storage_per_shard& local();
+};
+
 // schema_diff represents what is happening with tables or views during schema merge
 struct schema_diff {
     struct dropped_schema {
@@ -109,6 +134,8 @@ class schema_applier {
 
     schema_persisted_state _before;
     schema_persisted_state _after;
+
+    in_progress_types_storage _types_storage;
 
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
