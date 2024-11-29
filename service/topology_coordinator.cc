@@ -1525,10 +1525,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .build());
                     }
                     break;
-                case locator::tablet_transition_stage::end_migration:
+                case locator::tablet_transition_stage::end_migration: {
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
-                    if (do_barrier()) {
+                    bool defer_transition = utils::get_local_injector().enter("handle_tablet_migration_end_migration");
+                    if (!defer_transition && do_barrier()) {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
@@ -1536,6 +1537,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_migration_task_info(last_token, _db.features())
                                 .build());
                     }
+                }
                     break;
                 case locator::tablet_transition_stage::repair: {
                     if (action_failed(tablet_state.repair)) {
