@@ -2307,18 +2307,7 @@ struct multi_column_range_accumulator_builder {
     }
 
     void operator()(const constant& v) {
-      // We might have resolved this at prepare time, but...
-      builders.emplace_back([v] (multi_column_range_accumulator& acc, const query_options& options) {
-        auto& ranges = acc.ranges;
-        std::optional<bool> bool_val = get_bool_value(v);
-        if (!bool_val.has_value()) {
-            on_internal_error(rlogger, "non-bool constant encountered outside binary operator");
-        }
-
-        if (*bool_val == false) {
-            ranges.clear();
-        }
-      });
+        on_internal_error(rlogger, "constant encountered outside binary operator");
     }
 
     void operator()(const column_value&) {
