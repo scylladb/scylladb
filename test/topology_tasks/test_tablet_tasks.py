@@ -10,33 +10,34 @@ import pytest
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair
+from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology_experimental_raft.test_tablets import inject_error_on
 from test.topology_tasks.task_manager_client import TaskManagerClient
 from test.topology_tasks.task_manager_types import TaskStatus, TaskStats
 
-async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int):
-    async def get_user_repair_tasks():
-        return [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == "user_repair" and task.keyspace == "test"]
+async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int, type: str):
+    async def get_tasks():
+        return [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == type and task.keyspace == "test"]
 
-    repair_tasks = await get_user_repair_tasks()
-    while len(repair_tasks) != expected_number:
-        repair_tasks = await get_user_repair_tasks()
-    return repair_tasks
+    tasks = await get_tasks()
+    while len(tasks) != expected_number:
+        tasks = await get_tasks()
+    return tasks
+
+def check_task_status(status: TaskStatus, states: list[str], type: str, scope: str, abortable: bool):
+    assert status.scope == scope
+    assert status.kind == "cluster"
+    assert status.type == type
+    assert status.keyspace == "test"
+    assert status.table == "test"
+    assert status.is_abortable == abortable
+    assert not status.children_ids
+    assert status.state in states
 
 async def check_and_abort_repair_task(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str):
-    def check_repair_task_status(status: TaskStatus, states: list[str]):
-        assert status.scope == "table"
-        assert status.kind == "cluster"
-        assert status.type == "user_repair"
-        assert status.keyspace == "test"
-        assert status.table == "test"
-        assert status.is_abortable
-        assert not status.children_ids
-        assert status.state in states
-
     # Wait until user repair task is created.
-    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1)
+    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair")
 
     task = repair_tasks[0]
     assert task.scope == "table"
@@ -46,11 +47,11 @@ async def check_and_abort_repair_task(tm: TaskManagerClient, servers: list[Serve
 
     status = await tm.get_task_status(servers[0].ip_addr, task.task_id)
 
-    check_repair_task_status(status, ["created", "running"])
+    check_task_status(status, ["created", "running"], "user_repair", "table", True)
 
     async def wait_for_task():
         status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
-        check_repair_task_status(status_wait, ["done"])
+        check_task_status(status_wait, ["done"], "user_repair", "table", True)
 
     async def abort_task():
         await tm.abort_task(servers[0].ip_addr, task.task_id)
@@ -81,9 +82,9 @@ async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo
         return tasks_with_id1[0]
 
     # Wait until user repair tasks are created.
-    repair_tasks0 = await wait_tasks_created(tm, servers[0], module_name, len(servers))
-    repair_tasks1 = await wait_tasks_created(tm, servers[1], module_name, len(servers))
-    repair_tasks2 = await wait_tasks_created(tm, servers[2], module_name, len(servers))
+    repair_tasks0 = await wait_tasks_created(tm, servers[0], module_name, len(servers), "user_repair")
+    repair_tasks1 = await wait_tasks_created(tm, servers[1], module_name, len(servers), "user_repair")
+    repair_tasks2 = await wait_tasks_created(tm, servers[2], module_name, len(servers), "user_repair")
 
     assert len(repair_tasks0) == len(repair_tasks1), f"Different number of repair virtual tasks on nodes {servers[0].server_id} and {servers[1].server_id}"
     assert len(repair_tasks0) == len(repair_tasks2), f"Different number of repair virtual tasks on nodes {servers[0].server_id} and {servers[2].server_id}"
