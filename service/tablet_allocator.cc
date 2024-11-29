@@ -348,6 +348,8 @@ class load_balancer {
     // It's an average per-shard load in terms of tablet count.
     using load_type = double;
 
+    using table_candidates_map = std::unordered_map<table_id, std::unordered_set<global_tablet_id>>;
+
     struct shard_load {
         size_t tablet_count = 0;
 
@@ -362,7 +364,7 @@ class load_balancer {
         // Tablets which still have a replica on this shard which are candidates for migrating away from this shard.
         // Grouped by table. Used when _use_table_aware_balancing == true.
         // The set of candidates per table may be empty.
-        std::unordered_map<table_id, std::unordered_set<global_tablet_id>> candidates;
+        table_candidates_map candidates;
         // For all tables. Used when _use_table_aware_balancing == false.
         std::unordered_set<global_tablet_id> candidates_all_tables;
 
@@ -1041,7 +1043,7 @@ public:
         return rand_int() % shard_count;
     }
 
-    table_id pick_table(const std::unordered_map<table_id, std::unordered_set<global_tablet_id>>& candidates) {
+    table_id pick_table(const table_candidates_map& candidates) {
         if (!_use_table_aware_balancing) {
             on_internal_error(lblogger, "pick_table() called when table-aware balancing is disabled");
         }
