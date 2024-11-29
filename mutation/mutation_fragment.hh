@@ -14,8 +14,6 @@
 #include <optional>
 #include <seastar/util/optimized_optional.hh>
 
-#include <seastar/core/future-util.hh>
-
 #include "reader_permit.hh"
 #include "mutation_fragment_fwd.hh"
 #include "mutation/mutation_partition.hh"

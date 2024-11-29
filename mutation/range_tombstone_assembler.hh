@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <exception>
 #include <seastar/core/format.hh>
 
 #include "mutation/mutation_fragment_v2.hh"

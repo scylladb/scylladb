@@ -12,6 +12,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/core/when_all.hh>
 
 #include "mutation_writer/feed_writers.hh"
 

@@ -21,6 +21,7 @@
 #include "gms/feature_service.hh"
 #include <utility>
 #include <fmt/ranges.h>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <absl/container/flat_hash_map.h>
 
 using namespace locator;

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"

@@ -12,7 +12,6 @@
 #include "mutation_partition_visitor.hh"
 #include "utils/input_stream.hh"
 #include "atomic_cell.hh"
-#include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 
 namespace ser {

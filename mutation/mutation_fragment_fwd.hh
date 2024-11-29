@@ -7,7 +7,6 @@
  */
 
 #pragma once
-#include <seastar/util/bool_class.hh>
 #include <seastar/util/optimized_optional.hh>
 
 using namespace seastar;

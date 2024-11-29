@@ -7,7 +7,6 @@
  */
 
 #include <fmt/ranges.h>
-#include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
@@ -44,6 +43,8 @@
 #include "replica/database.hh"
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
