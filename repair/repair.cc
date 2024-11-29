@@ -37,10 +37,11 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/sleep.hh>
-#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include <exception>
 #include <cfloat>

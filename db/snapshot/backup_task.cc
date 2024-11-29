@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "utils/lister.hh"
 #include "utils/s3/client.hh"
 #include "replica/database.hh"

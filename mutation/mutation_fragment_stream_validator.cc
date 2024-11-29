@@ -7,7 +7,7 @@
  */
 
 #include "mutation/mutation_fragment_stream_validator.hh"
-#include "utils/to_string.hh"
+#include <fmt/std.h>
 #include "seastarx.hh"
 
 logging::logger validator_log("mutation_fragment_stream_validator");

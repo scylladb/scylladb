@@ -11,7 +11,6 @@
 #include "mutation_partition.hh"
 
 #include "counters.hh"
-#include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "frozen_mutation.hh"
 #include <seastar/coroutine/maybe_yield.hh>

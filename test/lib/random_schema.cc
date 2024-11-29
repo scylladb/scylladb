@@ -11,6 +11,8 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/algorithm/unique.hpp>
 
+#include <seastar/coroutine/maybe_yield.hh>
+
 #include "cql3/cql3_type.hh"
 #include "cql3/description.hh"
 #include "mutation/mutation.hh"

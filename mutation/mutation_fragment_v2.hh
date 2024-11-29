@@ -15,8 +15,6 @@
 #include <optional>
 #include <seastar/util/optimized_optional.hh>
 
-#include <seastar/core/future-util.hh>
-
 #include "reader_permit.hh"
 
 // Mutation fragment which represents a range tombstone boundary.

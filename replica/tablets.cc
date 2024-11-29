@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "types/types.hh"
 #include "types/tuple.hh"
