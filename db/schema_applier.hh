@@ -148,6 +148,8 @@ class schema_applier {
     schema_persisted_state _before;
     schema_persisted_state _after;
 
+    in_progress_types_storage _types_storage;
+
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
     affected_tables_and_views _affected_tables_and_views;
