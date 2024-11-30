@@ -712,7 +712,8 @@ public:
         // Make plans for repair jobs
         plan.set_repair_plan(co_await make_repair_plan(plan));
 
-        plan.set_resize_plan(co_await make_resize_plan());
+        // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
+        plan.merge_resize_plan(co_await make_resize_plan());
 
         lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
                 plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());

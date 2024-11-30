@@ -172,8 +172,8 @@ public:
 
     const table_resize_plan& resize_plan() const { return _resize_plan; }
 
-    void set_resize_plan(table_resize_plan resize_plan) {
-        _resize_plan = std::move(resize_plan);
+    void merge_resize_plan(table_resize_plan resize_plan) {
+        _resize_plan.merge(std::move(resize_plan));
     }
 
     const tablet_repair_plan& repair_plan() const { return _repair_plan; }
