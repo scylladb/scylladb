@@ -1170,11 +1170,11 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
         }
         writer.EndArray();
 
-        auto first_key = sstables::key_view(summary.first_key.value).to_partition_key(*schema);
+        auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
         writer.Key("first_key");
         writer.DataKey(*schema, first_key);
 
-        auto last_key = sstables::key_view(summary.last_key.value).to_partition_key(*schema);
+        auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
         writer.Key("last_key");
         writer.DataKey(*schema, last_key);
 
