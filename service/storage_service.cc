@@ -1559,7 +1559,6 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
 
         replace_address = ri->address;
         raft_replace_info = raft_group0::replace_info {
-            .ip_addr = *replace_address,
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
         if (!raft_topology_change_enabled()) {

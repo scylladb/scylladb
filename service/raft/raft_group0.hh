@@ -130,7 +130,6 @@ class raft_group0 {
 public:
     // Passed to `setup_group0` when replacing a node.
     struct replace_info {
-        gms::inet_address ip_addr;
         raft::server_id raft_id;
     };
 
