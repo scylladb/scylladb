@@ -16,6 +16,7 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <ranges>
 

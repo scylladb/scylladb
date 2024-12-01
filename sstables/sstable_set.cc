@@ -15,6 +15,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/copy.hpp>
+#include <boost/range/numeric.hpp>
 
 #include "sstables.hh"
 

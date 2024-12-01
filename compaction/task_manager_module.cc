@@ -7,6 +7,7 @@
  */
 
 #include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/numeric.hpp>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 

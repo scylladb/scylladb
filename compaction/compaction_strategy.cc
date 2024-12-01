@@ -22,6 +22,7 @@
 #include "cql3/statements/property_definitions.hh"
 #include "schema/schema.hh"
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/numeric.hpp>
 #include "size_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"

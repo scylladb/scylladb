@@ -53,6 +53,7 @@
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
+#include <boost/range/numeric.hpp>
 #include "utils/error_injection.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/empty_v2.hh"

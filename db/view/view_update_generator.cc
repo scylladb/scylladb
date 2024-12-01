@@ -11,6 +11,7 @@
 #include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/numeric.hpp>
 #include "replica/database.hh"
 #include "view_update_generator.hh"
 #include "utils/error_injection.hh"
