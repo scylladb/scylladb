@@ -17,6 +17,7 @@
 #include <algorithm>
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
 

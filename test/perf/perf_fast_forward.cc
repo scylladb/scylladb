@@ -15,6 +15,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
+#include <boost/range/numeric.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"

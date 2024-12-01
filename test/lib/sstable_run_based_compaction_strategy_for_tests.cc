@@ -8,6 +8,7 @@
 
 
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
+#include <boost/range/numeric.hpp>
 
 namespace sstables {
 

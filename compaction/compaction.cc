@@ -18,6 +18,7 @@
 
 #include <boost/range/algorithm.hpp>
 #include <boost/range/join.hpp>
+#include <boost/range/numeric.hpp>
 #include <boost/algorithm/string/join.hpp>
 
 #include <seastar/core/future-util.hh>

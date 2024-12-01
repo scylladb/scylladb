@@ -9,8 +9,6 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/numeric.hpp>
 
 #include "mutation/atomic_cell.hh"
 #include "types/types.hh"

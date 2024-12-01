@@ -10,6 +10,7 @@
 
 #include <seastar/core/iostream.hh>
 #include <seastar/core/fstream.hh>
+#include <boost/range/numeric.hpp>
 #include "sstables/types.hh"
 #include "checksum_utils.hh"
 #include "vint-serialization.hh"

@@ -30,6 +30,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
 
