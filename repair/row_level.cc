@@ -224,7 +224,7 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
 static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const inet_address_vector_replica_set& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
     parallel_for_each(std::views::iota(size_t(0), nodes.size()), coroutine::lambda([&] (size_t idx) -> future<> {
-        std::vector<row_level_diff_detect_algorithm> algorithms = co_await ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx]));
+        std::vector<row_level_diff_detect_algorithm> algorithms = co_await ser::repair_rpc_verbs::send_repair_get_diff_algorithms(&ms, netw::messaging_service::msg_addr(nodes[idx]));
         std::sort(algorithms.begin(), algorithms.end());
         nodes_algorithms[idx] = std::move(algorithms);
         rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
@@ -1431,7 +1431,7 @@ public:
         if (remote_node == myip()) {
             co_return co_await get_full_row_hashes_handler();
         }
-        repair_hash_set hashes = co_await _messaging.send_repair_get_full_row_hashes(msg_addr(remote_node),
+        repair_hash_set hashes = co_await ser::repair_rpc_verbs::send_repair_get_full_row_hashes(&_messaging, msg_addr(remote_node),
                 _repair_meta_id, dst_cpu_id);
         rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
         _metrics.rx_hashes_nr += hashes.size();
@@ -1508,7 +1508,7 @@ public:
         if (remote_node == myip()) {
             co_return co_await get_combined_row_hash_handler(common_sync_boundary);
         }
-        get_combined_row_hash_response resp = co_await _messaging.send_repair_get_combined_row_hash(msg_addr(remote_node),
+        get_combined_row_hash_response resp = co_await ser::repair_rpc_verbs::send_repair_get_combined_row_hash(&_messaging, msg_addr(remote_node),
                 _repair_meta_id, common_sync_boundary, dst_cpu_id);
         stats().rpc_call_nr++;
         stats().rx_hashes_nr++;
@@ -1542,7 +1542,7 @@ public:
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
         rpc::optional<repair_row_level_start_response> resp =
-            co_await _messaging.send_repair_row_level_start(msg_addr(remote_node),
+            co_await ser::repair_rpc_verbs::send_repair_row_level_start(&_messaging, msg_addr(remote_node),
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
                 remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id);
@@ -1575,7 +1575,7 @@ public:
             co_return co_await stop();
         }
         stats().rpc_call_nr++;
-        co_return co_await _messaging.send_repair_row_level_stop(msg_addr(remote_node),
+        co_return co_await ser::repair_rpc_verbs::send_repair_row_level_stop(&_messaging, msg_addr(remote_node),
                 _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), dst_cpu_id);
     }
 
@@ -1596,7 +1596,7 @@ public:
             co_return co_await get_estimated_partitions();
         }
         stats().rpc_call_nr++;
-        co_return co_await _messaging.send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_get_estimated_partitions(&_messaging, msg_addr(remote_node), _repair_meta_id, dst_cpu_id);
     }
 
 
@@ -1615,7 +1615,7 @@ public:
             co_return co_await set_estimated_partitions(estimated_partitions);
         }
         stats().rpc_call_nr++;
-        co_return co_await _messaging.send_repair_set_estimated_partitions(msg_addr(remote_node), _repair_meta_id, estimated_partitions, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_set_estimated_partitions(&_messaging, msg_addr(remote_node), _repair_meta_id, estimated_partitions, dst_cpu_id);
     }
 
 
@@ -1635,7 +1635,7 @@ public:
             co_return co_await get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
-        co_return co_await _messaging.send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
     }
 
     // RPC handler
@@ -1662,7 +1662,7 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            repair_rows_on_wire rows = _messaging.send_repair_get_row_diff(msg_addr(remote_node),
+            repair_rows_on_wire rows = ser::repair_rpc_verbs::send_repair_get_row_diff(&_messaging, msg_addr(remote_node),
                     _repair_meta_id, std::move(set_diff), bool(needs_all_rows), dst_cpu_id).get();
             if (!rows.empty()) {
                 apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
@@ -1676,7 +1676,7 @@ public:
             return;
         }
         stats().rpc_call_nr++;
-        repair_rows_on_wire rows = _messaging.send_repair_get_row_diff(msg_addr(remote_node),
+        repair_rows_on_wire rows = ser::repair_rpc_verbs::send_repair_get_row_diff(&_messaging, msg_addr(remote_node),
                 _repair_meta_id, {}, bool(needs_all_rows_t::yes), dst_cpu_id).get();
         if (!rows.empty()) {
             apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
@@ -1803,7 +1803,7 @@ public:
             stats().tx_row_bytes += row_bytes;
             stats().rpc_call_nr++;
             repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
-            co_await _messaging.send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows), dst_cpu_id);
+            co_await ser::repair_rpc_verbs::send_repair_put_row_diff(&_messaging, msg_addr(remote_node), _repair_meta_id, std::move(rows), dst_cpu_id);
         }
     }
 
@@ -2425,7 +2425,7 @@ future<> repair_service::init_ms_handlers() {
         });
         return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
     });
-    ms.register_repair_get_full_row_hashes([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
+    ser::repair_rpc_verbs::register_repair_get_full_row_hashes(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2439,7 +2439,7 @@ future<> repair_service::init_ms_handlers() {
             });
         }) ;
     });
-    ms.register_repair_get_combined_row_hash([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_get_combined_row_hash(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> common_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2455,7 +2455,7 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
-    ms.register_repair_get_sync_boundary([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -2470,7 +2470,7 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
-    ms.register_repair_get_row_diff([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_get_row_diff(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_hash_set set_diff, bool needs_all_rows, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2493,7 +2493,7 @@ future<> repair_service::init_ms_handlers() {
             }
         });
     });
-    ms.register_repair_put_row_diff([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_put_row_diff(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             repair_rows_on_wire row_diff, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2513,7 +2513,7 @@ future<> repair_service::init_ms_handlers() {
             }
         });
     });
-    ms.register_repair_row_level_start([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
+    ser::repair_rpc_verbs::register_repair_row_level_start(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
             sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed,
             unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version,
             rpc::optional<streaming::stream_reason> reason, rpc::optional<gc_clock::time_point> compaction_time, rpc::optional<shard_id> dst_cpu_id_opt) {
@@ -2535,7 +2535,7 @@ future<> repair_service::init_ms_handlers() {
                     schema_version, r, ct, _repair_module->abort_source());
         });
     });
-    ms.register_repair_row_level_stop([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_row_level_stop(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             sstring ks_name, sstring cf_name, dht::token_range range, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2545,7 +2545,7 @@ future<> repair_service::init_ms_handlers() {
                     std::move(ks_name), std::move(cf_name), std::move(range));
         });
     });
-    ms.register_repair_get_estimated_partitions([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
+    ser::repair_rpc_verbs::register_repair_get_estimated_partitions(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -2553,7 +2553,7 @@ future<> repair_service::init_ms_handlers() {
             return repair_meta::repair_get_estimated_partitions_handler(local_repair, from, repair_meta_id);
         });
     });
-    ms.register_repair_set_estimated_partitions([this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+    ser::repair_rpc_verbs::register_repair_set_estimated_partitions(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             uint64_t estimated_partitions, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
@@ -2562,7 +2562,7 @@ future<> repair_service::init_ms_handlers() {
             return repair_meta::repair_set_estimated_partitions_handler(local_repair, from, repair_meta_id, estimated_partitions);
         });
     });
-    ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
+    ser::repair_rpc_verbs::register_repair_get_diff_algorithms(&ms, [] (const rpc::client_info& cinfo) {
         return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
     });
     ser::repair_rpc_verbs::register_repair_update_system_table(&ms, [this] (const rpc::client_info& cinfo, repair_update_system_table_request req) {
@@ -2584,16 +2584,6 @@ future<> repair_service::uninit_ms_handlers() {
         ms.unregister_repair_get_row_diff_with_rpc_stream(),
         ms.unregister_repair_put_row_diff_with_rpc_stream(),
         ms.unregister_repair_get_full_row_hashes_with_rpc_stream(),
-        ms.unregister_repair_get_full_row_hashes(),
-        ms.unregister_repair_get_combined_row_hash(),
-        ms.unregister_repair_get_sync_boundary(),
-        ms.unregister_repair_get_row_diff(),
-        ms.unregister_repair_put_row_diff(),
-        ms.unregister_repair_row_level_start(),
-        ms.unregister_repair_row_level_stop(),
-        ms.unregister_repair_get_estimated_partitions(),
-        ms.unregister_repair_set_estimated_partitions(),
-        ms.unregister_repair_get_diff_algorithms(),
         ser::repair_rpc_verbs::unregister(&ms)
         ).discard_result();
 }
