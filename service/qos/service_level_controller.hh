@@ -206,6 +206,23 @@ public:
     void abort_group0_operations();
 
     /**
+     * this is an executor of a function with arguments under a specific
+     * service level.
+     * @param service_level_name
+     * @param func - the function to be executed
+     * @param args - the arguments to  pass to the function.
+     * @return a future that is resolved when the function's operation is resolved
+     * (if it returns a future). or a ready future containing the returned value
+     * from the function/
+     */
+    template <typename Func, typename Ret = std::invoke_result_t<Func>>
+    requires std::invocable<Func>
+    futurize_t<Ret> with_service_level(sstring service_level_name, Func&& func) {
+        service_level& sl = get_service_level(service_level_name);
+        return with_scheduling_group(sl.sg, std::move(func));
+    }
+
+    /**
      * @return the default service level scheduling group (see service_level_controller::initialize).
      */
     scheduling_group get_default_scheduling_group();

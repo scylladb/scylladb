@@ -11,6 +11,7 @@
 #include <seastar/core/file.hh>
 #include "reader_concurrency_semaphore.hh"
 #include "sstables/sstables_manager.hh"
+#include "reader_concurrency_semaphore_group.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_assertions.hh"
@@ -1218,6 +1219,113 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
 }
 
 } // namespace reader_concurrency_semaphore_test
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
+    const auto initial_resources = reader_resources{100, 100 * 1024};
+    auto serialize_multiplier = utils::updateable_value_source<uint32_t>(2);
+    auto kill_multiplier = utils::updateable_value_source<uint32_t>(3);
+    auto cpu_concurrency = utils::updateable_value_source<uint32_t>(1);
+
+    reader_concurrency_semaphore_group sem_group(initial_resources.memory, initial_resources.count, 1000,
+            utils::updateable_value(serialize_multiplier),
+            utils::updateable_value(kill_multiplier),
+            utils::updateable_value(cpu_concurrency));
+    auto stop_sem = deferred_stop(sem_group);
+
+    circular_buffer<scheduling_group> recycle_bin;
+
+    const auto initial_shares = 1000;
+    struct scheduling_group_with_shares {
+        scheduling_group sg;
+        size_t shares;
+
+        scheduling_group_with_shares(scheduling_group sg, size_t shares) : sg(sg), shares(shares) { }
+    };
+    std::vector<scheduling_group_with_shares> scheduling_groups;
+    const auto max_sched_groups = 8;
+
+    auto check_sem_group = [&] {
+        const auto total_shares = boost::accumulate(scheduling_groups
+                | boost::adaptors::transformed([] (const scheduling_group_with_shares& sgs) { return sgs.shares; }), size_t(0));
+        ssize_t total_memory = 0;
+        sem_group.foreach_semaphore([&] (scheduling_group sg, reader_concurrency_semaphore& sem) {
+            const auto res = sem.available_resources();
+            BOOST_CHECK_EQUAL(res.count, initial_resources.count); // currently count is not partitioned among the semaphores
+            auto it = std::find_if(scheduling_groups.begin(), scheduling_groups.end(), [sg] (const scheduling_group_with_shares& sgs) { return sgs.sg == sg; });
+            BOOST_REQUIRE(it != scheduling_groups.end());
+            const auto shares = it->shares;
+            const ssize_t expected_memory = std::floor((double(shares) / double(total_shares)) * initial_resources.memory);
+            const auto memory_diff = std::abs(res.memory - expected_memory);
+            testlog.trace("{}: {}/{} (shares) -> {}/{} (memory) | res.memory: {}", sg.name(), shares, total_shares, expected_memory, initial_resources.memory, res.memory);
+            BOOST_CHECK_LE(memory_diff, scheduling_groups.size()); // due to integer division, we allow for ceil/floor (off-by-one), the remainder being added to any semaphore
+            total_memory += res.memory;
+        });
+        BOOST_CHECK_EQUAL(total_memory, initial_resources.memory); // no off-by-one allowed on the total
+    };
+
+    auto add_sg = [&, sgi = 0] () mutable {
+        if (scheduling_groups.size() >= max_sched_groups) {
+            return false;
+        }
+        testlog.debug("create sg{}", sgi);
+        scheduling_group sg;
+        const auto sg_name = format("sg{}", sgi++);
+        if (recycle_bin.empty()) {
+            sg = create_scheduling_group(sg_name, initial_shares).get();
+        } else {
+            sg = recycle_bin.front();
+            recycle_bin.pop_front();
+            rename_scheduling_group(sg, sg_name).get();
+        }
+        scheduling_groups.emplace_back(sg, initial_shares);
+        sem_group.add_or_update(sg, initial_shares);
+        sem_group.wait_adjust_complete().get();
+        return true;
+    };
+
+    while (add_sg()) {
+        check_sem_group();
+    }
+
+    for (size_t i = 0; i < 32; ++i) {
+        testlog.debug("iteration {}", i);
+        std::shuffle(scheduling_groups.begin(), scheduling_groups.end(), tests::random::gen());
+        switch (tests::random::get_int<uint8_t>(0, 3)) {
+            case 0: // add
+            {
+                testlog.debug("maybe add sg");
+                if (add_sg()) {
+                    break;
+                }
+                [[fallthrough]];
+            }
+            case 1: //remove
+            {
+                const auto& sgs = scheduling_groups.back();
+                testlog.debug("maybe remove {}", sgs.sg.name());
+                if (scheduling_groups.size() > 1) {
+                    testlog.debug("remove {}", sgs.sg.name());
+                    sem_group.remove(sgs.sg).get();
+                    recycle_bin.push_back(sgs.sg);
+                    scheduling_groups.pop_back();
+                    break;
+                }
+                [[fallthrough]];
+            }
+            default: //update
+            {
+                auto& sgs = scheduling_groups.back();
+                const auto new_shares = tests::random::get_int<size_t>(100, 1000);
+                sgs.shares = new_shares;
+                testlog.debug("update {}: {}->{}", sgs.sg.name(), sgs.shares, new_shares);
+                sem_group.add_or_update(sgs.sg, new_shares);
+                sem_group.wait_adjust_complete().get();
+                break;
+            }
+        }
+        check_sem_group();
+    }
+}
 
 namespace {
 

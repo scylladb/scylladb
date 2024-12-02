@@ -199,6 +199,7 @@ target_sources(scylla-main
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
+    reader_concurrency_semaphore_group.cc
     row_cache.cc
     schema_mutations.cc
     serializer.cc

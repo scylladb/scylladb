@@ -184,6 +184,8 @@ public:
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
 
     data_dictionary::database data_dictionary();
+
+    virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});

@@ -593,6 +593,10 @@ private:
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
 
+            _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}, scheduling_groups.statement_scheduling_group).get();
+            auto stop_sl_controller = defer([this] { _sl_controller.stop().get(); });
+            _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+
             lang::manager::config lang_config;
             lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
             lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
@@ -618,7 +622,7 @@ private:
                 _db.stop().get();
             });
 
-            _db.invoke_on_all(&replica::database::start).get();
+            _db.invoke_on_all(&replica::database::start, std::ref(_sl_controller)).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
@@ -659,9 +663,6 @@ private:
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
-            _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}, scheduling_groups.statement_scheduling_group).get();
-            auto stop_sl_controller = defer([this] { _sl_controller.stop().get(); });
-            _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer([this] {
@@ -1104,6 +1105,10 @@ public:
         return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
+    }
+
+    virtual sharded<qos::service_level_controller>& service_level_controller_service() override {
+        return _sl_controller;
     }
 };
 

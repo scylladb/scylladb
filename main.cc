@@ -1211,6 +1211,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sstm.stop().get();
             });
 
+            static sharded<auth::service> auth_service;
+            static sharded<auth::service> maintenance_auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+            debug::the_sl_controller = &sl_controller;
+
+            //starting service level controller
+            qos::service_level_options default_service_level_configuration;
+            default_service_level_configuration.shares = 1000;
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, dbcfg.statement_scheduling_group).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
+            });
+
             lang::manager::config lang_config;
             lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
             lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
@@ -1247,7 +1261,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // because it obtains the list of pre-existing segments for replay, which must
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
-            db.invoke_on_all(&replica::database::start).get();
+            db.invoke_on_all(&replica::database::start, std::ref(sl_controller)).get();
 
             ::sigquit_handler sigquit_handler(db);
 
@@ -1337,20 +1351,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_config(ctx, *cfg).get();
             auto stop_config_api = defer_verbose_shutdown("config API", [&ctx] {
                 api::unset_server_config(ctx).get();
-            });
-
-            static sharded<auth::service> auth_service;
-            static sharded<auth::service> maintenance_auth_service;
-            static sharded<qos::service_level_controller> sl_controller;
-            debug::the_sl_controller = &sl_controller;
-
-            //starting service level controller
-            qos::service_level_options default_service_level_configuration;
-            default_service_level_configuration.shares = 1000;
-            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, dbcfg.statement_scheduling_group).get();
-            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
-            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
-                sl_controller.stop().get();
             });
 
             static sharded<db::system_distributed_keyspace> sys_dist_ks;

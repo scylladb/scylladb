@@ -124,6 +124,8 @@ public:
         uint64_t sstables_read = 0;
         // Permits waiting on something: admission, memory or execution
         uint64_t waiters = 0;
+
+        friend auto operator<=>(const stats&, const stats&) = default;
     };
 
     using permit_list_type = bi::list<

@@ -2311,13 +2311,21 @@ class scylla_memory(gdb.Command):
         if not db:
             return
 
+        per_service_level_sem = []
+        for sg, sem in unordered_map(db["_reader_concurrency_semaphores_group"]["_semaphores"]):
+            per_service_level_sem.append(scylla_memory.format_semaphore_stats(sem["sem"]))
+
+        per_service_level_vu_sem = []
+        for sg, sem in unordered_map(db["_view_update_read_concurrency_semaphores_group"]["_semaphores"]):
+            per_service_level_vu_sem.append(scylla_memory.format_semaphore_stats(sem["sem"]))
+
         database_typename = lookup_type(['replica::database', 'database'])[1].name
         gdb.write('Replica:\n')
         gdb.write('  Read Concurrency Semaphores:\n    {}\n    {}\n    {}\n    {}\n'.format(
-                scylla_memory.format_semaphore_stats(db['_read_concurrency_sem']),
+                '\n    '.join(per_service_level_sem),
                 scylla_memory.format_semaphore_stats(db['_streaming_concurrency_sem']),
                 scylla_memory.format_semaphore_stats(db['_system_read_concurrency_sem']),
-                scylla_memory.format_semaphore_stats(db['_view_update_read_concurrency_sem'])))
+                '\n    '.join(per_service_level_vu_sem)))
 
         gdb.write('  Execution Stages:\n')
         for es_path in [('_apply_stage',)]:
@@ -5809,12 +5817,17 @@ class scylla_read_stats(gdb.Command):
             semaphores = [gdb.parse_and_eval(arg) for arg in args.split(' ')]
         else:
             db = find_db()
-            semaphores = [db["_read_concurrency_sem"], db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
+            semaphores = [db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
             semaphores.append(db["_compaction_concurrency_sem"])
             try:
-                semaphores.append(db["_view_update_read_concurrency_sem"])
+                semaphores += [weighted_sem["sem"] for (_, weighted_sem) in unordered_map(db["_reader_concurrency_semaphores_group"]["_semaphores"])]
             except gdb.error:
-                # 6.2 compatibility
+                # compatibility with code before per-scheduling-group semaphore
+                pass
+            try:
+                semaphores += [weighted_sem["sem"] for (_, weighted_sem) in unordered_map(db["_view_update_read_concurrency_semaphores_group"]["_semaphores"])]
+            except gdb.error:
+                # 2024.2 compatibility
                 pass
 
         for semaphore in semaphores:
