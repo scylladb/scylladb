@@ -11,6 +11,7 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/query_processor.hh"
 #include "raw/parsed_statement.hh"
+#include "service/qos/qos_common.hh"
 #include "service/query_state.hh"
 
 namespace cql3 {
@@ -49,6 +50,8 @@ public:
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
+protected:
+    void validate_shares_option(const query_processor& qp, const qos::service_level_options& slo) const;
 };
 
 }

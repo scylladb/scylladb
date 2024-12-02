@@ -10,9 +10,11 @@
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "cql3/statements/create_service_level_statement.hh"
+#include "service/qos/qos_common.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
+#include "utils/error_injection.hh"
 
 namespace cql3 {
 
@@ -44,7 +46,14 @@ create_service_level_statement::execute(query_processor& qp,
     }
 
     service::group0_batch mc{std::move(guard)};
-    qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});
+    validate_shares_option(qp, _slo);
+    
+    auto default_slo = qos::service_level_options{.shares = qos::service_level_controller::default_shares};
+    if (utils::get_local_injector().is_enabled("create_service_levels_without_default_shares")) {
+        default_slo.shares = qos::service_level_options::unset_marker{};
+    }
+    qos::service_level_options slo = _slo.replace_defaults(default_slo);
+
     auto& sl = state.get_service_level_controller();
     co_await sl.add_distributed_service_level(_service_level, slo, _if_not_exists, mc);
     co_await sl.commit_mutations(std::move(mc));

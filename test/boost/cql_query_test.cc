@@ -40,6 +40,7 @@
 #include "db/extensions.hh"
 #include "cql3/cql_config.hh"
 #include "test/lib/exception_utils.hh"
+#include "service/qos/qos_common.hh"
 #include "utils/rjson.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
@@ -5061,14 +5062,21 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         e.execute_cql("CREATE SERVICE_LEVEL sl_1;").get();
         auto msg = e.execute_cql("LIST SERVICE_LEVEL sl_1;").get();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_1"), {}, {}},
+            {utf8_type->decompose("sl_1"), {}, {}, int32_type->decompose(1000)},
         });
-        e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get();
+        //create and alter service levels
+        e.execute_cql("CREATE SERVICE_LEVEL sl_2 WITH SHARES = 200;").get();
+        e.execute_cql("ALTER SERVICE_LEVEL sl_1 WITH SHARES = 111;").get();
+        msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("sl_1"), {}, {}, int32_type->decompose(111), utf8_type->decompose("35.69%")},
+            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("64.31%")},
+        });
         //drop service levels
         e.execute_cql("DROP SERVICE_LEVEL sl_1;").get();
         msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_2"), {}, {}},
+            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("100.00%")},
         });
 
         // validate exceptions (illegal requests)
@@ -5076,8 +5084,11 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         e.execute_cql("DROP SERVICE_LEVEL IF EXISTS sl_1;").get();
 
         BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_2 WITH SHARES = 999;").get(), exceptions::invalid_request_exception);
         e.execute_cql("CREATE SERVICE_LEVEL IF NOT EXISTS sl_2;").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_1 WITH SHARES = 0;").get(), exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_1 WITH SHARES = 1001;").get(), exceptions::syntax_exception);
 
         // test attach role
         e.execute_cql("ATTACH SERVICE_LEVEL sl_2 TO tester").get();
@@ -5096,7 +5107,7 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         BOOST_CHECK(true);
         // tests detaching service levels
         e.execute_cql("CREATE ROLE tester2;").get();
-        e.execute_cql("CREATE SERVICE_LEVEL sl_1;").get();
+        e.execute_cql("CREATE SERVICE_LEVEL sl_1 WITH SHARES = 998;").get();
         e.execute_cql("ATTACH SERVICE_LEVEL sl_1 TO tester2;").get();
         e.execute_cql("DETACH SERVICE_LEVEL FROM tester;").get();
         msg = e.execute_cql("LIST ATTACHED SERVICE_LEVEL OF tester2;").get();
@@ -5130,6 +5141,7 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get();
         assert_that(msg).is_rows().with_rows({
         });
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER SERVICE_LEVEL i_do_not_exist WITH shares = 1;").get(), exceptions::invalid_request_exception);
     });
 }
 

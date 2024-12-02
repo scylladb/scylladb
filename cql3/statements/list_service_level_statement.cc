@@ -47,10 +47,14 @@ list_service_level_statement::execute(query_processor& qp,
                 type);
     };
 
-    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({make_column("service_level", utf8_type),
+    std::vector<lw_shared_ptr<column_specification>> metadata({make_column("service_level", utf8_type),
         make_column("timeout", duration_type),
-        make_column("workload_type", utf8_type)
+        make_column("workload_type", utf8_type),
+        make_column("shares", int32_type),
     });
+    if (_describe_all) {
+        metadata.push_back(make_column("percentage of all service level shares", utf8_type));
+    }
 
     return make_ready_future().then([this, &state] () {
                                   if (_describe_all) {
@@ -59,7 +63,7 @@ list_service_level_statement::execute(query_processor& qp,
                                       return state.get_service_level_controller().get_distributed_service_level(_service_level);
                                   }
                               })
-            .then([] (qos::service_levels_info sl_info) {
+            .then([this, metadata = std::move(metadata)] (qos::service_levels_info sl_info) {
                 auto d = [] (const qos::service_level_options::timeout_type& duration) -> bytes_opt {
                     return std::visit(overloaded_functor{
                         [&] (const qos::service_level_options::unset_marker&) {
@@ -74,15 +78,51 @@ list_service_level_statement::execute(query_processor& qp,
                         },
                     }, duration);
                 };
+                auto dd = [] <typename T> (const std::variant<qos::service_level_options::unset_marker, qos::service_level_options::delete_marker, T>& v) -> bytes_opt {
+                    return std::visit(overloaded_functor{
+                        [&] (const qos::service_level_options::unset_marker&) {
+                            return bytes_opt();
+                        },
+                        [&] (const qos::service_level_options::delete_marker&) {
+                            return bytes_opt();
+                        },
+                        [&] (const T& v) -> bytes_opt {
+                            return data_type_for<T>()->decompose(v);
+                        },
+                    }, v);
+                };
+                auto get_shares_value = [] (const std::variant<qos::service_level_options::unset_marker, qos::service_level_options::delete_marker, int32_t>& shares) {
+                    if (std::holds_alternative<int32_t>(shares)) {
+                        return std::get<int32_t>(shares);
+                    } else {
+                        return qos::service_level_controller::default_shares;
+                    }
+                };
+
+                int32_t sum_of_shares = 0;
+                if (_describe_all) {
+                    for (auto &&[_, slo]: sl_info) {
+                        sum_of_shares += get_shares_value(slo.shares);
+                    }
+                }
+
                 auto rs = std::make_unique<result_set>(metadata);
                 for (auto &&[sl_name, slo] : sl_info) {
                     bytes_opt workload = slo.workload == qos::service_level_options::workload_type::unspecified
                             ? bytes_opt()
                             : utf8_type->decompose(qos::service_level_options::to_string(slo.workload));
-                    rs->add_row(std::vector<bytes_opt>{
+
+                    auto row = std::vector<bytes_opt>{
                             utf8_type->decompose(sl_name),
                             d(slo.timeout),
-                            workload});
+                            workload,
+                            dd(slo.shares)};  
+                    if (_describe_all) {
+                        row.push_back(utf8_type->decompose(
+                                fmt::format("{:.2f}%", 100.0f * get_shares_value(slo.shares) / sum_of_shares)
+                        ));
+                    }
+                    rs->add_row(std::move(row));
                 }
 
                 auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
