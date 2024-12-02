@@ -147,21 +147,21 @@ void service_level_controller::abort_group0_operations() {
     }
 }
 
-future<> service_level_controller::update_service_levels_cache() {
+future<> service_level_controller::update_service_levels_cache(qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
 
     if (!_sl_data_accessor) {
         return make_ready_future();
     }
 
-    return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
-        return async([this] () {
+    return with_semaphore(_global_controller_db->notifications_serializer, 1, [this, ctx] () {
+        return async([this, ctx] () {
             service_levels_info service_levels;
             // The next statement can throw, but that's fine since we would like the caller
             // to be able to agreggate those failures and only report when it is critical or noteworthy.
             // one common reason for failure is because one of the nodes comes down and before this node
             // detects it the scan query done inside this call is failing.
-            service_levels = _sl_data_accessor->get_service_levels().get();
+            service_levels = _sl_data_accessor->get_service_levels(ctx).get();
 
             service_levels_info service_levels_for_add_or_update;
             service_levels_info service_levels_for_delete;
@@ -289,10 +289,10 @@ future<> service_level_controller::update_effective_service_levels_cache() {
     });
 }
 
-future<> service_level_controller::update_cache(update_both_cache_levels update_both_cache_levels) {
+future<> service_level_controller::update_cache(update_both_cache_levels update_both_cache_levels, qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
     if (update_both_cache_levels) {
-        co_await update_service_levels_cache();
+        co_await update_service_levels_cache(ctx);
     }
     co_await update_effective_service_levels_cache();
 }
@@ -499,8 +499,8 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
     co_return co_await _sl_data_accessor->drop_service_level(name, mc);
 }
 
-future<service_levels_info> service_level_controller::get_distributed_service_levels() {
-    return _sl_data_accessor ? _sl_data_accessor->get_service_levels() : make_ready_future<service_levels_info>();
+future<service_levels_info> service_level_controller::get_distributed_service_levels(qos::query_context ctx) {
+    return _sl_data_accessor ? _sl_data_accessor->get_service_levels(ctx) : make_ready_future<service_levels_info>();
 }
 
 future<service_levels_info> service_level_controller::get_distributed_service_level(sstring service_level_name) {

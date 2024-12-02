@@ -164,7 +164,7 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
 
 future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     if (modules.service_levels_cache || modules.service_levels_effective_cache) { // this also updates SL effective cache
-        co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(modules.service_levels_cache));
+        co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(modules.service_levels_cache), qos::query_context::group0);
     }
 }
 

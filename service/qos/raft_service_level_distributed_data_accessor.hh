@@ -33,7 +33,7 @@ private:
 public:
     raft_service_level_distributed_data_accessor(cql3::query_processor& qp, service::raft_group0_client& group0_client);
 
-    virtual future<qos::service_levels_info> get_service_levels() const override;
+    virtual future<qos::service_levels_info> get_service_levels(qos::query_context ctx) const override;
     virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override;
     virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const override;
     virtual future<> drop_service_level(sstring service_level_name, service::group0_batch& mc) const override;
