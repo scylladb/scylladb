@@ -498,6 +498,7 @@ public:
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
+    named_value<uint32_t> view_flow_control_delay_limit_in_ms;
 
     static const sstring default_tls_priority;
 private:
