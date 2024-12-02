@@ -192,6 +192,7 @@ future<> view_update_generator::start() {
                 try {
                     inject_failure("view_update_generator_collect_consumed_sstables");
                     _progress_tracker->on_sstables_deregistration(sstables);
+                    _sstables_deregistered_cond.signal();
                     // collect all staging sstables to move in a map, grouped by table.
                     std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_to_move[t]));
                 } catch (...) {

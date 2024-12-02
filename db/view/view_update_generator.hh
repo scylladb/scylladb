@@ -72,6 +72,8 @@ private:
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
+    // condition variable that gets signalled when an sstable is deregistered
+    seastar::condition_variable _sstables_deregistered_cond;
     void do_abort() noexcept;
 public:
     view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as);
