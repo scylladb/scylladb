@@ -6,7 +6,7 @@ on:
       - master
 
 env:
-  BUILD_TYPE: RelWithDebInfo
+  BUILD_TYPE: Debug
   BUILD_DIR: build
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
   # the "idl" subdirectory does not contain C++ source code. the .hh files in it are
