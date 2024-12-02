@@ -11,7 +11,7 @@ from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency
 from test.topology.conftest import skip_mode
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -189,9 +189,9 @@ def create_roles_stmts():
 
 def create_service_levels_stmts():
     return [
-        "CREATE SERVICE LEVEL sl1 WITH timeout=30m AND workload_type='interactive'",
-        "CREATE SERVICE LEVEL sl2 WITH timeout=1h AND workload_type='batch'",
-        "CREATE SERVICE LEVEL sl3 WITH timeout=30s",
+        "CREATE SERVICE LEVEL sl1 WITH timeout=30m AND workload_type='interactive' AND shares=1000",
+        "CREATE SERVICE LEVEL sl2 WITH timeout=1h AND workload_type='batch' AND shares=500",
+        "CREATE SERVICE LEVEL sl3 WITH timeout=30s AND shares=800",
     ]
 
 def attach_service_levels_stms():
@@ -230,6 +230,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
                 continue
             assert param["workload_type"] == expect[role]["workload_type"]
             assert param["timeout"] == expect[role]["timeout"]
+            assert param["scheduling_group"]
 
 @pytest.mark.asyncio
 @skip_mode('release', 'cql server testing REST API is not supported in release mode')
@@ -248,14 +249,17 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
         "r1": {
             "workload_type": "unspecified",
             "timeout": default_timeout(build_mode),
+            "scheduling_group": "sl:default",
         },
         "r2": {
             "workload_type": "unspecified",
             "timeout": default_timeout(build_mode),
+            "scheduling_group": "sl:default",
         },
         "r3": {
             "workload_type": "unspecified",
             "timeout": default_timeout(build_mode),
+            "scheduling_group": "sl:default",
         },
     })
 
@@ -271,14 +275,17 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
         "r1": {
             "workload_type": "interactive",
             "timeout": "30m",
+            "scheduling_group": "sl:sl1",
         },
         "r2": {
             "workload_type": "batch",
             "timeout": "1h",
+            "scheduling_group": "sl:sl2",
         },
         "r3": {
             "workload_type": "unspecified",
             "timeout": "30s",
+            "scheduling_group": "sl:sl3",
         },
     })
 
@@ -292,14 +299,17 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
         "r1": {
             "workload_type": "batch",
             "timeout": "30s",
+            "scheduling_group": "sl:sl2",
         },
         "r2": {
             "workload_type": "batch",
             "timeout": "30s",
+            "scheduling_group": "sl:sl2",
         },
         "r3": {
             "workload_type": "unspecified",
             "timeout": "30s",
+            "scheduling_group": "sl:sl3",
         },
     })
 
@@ -332,3 +342,133 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
 
     result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
     assert len(result) == 1 and result[0].workload_type == 'batch'
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injection is disabled in release mode')
+async def test_shares_check(manager: ManagerClient):
+    srv = await manager.server_add(config={
+        "error_injections_at_startup": [
+            { "name": "suppress_features", "value": "WORKLOAD_PRIORITIZATION"}
+        ]
+    })
+    await manager.server_start(srv.server_id)
+
+    sl1 = f"sl_{unique_name()}"
+    sl2 = f"sl_{unique_name()}"
+    cql = manager.get_cql()
+
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
+    with pytest.raises(InvalidRequest, match="`shares` option can only be used when the cluster is fully upgraded to enterprise"):
+        await cql.run_async(f"CREATE SERVICE LEVEL {sl2} WITH shares=500")
+    with pytest.raises(InvalidRequest, match="`shares` option can only be used when the cluster is fully upgraded to enterprise"):
+        await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
+
+    await manager.server_stop_gracefully(srv.server_id)
+    await manager.server_update_config(srv.server_id, "error_injections_at_startup", [])
+    await manager.server_start(srv.server_id)
+    await wait_for_cql_and_get_hosts(manager.get_cql(), [srv], time.time() + 60)
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl2} WITH shares=500")
+    await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injection is not supported in release mode')
+async def test_workload_prioritization_upgrade(manager: ManagerClient):
+    # This test simulates OSS->enterprise upgrade in v1 service levels.
+    # Using error injection, the test disables WORKLOAD_PRIORITIZATION feature
+    # and removes `shares` column from system_distributed.service_levels table.
+    config = {
+        'authenticator': 'AllowAllAuthenticator',
+        'authorizer': 'AllowAllAuthorizer',
+        'force_gossip_topology_changes': True,
+        'error_injections_at_startup': [
+            {
+                'name': 'suppress_features',
+                'value': 'WORKLOAD_PRIORITIZATION'
+            },
+            {
+                'name': 'service_levels_v1_table_without_shares'
+            }
+        ]
+    }
+    servers = [await manager.server_add(config=config) for _ in range(3)]
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    # Validate that service levels' table has no `shares` column
+    sl_schema = await cql.run_async("DESC TABLE system_distributed.service_levels")
+    assert "shares int" not in sl_schema[0].create_statement
+    with pytest.raises(InvalidRequest):
+        await cql.run_async("CREATE SERVICE LEVEL sl1 WITH shares = 100")
+    
+    # Do rolling restart of the cluster and remove error injections
+    for server in servers:
+        await manager.server_update_config(server.server_id, 'error_injections_at_startup', [])
+    await manager.rolling_restart(servers)
+
+    # Validate that `shares` column was added
+    logs = [await manager.server_open_log(server.server_id) for server in servers]
+    await logs[0].wait_for("Workload prioritization v1 started|Workload prioritization v1 is already started", timeout=10)
+    sl_schema_upgraded = await cql.run_async("DESC TABLE system_distributed.service_levels")
+    assert "shares int" in sl_schema_upgraded[0].create_statement
+    await cql.run_async("CREATE SERVICE LEVEL sl2 WITH shares = 100")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injection is disabled in release mode')
+async def test_service_levels_over_limit(manager: ManagerClient):
+    srv = await manager.server_add(config={
+        "error_injections_at_startup": ['allow_service_level_over_limit']
+    })
+    await manager.server_start(srv.server_id)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
+
+    SL_LIMIT = 7
+    sls = []
+    for i in range(SL_LIMIT + 1):
+        sl = f"sl_{i}_{unique_name()}"
+        sls.append(sl)
+        await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
+    
+    log = await manager.server_open_log(srv.server_id)
+    mark = await log.mark()
+    await cql.run_async(f"ATTACH SERVICE LEVEL {sls[-1]} TO CASSANDRA")
+    await log.wait_for(f"Service level {sls[-1]} is effectively dropped and its values are ignored.", timeout=10, from_mark=mark)
+
+    mark = await log.mark()
+    # When service levels exceed the limit, last service levels in alphabetical order are effectively dropped
+    sl_name = f"aaa_sl_{unique_name()}"
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl_name}")
+    await log.wait_for(f"service level \"{sls[-2]}\" will be effectively dropped to make scheduling group available to \"{sl_name}\", please consider removing a service level.", timeout=10, from_mark=mark)
+
+# Reproduces issue scylla-enterprise#4912
+@pytest.mark.asyncio
+async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
+    s = await manager.server_add()
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    cql = manager.get_cql()
+
+    sl1 = unique_name()
+    sl2 = unique_name()
+
+    # creates scheduling group `sl:sl1`
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
+    # renames scheduling group `sl:sl1` to `sl_deleted:sl1`
+    await cql.run_async(f"DROP SERVICE LEVEL {sl1}")
+    # renames scheduling group `sl_deleted:sl1` to `sl:sl2`
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl2}")
+    # creates scheduling group `sl:sl1`
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
+    # In issue #4912, service_level_controller thought there was no room
+    # for `sl:sl1` scheduling group because create_scheduling_group() failed due to
+    # `seastar::metrics::double_registration (registering metrics twice for metrics: transport_cql_requests_count)`
+    # but the scheduling group was actually created.
+    # When sl2 is dropped, service_level_controller tries to rename its
+    # scheduling group to `sl:sl1`, triggering 
+    # `seastar::metrics::double_registration (registering metrics twice for metrics: scheduler_runtime_ms)`
+    await cql.run_async(f"DROP SERVICE LEVEL {sl2}")
+
+    # Check if group0 is healthy
+    s2 = await manager.server_add()
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
