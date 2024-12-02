@@ -87,6 +87,10 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
                 "Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns");
     }
 
+    if (_index_name.size() > size_t(schema::NAME_LENGTH)) {
+        throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
+    }
+
     validate_for_local_index(*schema);
 
     std::vector<::shared_ptr<index_target>> targets;
