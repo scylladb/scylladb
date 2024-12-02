@@ -39,8 +39,8 @@ raft_service_level_distributed_data_accessor::raft_service_level_distributed_dat
     : _qp(qp)
     , _group0_client(group0_client) {}
 
-future<qos::service_levels_info> raft_service_level_distributed_data_accessor::get_service_levels() const {
-    return qos::get_service_levels(_qp, db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2, db::consistency_level::LOCAL_ONE);
+future<qos::service_levels_info> raft_service_level_distributed_data_accessor::get_service_levels(qos::query_context ctx) const {
+    return qos::get_service_levels(_qp, db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2, db::consistency_level::LOCAL_ONE, ctx);
 }
 
 future<qos::service_levels_info> raft_service_level_distributed_data_accessor::get_service_level(sstring service_level_name) const {
