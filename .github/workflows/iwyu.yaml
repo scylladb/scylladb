@@ -45,6 +45,10 @@ jobs:
             -G Ninja                                    \
             -B $BUILD_DIR                               \
             -S .
+      - run: |
+          cmake                       \
+          --build $BUILD_DIR          \
+          --target wasmtime_bindings
       - name: Build headers
         run: |
           swagger_targets=''
