@@ -57,7 +57,7 @@ sstring generate_random_salt_bytes(RandomNumberEngine& g) {
 ///
 scheme identify_best_supported_scheme();
 
-const char* prefix_for_scheme(scheme) noexcept;
+std::string_view prefix_for_scheme(scheme) noexcept;
 
 ///
 /// Generate a implementation-specific salt string for hashing passwords.

@@ -46,7 +46,7 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt) {
     return res;
 }
 
-const char* prefix_for_scheme(scheme c) noexcept {
+std::string_view prefix_for_scheme(scheme c) noexcept {
     switch (c) {
     case scheme::bcrypt_y: return "$2y$";
     case scheme::bcrypt_a: return "$2a$";
