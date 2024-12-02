@@ -53,7 +53,6 @@ const char* prefix_for_scheme(scheme c) noexcept {
     case scheme::sha_512: return "$6$";
     case scheme::sha_256: return "$5$";
     case scheme::md5: return "$1$";
-    default: return nullptr;
     }
 }
 
