@@ -565,8 +565,15 @@ public:
         sstable_list_builder& operator=(const sstable_list_builder&) = delete;
         sstable_list_builder(const sstable_list_builder&) = delete;
 
+        // Struct to return the newly built sstable set and the removed sstables
+        struct result {
+            lw_shared_ptr<sstables::sstable_set> new_sstable_set;
+            std::vector<sstables::shared_sstable> removed_sstables;
+        };
+
         // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
-        future<lw_shared_ptr<sstables::sstable_set>>
+        // Returns the updated sstable set and a list of removed sstables.
+        future<result>
         build_new_list(const sstables::sstable_set& current_sstables,
                        sstables::sstable_set new_sstable_list,
                        const std::vector<sstables::shared_sstable>& new_sstables,
