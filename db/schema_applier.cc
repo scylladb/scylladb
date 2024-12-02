@@ -271,7 +271,7 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     // For the ALTER case, we have to also consider changes made to SCYLLA_KEYSPACES, not only to KEYSPACES:
     // 1. changes made to non-null columns...
     altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
-    // 2. ... and new or deleted entries - these change only when ALTERing, not CREATEing or DROPing
+    // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
     for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
         if (!created.contains(ks) && !dropped.contains(ks)) {
             altered.emplace(ks);
