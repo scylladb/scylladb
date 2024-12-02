@@ -29,6 +29,7 @@
 #include "gms/feature_service.hh"
 #include "db/view/view.hh"
 #include "service/migration_manager.hh"
+#include "replica/database.hh"
 
 namespace cql3 {
 
@@ -139,6 +140,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 
     schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
 
+    if (!db.features().views_with_tablets && db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
+        throw exceptions::invalid_request_exception(format("Materialized views are not supported on base tables with tablets"));
+    }
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on counter tables"));
     }
