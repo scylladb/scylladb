@@ -5453,7 +5453,11 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
             sleep = true;
         }
         if (sleep) {
-            co_await split_retry.retry(_group0_as);
+            try {
+                co_await split_retry.retry(_group0_as);
+            } catch (...) {
+                slogger.warn("Sleep in split monitor failed with {}", std::current_exception());
+            }
         }
     }
 }
