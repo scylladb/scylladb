@@ -917,7 +917,7 @@ future<> service_level_controller::unregister_subscriber(qos_configuration_chang
 static sstring describe_service_level(std::string_view sl_name, const service_level_options& sl_opts) {
     using slo = service_level_options;
 
-    utils::small_vector<sstring, 2> opts{};
+    utils::small_vector<sstring, 3> opts{};
 
     const sstring sl_name_formatted = cql3::util::maybe_quote(sl_name);
 
@@ -941,6 +941,10 @@ static sstring describe_service_level(std::string_view sl_name, const service_le
             // `slo::workload_typ::delete_marker` is only set temporarily. When a service level
             // is actually created, it never has this workload type set anymore.
             on_internal_error(sl_logger, "Unexpected workload type");
+    }
+
+    if (auto* maybe_shares = std::get_if<int32_t>(&sl_opts.shares)) {
+        opts.push_back(seastar::format("SHARES = {}", *maybe_shares));
     }
 
     if (opts.size() == 0) {
