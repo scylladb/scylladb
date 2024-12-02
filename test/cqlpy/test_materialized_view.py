@@ -1333,7 +1333,6 @@ def table1(cql, test_keyspace):
 # Cassandra doesn't shut down in this test, but it still fails uncleanly and
 # leaves the table in a partly-existing state so it fails this test and the
 # test is marked a cassandra_bug.
-@pytest.mark.skip(reason="issue #20755")
 def test_create_materialized_view_oversized_name(cql, test_keyspace, table1, cassandra_bug):
     stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
     try:
@@ -1349,7 +1348,6 @@ def test_create_materialized_view_oversized_name(cql, test_keyspace, table1, cas
 # questionable whether we must be identical to Cassandra in this enforcement.
 # The test below (test_create_materialized_view_slash_name) checks the one
 # character - slash - that it is critical to not allow.
-@pytest.mark.xfail(reason="allowed characters not enforced in view names")
 def test_create_materialized_view_invalid_char_name(cql, test_keyspace, table1):
     stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
     try:
@@ -1363,7 +1361,6 @@ def test_create_materialized_view_invalid_char_name(cql, test_keyspace, table1):
 # characters are not enforced (see "!" in the previous test). However, it
 # still fails with an "unclean" internal error instead of the expected
 # exception.
-@pytest.mark.xfail(reason="allowed characters not enforced in view names")
 def test_create_materialized_view_slash_name(cql, test_keyspace, table1):
     stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
     try:
