@@ -8,6 +8,7 @@
 
 #include "db/timeout_clock.hh"
 #include "tasks/task_handler.hh"
+#include "tasks/virtual_task_hint.hh"
 #include "utils/overloaded_functor.hh"
 
 #include <seastar/core/with_timeout.hh>
@@ -81,7 +82,7 @@ struct status_helper {
 
 future<status_helper> task_handler::get_status_helper() {
     return task_manager::invoke_on_task(_tm.container(), _id, std::function(
-            [id = _id] (task_manager::task_variant task_v) -> future<status_helper> {
+            [id = _id] (task_manager::task_variant task_v, tasks::virtual_task_hint hint) -> future<status_helper> {
         return std::visit(overloaded_functor{
             [] (task_manager::task_ptr task) -> future<status_helper> {
                 if (task->is_complete()) {
@@ -92,9 +93,9 @@ future<status_helper> task_handler::get_status_helper() {
                     .task = task
                 };
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<status_helper> {
+            [id, hint = std::move(hint)] (task_manager::virtual_task_ptr task) -> future<status_helper> {
                 auto id_ = id;
-                auto status = co_await task->get_status(id_);
+                auto status = co_await task->get_status(id_, std::move(hint));
                 co_return status_helper{
                     .status = get_virtual_task_info(id_, status),
                     .task = nullptr
@@ -110,7 +111,7 @@ future<task_status> task_handler::get_status() {
 }
 
 future<task_status> task_handler::wait_for_task(std::optional<std::chrono::seconds> timeout) {
-    auto wait = task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v) -> future<task_status> {
+    auto wait = task_manager::invoke_on_task(_tm.container(), _id, std::function([id = _id] (task_manager::task_variant task_v, tasks::virtual_task_hint hint) -> future<task_status> {
         return std::visit(overloaded_functor{
             [] (task_manager::task_ptr task) {
                 return task->done().then_wrapped([task] (auto f) {
@@ -120,9 +121,9 @@ future<task_status> task_handler::wait_for_task(std::optional<std::chrono::secon
                     return get_task_status(std::move(task));
                 });
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<task_status> {
+            [id, hint = std::move(hint)] (task_manager::virtual_task_ptr task) -> future<task_status> {
                 auto id_ = id;
-                auto status = co_await task->wait(id_);
+                auto status = co_await task->wait(id_, std::move(hint));
                 co_return get_virtual_task_info(id_, status);
             }
         }, task_v);
@@ -208,7 +209,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
 }
 
 future<> task_handler::abort() {
-    co_await task_manager::invoke_on_task(_tm.container(), _id, [id = _id] (task_manager::task_variant task_v) -> future<> {
+    co_await task_manager::invoke_on_task(_tm.container(), _id, [id = _id] (task_manager::task_variant task_v, tasks::virtual_task_hint hint) -> future<> {
         return std::visit(overloaded_functor{
             [id] (task_manager::task_ptr task) -> future<> {
                 if (!task->is_abortable()) {
@@ -216,12 +217,13 @@ future<> task_handler::abort() {
                 }
                 task->abort();
             },
-            [id] (task_manager::virtual_task_ptr task) -> future<> {
+            [id, hint = std::move(hint)] (task_manager::virtual_task_ptr task) -> future<> {
                 auto id_ = id;
-                if (!co_await task->is_abortable()) {
+                auto hint_ = std::move(hint);
+                if (!co_await task->is_abortable(hint_)) {
                     co_await coroutine::return_exception(task_not_abortable(id_));
                 }
-                co_await task->abort(id_);
+                co_await task->abort(id_, std::move(hint_));
             }
         }, task_v);
     });

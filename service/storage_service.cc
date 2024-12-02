@@ -101,6 +101,7 @@
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "node_ops/task_manager_module.hh"
+#include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
@@ -182,7 +183,8 @@ storage_service::storage_service(abort_source& abort_source,
         , _sl_controller(sl_controller)
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
-        , _task_manager_module(make_shared<node_ops::task_manager_module>(tm, *this))
+        , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
+        , _tablets_module(make_shared<service::task_manager_module>(tm))
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
         , _lifecycle_notifier(elc_notif)
@@ -199,9 +201,11 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
 {
-    tm.register_module(_task_manager_module->get_name(), _task_manager_module);
+    tm.register_module(_node_ops_module->get_name(), _node_ops_module);
+    tm.register_module(_tablets_module->get_name(), _tablets_module);
     if (this_shard_id() == 0) {
-        _task_manager_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
+        _node_ops_module->make_virtual_task<node_ops::node_ops_virtual_task>(*this);
+        _tablets_module->make_virtual_task<service::tablet_virtual_task>(*this);
     }
     register_metrics();
 
@@ -219,8 +223,8 @@ storage_service::storage_service(abort_source& abort_source,
 
 storage_service::~storage_service() = default;
 
-node_ops::task_manager_module& storage_service::get_task_manager_module() noexcept {
-    return *_task_manager_module;
+node_ops::task_manager_module& storage_service::get_node_ops_module() noexcept {
+    return *_node_ops_module;
 }
 
 enum class node_external_status {
@@ -3235,7 +3239,8 @@ future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_signal_abort(std::nullopt);
     _listeners.clear();
-    co_await _task_manager_module->stop();
+    co_await _tablets_module->stop();
+    co_await _node_ops_module->stop();
     co_await _async_gate.close();
     co_await std::move(_node_ops_abort_thread);
     _tablet_split_monitor_event.signal();
@@ -5653,7 +5658,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
-                                auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
+                                auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                         parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, coroutine::lambda([this, &rs] () -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                         co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
@@ -5672,7 +5677,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 [] { std::raise(SIGSTOP); });
                         } else {
                             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-                            auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
+                            auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                     parent_info.id, streaming::stream_reason::replace, _bootstrap_result, coroutine::lambda([this, &rs, &id, replaced_id] () -> future<> {
                                 if (!_topology_state_machine._topology.req_param.contains(id)) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
@@ -5705,7 +5710,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     break;
                     case node_state::decommissioning: {
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
-                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
+                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::decommission, _decommission_result, coroutine::lambda([this] () -> future<> {
                             co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
@@ -5728,7 +5733,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto ip = am.find(id); // map node id to ip
                         SCYLLA_ASSERT (ip); // what to do if address is unknown?
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
-                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
+                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::removenode, _remove_result[id], coroutine::lambda([this, ip] () {
                             auto as = make_shared<abort_source>();
                             auto sub = _abort_source.subscribe([as] () noexcept {
@@ -5760,7 +5765,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[id]).source_dc;
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
                         tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
-                        auto task = co_await get_task_manager_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
+                        auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
                                 parent_info.id, streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc] () -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();

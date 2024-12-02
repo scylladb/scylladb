@@ -111,6 +111,8 @@ class raft_group0;
 class group0_guard;
 class group0_info;
 class raft_group0_client;
+class tablet_virtual_task;
+class task_manager_module;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -184,7 +186,8 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
-    shared_ptr<node_ops::task_manager_module> _task_manager_module;
+    shared_ptr<node_ops::task_manager_module> _node_ops_module;
+    shared_ptr<service::task_manager_module> _tablets_module;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
@@ -231,7 +234,7 @@ public:
         tasks::task_manager& tm);
     ~storage_service();
 
-    node_ops::task_manager_module& get_task_manager_module() noexcept;
+    node_ops::task_manager_module& get_node_ops_module() noexcept;
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service();
@@ -990,6 +993,7 @@ private:
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
     friend class node_ops::task_manager_module;
+    friend class tablet_virtual_task;
 };
 
 }
