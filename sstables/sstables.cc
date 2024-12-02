@@ -504,7 +504,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
 
     // Positions are encoded in little-endian.
     auto b = buf.get();
-    s.positions = utils::chunked_vector<pos_type>();
+    s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
         s.positions.push_back(seastar::read_le<pos_type>(b));
         b += sizeof(pos_type);
