@@ -58,7 +58,7 @@ class service_level_controller : public peering_sharded_service<service_level_co
 public:
     class service_level_distributed_data_accessor {
     public:
-        virtual future<qos::service_levels_info> get_service_levels() const = 0;
+        virtual future<qos::service_levels_info> get_service_levels(qos::query_context ctx = qos::query_context::unspecified) const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
         virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const = 0;
         virtual future<> drop_service_level(sstring service_level_name, service::group0_batch& mc) const = 0;
@@ -171,13 +171,13 @@ public:
      * Updates the service level data from the distributed data store.
      * @return a future that is resolved when the update is done
      */
-    future<> update_service_levels_from_distributed_data();
+    future<> update_service_levels_from_distributed_data(qos::query_context ctx = qos::query_context::unspecified);
 
 
     future<> add_distributed_service_level(sstring name, service_level_options slo, bool if_not_exsists, service::group0_batch& mc);
     future<> alter_distributed_service_level(sstring name, service_level_options slo, service::group0_batch& mc);
     future<> drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc);
-    future<service_levels_info> get_distributed_service_levels();
+    future<service_levels_info> get_distributed_service_levels(qos::query_context ctx);
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
     /**

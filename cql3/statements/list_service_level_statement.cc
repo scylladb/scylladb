@@ -54,7 +54,7 @@ list_service_level_statement::execute(query_processor& qp,
 
     return make_ready_future().then([this, &state] () {
                                   if (_describe_all) {
-                                      return state.get_service_level_controller().get_distributed_service_levels();
+                                      return state.get_service_level_controller().get_distributed_service_levels(qos::query_context::user);
                                   } else {
                                       return state.get_service_level_controller().get_distributed_service_level(_service_level);
                                   }

@@ -875,7 +875,7 @@ public:
 
     // Reload service levels in-memory configuration once.
     // Must be called on shard 0.
-    future<> update_service_levels_cache();
+    future<> update_service_levels_cache(qos::query_context ctx = qos::query_context::unspecified);
 
     future<> do_cluster_cleanup();
 
