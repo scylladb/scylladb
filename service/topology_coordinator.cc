@@ -42,6 +42,7 @@
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_voter_handler.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -144,6 +145,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Engaged if an ongoing topology change should be rolled back. The string inside
     // will indicate a reason for the rollback.
     std::optional<sstring> _rollback;
+
+    group0_voter_handler _voter_handler;
 
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
@@ -460,6 +463,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<group0_guard> remove_from_group0(group0_guard guard, const raft::server_id& id) {
         rtlogger.info("removing node {} from group 0 configuration...", id);
         release_guard(std::move(guard));
+        co_await _voter_handler.on_node_removed(id, _as);
         co_await _group0.remove_from_raft_config(id);
         rtlogger.info("node {} removed from group 0 configuration", id);
         co_return co_await start_operation();
@@ -467,7 +471,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> step_down_as_nonvoter() {
         // Become a nonvoter which triggers a leader stepdown.
-        co_await _group0.become_nonvoter(_as);
+        co_await _voter_handler.on_node_removed(_raft.id(), _as);
         if (_raft.is_leader()) {
             co_await _raft.wait_for_state_change(&_as);
         }
@@ -1982,6 +1986,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtbuilder.done();
                             auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
                             co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            co_await _voter_handler.on_node_added(node.id, _as);
                             break;
                         }
 
@@ -2035,6 +2040,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtbuilder.done();
                             co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
                                     fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
+                            co_await _voter_handler.on_node_added(node.id, _as);
                             break;
                         }
 
@@ -2174,14 +2180,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
                     // restoring its voter state on the recovery path.
                     if (node.rs->state == node_state::removing) {
-                        co_await _group0.make_nonvoter(node.id, _as);
+                        co_await _voter_handler.on_node_removed(node.id, _as);
                     }
                 }
                 if (node.rs->state == node_state::replacing) {
                     // We make a replaced node a non-voter early, just like a removed node.
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
-                        co_await _group0.make_nonvoter(replaced_node_id, _as);
+                        co_await _voter_handler.on_node_removed(replaced_node_id, _as);
                     }
                 }
                 utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
@@ -2274,6 +2280,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.warn("Error during tablet load stats refresh: {}", ep);
                     });
                     }
+                    co_await _voter_handler.on_node_added(node.id, _as);
                     break;
                 case node_state::removing: {
                     co_await utils::get_local_injector().inject("delay_node_removal", [](auto& handler) {
@@ -2334,6 +2341,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
                     }
+                    co_await _voter_handler.on_node_added(node.id, _as);
                     break;
                 default:
                     on_fatal_internal_error(rtlogger, ::format(
@@ -2476,6 +2484,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 rtlogger.info("{}", str);
                 co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
+
+                co_await _voter_handler.on_node_added(node.id, _as);
             }
                 break;
             case topology::transition_state::truncate_table:
@@ -2844,6 +2854,7 @@ public:
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
+        , _voter_handler(group0, topo_sm._topology, gossiper, feature_service)
     {}
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
