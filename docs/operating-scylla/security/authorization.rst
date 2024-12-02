@@ -91,6 +91,50 @@ If the option is used and the role exists, the statement is a no-op::
     CREATE ROLE other_role;
     CREATE ROLE IF NOT EXISTS other_role;
 
+Creating a role with a hashed password
+``````````````````````````````````````
+
+When you create a role with a password, the password is hashed by ScyllaDB and only then inserted into the database.
+However, there also exists a version of the statement allowing you to create a role with a pre-hashed password; the syntax:
+
+.. code-block::
+
+   create_role_statement: CREATE ROLE [ IF NOT EXISTS ] `role_name`
+                        : WITH HASHED PASSWORD `hashed_password`
+                        :     ( AND `role_option` )*
+   hashed_password: `string`
+   role_option: LOGIN '=' `boolean`
+              :| SUPERUSER '=' `boolean`
+              :| OPTIONS '=' `map_literal`
+
+When that statement is executed, ScyllaDB will not hash the provided hashed password; it will be inserted into
+the database directly, with no additional processing of it. The statement only works with an authenticator that
+uses passwords, e.g. PasswordAuthenticator. It can only be executed by a role with the superuser privilege.
+
+The provided hashed password must be an encrypted string using the library function `crypt(3)` specified by POSIX,
+and it must use one of the encryption algorithms that ScyllaDB supports: bcrypt, sha512crypt, sha256crypt, md5crypt.
+If the hashed password doesn't satisfy those requirements, logging in as the role may be impossible.
+
+Example how to generate a hashed password using `crypt(3)`:
+
+.. code-block:: c
+
+  #include <crypt.h>
+  #include <stdio.h>
+
+  int main(void) {
+    // Generate a hashed password using sha256.
+    const char* pwd = crypt("myPassword", "$5$");
+    printf("The hashed password is %s\n", pwd);
+    return 0;
+  }
+
+Example how to create a role with a hashed password:
+
+.. code-block:: cql
+
+  cqlsh> CREATE ROLE bob WITH HASHED PASSWORD = '$5$$QdpObVOY40UOyo.BuWdpRq0Cr/DPkw7ckBEs2NqWVn5';
+
 
 .. _alter-role-statement:
 
