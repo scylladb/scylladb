@@ -93,6 +93,10 @@ public:
         return _inactive_pending_work +
             std::ranges::fold_left(_monitors | std::views::values | std::views::transform(std::mem_fn(&read_monitor::pending_work)), uint64_t(0), std::plus());
     }
+
+    bool is_sstable_tracked(const sstables::shared_sstable& sst) const {
+        return _monitors.contains(sst);
+    }
 };
 
 view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as)
