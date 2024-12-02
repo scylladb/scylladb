@@ -20,7 +20,7 @@
 
 import pytest
 import math
-from .util import new_test_table, unique_key_int
+from util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
 from ctypes import c_float
 

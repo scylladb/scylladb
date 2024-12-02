@@ -6,7 +6,7 @@
 # some point in the past.
 
 import pytest
-from .util import new_test_table
+from util import new_test_table
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 

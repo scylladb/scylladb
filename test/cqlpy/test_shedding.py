@@ -9,7 +9,7 @@
 import pytest
 from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest
-from .util import unique_name, new_cql, ScyllaMetrics
+from util import unique_name, new_cql, ScyllaMetrics
 from contextlib import contextmanager
 
 

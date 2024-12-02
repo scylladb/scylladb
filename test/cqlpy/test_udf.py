@@ -8,7 +8,7 @@
 #############################################################################
 
 import pytest
-from .util import unique_name, new_function
+from util import unique_name, new_function
 from cassandra.protocol import InvalidRequest
 
 # Unfortunately, while ScyllaDB and Cassandra support the same UDF

@@ -8,8 +8,8 @@
 #############################################################################
 
 import pytest
-from . import nodetool
-from .util import new_test_table
+import nodetool
+from util import new_test_table
 from cassandra.protocol import ConfigurationException, SyntaxException
 
 # In older Cassandra and Scylla, the name of the compression algorithm was

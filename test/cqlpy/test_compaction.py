@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+from util import new_materialized_view, new_test_table
+import nodetool
 import pytest
 import requests
-from .util import new_materialized_view, new_test_table
-from . import nodetool
 import time
 
 # sleep to let a ttl (of `seconds`) expire and

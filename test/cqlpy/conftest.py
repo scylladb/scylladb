@@ -21,7 +21,9 @@ import tempfile
 import time
 import random
 
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla
+import sys
+sys.path.insert(1, sys.path[0] + '/../..')
+from util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla
 
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")

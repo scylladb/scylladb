@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-from .util import new_test_table
+from util import new_test_table
 from cassandra.query import SimpleStatement
 import pytest
-from . import nodetool
+import nodetool
 
 # Test that the _stop flag set in the compactor at the end of a page is not
 # sticky and doesn't remain set on the following page. If it does it can cause

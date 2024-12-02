@@ -12,11 +12,11 @@ import cassandra.query
 import glob
 import json
 import os
-from . import nodetool
-from . import util
+import nodetool
 import pytest
 import requests
 import subprocess
+import util
 
 
 @pytest.fixture(scope="module")

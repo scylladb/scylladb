@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 import time
 from cassandra.query import UNSET_VALUE

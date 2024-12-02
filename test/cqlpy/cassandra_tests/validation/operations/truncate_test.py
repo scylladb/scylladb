@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testTruncate(cql, test_keyspace):
     for arg in ["", "TABLE"]:

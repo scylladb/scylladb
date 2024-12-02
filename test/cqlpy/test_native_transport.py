@@ -4,8 +4,8 @@
 
 import pytest
 import time
-from . import nodetool
-from .util import new_test_table
+import nodetool
+from util import new_test_table
 from cassandra.cluster import NoHostAvailable
 
 def test_enable_disable_binary(cql, test_keyspace):

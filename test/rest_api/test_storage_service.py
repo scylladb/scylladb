@@ -8,7 +8,8 @@ import requests
 import time
 
 # Use the util.py library from ../cqlpy:
-from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
+from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
 from test.rest_api.rest_util import new_test_snapshot, scylla_inject_error, ThreadWrapper
 
 # "keyspace" function: Creates and returns a temporary keyspace to be

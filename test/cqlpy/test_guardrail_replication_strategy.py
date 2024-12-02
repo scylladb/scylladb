@@ -1,6 +1,6 @@
 import pytest
 from contextlib import ExitStack
-from .util import unique_name, config_value_context, new_test_keyspace
+from util import unique_name, config_value_context, new_test_keyspace
 from cassandra.protocol import ConfigurationException
 
 # Tests for the replication_strategy_{warn,fail}_list guardrail. Because

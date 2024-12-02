@@ -11,8 +11,8 @@
 # the disk.
 #############################################################################
 
-from .util import new_test_table
-from . import nodetool
+from util import new_test_table
+import nodetool
 import random
 
 # Reproduces issue #8138, where the sstable reader in a TWCS sstable set

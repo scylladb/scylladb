@@ -8,9 +8,9 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest
-from .util import unique_name, unique_key_string, unique_key_int, new_test_table
+from util import unique_name, unique_key_string, unique_key_int, new_test_table
 
-from . import nodetool
+import nodetool
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):

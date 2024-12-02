@@ -7,8 +7,8 @@
 import time
 import pytest
 
-from .util import new_test_table, unique_name
-from .nodetool import flush
+from util import new_test_table, unique_name
+from nodetool import flush
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
 # It is `scylla_only` because Cassandra doesn't allow to prepare the statement with ? as the timestamp.

@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testInsertWithUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s text, i int)") as table:

@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 
 def testSimpleStaticColumn(cql, test_keyspace):

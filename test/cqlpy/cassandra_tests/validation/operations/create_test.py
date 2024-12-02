@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...porting import *
+from cassandra_tests.porting import *
 from cassandra.util import Duration
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID

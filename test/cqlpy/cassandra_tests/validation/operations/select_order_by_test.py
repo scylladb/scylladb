@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testSelectOrderBy(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b))") as table:

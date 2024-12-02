@@ -9,7 +9,7 @@ from collections import defaultdict
 
 # Use the util.py library from ../cqlpy:
 sys.path.insert(1, sys.path[0] + '/test/cqlpy')
-from ..cqlpy.util import new_test_table, new_test_keyspace
+from util import new_test_table, new_test_keyspace
 
 
 def extractRowsMergedAsSortedList(response, ks):

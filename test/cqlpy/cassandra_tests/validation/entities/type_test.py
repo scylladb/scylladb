@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testNonExistingOnes(cql, test_keyspace):
     # The Scylla and Cassandra error messages are slightly different, but both

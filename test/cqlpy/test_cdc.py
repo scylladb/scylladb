@@ -6,8 +6,8 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 
-from .util import new_test_table, unique_name
-from .nodetool import flush
+from util import new_test_table, unique_name
+from nodetool import flush
 import pytest
 import time
 

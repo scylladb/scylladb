@@ -6,7 +6,9 @@ import pytest
 import sys
 import requests
 
-from ..cqlpy.util import new_test_table, unique_name
+# Use the util.py library from ../cqlpy:
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
+from util import new_test_table, unique_name
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,

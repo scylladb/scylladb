@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testUseStatementWithBindVariable(cql, test_keyspace):
     assert_invalid_syntax_message(cql, test_keyspace, "Bind variables cannot be used for keyspace names", "USE ?")

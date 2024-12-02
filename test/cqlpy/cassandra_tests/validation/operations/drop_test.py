@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...porting import *
+from cassandra_tests.porting import *
 
 def testNonExistingOnes(cql, test_keyspace):
     # The specific error message that Scylla and Cassandra print in these

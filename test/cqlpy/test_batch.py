@@ -2,13 +2,14 @@
 # Copyright 2022-present ScyllaDB
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
+
 #############################################################################
 # Tests for batch operations
 #############################################################################
 from cassandra import InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from .util import new_test_table
-from .rest_api import scylla_inject_error
+from util import new_test_table
+from rest_api import scylla_inject_error
 
 
 import pytest
