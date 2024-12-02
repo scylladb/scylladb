@@ -47,6 +47,7 @@ class server;
 
 namespace service {
 
+class group0_voter_registry;
 class raft_group0;
 class tablet_allocator;
 
@@ -72,6 +73,7 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service);
+        gms::feature_service& feature_service,
+        service::group0_voter_registry& voter_registry);
 
 }

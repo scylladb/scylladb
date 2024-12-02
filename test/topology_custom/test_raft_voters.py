@@ -16,7 +16,6 @@ from test.topology.conftest import cluster_con
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason='issue #18793')
 # Make sure the algorithm works with different number of nodes.
 # Here with the "num_nodes == 1" we test that we'll only have one voter per DC, despite DC having two nodes
 # (the DC1 must not have 2 voters otherwise losing it would result in the raft majority loss).
@@ -43,6 +42,9 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     config = {
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
     }
+    cmdline = [
+        '--logger-log-level', 'group0_voter_registry=debug',
+    ]
     dc_setup = [
         {
             'property_file': {'dc': 'dc1', 'rack': 'rack1'},
@@ -64,7 +66,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     dc_servers = []
     for dc in dc_setup:
         logging.info(f"Creating {dc['property_file']['dc']} with {dc['num_nodes']} nodes")
-        dc_servers.append(await manager.servers_add(dc['num_nodes'], config=config,
+        dc_servers.append(await manager.servers_add(dc['num_nodes'], config=config, cmdline=cmdline,
                                                     property_file=dc['property_file']))
 
     assert len(dc_servers) == len(dc_setup)

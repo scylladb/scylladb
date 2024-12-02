@@ -1683,7 +1683,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        auto handshaker = make_legacy_handshaker(can_vote::yes); // Voter
+        auto handshaker = make_legacy_handshaker(can_vote::no);
         co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled);
     } else {
         upgrade_log.info(
