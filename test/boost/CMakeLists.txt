@@ -233,6 +233,8 @@ add_scylla_test(sstable_datafile_test
   KIND SEASTAR)
 add_scylla_test(sstable_generation_test
   KIND BOOST)
+add_scylla_test(sstable_inexact_index_test
+  KIND SEASTAR)
 add_scylla_test(sstable_move_test
   KIND SEASTAR)
 add_scylla_test(sstable_mutation_test
