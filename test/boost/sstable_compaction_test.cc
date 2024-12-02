@@ -2682,6 +2682,45 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     r.produces_end_of_stream();
 }
 
+SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
+    // Test to verify that scrub removes the source sstable from the table upon completion
+    // https://github.com/scylladb/scylladb/issues/20030
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+
+        // add the sstable to cf's maintenance set
+        cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
+        auto& cf_ts = cf.as_table_state();
+        auto maintenance_sst_set = cf_ts.maintenance_sstable_set();
+        BOOST_REQUIRE_EQUAL(maintenance_sst_set.size(), 1);
+        BOOST_REQUIRE_EQUAL(*maintenance_sst_set.all()->begin(), sst);
+        // confirm main sstable_set is empty
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 0);
+
+        // Perform scrub on the table
+        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+
+        // main set should have the resultant sst and the maintenance set should be empty now
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+
+        // Now that there is an sstable in main set, perform scrub on the table
+        // again to verify that the result ends up again in main sstable_set
+        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto builder = schema_builder("tests", "sstable_run_based_compaction_test")
