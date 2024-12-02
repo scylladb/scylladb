@@ -121,6 +121,9 @@ public:
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout);
 
+    // Waits until the given list of sstables are all processed
+    future<> wait_until_sstables_are_processed(const std::vector<sstables::shared_sstable>& sstables);
+
 private:
     bool should_throttle() const;
     void setup_metrics();

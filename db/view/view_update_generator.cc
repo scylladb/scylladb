@@ -487,4 +487,13 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
     }
 }
 
+future<> view_update_generator::wait_until_sstables_are_processed(const std::vector<sstables::shared_sstable>& sstables) {
+    // wait until none of the sstables are being tracked in progress tracker
+    return _sstables_deregistered_cond.wait([sstables = std::move(sstables), this] {
+        return std::ranges::none_of(sstables, [this] (const sstables::shared_sstable& sst) {
+            return _progress_tracker->is_sstable_tracked(sst);
+        });
+    });
+}
+
 }
