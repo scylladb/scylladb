@@ -453,7 +453,12 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
                 sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
             }
         });
-        _service_levels_db.emplace(name, sl_data);
+        auto result= _service_levels_db.emplace(name, sl_data);
+        if (result.second) {
+            unsigned sl_idx = internal::scheduling_group_index(sl_data.sg);
+            _sl_lookup[sl_idx].first = &(result.first->first);
+            _sl_lookup[sl_idx].second = &(result.first->second);
+        }
     });
 
 }
@@ -493,6 +498,9 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
 future<> service_level_controller::notify_service_level_removed(sstring name) {
     auto sl_it = _service_levels_db.find(name);
     if (sl_it != _service_levels_db.end()) {
+        unsigned sl_idx = internal::scheduling_group_index(sl_it->second.sg);
+        _sl_lookup[sl_idx].first = nullptr;
+        _sl_lookup[sl_idx].second = nullptr;
         if (this_shard_id() == global_controller) {
             _global_controller_db->deleted_scheduling_groups.emplace_back(sl_it->second.sg);
             co_await rename_scheduling_group(sl_it->second.sg, seastar::format(deleted_scheduling_group_name_pattern, sl_it->first));
@@ -517,6 +525,24 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
 
 scheduling_group service_level_controller::get_default_scheduling_group() {
     return _default_service_level.sg;
+}
+
+scheduling_group service_level_controller::get_scheduling_group(sstring service_level_name) {
+    auto service_level_it = _service_levels_db.find(service_level_name);
+    if (service_level_it != _service_levels_db.end()) {
+        return service_level_it->second.sg;
+    } else {
+        return get_default_scheduling_group();
+    }
+}
+
+std::optional<sstring> service_level_controller::get_active_service_level() {
+    unsigned sched_idx = internal::scheduling_group_index(current_scheduling_group());
+    if (_sl_lookup[sched_idx].first) {
+        return sstring(*_sl_lookup[sched_idx].first);
+    } else {
+        return std::nullopt;
+    }
 }
 
 future<> service_level_controller::notify_effective_service_levels_cache_reloaded() {

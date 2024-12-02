@@ -150,6 +150,7 @@ private:
     std::map<sstring, service_level_options> _effective_service_levels_db;
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
     std::set<sstring> _effectively_dropped_sls;
+    std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
@@ -226,6 +227,19 @@ public:
      * @return the default service level scheduling group (see service_level_controller::initialize).
      */
     scheduling_group get_default_scheduling_group();
+    /**
+     * Get the scheduling group for a specific service level.
+     * @param service_level_name - the service level which it's scheduling group
+     * should be returned.
+     * @return if the service level exists the service level's scheduling group. else
+     * get_scheduling_group("default")
+     */
+    scheduling_group get_scheduling_group(sstring service_level_name);
+    /**
+     * @return the name of the currently active service level if such exists or an empty
+     * optional if no active service level.
+     */
+    std::optional<sstring> get_active_service_level();
 
     /**
      * Start legacy update loop if RAFT_SERVICE_LEVELS_CHANGE feature is not enabled yet 

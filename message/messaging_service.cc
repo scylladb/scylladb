@@ -18,6 +18,8 @@
 #include "message/messaging_service.hh"
 #include <seastar/core/distributed.hh>
 #include "gms/gossiper.hh"
+#include "service/storage_service.hh"
+#include "service/qos/service_level_controller.hh"
 #include "streaming/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -275,10 +277,11 @@ messaging_service::messaging_service(
     uint16_t port,
     gms::feature_service& feature_service,
     gms::gossip_address_map& address_map,
-    utils::walltime_compressor_tracker& wct)
+    utils::walltime_compressor_tracker& wct,
+    qos::service_level_controller& sl_controller)
     : messaging_service(config{std::move(id), ip, ip, port},
                         scheduling_config{{{{}, "$default"}}, {}, {}},
-                        nullptr, feature_service, address_map, wct)
+                        nullptr, feature_service, address_map, wct, sl_controller)
 {}
 
 static
@@ -386,9 +389,10 @@ void messaging_service::do_start_listen() {
     //        the first by wrapping its server_socket, but not the second.
     auto limits = rpc_resource_limits(_cfg.rpc_memory_limit);
     limits.isolate_connection = [this] (sstring isolation_cookie) {
-        rpc::isolation_config cfg;
-        cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
-        return cfg;
+
+        return scheduling_group_for_isolation_cookie(isolation_cookie).then([] (scheduling_group sg) {
+            return rpc::isolation_config{.sched_group = sg};
+        });
     };
     if (!_server[0] && _cfg.encrypt != encrypt_what::all && _cfg.port) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
@@ -467,7 +471,7 @@ void messaging_service::do_start_listen() {
 }
 
 messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service,
-                                     gms::gossip_address_map& address_map, utils::walltime_compressor_tracker& arct)
+                                     gms::gossip_address_map& address_map, utils::walltime_compressor_tracker& arct, qos::service_level_controller& sl_controller)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
@@ -476,6 +480,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
     , _feature_service(feature_service)
+    , _sl_controller(sl_controller)
     , _compressor_factory_wrapper(std::make_unique<compressor_factory_wrapper>(arct, _cfg.enable_advanced_rpc_compression))
     , _address_map(address_map)
 {
@@ -743,13 +748,21 @@ msg_addr messaging_service::addr_for_host_id(locator::host_id hid) {
 }
 
 unsigned
-messaging_service::get_rpc_client_idx(messaging_verb verb) const {
+messaging_service::get_rpc_client_idx(messaging_verb verb) {
     auto idx = s_rpc_client_idx_table[static_cast<size_t>(verb)];
 
     if (idx < PER_SHARD_CONNECTION_COUNT) {
         return idx;
     }
 
+    // this is just a workaround for a wrong initialization order in messaging_service's
+    // constructor that causes _connection_index_for_tenant to be queried before it is
+    // initialized. This WA makes the behaviour match OSS in this case and it should be
+    // removed once it is fixed in OSS. If it isn't removed the behaviour will still be
+    // correct but we will lose cycles on an unnecesairy check.
+    if (_connection_index_for_tenant.size() == 0) {
+        return idx;
+    }
     const auto curr_sched_group = current_scheduling_group();
     for (unsigned i = 0; i < _connection_index_for_tenant.size(); ++i) {
         if (_connection_index_for_tenant[i].sched_group == curr_sched_group) {
@@ -757,16 +770,42 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) const {
                 // i == 0: the default tenant maps to the default client indexes belonging to the interval
                 // [PER_SHARD_CONNECTION_COUNT, PER_SHARD_CONNECTION_COUNT + PER_TENANT_CONNECTION_COUNT).
                 idx += i * PER_TENANT_CONNECTION_COUNT;
-                break;
+                return idx;
             } else {
                 // If the tenant is disable, immediately return current index to
                 // use $system tenant.
                 return idx;
             }
         }
+
     }
 
-    return idx;
+    // if we got here - it means that two conditions are met:
+    // 1. We are trying to get a client for a statement/statement_ack verb.
+    // 2. We are running in a scheduling group that is not assigned to one of the
+    // static tenants (e.g $system)
+    // If this scheduling group is of one of the system's static statement tenants we
+    // whould have caught it in the loop above.
+    // The other posibility is that we are running in a scheduling group belongs to
+    // a service level, maybe a deleted one, this is why it is possible that we will
+    // not find the service level name.
+
+    std::optional<sstring> service_level = _sl_controller.get_active_service_level();
+    scheduling_group sg_for_tenant = curr_sched_group;
+    if (!service_level) {
+        service_level = qos::service_level_controller::default_service_level_name;
+        sg_for_tenant = _sl_controller.get_default_scheduling_group();
+    }
+    auto it = _dynamic_tenants_to_client_idx.find(*service_level);
+    // the second part of this condition checks that the service level didn't "suddenly"
+    // changed scheduling group. If it did, it means probably that it was dropped and
+    // added again, if it happens we will update it's connection indexes since it is
+    // basically a new tenant with the same name.
+    if (it == _dynamic_tenants_to_client_idx.end() ||
+            _scheduling_info_for_connection_index[it->second].sched_group != sg_for_tenant) {
+        return add_statement_tenant(*service_level,sg_for_tenant) + (idx - PER_SHARD_CONNECTION_COUNT);
+    }
+    return it->second;
 }
 
 std::vector<messaging_service::scheduling_info_for_connection_index>
@@ -802,25 +841,96 @@ messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
     return _scheduling_info_for_connection_index[idx].sched_group;
 }
 
-scheduling_group
+future<scheduling_group>
 messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const {
     // Once per connection, so a loop is fine.
     for (auto&& info : _scheduling_info_for_connection_index) {
         if (info.isolation_cookie == isolation_cookie) {
-            return info.sched_group;
+            return make_ready_future<scheduling_group>(info.sched_group);
         }
     }
-    // Check for the case of the client using a connection class we don't
-    // recognize, but we know its a tenant, not a system connection.
-    // Fall-back to the default tenant in this case.
-    for (auto&& connection_prefix : _connection_types_prefix) {
-        if (isolation_cookie.find(connection_prefix.data()) == 0) {
-            return _scheduling_config.statement_tenants.front().sched_group;
+
+    // We first check if this is a statement isolation cookie - if it is, we will search for the
+    // appropriate service level in the service_level_controller since in can be that
+    // _scheduling_info_for_connection_index is not yet updated (drop readd case for example)
+    // in the future we will only fall back here for new service levels that havn't been referenced
+    // before.
+    // It is safe to assume that an unknown connection type can be rejected since a connection
+    // with an unknown purpose on the inbound side is useless.
+    // However, until we get rid of the backward compatibility code below, we can't reject the
+    // connection since there is a slight chance that this connection comes from an old node that
+    // still doesn't use the "connection type prefix" convention.
+    auto tenant_connection = [] (const sstring& isolation_cookie) -> bool {
+        for (auto&& connection_prefix : _connection_types_prefix) {
+            if(isolation_cookie.find(connection_prefix.data()) == 0) {
+                return true;
+            }
         }
+        return false;
+    };
+
+    std::string service_level_name = "";
+    if (tenant_connection(isolation_cookie)) {
+        // Extract the service level name from the connection isolation cookie.
+        service_level_name = isolation_cookie.substr(std::string(isolation_cookie).find_first_of(':') + 1);
+    } else if (_sl_controller.has_service_level(isolation_cookie)) {
+        // Backward Compatibility Code - This entire "else if" block should be removed
+        // in the major version that follows the one that contains this code.
+        // When upgrading from an older enterprise version the isolation cookie is not
+        // prefixed with "statement:" or any other connection type prefix, so an isolation cookie
+        // that comes from an older node will simply contain the service level name.
+        // we do an extra step to be also future proof and make sure it is indeed a service
+        // level's name, since if this is the older version and we upgrade to a new one
+        // we could have more connection classes (eg: streaming,gossip etc...) and we wouldn't
+        // want it to overload the default statement's scheduling group.
+        // it is not bulet proof in the sense that if a new tenant class happens to have the exact
+        // name as one of the service levels it will be diverted to the default statement scheduling
+        // group but it has a small chance of happening.
+        service_level_name = isolation_cookie;
+        mlogger.info("Trying to allow an rpc connection from an older node for service level {}", service_level_name);
+    } else {
+        // Client is using a new connection class that the server doesn't recognize yet.
+        // Assume it's important, after server upgrade we'll recognize it.
+        service_level_name = isolation_cookie;
+        mlogger.warn("Assuming an unknown cookie is from an older node and represent some not yet discovered service level {} - Trying to allow it.", service_level_name);
     }
-    // Client is using a new connection class that the server doesn't recognize yet.
-    // Assume it's important, after server upgrade we'll recognize it.
-    return default_scheduling_group();
+
+    if (_sl_controller.has_service_level(service_level_name)) {
+        return make_ready_future<scheduling_group>(_sl_controller.get_scheduling_group(service_level_name));
+    } else if (service_level_name.starts_with('$')) {
+        // Tenant names starting with '$' are reserved for internal ones. If the tenant is not recognized
+        // to this point, it means we are in the middle of cluster upgrade and we don't know this tenant yet.
+        // Hardwire it to the default service level to keep things simple.
+        // This also includes `$user` tenant which is used in OSS and may appear in mixed OSS/Enterprise cluster.
+        return make_ready_future<scheduling_group>(_sl_controller.get_default_scheduling_group());
+    } else {
+        mlogger.info("Service level {} is still unknown, will try to create it now and allow the RPC connection.", service_level_name);
+        // If the service level don't exist there are two possibilities, it is either created but still not known by this
+        // node. Or it has been deleted and the initiating node hasn't caught up yet, in both cases it is safe to __try__ and
+        // create a new service level (internally), it will naturally catch up eventually and by creating it here we prevent
+        // an rpc connection for a valid service level to permanently get stuck in the default service level scheduling group.
+        // If we can't create the service level (we already have too many service levels), we will reject the connection by returning
+        // an exeptional future.
+        qos::service_level_options slo;
+        // We put here the minimal ammount of shares for this service level to be functional. When the node catches up it will
+        // be either deleted or the number of shares and other configuration options will be updated.
+        slo.shares.emplace<int32_t>(1000);
+        slo.shares_name.emplace(service_level_name);
+        return _sl_controller.add_service_level(service_level_name, slo).then([this, service_level_name] () {
+            if (_sl_controller.has_service_level(service_level_name)) {
+                return make_ready_future<scheduling_group>(_sl_controller.get_scheduling_group(service_level_name));
+            } else {
+                // The code until here is best effort, to provide fast catchup in case the configuration changes very quickly and being used
+                // before this node caught up, or alternatively during startup while the configuration table hasn't been consulted yet.
+                // If for some reason we couldn't add the service level, it is better to wait for the configuration to settle,
+                // this occasion should be rare enough, even if it happen, two paths are possible, either the initiating node will
+                // catch up, figure out the service level has been deleted and will not reattempt this rpc connection, or that this node will
+                // eventually catch up with the correct configuration (mainly some service levels that have been deleted and "made room" for this service level) and
+                // will eventually allow the connection.
+                return make_exception_future<scheduling_group>(std::runtime_error(fmt::format("Rejecting RPC connection for service level: {}, probably only a transitional effect", service_level_name)));
+            }
+        });
+    }
 }
 
 
@@ -1247,6 +1357,37 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
 }
 
 // Wrappers for verbs
+
+unsigned messaging_service::add_statement_tenant(sstring tenant_name, scheduling_group sg) {
+    auto idx = _clients.size();
+    auto scheduling_info_for_connection_index_size = _scheduling_info_for_connection_index.size();
+    auto undo = defer([&] {
+        _clients.resize(idx);
+        _clients_with_host_id.resize(idx);
+        _scheduling_info_for_connection_index.resize(scheduling_info_for_connection_index_size);
+    });
+    _clients.resize(_clients.size() + PER_TENANT_CONNECTION_COUNT);
+    _clients_with_host_id.resize(_clients_with_host_id.size() + PER_TENANT_CONNECTION_COUNT);
+    // this functions as a way to delete an obsolete tenant with the same name but keeping _clients
+    // indexing and _scheduling_info_for_connection_index indexing in sync.
+    sstring first_cookie = sstring(_connection_types_prefix[0]) + tenant_name;
+    for (unsigned i = 0; i < _scheduling_info_for_connection_index.size(); i++) {
+        if (_scheduling_info_for_connection_index[i].isolation_cookie == first_cookie) {
+            // remove all connections associated with this tenant, since we are reinserting it.
+            for (size_t j = 0; j < _connection_types_prefix.size() ; j++) {
+                _scheduling_info_for_connection_index[i + j].isolation_cookie = "";
+            }
+            break;
+        }
+    }
+    for (auto&& connection_prefix : _connection_types_prefix) {
+        sstring isolation_cookie = sstring(connection_prefix) + tenant_name;
+        _scheduling_info_for_connection_index.emplace_back(scheduling_info_for_connection_index{sg, isolation_cookie});
+    }
+    _dynamic_tenants_to_client_idx.insert_or_assign(tenant_name, idx);
+    undo.cancel();
+    return idx;
+}
 
 // Wrapper for TASKS_CHILDREN_REQUEST
 void messaging_service::register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func) {
