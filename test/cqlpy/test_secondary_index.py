@@ -193,6 +193,14 @@ def test_create_index_if_not_exists2(cql, test_keyspace, cassandra_bug):
         with pytest.raises(InvalidRequest, match="already exists"):
             cql.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table}(v2)")
 
+# Verify that oversized index names are cleanly rejected  as InvalidRequest
+# Reproduces issue #20755
+def test_create_index_oversized_name(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        index_name = 'x'*500
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+
 # Test that the paging state works properly for indexes on tables
 # with descending clustering order. There was a problem with indexes
 # created on clustering keys with DESC clustering order - they are represented
