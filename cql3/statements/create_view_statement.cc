@@ -13,6 +13,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <boost/regex.hpp>
+
 #include <seastar/core/coroutine.hh>
 #include "cql3/column_identifier.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -104,6 +106,7 @@ static bool validate_primary_key(
 
 std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(data_dictionary::database db) const {
     // We need to make sure that:
+    //  - materialized view name is valid
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
     //    and their names match the base table's names
@@ -136,6 +139,14 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     if (_base_name.get_keyspace() != keyspace()) {
         throw exceptions::invalid_request_exception(format("Cannot create a materialized view on a table in a separate keyspace ('{}' != '{}')",
                 _base_name.get_keyspace(), keyspace()));
+    }
+    const sstring& cf_name = column_family();
+    boost::regex name_regex("\\w+");
+    if (!boost::regex_match(std::string(cf_name), name_regex)) {
+        throw exceptions::invalid_request_exception(format("\"{}\" is not a valid materialized view name (must contain alphanumeric character only: [0-9A-Za-z] or the underscore)", cf_name.c_str()));
+    }
+    if (cf_name.size() > size_t(schema::NAME_LENGTH)) {
+        throw exceptions::invalid_request_exception(format("materialized view names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, cf_name.c_str()));
     }
 
     schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
