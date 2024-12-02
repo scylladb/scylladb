@@ -42,6 +42,7 @@
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_voter_registry.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -95,6 +96,7 @@ future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_sou
 }
 
 namespace {
+
 // Doesn't throw error on absence of values.
 sstring get_application_state_gently(const gms::application_state_map& epmap, gms::application_state app_state) {
     const auto it = epmap.find(app_state);
@@ -104,6 +106,85 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
     // it's versioned_value::value(), not std::optional::value() - it does not throw
     return it->second.value();
 }
+
+class group0_server_info_accessor : public raft_server_info_accessor {
+    using topology_type = topology;
+    const topology_type& _topology;
+    const gms::gossiper& _gossiper;
+
+public:
+    explicit group0_server_info_accessor(const topology_type& topology, const gms::gossiper& gossiper)
+        : _topology(topology)
+        , _gossiper(gossiper) {
+    }
+    [[nodiscard]] const std::unordered_map<raft::server_id, replica_state>& get_members() const override;
+    [[nodiscard]] const replica_state& find(raft::server_id id) const override;
+    [[nodiscard]] bool is_alive(raft::server_id id) const override;
+};
+
+class group0_voter_client : public raft_voter_client {
+    raft_group0& _group0;
+
+public:
+    explicit group0_voter_client(raft_group0& group0)
+        : _group0(group0) {
+    }
+    [[nodiscard]] bool is_voter(raft::server_id id) const override;
+    [[nodiscard]] future<> set_voters_status(const std::unordered_set<raft::server_id>& nodes, can_vote can_vote, abort_source& as) override;
+};
+
+[[nodiscard]] const std::unordered_map<raft::server_id, replica_state>& group0_server_info_accessor::get_members() const {
+    return _topology.normal_nodes;
+}
+
+const replica_state& group0_server_info_accessor::find(raft::server_id id) const {
+    const auto* it = _topology.find(id);
+    if (!it) {
+        throw std::runtime_error(::format("node {} is not a member of the cluster", id));
+    }
+
+    return it->second;
+}
+
+bool group0_server_info_accessor::is_alive(raft::server_id id) const {
+    return _gossiper.is_alive(to_host_id(id));
+}
+
+bool group0_voter_client::is_voter(raft::server_id id) const {
+    return _group0.group0_server().get_configuration().can_vote(id);
+}
+
+future<> group0_voter_client::set_voters_status(const std::unordered_set<raft::server_id>& nodes, can_vote can_vote, abort_source& as) {
+    return _group0.set_voters_status(nodes, can_vote, as);
+}
+
+class voter_registry_wrapper : public group0_voter_registry {
+    raft_group0& _group0;
+    const gms::feature_service& _feature_service;
+
+    group0_voter_registry::instance_ptr _instance;
+
+public:
+    voter_registry_wrapper(raft_group0& group0, const gms::feature_service& feature_service,
+            std::unique_ptr<const raft_server_info_accessor> server_info_accessor, std::unique_ptr<raft_voter_client> voter_client,
+            std::optional<size_t> max_voters = std::nullopt)
+        : _group0(group0)
+        , _feature_service(feature_service)
+        , _instance(group0_voter_registry::create(std::move(server_info_accessor), std::move(voter_client), max_voters)) {
+    }
+
+    future<> update_nodes(
+            const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) override {
+        if (!_feature_service.group0_limited_voters) {
+            // the previous implementation had just the voter removals part
+            // (thus we only handle the removed nodes here if the feature is not active)
+            return _group0.set_voters_status(nodes_removed, can_vote::no, as);
+        }
+
+        return _instance->update_nodes(nodes_added, nodes_removed, as);
+    }
+};
+
 } // namespace
 
 class topology_coordinator : public endpoint_lifecycle_subscriber {
@@ -142,6 +223,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Engaged if an ongoing topology change should be rolled back. The string inside
     // will indicate a reason for the rollback.
     std::optional<sstring> _rollback;
+
+    group0_voter_registry& _voter_registry;
 
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
@@ -465,7 +548,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> step_down_as_nonvoter() {
         // Become a nonvoter which triggers a leader stepdown.
-        co_await _group0.become_nonvoter(_as);
+        co_await _voter_registry.remove_node(_raft.id(), _as);
         if (_raft.is_leader()) {
             co_await _raft.wait_for_state_change(&_as);
         }
@@ -1960,6 +2043,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtbuilder.done();
                             auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
                             co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            co_await _voter_registry.insert_node(node.id, _as);
                             break;
                         }
 
@@ -2013,6 +2097,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtbuilder.done();
                             co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
                                     fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
+                            co_await _voter_registry.insert_node(node.id, _as);
                             break;
                         }
 
@@ -2152,7 +2237,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
                     // restoring its voter state on the recovery path.
                     if (node.rs->state == node_state::removing) {
-                        co_await _group0.set_voter_status(node.id, can_vote::no, _as);
+                        co_await _voter_registry.remove_node(node.id, _as);
                     }
 
                     // If we decommission a node when the number of nodes is even, we make it a non-voter early.
@@ -2169,7 +2254,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                          "giving up leadership");
                             co_await step_down_as_nonvoter();
                         } else {
-                            co_await _group0.set_voter_status(node.id, can_vote::no, _as);
+                            co_await _voter_registry.remove_node(node.id, _as);
                         }
                     }
                 }
@@ -2177,7 +2262,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // We make a replaced node a non-voter early, just like a removed node.
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
-                        co_await _group0.set_voter_status(replaced_node_id, can_vote::no, _as);
+                        co_await _voter_registry.remove_node(replaced_node_id, _as);
                     }
                 }
                 utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
@@ -2266,6 +2351,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                    "bootstrap: read fence completed");
                     }
+                    co_await _voter_registry.insert_node(node.id, _as);
                     break;
                 case node_state::removing: {
                     co_await utils::get_local_injector().inject("delay_node_removal", [](auto& handler) {
@@ -2326,6 +2412,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
                     }
+                    co_await _voter_registry.insert_node(node.id, _as);
                     break;
                 default:
                     on_fatal_internal_error(rtlogger, ::format(
@@ -2359,7 +2446,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // (If we're in `left` state when we try to restart we won't
                     // be able to become a voter - we'll be banned from the cluster.)
                 } else {
-                    co_await _group0.set_voter_status(node.id, can_vote::no, _as);
+                    co_await _voter_registry.remove_node(node.id, _as);
                 }
 
                 bool barrier_failed = false;
@@ -2468,6 +2555,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 rtlogger.info("{}", str);
                 co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
+
+                co_await _voter_registry.insert_node(node.id, _as);
             }
                 break;
             case topology::transition_state::truncate_table:
@@ -2825,7 +2914,8 @@ public:
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
-            gms::feature_service& feature_service)
+            gms::feature_service& feature_service,
+            group0_voter_registry& voter_registry)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
@@ -2835,6 +2925,7 @@ public:
         , _tablet_allocator(tablet_allocator)
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
+        , _voter_registry(voter_registry)
     {}
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
@@ -3423,13 +3514,17 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service) {
 
+    group0_voter_registry::instance_ptr voter_registry = std::make_unique<voter_registry_wrapper>(
+            group0, feature_service, std::make_unique<group0_server_info_accessor>(topo_sm._topology, gossiper), std::make_unique<group0_voter_client>(group0));
+
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
             sys_ks, db, group0, topo_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service};
+            feature_service,
+            *voter_registry};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);
