@@ -10,6 +10,7 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/core/future.hh>
 
+#include "gms/gossip_address_map.hh"
 #include "replica/database_fwd.hh"
 #include "tasks/task_manager.hh"
 #include "seastarx.hh"
@@ -97,7 +98,7 @@ future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>&
 future<> unset_server_sstables_loader(http_context& ctx);
 future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb);
 future<> unset_server_view_builder(http_context& ctx);
-future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
+future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_transport_controller(http_context& ctx);

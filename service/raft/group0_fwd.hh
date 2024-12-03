@@ -14,9 +14,6 @@
 
 namespace service {
 
-template <typename C> class raft_address_map_t;
-using raft_address_map = raft_address_map_t<seastar::lowres_clock>;
-
 // Address of a discovery peer
 struct discovery_peer {
     raft::server_id id;
@@ -82,5 +79,9 @@ struct group_liveness_info {
 struct direct_fd_ping_reply {
     std::variant<std::monostate, wrong_destination, group_liveness_info> result;
 };
+
+using raft_ticker_type = seastar::timer<lowres_clock>;
+// TODO: should be configurable.
+static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::milliseconds(100);
 
 } // namespace service

@@ -130,7 +130,6 @@ class raft_group0 {
 public:
     // Passed to `setup_group0` when replacing a node.
     struct replace_info {
-        gms::inet_address ip_addr;
         raft::server_id raft_id;
     };
 
@@ -298,9 +297,6 @@ public:
 
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
-
-    const raft_address_map& address_map() const;
-    raft_address_map& modifiable_address_map();
 
     // Returns scheduling group group0 is configured to run with
     seastar::scheduling_group get_scheduling_group() {

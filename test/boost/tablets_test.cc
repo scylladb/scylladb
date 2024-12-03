@@ -750,6 +750,7 @@ SEASTAR_TEST_CASE(test_get_shard) {
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
                 locator::topology::config{
                         .this_endpoint = ip1,
+                        .this_host_id = h1,
                         .local_dc_rack = locator::endpoint_dc_rack::default_location
                 }
         });
@@ -1004,7 +1005,7 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
         tokm.get_topology().add_or_update_endpoint(h1, tokm.get_topology().my_address());
 
         std::vector<tablet_id> tablet_ids;
@@ -1219,7 +1220,7 @@ SEASTAR_TEST_CASE(test_intranode_sharding) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1 } });
+        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
         tokm.get_topology().add_or_update_endpoint(h1, tokm.get_topology().my_address());
 
         auto leaving_replica = tablet_replica{h1, 5};
@@ -1470,6 +1471,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         locator::topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
@@ -1570,6 +1572,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         locator::topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
@@ -1658,6 +1661,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
                 locator::topology::config {
                         .this_endpoint = ip1,
+                        .this_host_id = host1,
                         .local_dc_rack = locator::endpoint_dc_rack::default_location
                 }
         });
@@ -1757,6 +1761,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
             locator::topology::config {
                 .this_endpoint = ip1,
+                .this_host_id = host1,
                 .local_dc_rack = dcrack
             }
         });
@@ -1826,6 +1831,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
                 locator::topology::config {
                         .this_endpoint = ip1,
+                        .this_host_id = host1,
                         .local_dc_rack = racks[0]
                 }
         });
@@ -1932,6 +1938,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
                 locator::topology::config {
                         .this_endpoint = ip1,
+                        .this_host_id = host1,
                         .local_dc_rack = racks[0]
                 }
         });
@@ -2010,6 +2017,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
         shared_token_metadata stm([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
                 locator::topology::config {
                         .this_endpoint = ip1,
+                        .this_host_id = host1,
                         .local_dc_rack = locator::endpoint_dc_rack::default_location
                 }
         });
@@ -2070,6 +2078,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         locator::topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
@@ -2143,6 +2152,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         locator::topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
@@ -2209,6 +2219,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         locator::topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
@@ -2273,6 +2284,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
             locator::topology::config{
                 .this_endpoint = ip1,
+                .this_host_id = host1,
                 .local_dc_rack = locator::endpoint_dc_rack::default_location
             }
         });
@@ -2366,6 +2378,7 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
             locator::topology::config{
                 .this_endpoint = ip1,
+                .this_host_id = host1,
                 .local_dc_rack = locator::endpoint_dc_rack::default_location
             }
         });
@@ -2609,6 +2622,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
                 locator::topology::config{
                         .this_endpoint = ip1,
+                        .this_host_id = host1,
                         .local_dc_rack = locator::endpoint_dc_rack::default_location
                 }
         });
@@ -2897,7 +2911,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
+            topo.add_or_update_endpoint(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }

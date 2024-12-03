@@ -10,7 +10,6 @@ ERROR_INJECTIONS = (
     "stop_after_init_of_system_ks",
     "stop_after_init_of_schema_commitlog",
     "stop_after_starting_gossiper",
-    "stop_after_starting_raft_address_map",
     "stop_after_starting_migration_manager",
     "stop_after_starting_commitlog",
     "stop_after_starting_repair",

@@ -1728,7 +1728,7 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static std::optional<gms::inet_address>
+static std::optional<locator::host_id>
 get_view_natural_endpoint(
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
@@ -1758,7 +1758,7 @@ get_view_natural_endpoint(
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
             if (view_endpoint == me && it != base_endpoints.end()) {
-                return topology.my_address();
+                return me;
             }
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
@@ -1788,23 +1788,20 @@ get_view_natural_endpoint(
 
     // https://github.com/scylladb/scylladb/issues/19439
     // With tablets, a node being replaced might transition to "left" state
-    // but still be kept as a replica. In such case, the IP of the replaced
-    // node will be lost and `endpoint()` will return an empty IP here.
-    // As of writing this, storage proxy was not migrated to host IDs yet
-    // (#6403) and hints are not prepared to handle nodes that are left
+    // but still be kept as a replica.
+    // As of writing this hints are not prepared to handle nodes that are left
     // but are still replicas. Therefore, there is no other sensible option
     // right now but to give up attempt to send the update or write a hint
     // to the paired, permanently down replica.
-    const auto ep = view_topology.get_node(replica).endpoint();
-    if (ep != gms::inet_address{}) {
-        return ep;
+    if (!view_topology.get_node(replica).left()) {
+        return replica;
     } else {
         return std::nullopt;
     }
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
-        gms::inet_address target, inet_address_vector_topology_change pending_endpoints,
+        locator::host_id target, host_id_vector_topology_change pending_endpoints,
         frozen_mutation_and_schema mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
     // The "delay_before_remote_view_update" injection point can be
@@ -1874,7 +1871,7 @@ future<> view_update_generator::mutate_MV(
         // on a view, like we have the synchronous_updates_flag.
         bool use_legacy_self_pairing = !ks.uses_tablets();
         auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
-        auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
+        auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
@@ -1889,7 +1886,7 @@ future<> view_update_generator::mutate_MV(
         // First, find the local endpoint and ensure that if it exists,
         // it will be the target endpoint. That way, all endpoints in the
         // remote_endpoints list are guaranteed to be remote.
-        auto my_address = view_ermp->get_topology().my_address();
+        auto my_address = view_ermp->get_topology().my_host_id();
         auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), my_address);
         if (remote_it != remote_endpoints.end()) {
             if (!target_endpoint) {

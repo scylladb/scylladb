@@ -23,7 +23,7 @@ public:
     // Ballots of the most recent decisions, as seen by replicas. Before proceeding with its own
     // proposal, the coordinator must ensure all replicas are on the same page with the most recent
     // previous decision.
-    std::unordered_map<gms::inet_address, utils::UUID> committed_ballots_by_replica;
+    std::unordered_map<locator::host_id, utils::UUID> committed_ballots_by_replica;
     // Whether all replicas accepted the ballot or not. Even if there is only one reject, the
     // coordinator will not proceed, since it indicates there is a more recent ballot. It will
     // proceed, however, as soon as it receives a majority of responses.
@@ -52,7 +52,7 @@ public:
 
 public:
     prepare_summary(size_t node_count);
-    inet_address_vector_replica_set replicas_missing_most_recent_commit(schema_ptr s, std::chrono::seconds now_in_sec) const;
+    host_id_vector_replica_set replicas_missing_most_recent_commit(schema_ptr s, std::chrono::seconds now_in_sec) const;
     void update_most_recent_promised_ballot(utils::UUID ballot);
 };
 

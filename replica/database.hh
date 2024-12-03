@@ -501,7 +501,7 @@ private:
     // holds cache hit rates per each node in a cluster
     // may not have information for some node, since it fills
     // in dynamically
-    std::unordered_map<gms::inet_address, cache_hit_rate> _cluster_cache_hit_rates;
+    std::unordered_map<locator::host_id, cache_hit_rate> _cluster_cache_hit_rates;
 
     // Operations like truncate, flush, query, etc, may depend on a column family being alive to
     // complete.  Some of them have their own gate already (like flush), used in specialized wait
@@ -1080,10 +1080,10 @@ public:
         _global_cache_hit_rate = rate;
     }
 
-    void set_hit_rate(gms::inet_address addr, cache_temperature rate);
+    void set_hit_rate(locator::host_id addr, cache_temperature rate);
     cache_hit_rate get_my_hit_rate() const;
-    cache_hit_rate get_hit_rate(const gms::gossiper& g, gms::inet_address addr);
-    void drop_hit_rate(gms::inet_address addr);
+    cache_hit_rate get_hit_rate(const gms::gossiper& g, locator::host_id addr);
+    void drop_hit_rate(locator::host_id addr);
 
     void enable_auto_compaction();
     future<> disable_auto_compaction();

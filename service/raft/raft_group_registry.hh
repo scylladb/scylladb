@@ -81,13 +81,13 @@ class raft_operation_timeout_error : public std::runtime_error {
 // this will have the same end effect as not having a timeout at all.
 class raft_server_with_timeouts {
     raft_server_for_group& _group_server;
-    raft_group_registry& _registry;
+    shared_ptr<raft::failure_detector> _fd;
 
     template <std::invocable<abort_source*> Op>
     std::invoke_result_t<Op, abort_source*>
     run_with_timeout(Op&& op, const char* op_name, seastar::abort_source* as, std::optional<raft_timeout> timeout);
 public:
-    raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry);
+    raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd);
     future<> add_entry(raft::command command, raft::wait_type type, seastar::abort_source& as, std::optional<raft_timeout> timeout);
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<bool> trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout);
@@ -108,8 +108,6 @@ private:
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
     std::unordered_map<raft::group_id, raft_server_for_group> _servers;
-    // inet_address:es for remote raft servers known to us
-    raft_address_map& _address_map;
 
     direct_failure_detector::failure_detector& _direct_fd;
     // Listens to notifications from direct failure detector.
@@ -131,7 +129,7 @@ private:
     raft::server_id _my_id;
 
 public:
-    raft_group_registry(raft::server_id my_id, raft_address_map&, netw::messaging_service& ms,
+    raft_group_registry(raft::server_id my_id, netw::messaging_service& ms,
             direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
@@ -183,7 +181,6 @@ public:
     void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
-    raft_address_map& address_map() { return _address_map; }
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
 };
 
@@ -191,14 +188,13 @@ public:
 // Translates `raft::server_id`s to `gms::inet_address`es before pinging.
 class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinger>, public direct_failure_detector::pinger {
     netw::messaging_service& _ms;
-    raft_address_map& _address_map;
 
     using rate_limits = utils::recent_entries_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
     rate_limits _rate_limits;
 
 public:
-    direct_fd_pinger(netw::messaging_service& ms, raft_address_map& address_map)
-            : _ms(ms), _address_map(address_map) {}
+    direct_fd_pinger(netw::messaging_service& ms)
+            : _ms(ms) {}
 
     direct_fd_pinger(const direct_fd_pinger&) = delete;
     direct_fd_pinger(direct_fd_pinger&&) = delete;

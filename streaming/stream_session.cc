@@ -118,6 +118,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
             rpc::optional<service::session_id> session) {
         auto from = netw::messaging_service::get_source(cinfo);
+        auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
         sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
@@ -125,7 +127,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     _db.local().get_token_metadata().get_topology().my_address())));
         }
-        return _mm.local().get_schema_for_write(schema_id, from, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+        return _mm.local().get_schema_for_write(schema_id, src, from.cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
             auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;

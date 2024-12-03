@@ -298,7 +298,7 @@ private:
      *
      * @param val the set of batchlog endpoints
      */
-    void set_batchlog_endpoints(const inet_address_vector_replica_set& val);
+    void set_batchlog_endpoints(const host_id_vector_replica_set& val);
 
     /**
      * Stores a consistency level of a query being traced.
@@ -482,7 +482,7 @@ private:
     friend void set_page_size(const trace_state_ptr& p, int32_t val);
     friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
     friend void set_response_size(const trace_state_ptr& p, size_t s) noexcept;
-    friend void set_batchlog_endpoints(const trace_state_ptr& p, const inet_address_vector_replica_set& val);
+    friend void set_batchlog_endpoints(const trace_state_ptr& p, const host_id_vector_replica_set& val);
     friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::optional<db::consistency_level>&val);
     friend void add_query(const trace_state_ptr& p, std::string_view val);
@@ -603,7 +603,7 @@ inline void set_response_size(const trace_state_ptr& p, size_t s) noexcept {
     }
 }
 
-inline void set_batchlog_endpoints(const trace_state_ptr& p, const inet_address_vector_replica_set& val) {
+inline void set_batchlog_endpoints(const trace_state_ptr& p, const host_id_vector_replica_set& val) {
     if (p) {
         p->set_batchlog_endpoints(val);
     }

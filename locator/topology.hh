@@ -182,6 +182,8 @@ public:
 
         bool operator==(const config&) const = default;
     };
+    struct shallow_copy{};
+    topology(shallow_copy, config cfg);
     topology(config cfg);
     topology(topology&&) noexcept;
 
@@ -193,9 +195,7 @@ public:
 public:
     const config& get_config() const noexcept { return _cfg; }
 
-    void set_host_id_cfg(host_id this_host_id) {
-        _cfg.this_host_id = this_host_id;
-    }
+    void set_host_id_cfg(host_id this_host_id);
 
     const node* this_node() const noexcept {
         return _this_node;
@@ -349,6 +349,12 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    /**
+     * This method will sort the <tt>List</tt> by proximity to the given
+     * host_id.
+     */
+    void sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const;
+
     // Executes a function for each node in a state other than "none" and "left".
     void for_each_node(std::function<void(const node*)> func) const;
 
@@ -402,7 +408,8 @@ private:
      * 2. Nodes in the same RACK as the reference node
      * 3. Nodes in the same DC as the reference node
      */
-    std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    template<typename T>
+    std::weak_ordering compare_endpoints(const T& address, const T& a1, const T& a2) const;
 
     unsigned _shard;
     config _cfg;

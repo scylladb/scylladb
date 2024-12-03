@@ -33,6 +33,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const override;
+    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
 };
 }

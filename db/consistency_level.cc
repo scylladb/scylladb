@@ -17,6 +17,7 @@
 #include "exceptions/exceptions.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/sstring.hh>
+#include "locator/host_id.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "db/read_repair_decision.hh"
@@ -232,15 +233,16 @@ void assure_sufficient_live_nodes(
 
 template void assure_sufficient_live_nodes(consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
 template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
+template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set&, const host_id_vector_topology_change&);
 
-inet_address_vector_replica_set
+host_id_vector_replica_set
 filter_for_query(consistency_level cl,
                  const locator::effective_replication_map& erm,
-                 inet_address_vector_replica_set live_endpoints,
-                 const inet_address_vector_replica_set& preferred_endpoints,
+                 host_id_vector_replica_set live_endpoints,
+                 const host_id_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  const gms::gossiper& g,
-                 std::optional<gms::inet_address>* extra,
+                 std::optional<locator::host_id>* extra,
                  replica::column_family* cf) {
     size_t local_count;
 
@@ -267,13 +269,13 @@ filter_for_query(consistency_level cl,
         return live_endpoints;
     }
 
-    inet_address_vector_replica_set selected_endpoints;
+    host_id_vector_replica_set selected_endpoints;
 
     // Pre-select endpoints based on client preference. If the endpoints
     // selected this way aren't enough to satisfy CL requirements select the
     // remaining ones according to the load-balancing strategy as before.
     if (!preferred_endpoints.empty()) {
-        const auto it = boost::stable_partition(live_endpoints, [&preferred_endpoints] (const gms::inet_address& a) {
+        const auto it = boost::stable_partition(live_endpoints, [&preferred_endpoints] (const locator::host_id& a) {
             return std::find(preferred_endpoints.cbegin(), preferred_endpoints.cend(), a) == preferred_endpoints.end();
         });
         const size_t selected = std::distance(it, live_endpoints.end());
@@ -281,7 +283,7 @@ filter_for_query(consistency_level cl,
              if (extra) {
                  *extra = selected == bf ? live_endpoints.front() : *(it + bf);
              }
-             return inet_address_vector_replica_set(it, it + bf);
+             return host_id_vector_replica_set(it, it + bf);
         } else if (selected) {
              selected_endpoints.reserve(bf);
              std::move(it, live_endpoints.end(), std::back_inserter(selected_endpoints));
@@ -292,7 +294,7 @@ filter_for_query(consistency_level cl,
     const auto remaining_bf = bf - selected_endpoints.size();
 
     if (cf) {
-        auto get_hit_rate = [&g, cf] (gms::inet_address ep) -> float {
+        auto get_hit_rate = [&g, cf] (locator::host_id ep) -> float {
             // We limit each nodes' cache-hit ratio to max_hit_rate = 0.95
             // for two reasons:
             // 1. If two nodes have hit rate 0.99 and 0.98, the miss rates
@@ -306,6 +308,7 @@ filter_for_query(consistency_level cl,
             //    its miss rate is 0.05, 1/20th of the worst miss rate 1.0,
             //    so the cold node will get 1/20th the work of the hot.
             constexpr float max_hit_rate = 0.95;
+            // FIXME: all functions here should work on host ids
             auto ht = cf->get_hit_rate(g, ep);
             if (float(ht.rate) < 0) {
                 return float(ht.rate);
@@ -323,18 +326,18 @@ filter_for_query(consistency_level cl,
         float ht_min = 1;
         bool old_node = false;
 
-        auto epi = live_endpoints | std::views::transform([&] (gms::inet_address ep) {
+        auto epi = live_endpoints | std::views::transform([&] (locator::host_id ep) {
             auto ht = get_hit_rate(ep);
             old_node = old_node || ht < 0;
             ht_max = std::max(ht_max, ht);
             ht_min = std::min(ht_min, ht);
             return std::make_pair(ep, ht);
-        }) | std::ranges::to<std::vector<std::pair<gms::inet_address, float>>>();
+        }) | std::ranges::to<std::vector<std::pair<locator::host_id, float>>>();
 
         if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_endpoints_for_reading)
             unsigned local_idx = erm.get_topology().is_me(epi[0].first) ? 0 : epi.size() + 1;
-            auto weighted = boost::copy_range<inet_address_vector_replica_set>(miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra)));
+            auto weighted = boost::copy_range<host_id_vector_replica_set>(miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra)));
             // Workaround for https://github.com/scylladb/scylladb/issues/9285
             auto last = std::adjacent_find(weighted.begin(), weighted.end());
             if (last == weighted.end()) {
@@ -356,7 +359,7 @@ filter_for_query(consistency_level cl,
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,
-                         const inet_address_vector_replica_set& live_endpoints) {
+                         const host_id_vector_replica_set& live_endpoints) {
     using namespace locator;
     const auto& topo = erm.get_topology();
 

@@ -35,6 +35,7 @@
 #include "task_manager_test.hh"
 #include "tasks.hh"
 #include "raft.hh"
+#include "gms/gossip_address_map.hh"
 
 logging::logger apilog("api");
 
@@ -159,8 +160,8 @@ future<> unset_server_view_builder(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_view_builder(ctx, r); });
 }
 
-future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair) {
-    return ctx.http_server.set_routes([&ctx, &repair] (routes& r) { set_repair(ctx, r, repair); });
+future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am) {
+    return ctx.http_server.set_routes([&ctx, &repair, &am] (routes& r) { set_repair(ctx, r, repair, am); });
 }
 
 future<> unset_server_repair(http_context& ctx) {

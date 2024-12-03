@@ -13,6 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include "locator/host_id.hh"
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "gms/generation-number.hh"
@@ -32,6 +33,7 @@
 #include <seastar/core/scheduling.hh>
 #include "locator/token_metadata.hh"
 #include "locator/types.hh"
+#include "gms/gossip_address_map.hh"
 
 namespace gms {
 
@@ -43,8 +45,6 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class gossip_get_endpoint_states_request;
 class gossip_get_endpoint_states_response;
-
-using advertise_myself = bool_class<class advertise_myself_tag>;
 
 struct syn_msg_pending {
     bool pending = false;
@@ -59,6 +59,7 @@ struct ack_msg_pending {
 struct gossip_config {
     seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
     sstring cluster_name;
+    locator::host_id host_id;
     utils::UUID group0_id;
     std::set<inet_address> seeds;
     sstring partitioner;
@@ -119,7 +120,6 @@ private:
     seastar::gate _background_msg;
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
-    bool _advertise_myself = true;
     // Map ip address and generation number
     generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
@@ -280,7 +280,7 @@ private:
     // Must be called under lock_endpoint.
     future<> replicate(inet_address, endpoint_state, permit_id);
 public:
-    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, gossip_config gcfg, gossip_address_map& address_map);
 
     /**
      * Register for interesting state changes.
@@ -298,7 +298,7 @@ public:
 
     std::set<inet_address> get_live_members() const;
 
-    std::set<inet_address> get_live_token_owners() const;
+    std::set<locator::host_id> get_live_token_owners() const;
 
     /**
      * @return a list of unreachable gossip participants, including fat clients
@@ -439,6 +439,7 @@ public:
     }
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
+    const versioned_value* get_application_state_ptr(locator::host_id id, application_state appstate) const noexcept;
     sstring get_application_state_value(inet_address endpoint, application_state appstate) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip.
@@ -512,12 +513,17 @@ private:
      */
     future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
 
+    template<typename ID>
+    future<> wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout);
 public:
     bool is_alive(inet_address ep) const;
+    bool is_alive(locator::host_id id) const;
+
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
-    future<> wait_alive(noncopyable_function<std::vector<gms::inet_address>()> get_nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);
@@ -599,8 +605,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {},
-            gms::advertise_myself advertise = gms::advertise_myself::yes);
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {});
 
 public:
     using mandatory = bool_class<class mandatory_tag>;
@@ -673,6 +678,7 @@ private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
+    gossip_address_map& _address_map;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
@@ -690,7 +696,13 @@ public:
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
     // Send UP notification to all nodes in the set
-    future<> notify_nodes_on_up(std::unordered_set<inet_address>);
+    future<> notify_nodes_on_up(std::unordered_set<locator::host_id>);
+    const gossip_address_map& get_address_map() const  {
+        return _address_map;
+    }
+    gossip_address_map& get_mutable_address_map() const {
+        return _address_map;
+    }
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);

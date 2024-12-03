@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "service/raft/raft_group_registry.hh"
+#include "raft/raft.hh"
 #include "service/raft/raft_rpc.hh"
-#include "service/raft/raft_address_map.hh"
 #include "db/system_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
@@ -78,10 +78,8 @@ public:
 
 raft_group_registry::raft_group_registry(
         raft::server_id my_id,
-        raft_address_map& address_map,
         netw::messaging_service& ms, direct_failure_detector::failure_detector& fd)
     : _ms(ms)
-    , _address_map{address_map}
     , _direct_fd(fd)
     , _direct_fd_proxy(make_shared<direct_fd_proxy>(my_id))
     , _my_id(my_id)
@@ -103,16 +101,8 @@ void raft_group_registry::init_rpc_verbs() {
         }
 
         return container().invoke_on(shard_for_group(gid),
-                [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
-            // Update the address mappings for the rpc module
-            // in case the sender is encountered for the first time
+                [addr = netw::messaging_service::get_source(cinfo).addr, gid, handler] (raft_group_registry& self) mutable {
             auto& rpc = self.get_rpc(gid);
-            // The address learnt from a probably unknown server should
-            // eventually expire. Do not use it to update
-            // a previously learned gossiper address: otherwise an RPC from
-            // a node outside of the config could permanently
-            // change the address map of a healthy cluster.
-            self._address_map.opt_add_entry(from, std::move(addr));
             // Execute the actual message handling code
             if constexpr (is_one_way) {
                 handler(rpc);
@@ -337,7 +327,7 @@ raft_server_with_timeouts raft_group_registry::get_server_with_timeouts(raft::gr
     if (!group_server.server.get()) {
         on_internal_error(rslog, format("get_server(): no server for group {}", gid));
     }
-    return raft_server_with_timeouts(group_server, *this);
+    return raft_server_with_timeouts(group_server, failure_detector());
 }
 
 raft::server* raft_group_registry::find_server(raft::group_id gid) {
@@ -436,9 +426,9 @@ namespace {
     };
 }
 
-raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, raft_group_registry& registry)
+raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd)
     : _group_server(group_server)
-    , _registry(registry)
+    , _fd(fd)
 {
 }
 
@@ -475,14 +465,12 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         }
         sstring quorum_message;
         {
-            auto fd = _registry.failure_detector();
-            const auto& am = _registry.address_map();
             unsigned voters_count = 0;
             std::vector<raft::server_id> dead_voters;
             for (const auto& c: _group_server.server->get_configuration().current) {
                 if (c.can_vote) {
                     ++voters_count;
-                    if (!fd->is_alive(c.addr.id)) {
+                    if (!_fd->is_alive(c.addr.id)) {
                         dead_voters.push_back(c.addr.id);
                     }
                 }
@@ -490,12 +478,7 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
             if (voters_count > 0 && dead_voters.size() >= (voters_count + 1) / 2) {
                 std::string dead_voters_str;
                 for (const auto id: dead_voters) {
-                    const auto ip = am.find(id);
-                    if (ip) {
-                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", *ip);
-                    } else {
-                        fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
-                    }
+                    fmt::format_to(std::back_inserter(dead_voters_str), ",{}", id);
                     if (dead_voters_str.size() > 512) {
                         dead_voters_str.append("...");
                         break;
@@ -547,24 +530,17 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
 
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, abort_source& as) {
     auto dst_id = raft::server_id{id};
-    auto addr = _address_map.find(dst_id);
-    if (!addr) {
-        {
-            auto& rate_limit = _rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));
-            rslog.log(log_level::warn, rate_limit, "Raft server id {} cannot be translated to an IP address.", id);
-        }
-        _rate_limits.remove_least_recent_entries(std::chrono::minutes(30));
-        co_return false;
-    }
 
     try {
-        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, netw::msg_addr(*addr), as, dst_id);
+        auto reply = co_await ser::raft_rpc_verbs::send_direct_fd_ping(&_ms, locator::host_id{id}, as, dst_id);
         if (auto* wrong_dst = std::get_if<wrong_destination>(&reply.result)) {
+            // FIXME: after moving to host_id based verbs we will not get `wrong_destination`
+            //        any more since the connection will fail
             // This may happen e.g. when node B is replacing node A with the same IP.
             // When we ping node A, the pings will reach node B instead.
             // B will detect they were destined for node A and return wrong_destination.
-            rslog.trace("ping(id = {}, ip_addr = {}): wrong destination (reached {})",
-                        dst_id, *addr, wrong_dst->reached_id);
+            rslog.trace("ping(id = {}): wrong destination (reached {})",
+                        dst_id, wrong_dst->reached_id);
             co_return false;
         } else if (auto* info = std::get_if<group_liveness_info>(&reply.result)) {
             co_return info->group0_alive;

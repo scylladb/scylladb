@@ -38,7 +38,6 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/tablet_allocator.hh"
@@ -62,13 +61,17 @@ namespace service {
 
 logging::logger rtlogger("raft_topology");
 
-future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, abort_source& as) {
+locator::host_id to_host_id(raft::server_id id) {
+    return locator::host_id{id.uuid()};
+}
+
+future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_source& as) {
     const auto timeout = std::chrono::seconds{30};
     const auto deadline = lowres_clock::now() + timeout;
     while (true) {
-        const auto ip = am.find(id);
-        if (ip) {
-            co_return *ip;
+        auto hids = g.get_nodes_with_host_id(to_host_id(id));
+        if (!hids.empty()) {
+            co_return;
         }
         if (lowres_clock::now() > deadline) {
             co_await coroutine::exception(std::make_exception_ptr(
@@ -88,7 +91,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     db::system_keyspace& _sys_ks;
     replica::database& _db;
     service::raft_group0& _group0;
-    const service::raft_address_map& _address_map;
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
@@ -188,7 +190,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto& n : _topo_sm._topology.normal_nodes) {
             bool alive = false;
             try {
-                alive = _gossiper.is_alive(id2ip(locator::host_id(n.first.uuid())));
+                alive = _gossiper.is_alive(locator::host_id(n.first.uuid()));
             } catch (...) {}
 
             if (!alive) {
@@ -206,7 +208,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto& n : _topo_sm._topology.normal_nodes) {
             bool alive = false;
             try {
-                alive = _gossiper.is_alive(id2ip(locator::host_id(n.first.uuid())));
+                alive = _gossiper.is_alive(locator::host_id(n.first.uuid()));
             } catch (...) {}
 
             if (!alive) {
@@ -357,32 +359,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    inet_address id2ip(locator::host_id id) const {
-        auto ip = _address_map.find(raft::server_id(id.uuid()));
-        if (!ip) {
-            throw std::runtime_error(::format("no ip address mapping for {}", id));
-        }
-        return *ip;
-    }
-
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
-        auto ip = _address_map.find(id);
-        if (!ip) {
-            rtlogger.warn("cannot send command {} with term {} and index {} "
-                         "to {} because mapping to ip is not available",
-                         cmd.cmd, _term, cmd_index, id);
-            co_await coroutine::exception(std::make_exception_ptr(
-                    std::runtime_error(::format("no ip address mapping for {}", id))));
-        }
-        rtlogger.debug("send {} command with term {} and index {} to {}/{}",
-            cmd.cmd, _term, cmd_index, id, *ip);
-        auto result = _db.get_token_metadata().get_topology().is_me(*ip) ?
+        rtlogger.debug("send {} command with term {} and index {} to {}",
+            cmd.cmd, _term, cmd_index, id);
+        auto result = _db.get_token_metadata().get_topology().is_me(to_host_id(id)) ?
                     co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
-                            &_messaging, netw::msg_addr{*ip}, id, _term, cmd_index, cmd);
+                            &_messaging, to_host_id(id), id, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
             co_await coroutine::exception(std::make_exception_ptr(
-                    std::runtime_error(::format("failed status returned from {}/{}", id, *ip))));
+                    std::runtime_error(::format("failed status returned from {}", id))));
         }
     };
 
@@ -1225,7 +1211,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
                         auto dst = trinfo.pending_replica->host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                   netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
+                                   dst, _as, raft::server_id(dst.uuid()), gid);
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                         updates.emplace_back(get_mutation_builder()
@@ -1285,7 +1271,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);
+                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
@@ -1303,7 +1289,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);
+                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
                     })) {
                         transition_to(locator::tablet_transition_stage::revert_migration);
                     }
@@ -1352,7 +1338,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto tablet = gid;
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
+                                dst, _as, raft::server_id(dst.uuid()), gid);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={}", dst, tablet, duration);
                     })) {
@@ -1568,7 +1554,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node_builder.set("node_state", node_state::left);
                     reject_join.emplace_back(id);
                     try {
-                        co_await wait_for_ip(id, _address_map, _as);
+                        co_await wait_for_gossiper(id, _gossiper, _as);
                     } catch (...) {
                         rtlogger.warn("wait_for_ip failed during cancellation: {}", std::current_exception());
                     }
@@ -2239,7 +2225,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto validation_result = validate_joining_node(node);
 
                     if (utils::get_local_injector().enter("handle_node_transition_drop_expiring")) {
-                        _group0.modifiable_address_map().force_drop_expiring_entries();
+                        _gossiper.get_mutable_address_map().force_drop_expiring_entries();
                     }
 
                     // When the validation succeeded, it's important that all nodes in the
@@ -2258,7 +2244,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         try {
                             if (holds_alternative<join_node_response_params::rejected>(validation_result)) {
                                 release_guard(std::move(node.guard));
-                                co_await wait_for_ip(node.id, _address_map, _as);
+                                co_await wait_for_gossiper(node.id, _gossiper, _as);
                                 node.guard = co_await start_operation();
                             } else {
                                 auto exclude_nodes = get_excluded_nodes(node);
@@ -2484,9 +2470,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> respond_to_joining_node(raft::server_id id, join_node_response_params&& params) {
-        auto ip = id2ip(locator::host_id(id.uuid()));
         co_await ser::join_node_rpc_verbs::send_join_node_response(
-            &_messaging, netw::msg_addr(ip), id,
+            &_messaging, to_host_id(id), id,
             std::move(params)
         );
     }
@@ -2577,7 +2562,7 @@ public:
             gms::feature_service& feature_service)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
-        , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
+        , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
@@ -2704,7 +2689,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
             auto sub = _as.subscribe(request_abort);
 
             auto node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                             netw::msg_addr(id2ip(dst)),
+                                                                                             dst,
                                                                                              as,
                                                                                              raft::server_id(dst.uuid()));
 
