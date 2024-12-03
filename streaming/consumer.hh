@@ -30,6 +30,7 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
     uint64_t estimated_partitions,
     stream_reason reason,
     sstables::offstrategy offstrategy,
-    service::frozen_topology_guard);
+    service::frozen_topology_guard,
+    std::vector<sstables::shared_sstable>* staged_sstables = nullptr);
 
 }
