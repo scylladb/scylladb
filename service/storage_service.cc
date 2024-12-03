@@ -4678,22 +4678,7 @@ future<> storage_service::do_cluster_cleanup() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
-    rtlogger.debug("Start waiting for topology request completion (request id {})", id);
-    while (true) {
-        auto c = _topology_state_machine.reload_count;
-        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id, require_entry);
-        if (done) {
-            rtlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
-            co_return error;
-        }
-        if (c == _topology_state_machine.reload_count) {
-            // wait only if the state was not reloaded while we were preempted
-            rtlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
-            co_await _topology_state_machine.event.when();
-        }
-    }
-
-    co_return sstring();
+    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
 future<> storage_service::wait_for_topology_not_busy() {
