@@ -198,6 +198,7 @@ target_sources(scylla-main
     table_helper.cc
     tasks/task_handler.cc
     tasks/task_manager.cc
+    tasks/virtual_task_hint.cc
     timeout_config.cc
     unimplemented.cc
     validation.cc
