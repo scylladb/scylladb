@@ -16,6 +16,14 @@ from test.topology_experimental_raft.test_tablets import inject_error_on
 from test.topology_tasks.task_manager_client import TaskManagerClient
 from test.topology_tasks.task_manager_types import TaskStatus, TaskStats
 
+async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+    for server in servers:
+        await manager.api.enable_injection(server.ip_addr, injection, False)
+
+async def disable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+    for server in servers:
+        await manager.api.disable_injection(server.ip_addr, injection)
+
 async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int, type: str):
     async def get_tasks():
         return [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == type and task.keyspace == "test"]
@@ -184,3 +192,50 @@ async def test_tablet_migration_task(manager: ManagerClient):
     assert migration_src[0] != host_ids[1]
     migration_dst = (host_ids[1], 0)
     await asyncio.gather(move_tablet(migration_src, migration_dst), check("migration"))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_migration_task_list(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    servers, host_ids = await prepare_migration_test(manager)
+    injection = "handle_tablet_migration_end_migration"
+
+    async def move_tablet(server, old_replica, new_replica):
+        await manager.api.move_tablet(server.ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+
+    async def check_migration_task_list(type: str):
+        # Wait until migration tasks are created.
+        migration_tasks0 = await wait_tasks_created(tm, servers[0], module_name, 1, type)
+        migration_tasks1 = await wait_tasks_created(tm, servers[1], module_name, 1, type)
+
+        assert len(migration_tasks0) == len(migration_tasks1), f"Different number of migration virtual tasks on nodes {servers[0].server_id} and {servers[1].server_id}"
+        assert len(migration_tasks0) == 1, f"Wrong number of migration virtual tasks"
+
+        task0 = migration_tasks0[0]
+        task1 = migration_tasks1[0]
+        assert task0.task_id == task1.task_id
+
+        for task in [task0, task1]:
+            assert task.state in ["created", "running"]
+            assert task.type == type
+            assert task.kind == "cluster"
+            assert task.scope == "tablet"
+            assert task.table == "test"
+            assert task.keyspace == "test"
+
+        await disable_injection(manager, servers, injection)
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+    intranode_migration_src = replicas[0].replicas[0]
+    intranode_migration_dst = (intranode_migration_src[0], 1 - intranode_migration_src[1])
+    await enable_injection(manager, servers, injection)
+    await asyncio.gather(move_tablet(servers[0], intranode_migration_src, intranode_migration_dst), check_migration_task_list("intranode_migration"))
+
+    migration_src = intranode_migration_dst
+    assert migration_src[0] != host_ids[1]
+    migration_dst = (host_ids[1], 0)
+    await enable_injection(manager, servers, injection)
+    await asyncio.gather(move_tablet(servers[0], migration_src, migration_dst), check_migration_task_list("migration"))
