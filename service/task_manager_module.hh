@@ -13,6 +13,7 @@
 
 namespace locator {
 class tablet_id;
+enum class tablet_task_type;
 }
 
 namespace service {
