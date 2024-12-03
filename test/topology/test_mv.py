@@ -16,6 +16,8 @@ import pytest
 
 from test.topology.util import new_test_keyspace, new_test_table, new_materialized_view
 
+ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND TABLETS = {'enabled': false }"
+
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
@@ -32,7 +34,7 @@ async def test_mv_tombstone_gc_setting(manager):
     be here and not in the single-node cqlpy.
     """
     cql = manager.cql
-    async with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }") as keyspace:
+    async with new_test_keyspace(cql, ksdef) as keyspace:
         async with new_test_table(cql, keyspace, "p int primary key, x int") as table:
             # Adding "WITH tombstone_gc = ..." In the CREATE MATERIALIZED VIEW:
             async with new_materialized_view(cql, table, "*", "p, x", "p is not null and x is not null", "WITH tombstone_gc = {'mode': 'repair'}") as mv:
@@ -55,7 +57,7 @@ async def test_mv_tombstone_gc_not_inherited(manager):
     demonstrates the existing behavior.
     """
     cql = manager.cql
-    async with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }") as keyspace:
+    async with new_test_keyspace(cql, ksdef) as keyspace:
         async with new_test_table(cql, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'repair'}") as table:
             s = list(cql.execute(f"DESC {table}"))[0].create_statement
             assert "'mode': 'repair'" in s
