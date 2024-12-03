@@ -233,6 +233,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);
     f.set_if<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>(table_digest_insensitive_to_expiry);
     f.set_if<db::schema_feature::GROUP0_SCHEMA_VERSIONING>(group0_schema_versioning);
+    f.set_if<db::schema_feature::IN_MEMORY_TABLES>(bool(in_memory_tables));
     return f;
 }
 

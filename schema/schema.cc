@@ -581,6 +581,7 @@ bool operator==(const schema& x, const schema& y)
         && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info)
         && x._raw._indices_by_name == y._raw._indices_by_name
         && x._raw._is_counter == y._raw._is_counter
+        && x._raw._in_memory == y._raw._in_memory
         ;
 }
 
@@ -839,6 +840,7 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",speculativeRetry={}", s._raw._speculative_retry.to_sstring());
     out = fmt::format_to(out, ",triggers=[]");
     out = fmt::format_to(out, ",isDense={}", s._raw._is_dense);
+    out = fmt::format_to(out, ",in_memory={}", s._raw._in_memory);
     out = fmt::format_to(out, ",version={}", s.version());
 
     out = fmt::format_to(out, ",droppedColumns={{");

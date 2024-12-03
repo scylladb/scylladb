@@ -563,6 +563,7 @@ private:
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::static_sharder> _sharder;
+        bool _in_memory = false;
         std::optional<raw_view_info> _view_info;
     };
     raw_schema _raw;
@@ -759,6 +760,10 @@ public:
     replica::table& table() const;
 
     bool has_custom_partitioner() const;
+
+    bool is_in_memory() const {
+        return _raw._in_memory;
+    }
 
     const column_definition* get_column_definition(const bytes& name) const;
     const column_definition& column_at(column_kind, column_id) const;

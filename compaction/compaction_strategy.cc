@@ -180,6 +180,9 @@ void compaction_strategy_impl::validate_options_for_strategy_type(const std::map
             break;
         default:
             break;
+        case compaction_strategy_type::null:
+        case compaction_strategy_type::in_memory:
+            return;
     }
 
     unchecked_options.erase("class");
@@ -761,6 +764,13 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         break;
     case compaction_strategy_type::time_window:
         impl = ::make_shared<time_window_compaction_strategy>(options);
+        break;
+    case compaction_strategy_type::in_memory:
+        compaction_strategy_logger.warn(
+                "{} is no longer supported. Defaulting to {}.",
+                compaction_strategy::name(compaction_strategy_type::in_memory),
+                compaction_strategy::name(compaction_strategy_type::null));
+        impl = ::make_shared<null_compaction_strategy>();
         break;
     case compaction_strategy_type::incremental:
         impl = make_shared<incremental_compaction_strategy>(incremental_compaction_strategy(options));
