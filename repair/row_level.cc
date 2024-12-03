@@ -2309,8 +2309,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             return rs.repair_flush_hints_batchlog_handler(from, std::move(req));
         });
     }
-    rlogger.info("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} target_nodes={} hints_timeout={}s batchlog_timeout={}s",
-            req.repair_uuid, from, req.target_nodes, req.hints_timeout.count(), req.batchlog_timeout.count());
+    rlogger.info("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
+            req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
     auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
     bool updated = false;
     auto now = gc_clock::now();
@@ -2319,8 +2319,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     auto flush_time = now;
     if (cache_disabled || (now - _flush_hints_batchlog_time > cache_time)) {
         // Empty targets meants all nodes
-        std::vector<gms::inet_address> target_nodes;
-        db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::move(target_nodes));
+        db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::vector<gms::inet_address>{});
         lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
         try {
             bool bm_throw = utils::get_local_injector().enter("repair_flush_hints_batchlog_handler_bm_uninitialized");
@@ -2329,13 +2328,13 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             }
             co_await coroutine::all(
                 [this, &from, &req, &sync_point, &deadline] () -> future<> {
-                    rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+                    rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     co_await _sp.local().wait_for_hint_sync_point(std::move(sync_point), deadline);
-                    rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}, target_hosts={}", req.repair_uuid, from, req.target_nodes);
+                    rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     co_return;
                 },
                 [this, now, cache_disabled, &flush_time, &cache_time, &from, &req] () -> future<>  {
-                    rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}", req.repair_uuid, from, req.target_nodes);
+                    rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     auto last_replay = _bm.local().get_last_replay();
                     bool issue_flush = false;
                     if (cache_disabled) {
@@ -2364,12 +2363,12 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
                         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
-                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, target_nodes={}, flushed={}", req.repair_uuid, from, req.target_nodes, issue_flush);
+                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={}", req.repair_uuid, from, issue_flush);
                 }
             );
         } catch (...) {
-            rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={} target_hosts={}: {}",
-                    req.repair_uuid, from, req.target_nodes, std::current_exception());
+            rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}: {}",
+                    req.repair_uuid, from, std::current_exception());
             throw;
         }
         co_await container().invoke_on_all([flush_time] (repair_service& rs) {
@@ -2380,8 +2379,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "skip_flush", fmt::to_string(flush_time));
     }
     auto duration = std::chrono::duration<float>(gc_clock::now() - now);
-    rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} target_nodes={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
-            req.repair_uuid, from, req.target_nodes, updated, _flush_hints_batchlog_time, cache_time, duration);
+    rlogger.info("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
+            req.repair_uuid, from, updated, _flush_hints_batchlog_time, cache_time, duration);
     repair_flush_hints_batchlog_response resp{ .flush_time = _flush_hints_batchlog_time };
     co_return resp;
 }

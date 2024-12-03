@@ -87,7 +87,7 @@ struct repair_update_system_table_response {
 
 struct repair_flush_hints_batchlog_request {
     tasks::task_id repair_uuid;
-    std::list<gms::inet_address> target_nodes;
+    std::list<gms::inet_address> unused;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;
 };

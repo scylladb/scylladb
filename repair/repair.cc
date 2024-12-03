@@ -375,7 +375,7 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
 
 future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<gms::inet_address> ignore_nodes, std::list<gms::inet_address> participants) {
+        std::unordered_set<gms::inet_address> ignore_nodes) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     bool needs_flush_before_repair = false;
@@ -400,13 +400,13 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
         });
         auto hints_timeout = std::chrono::seconds(300);
         auto batchlog_timeout = std::chrono::seconds(300);
-        repair_flush_hints_batchlog_request req{id.uuid(), participants, hints_timeout, batchlog_timeout};
+        repair_flush_hints_batchlog_request req{id.uuid(), {}, hints_timeout, batchlog_timeout};
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
-            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req, &participants] (gms::inet_address node) -> future<> {
-                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, started",
-                        uuid, node, participants);
+            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (gms::inet_address node) -> future<> {
+                rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
+                        uuid, node);
                 try {
                     auto& ms = get_messaging();
                     auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
@@ -418,8 +418,8 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
                         times.push_back(resp.flush_time);
                     }
                 } catch (...) {
-                    rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, participants={}, failed: {}",
-                            uuid, node, participants, std::current_exception());
+                    rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, failed: {}",
+                            uuid, node, std::current_exception());
                     throw;
                 }
             });
@@ -431,11 +431,10 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
             rlogger.info("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
         } catch (...) {
-            rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to participants={} failed, continue to run repair",
-                    uuid, participants);
+            rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
-        rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog to nodes={}", uuid, participants);
+        rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
     co_return std::make_tuple(hints_batchlog_flushed, flush_time);
 }
@@ -1360,7 +1359,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         } else {
             participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes, participants).get();
+        auto [hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
@@ -2588,10 +2587,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                auto my_address = erm->get_topology().my_address();
-                auto participants = std::list<gms::inet_address>(m.neighbors.all.begin(), m.neighbors.all.end());
-                participants.push_front(my_address);
-                auto [hints_batchlog_flushed, flush_time] = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, participants);
+                auto [hints_batchlog_flushed, flush_time] = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 bool small_table_optimization = false;
 
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
