@@ -795,4 +795,18 @@ future<> task_manager::uninit_ms_handlers() {
     return make_ready_future();
 }
 
+locator::tablet_task_type virtual_task_hint::get_task_type() const {
+    if (!task_type.has_value()) {
+        on_internal_error(tmlogger, "tablet_virtual_task hint does not contain task type");
+    }
+    return task_type.value();
+}
+
+locator::tablet_id virtual_task_hint::get_tablet_id() const {
+    if (!tablet_id.has_value()) {
+        on_internal_error(tmlogger, "tablet_virtual_task hint does not contain tablet_id");
+    }
+    return tablet_id.value();
+}
+
 }
