@@ -185,7 +185,7 @@ arch_packages=(
 )
 
 go_arch() {
-    declare -A local GO_ARCH=(
+    local -A GO_ARCH=(
         ["x86_64"]=amd64
         ["aarch64"]=arm64
         ["s390x"]=s390x
