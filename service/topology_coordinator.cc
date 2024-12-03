@@ -873,6 +873,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                     release_guard(std::move(guard));
 
+                    co_await utils::get_local_injector().inject("truncate_table_wait", [] (auto& handler) {
+                        rtlogger.info("truncate_table_wait: start");
+                        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+                    });
+
                     // Check if all the nodes with replicas are alive
                     for (const locator::host_id& replica_host: replica_hosts) {
                         if (!_gossiper.is_alive(replica_host)) {
@@ -916,6 +921,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                 }
             }
+
+            utils::get_local_injector().inject("truncate_crash_after_session_clear", [] {
+                rtlogger.info("truncate_crash_after_session_clear hit, killing the node");
+                _exit(1);
+            });
 
             // Execute a barrier to ensure the TRUNCATE RPC can't run on any nodes after this point
             if (!guard) {
