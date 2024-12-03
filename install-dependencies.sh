@@ -327,7 +327,7 @@ elif [ "$ID" = "fedora" ]; then
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
     PIP_DEFAULT_ARGS="--only-binary=:all: -v"
     pip_constrained_packages=""
-    for package in ${!pip_packages[@]}
+    for package in "${!pip_packages[@]}"
     do
         pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
     done
