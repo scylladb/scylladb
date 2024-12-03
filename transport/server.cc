@@ -2053,9 +2053,24 @@ future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
 }
 
 future<> cql_server::update_connections_service_level_params() {
-    return for_each_gently([] (generic_server::connection& conn) -> future<> {
+    if (!_sl_controller.is_v2()) {
+        // Auto update of connections' service level params requires
+        // service levels in v2.
+        return make_ready_future<>();
+    }
+
+    return for_each_gently([this] (generic_server::connection& conn) -> future<> {
         connection& cql_conn = dynamic_cast<connection&>(conn);
-        return cql_conn.get_client_state().maybe_update_per_service_level_params();
+        auto& cs = cql_conn.get_client_state();
+        auto& user = cs.user();
+
+        if (user && user->name) {
+            auto slo = _sl_controller.find_cached_effective_service_level(user->name.value());
+            if (slo) {
+                cs.update_per_service_level_params(*slo);
+            }
+        }
+        co_return;
     });
 }
 
