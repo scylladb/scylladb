@@ -687,6 +687,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
+    _topology_state_machine.reload_count++;
 
     if (_manage_topology_change_kind_from_group0) {
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
@@ -1530,7 +1531,7 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     };
     if (!is_drained()) {
         slogger.info("Waiting for tablet replicas from the replaced node to be rebuilt");
-        co_await _topology_state_machine.event.wait([&] {
+        co_await _topology_state_machine.event.when([&] {
             return is_drained();
         });
     }
@@ -4725,12 +4726,19 @@ future<> storage_service::do_cluster_cleanup() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
+    rtlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
+        auto c = _topology_state_machine.reload_count;
         auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id, require_entry);
         if (done) {
+            rtlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
         }
-        co_await _topology_state_machine.event.when();
+        if (c == _topology_state_machine.reload_count) {
+            // wait only if the state was not reloaded while we were preempted
+            rtlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
+            co_await _topology_state_machine.event.when();
+        }
     }
 
     co_return sstring();
@@ -4740,7 +4748,7 @@ future<> storage_service::wait_for_topology_not_busy() {
     auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     while (_topology_state_machine._topology.is_busy()) {
         release_guard(std::move(guard));
-        co_await _topology_state_machine.event.wait();
+        co_await _topology_state_machine.event.when();
         guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
     }
 }
@@ -6570,7 +6578,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
             }
             rtlogger.debug("transit_tablet(): topology state machine is busy: {}", tstate);
             release_guard(std::move(guard));
-            co_await _topology_state_machine.event.wait();
+            co_await _topology_state_machine.event.when();
             guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         }
 
@@ -6601,7 +6609,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
     }
 
     // Wait for transition to finish.
-    co_await _topology_state_machine.event.wait([&] {
+    co_await _topology_state_machine.event.when([&] {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return !tmap.get_tablet_transition_info(tmap.get_tablet_id(token));
     });
@@ -6639,7 +6647,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
 
     while (_topology_state_machine._topology.is_busy()) {
         rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
-        co_await _topology_state_machine.event.wait();
+        co_await _topology_state_machine.event.when();
     }
 }
 
