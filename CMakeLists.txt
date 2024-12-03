@@ -266,6 +266,7 @@ add_subdirectory(compaction)
 add_subdirectory(cql3)
 add_subdirectory(data_dictionary)
 add_subdirectory(dht)
+add_subdirectory(ent)
 add_subdirectory(gms)
 add_subdirectory(idl)
 add_subdirectory(index)
@@ -311,6 +312,7 @@ set(scylla_libs
     idl
     index
     lang
+    ldap
     locator
     message
     mutation

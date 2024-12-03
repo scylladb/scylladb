@@ -97,6 +97,7 @@ if(BUILD_TESTING)
     add_dependencies(tests scylla)
 
     add_subdirectory(boost)
+    add_subdirectory(ldap)
     add_subdirectory(manual)
     add_subdirectory(unit)
     add_subdirectory(raft)
