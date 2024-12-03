@@ -20,6 +20,22 @@ tasks::task_manager::task_group tablet_virtual_task::get_group() const noexcept 
     return tasks::task_manager::task_group::tablets_group;
 }
 
+static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tablet_task_info& task_info, schema_ptr schema) {
+    if (!task_info.is_valid()) {
+        return std::nullopt;
+    }
+
+    return tasks::task_stats{
+        .task_id = tasks::task_id{task_info.tablet_task_id.uuid()},
+        .type = locator::tablet_task_type_to_string(task_info.request_type),
+        .kind = tasks::task_kind::cluster,
+        .scope = task_info.is_user_repair_request() ? "table" : "tablet",
+        .state = tasks::task_manager::task_state::running,
+        .keyspace = schema->ks_name(),
+        .table = schema->cf_name()
+    };
+}
+
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {
     auto tables = get_table_ids();
     for (auto table : tables) {
@@ -80,27 +96,23 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
         std::unordered_map<tasks::task_id, tasks::task_stats> user_requests;
         std::unordered_map<tasks::task_id, size_t> sched_num_sum;
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            if (!info.repair_task_info.is_valid()) {
-                return make_ready_future();
+            auto repair_stats = maybe_make_task_stats(info.repair_task_info, schema);
+            if (repair_stats) {
+                if (info.repair_task_info.is_user_repair_request()) {
+                    // User requested repair may encompass more that one tablet.
+                    auto task_id = tasks::task_id{info.repair_task_info.tablet_task_id.uuid()};
+                    user_requests[task_id] = std::move(repair_stats.value());
+                    sched_num_sum[task_id] += info.repair_task_info.sched_nr;
+                } else {
+                    res.push_back(std::move(repair_stats.value()));
+                }
             }
 
-            auto task_id = tasks::task_id{info.repair_task_info.tablet_task_id.uuid()};
-            tasks::task_stats stats{
-                .task_id = task_id,
-                .type = locator::tablet_task_type_to_string(info.repair_task_info.request_type),
-                .kind = tasks::task_kind::cluster,
-                .scope = info.repair_task_info.is_user_repair_request() ? "table" : "tablet",
-                .state = tasks::task_manager::task_state::running,
-                .keyspace = schema->ks_name(),
-                .table = schema->cf_name()
-            };
-            if (info.repair_task_info.is_user_repair_request()) {
-                // User requested repair may encompass more that one tablet.
-                user_requests[task_id] = std::move(stats);
-                sched_num_sum[task_id] += info.repair_task_info.sched_nr;
-            } else {
-                res.push_back(std::move(stats));
+            auto migration_stats = maybe_make_task_stats(info.migration_task_info, schema);
+            if (migration_stats) {
+                res.push_back(std::move(migration_stats.value()));
             }
+
             return make_ready_future();
         });
 
