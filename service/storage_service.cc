@@ -6025,6 +6025,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",
                                                      tablet, leaving_replica->shard, trinfo->pending_replica->shard));
             }
+            co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
+                rtlogger.info("migration_streaming_wait: start");
+                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+            });
             auto& table = _db.local().find_column_family(tablet.table);
             std::vector<sstring> tables = {table.schema()->cf_name()};
             auto my_id = tm->get_my_id();
