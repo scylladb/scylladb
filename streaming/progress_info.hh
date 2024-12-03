@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 #include <seastar/core/sstring.hh>
 
 namespace streaming {
@@ -20,20 +20,19 @@ namespace streaming {
  */
 class progress_info {
 public:
-    using inet_address = gms::inet_address;
     /**
      * Direction of the stream.
      */
     enum class direction { OUT, IN };
 
-    inet_address peer;
+    locator::host_id peer;
     sstring file_name;
     direction dir;
     long current_bytes;
     long total_bytes;
 
     progress_info() = default;
-    progress_info(inet_address _peer, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
+    progress_info(locator::host_id _peer, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
         : peer(_peer)
         , file_name(_file_name)
         , dir(_dir)

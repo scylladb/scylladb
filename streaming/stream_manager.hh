@@ -90,7 +90,7 @@ private:
 
     std::unordered_map<plan_id, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<plan_id, shared_ptr<stream_result_future>> _receiving_streams;
-    std::unordered_map<plan_id, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
+    std::unordered_map<plan_id, std::unordered_map<locator::host_id, stream_bytes>> _stream_bytes;
     uint64_t _total_incoming_bytes{0};
     uint64_t _total_outgoing_bytes{0};
     semaphore _mutation_send_limiter{256};
@@ -145,28 +145,29 @@ public:
         return make_ready_future<>();
     }
 
-    void update_progress(streaming::plan_id plan_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
+    void update_progress(streaming::plan_id plan_id, locator::host_id peer, progress_info::direction dir, size_t fm_size);
     future<> update_all_progress_info();
 
     void remove_progress(streaming::plan_id plan_id);
 
-    stream_bytes get_progress(streaming::plan_id plan_id, gms::inet_address peer) const;
+    stream_bytes get_progress(streaming::plan_id plan_id, locator::host_id peer) const;
 
     stream_bytes get_progress(streaming::plan_id plan_id) const;
 
     future<> remove_progress_on_all_shards(streaming::plan_id plan_id);
 
-    future<stream_bytes> get_progress_on_all_shards(streaming::plan_id plan_id, gms::inet_address peer) const;
+    future<stream_bytes> get_progress_on_all_shards(streaming::plan_id plan_id, locator::host_id peer) const;
 
     future<stream_bytes> get_progress_on_all_shards(streaming::plan_id plan_id) const;
 
+    future<stream_bytes> get_progress_on_all_shards(locator::host_id peer) const;
     future<stream_bytes> get_progress_on_all_shards(gms::inet_address peer) const;
 
     future<stream_bytes> get_progress_on_all_shards() const;
 
     stream_bytes get_progress_on_local_shard() const;
 
-    shared_ptr<stream_session> get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
+    shared_ptr<stream_session> get_session(streaming::plan_id plan_id, locator::host_id from, const char* verb, std::optional<table_id> cf_id = {});
 
     reader_consumer_v2 make_streaming_consumer(
             uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard);

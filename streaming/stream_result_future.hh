@@ -75,7 +75,7 @@ public:
 
 public:
     static future<stream_state> init_sending_side(stream_manager& mgr, streaming::plan_id plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
-    static shared_ptr<stream_result_future> init_receiving_side(stream_manager& mgr, streaming::plan_id plan_id, sstring description, inet_address from);
+    static shared_ptr<stream_result_future> init_receiving_side(stream_manager& mgr, streaming::plan_id plan_id, sstring description, locator::host_id from);
 
 public:
     void add_event_listener(stream_event_handler* listener) {
