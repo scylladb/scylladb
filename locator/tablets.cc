@@ -558,6 +558,8 @@ static const std::unordered_map<tablet_task_type, sstring> tablet_task_type_to_n
     {locator::tablet_task_type::auto_repair, "auto_repair"},
     {locator::tablet_task_type::migration, "migration"},
     {locator::tablet_task_type::intranode_migration, "intranode_migration"},
+    {locator::tablet_task_type::split, "split"},
+    {locator::tablet_task_type::merge, "merge"},
 };
 
 static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from_name = std::invoke([] {
@@ -1174,4 +1176,16 @@ locator::tablet_task_info locator::tablet_task_info::make_intranode_migration_re
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::intranode_migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_split_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::split, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }
