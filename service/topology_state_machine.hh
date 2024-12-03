@@ -229,6 +229,7 @@ struct topology_state_machine {
     using topology_type = topology;
     topology_type _topology;
     condition_variable event;
+    size_t reload_count = 0;
 
     future<> await_not_busy();
 };
