@@ -311,6 +311,7 @@ set(scylla_libs
     idl
     index
     lang
+    ldap
     locator
     message
     mutation

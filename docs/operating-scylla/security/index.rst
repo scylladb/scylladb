@@ -18,7 +18,8 @@ Security
    node-node-encryption
    generate-certificate
    saslauthd
-      
+   ldap-authentication
+   ldap-authorization
 
 .. panel-box::
   :title: Security
