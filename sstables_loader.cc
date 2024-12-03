@@ -198,6 +198,8 @@ private:
         // FIXME: fully contained sstables can be optimized.
         return stream_sstables(pr, std::move(sstables), std::move(on_streamed));
     }
+
+    bool tablet_in_scope(locator::tablet_id) const;
 };
 
 inet_address_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
@@ -243,11 +245,31 @@ future<> sstable_streamer::stream(std::function<void(unsigned)> on_streamed) {
     co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(on_streamed));
 }
 
+bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
+    if (_stream_scope == stream_scope::all) {
+        return true;
+    }
+
+    const auto& topo = _erm->get_topology();
+    for (const auto& r : _tablet_map.get_tablet_info(tid).replicas) {
+        if (_stream_scope == stream_scope::node && topo.is_me(r.host)) {
+            return true;
+        }
+        if (_stream_scope == stream_scope::rack && topo.get_location(r.host) == topo.get_location()) {
+            return true;
+        }
+        if (_stream_scope == stream_scope::dc && topo.get_datacenter(r.host) == topo.get_datacenter()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 future<> tablet_sstable_streamer::stream(std::function<void(unsigned)> on_streamed) {
     // sstables are sorted by first key in reverse order.
     auto sstable_it = _sstables.rbegin();
 
-    for (auto tablet_id : _tablet_map.tablet_ids()) {
+    for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid); })) {
         auto tablet_range = _tablet_map.get_token_range(tablet_id);
 
         auto sstable_token_range = [] (const sstables::shared_sstable& sst) {
