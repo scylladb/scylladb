@@ -8,6 +8,7 @@
 
 #include "i_partitioner.hh"
 #include "sharder.hh"
+#include "auto_refreshing_sharder.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "dht/ring_position.hh"
@@ -15,6 +16,7 @@
 #include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "sstables/key.hh"
+#include "replica/database.hh"
 #include <seastar/core/thread.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "utils/log.hh"
@@ -490,6 +492,46 @@ std::optional<shard_id> is_single_shard(const dht::sharder& sharder, const schem
         }
     }
     return shard;
+}
+
+auto_refreshing_sharder::auto_refreshing_sharder(lw_shared_ptr<replica::table> table, std::optional<write_replica_set_selector> sel)
+    : _table(std::move(table))
+    , _sel(sel)
+{
+    refresh();
+}
+
+auto_refreshing_sharder::~auto_refreshing_sharder() = default;
+
+void
+auto_refreshing_sharder::refresh() {
+    _erm = _table->get_effective_replication_map();
+    _sharder = &_erm->get_sharder(*_table->schema());
+    _callback = _erm->get_validity_abort_source().subscribe([this] () noexcept {
+        refresh();
+    });
+}
+
+unsigned auto_refreshing_sharder::shard_for_reads(const token& t) const {
+    return _sharder->shard_for_reads(t);
+}
+
+dht::shard_replica_set
+auto_refreshing_sharder::shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const {
+    if (!sel) {
+        sel = _sel;
+    }
+    return _sharder->shard_for_writes(t, sel);
+}
+
+std::optional<dht::shard_and_token>
+auto_refreshing_sharder::next_shard_for_reads(const dht::token& t) const {
+    return _sharder->next_shard_for_reads(t);
+}
+
+dht::token
+auto_refreshing_sharder::token_for_next_shard_for_reads(const dht::token& t, shard_id shard, unsigned spans) const {
+    return _sharder->token_for_next_shard_for_reads(t, shard, spans);
 }
 
 }
