@@ -47,6 +47,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_builder.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
 #include "db/batchlog_manager.hh"
@@ -433,6 +434,10 @@ public:
 
     virtual future<> wait_for_writer_done() override;
 
+    virtual future<> wait_for_view_update_done() override {
+        return _view_builder.local().wait_until_sstables_are_processed(_staged_sstables);
+    }
+
 private:
     static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
         static const std::unordered_set<streaming::stream_reason> operations_supported = {
@@ -581,6 +586,10 @@ future<> repair_writer::wait_for_writer_done() {
                 _schema->ks_name(), _schema->cf_name(), ep);
         return make_exception_future<>(std::move(ep));
     });
+}
+
+future<> repair_writer::wait_for_view_update_done() {
+    return _impl->wait_for_view_update_done();
 }
 
 class repair_meta;
