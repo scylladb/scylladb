@@ -1203,62 +1203,6 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
 
 // Wrappers for verbs
 
-// PREPARE_MESSAGE
-void messaging_service::register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
-        streaming::prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<streaming::stream_reason> reason, rpc::optional<service::session_id>)>&& func) {
-    register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
-}
-future<streaming::prepare_message> messaging_service::send_prepare_message(msg_addr id, streaming::prepare_message msg, streaming::plan_id plan_id,
-        sstring description, streaming::stream_reason reason, service::session_id session) {
-    return send_message<streaming::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
-        std::move(msg), plan_id, std::move(description), reason, session);
-}
-future<> messaging_service::unregister_prepare_message() {
-    return unregister_handler(messaging_verb::PREPARE_MESSAGE);
-}
-
-// PREPARE_DONE_MESSAGE
-void messaging_service::register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id)>&& func) {
-    register_handler(this, messaging_verb::PREPARE_DONE_MESSAGE, std::move(func));
-}
-future<> messaging_service::send_prepare_done_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id) {
-    return send_message<void>(this, messaging_verb::PREPARE_DONE_MESSAGE, id,
-        plan_id, dst_cpu_id);
-}
-future<> messaging_service::unregister_prepare_done_message() {
-    return unregister_handler(messaging_verb::PREPARE_DONE_MESSAGE);
-}
-
-// STREAM_MUTATION_DONE
-void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
-        streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id)>&& func) {
-    register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
-            [func = std::move(func)] (const rpc::client_info& cinfo,
-                    streaming::plan_id plan_id, std::vector<wrapping_interval<dht::token>> ranges,
-                    table_id cf_id, unsigned dst_cpu_id) mutable {
-        return func(cinfo, plan_id, ::compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
-    });
-}
-future<> messaging_service::send_stream_mutation_done(msg_addr id, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
-    return send_message<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
-        plan_id, std::move(ranges), cf_id, dst_cpu_id);
-}
-future<> messaging_service::unregister_stream_mutation_done() {
-    return unregister_handler(messaging_verb::STREAM_MUTATION_DONE);
-}
-
-// COMPLETE_MESSAGE
-void messaging_service::register_complete_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func) {
-    register_handler(this, messaging_verb::COMPLETE_MESSAGE, std::move(func));
-}
-future<> messaging_service::send_complete_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed) {
-    return send_message<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
-        plan_id, dst_cpu_id, failed);
-}
-future<> messaging_service::unregister_complete_message() {
-    return unregister_handler(messaging_verb::COMPLETE_MESSAGE);
-}
-
 // Wrapper for TASKS_CHILDREN_REQUEST
 void messaging_service::register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func) {
     register_handler(this, messaging_verb::TASKS_GET_CHILDREN, std::move(func));

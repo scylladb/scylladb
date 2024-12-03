@@ -393,18 +393,6 @@ public:
 
     future<> unregister_handler(messaging_verb verb);
 
-    // Wrapper for PREPARE_MESSAGE verb
-    void register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
-            streaming::prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<streaming::stream_reason> reason, rpc::optional<service::session_id>)>&& func);
-    future<streaming::prepare_message> send_prepare_message(msg_addr id, streaming::prepare_message msg, streaming::plan_id plan_id,
-            sstring description, streaming::stream_reason, service::session_id);
-    future<> unregister_prepare_message();
-
-    // Wrapper for PREPARE_DONE_MESSAGE verb
-    void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id)>&& func);
-    future<> send_prepare_done_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id);
-    future<> unregister_prepare_done_message();
-
     // Wrapper for STREAM_MUTATION_FRAGMENTS
     // The receiver of STREAM_MUTATION_FRAGMENTS sends status code to the sender to notify any error on the receiver side. The status code is of type int32_t. 0 means successful, -1 means error, -2 means error and table is dropped, other status code value are reserved for future use.
     void register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions, rpc::optional<streaming::stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>> source, rpc::optional<service::session_id>)>&& func);
@@ -429,14 +417,6 @@ public:
     rpc::sink<repair_hash_with_cmd> make_sink_for_repair_get_full_row_hashes_with_rpc_stream(rpc::source<repair_stream_cmd>& source);
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
-
-    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(msg_addr id, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id);
-    future<> unregister_stream_mutation_done();
-
-    void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func);
-    future<> send_complete_message(msg_addr id, streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed = false);
-    future<> unregister_complete_message();
 
     // Wrapper for TASKS_GET_CHILDREN
     void register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func);
