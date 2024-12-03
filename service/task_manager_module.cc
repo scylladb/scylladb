@@ -20,6 +20,10 @@ tasks::task_manager::task_group tablet_virtual_task::get_group() const noexcept 
     return tasks::task_manager::task_group::tablets_group;
 }
 
+static std::optional<locator::tablet_task_type> maybe_get_task_type(const locator::tablet_task_info& task_info, tasks::task_id task_id) {
+    return task_info.is_valid() && task_info.tablet_task_id.uuid() == task_id.uuid() ? std::make_optional(task_info.request_type) : std::nullopt;
+}
+
 static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tablet_task_info& task_info, schema_ptr schema) {
     if (!task_info.is_valid()) {
         return std::nullopt;
@@ -36,33 +40,60 @@ static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tab
     };
 }
 
+static bool is_repair_task(const locator::tablet_task_type& task_type) {
+    return task_type == locator::tablet_task_type::user_repair || task_type == locator::tablet_task_type::auto_repair;
+}
+
+static bool tablet_id_provided(const locator::tablet_task_type& task_type) {
+    return !is_repair_task(task_type);
+}
+
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {
     auto tables = get_table_ids();
     for (auto table : tables) {
         auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+        std::optional<locator::tablet_id> tid = tmap.first_tablet();
         for (const locator::tablet_info& info : tmap.tablets()) {
-            if (info.repair_task_info.is_valid() && info.repair_task_info.tablet_task_id.uuid() == task_id.uuid()) {
+            auto task_type = maybe_get_task_type(info.repair_task_info, task_id).or_else([&] () {
+                return maybe_get_task_type(info.migration_task_info, task_id);
+            });
+            if (task_type.has_value()) {
                 co_return tasks::virtual_task_hint{
                     .table_id = table,
+                    .task_type = task_type.value(),
+                    .tablet_id = tablet_id_provided(task_type.value()) ? std::make_optional(*tid) : std::nullopt,
                 };
             }
             co_await coroutine::maybe_yield();
+            tid = tmap.next_tablet(*tid);
         }
     }
     co_return std::nullopt;
 }
 
 future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
+    auto task_type = hint.get_task_type();
+    if (!is_repair_task(task_type)) {
+        return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
+    }
     return make_ready_future<tasks::is_abortable>(tasks::is_abortable::yes);
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     utils::chunked_vector<locator::tablet_id> tablets;
+    auto task_type = hint.get_task_type();
+    if (!is_repair_task(task_type)) {
+        co_return std::nullopt;
+    }
     co_return co_await get_status_helper(id, tablets, std::move(hint));
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto table = hint.get_table_id();
+    auto task_type = hint.get_task_type();
+    if (!is_repair_task(task_type)) {
+        co_return std::nullopt;
+    }
 
     utils::chunked_vector<locator::tablet_id> tablets;
     auto status = co_await get_status_helper(id, tablets, std::move(hint));
@@ -84,6 +115,10 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
     auto table = hint.get_table_id();
+    auto task_type = hint.get_task_type();
+    if (!is_repair_task(task_type)) {
+        co_return;
+    }
     co_await _ss.del_repair_tablet_request(table, locator::tablet_task_id{id.uuid()});
 }
 
