@@ -3162,6 +3162,10 @@ future<> view_builder::register_staging_sstable(sstables::shared_sstable sst, lw
     return _vug.register_staging_sstable(std::move(sst), std::move(table));
 }
 
+future<> view_builder::wait_until_sstables_are_processed(const std::vector<sstables::shared_sstable>& sstables) {
+    return _vug.wait_until_sstables_are_processed(sstables);
+}
+
 future<bool> check_needs_view_update_path(view_builder& vb, locator::token_metadata_ptr tmptr, const replica::table& t, streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
         return make_ready_future<bool>(false);
