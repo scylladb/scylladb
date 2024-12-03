@@ -144,6 +144,34 @@ Then launch ScyllaDB instances using Docker’s ``--volume`` command line option
 .. code-block:: console
 
  docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scylladb/scylla --developer-mode=0
+ 
+ Setting aio-max-nr
+++++++++++++++++++
+Multiple cores requires setting a proper value to the /proc/sys/fs/aio-max-nr. On many non production systems it will be equal to 65K. 
+The formula to calculate proper value is:
+
+.. code-block:: console
+ Available AIO on the system - (request AIO per-cpu * ncpus) =
+ aio_max_nr - aio_nr < (reactor::max_aio + detect_aio_poll + reactor_backend_aio::max_polls) * cpu_cores =
+ aio_max_nr - aio_nr < (1024 + 2 + 10000) * cpu_cores =
+ aio_max_nr - aio_nr < 11026 * cpu_cores
+ 
+ where
+ 
+ reactor::max_aio = max_aio_per_queue * max_queues,
+ max_aio_per_queue = 128,
+ max_queues = 8.
+For example, to check the existing value and update it to 1048576: 
+
+.. code-block:: console
+ ubuntu $ cat /proc/sys/fs/aio-max-nr
+ 65536
+ ubuntu $ echo "fs.aio-max-nr = 1048576" >> /etc/sysctl.conf
+ ubuntu $ sysctl -p /etc/sysctl.conf
+ fs.inotify.max_user_watches = 524288
+ fs.aio-max-nr = 1048576
+ ubuntu $
+
 
 Overriding scylla.yaml with a Master File
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
