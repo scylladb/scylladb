@@ -67,6 +67,12 @@ public:
     ///
     static const sstring PASSWORD_KEY;
 
+    /// Service for SASL authentication.
+    static const sstring SERVICE_KEY;
+
+    /// Realm for SASL authentication.
+    static const sstring REALM_KEY;
+
     using credentials_map = std::unordered_map<sstring, sstring>;
 
     virtual ~authenticator() = default;

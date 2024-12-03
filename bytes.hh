@@ -20,6 +20,8 @@
 #include "utils/mutable_view.hh"
 #include "utils/simple_hashers.hh"
 
+using sstring_view = std::string_view;
+
 inline bytes to_bytes(bytes&& b) {
     return std::move(b);
 }

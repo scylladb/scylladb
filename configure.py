@@ -436,6 +436,12 @@ modes = {
     },
 }
 
+ldap_tests = set([
+    'test/ldap/ldap_connection_test',
+    'test/ldap/role_manager_test',
+    'test/ldap/saslauthd_authenticator_test'
+])
+
 scylla_tests = set([
     'test/boost/combined_tests',
     'test/boost/UUID_test',
@@ -587,7 +593,7 @@ scylla_tests = set([
     'test/unit/row_cache_stress_test',
     'test/unit/cross_shard_barrier_test',
     'test/boost/address_map_test',
-])
+]) | ldap_tests
 
 perf_tests = set([
     'test/perf/perf_mutation_readers',
@@ -1103,11 +1109,13 @@ scylla_core = (['message/messaging_service.cc',
                 'auth/permissions_cache.cc',
                 'auth/service.cc',
                 'auth/standard_role_manager.cc',
+                'auth/ldap_role_manager.cc',
                 'auth/transitional.cc',
                 'auth/maintenance_socket_role_manager.cc',
                 'auth/role_or_anonymous.cc',
                 'auth/sasl_challenge.cc',
                 'auth/certificate_authenticator.cc',
+                'auth/saslauthd_authenticator.cc',
                 'tracing/tracing.cc',
                 'tracing/trace_keyspace_helper.cc',
                 'tracing/trace_state.cc',
@@ -1123,6 +1131,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                 'querier.cc',
                 'mutation_writer/multishard_writer.cc',
+                'ent/ldap/ldap_connection.cc',
                 'multishard_mutation_query.cc',
                 'reader_concurrency_semaphore.cc',
                 'sstables_loader.cc',
@@ -2001,7 +2010,7 @@ pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy',
-                 ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
+                 ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread', ' -lldap -llber',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),

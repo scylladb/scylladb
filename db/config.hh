@@ -504,6 +504,12 @@ public:
 
     named_value<uint32_t> service_levels_interval;
 
+    named_value<sstring> ldap_url_template;
+    named_value<sstring> ldap_attr_role;
+    named_value<sstring> ldap_bind_dn;
+    named_value<sstring> ldap_bind_passwd;
+    named_value<sstring> saslauthd_socket_path;
+
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 
     const db::extensions& extensions() const;
