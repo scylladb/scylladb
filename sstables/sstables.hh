@@ -54,6 +54,8 @@ namespace data_dictionary {
 class storage_options;
 }
 
+class in_memory_config_type;
+
 namespace db {
 class large_data_handler;
 }
@@ -1057,6 +1059,8 @@ public:
 
     future<std::optional<uint32_t>> read_digest();
     future<lw_shared_ptr<checksum>> read_checksum();
+
+    friend in_memory_config_type;
 };
 
 // Validate checksums

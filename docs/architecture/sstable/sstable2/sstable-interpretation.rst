@@ -22,7 +22,7 @@ is just a **mutation**, a list of changed (added or deleted) columns and
 their new values (or "tombstone" for a deleted column), and a timestamp
 for each such change (this timestamp is used for reconciling conflicting
 mutations). The full data row needed by a request will be composed from
-potentially multiple sstables and/or the in-memory table(s).
+potentially multiple sstables.
 
 As we'll explain below when discussing clustering columns, the best term
 for what we read from one row in the SSTable isn't a "row", but rather a
