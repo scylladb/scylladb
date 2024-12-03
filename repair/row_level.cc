@@ -1929,6 +1929,10 @@ public:
         cf.update_off_strategy_trigger();
         co_await apply_rows_on_follower(std::move(rows));
     }
+
+    future<> wait_for_view_update_done() {
+        return _repair_writer->wait_for_view_update_done();
+    }
 };
 
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization, repair_meta* rm) {
@@ -3179,6 +3183,9 @@ public:
                 co_await master.repair_row_level_stop(node, _shard_task.get_keyspace(), _cf_name, _range, ns.shard);
                 master.set_repair_state(repair_state::row_level_stop_finished, node);
             })).get();
+
+            // wait for view update to complete
+            master.wait_for_view_update_done().get();
 
             _shard_task.update_statistics(master.stats());
             if (_failed) {
