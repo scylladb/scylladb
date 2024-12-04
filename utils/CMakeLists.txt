@@ -17,6 +17,7 @@ target_sources(utils
     buffer_input_stream.cc
     build_id.cc
     config_file.cc
+    dict_trainer.cc
     directories.cc
     disk-error-handler.cc
     dynamic_bitset.cc
