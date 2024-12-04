@@ -8,12 +8,15 @@
 
 #pragma once
 
-#include "utils/assert.hh"
 #include <boost/intrusive/parent_from_member.hpp>
 
 #include "mutation_partition.hh"
 
 #include <ranges>
+
+#ifdef SEASTAR_DEBUG
+#include "utils/assert.hh"
+#endif
 
 // is_evictable::yes means that the object is part of an evictable snapshots in MVCC,
 // and non-evictable one otherwise.
