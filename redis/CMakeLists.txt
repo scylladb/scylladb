@@ -17,7 +17,8 @@ function(generate_ragel)
   add_custom_target(${args_TARGET}
     DEPENDS ${args_OUT_FILE})
 
-  set(${args_VAR} ${args_OUT_FILE} PARENT_SCOPE)
+  set(${args_VAR} ${args_OUT_FILE})
+  return(PROPAGATE ${args_VAR})
 endfunction()
 
 generate_ragel(

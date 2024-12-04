@@ -11,7 +11,8 @@ function(wasm2wat input)
     COMMAND ${WASM2WAT} ${input} --output=${output}
     DEPENDS ${input}
     COMMENT "Generating WebAssembly Text ${output}")
-  set(${parsed_args_WAT} ${output} PARENT_SCOPE)
+  set(${parsed_args_WAT} ${output})
+  return(PROPAGATE ${parsed_args_WAT})
 endfunction()
 
 add_custom_target(wasm ALL)

@@ -29,7 +29,8 @@ function(compile_rust_to_wasm input)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Building WASM ${output}"
     VERBATIM)
-  set(${parsed_args_WASM} ${output} PARENT_SCOPE)
+  set(${parsed_args_WASM} ${output})
+  return(PROPAGATE ${parsed_args_WASM})
 endfunction(compile_rust_to_wasm)
 
 set(rust_srcs

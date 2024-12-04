@@ -43,5 +43,6 @@ function(generate_cql_grammar)
     COMMENT "Generating sources from ${grammar}"
     VERBATIM)
 
-  set(${parsed_args_SOURCES} ${outputs} PARENT_SCOPE)
+  set(${parsed_args_SOURCES} ${outputs})
+  return(PROPAGATE ${parsed_args_SOURCES})
 endfunction(generate_cql_grammar)

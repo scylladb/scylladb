@@ -17,7 +17,8 @@ function(compile_c_to_wasm input)
       -o ${output}
     DEPENDS ${input}
     COMMENT "Building WASM ${output}")
-  set(${parsed_args_WASM} ${output} PARENT_SCOPE)
+  set(${parsed_args_WASM} ${output})
+  return(PROPAGATE ${parsed_args_WASM})
 endfunction(compile_c_to_wasm)
 
 set(c_srcs
