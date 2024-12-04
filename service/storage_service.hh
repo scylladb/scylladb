@@ -232,7 +232,8 @@ public:
         sharded<qos::service_level_controller>& sl_controller,
         topology_state_machine& topology_state_machine,
         tasks::task_manager& tm,
-        gms::gossip_address_map& address_map);
+        gms::gossip_address_map& address_map,
+        std::function<future<void>()> compression_dictionary_updated_callback);
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;

@@ -138,6 +138,7 @@ private:
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
     sharded<service::topology_state_machine> _topology_state_machine;
+    sharded<utils::walltime_compressor_tracker> _compressor_tracker;
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<gms::gossiper> _gossiper;
@@ -699,6 +700,15 @@ private:
                 _gossip_address_map.stop().get();
             });
 
+            auto arct_cfg = [&] {
+                return utils::advanced_rpc_compressor::tracker::config{
+                    .zstd_quota_fraction{1.0},
+                    .register_metrics = true,
+                };
+            };
+            _compressor_tracker.start(arct_cfg).get();
+            auto stop_compressor_tracker = defer([this] { _compressor_tracker.stop().get(); });
+
             uint16_t port = 7000;
             seastar::server_socket tmp;
 
@@ -719,7 +729,8 @@ private:
                        port = tmp.local_address().port();
                     }
                     // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
-                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service), std::ref(_gossip_address_map)).get();
+                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service),
+                              std::ref(_gossip_address_map), std::ref(_compressor_tracker)).get();
                     stop_ms = defer(stop_type(stop_ms_func));
 
                     if (cfg_in.ms_listen) {
@@ -824,6 +835,8 @@ private:
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
+            auto compression_dict_updated_callback = [] { return make_ready_future<>(); };
+
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
@@ -842,7 +855,9 @@ private:
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),
                 std::ref(_task_manager),
-                std::ref(_gossip_address_map)).get();
+                std::ref(_gossip_address_map),
+                compression_dict_updated_callback
+            ).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());

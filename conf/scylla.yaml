@@ -477,6 +477,47 @@ commitlog_total_space_in_mb: -1
 #          none - nothing is compressed.
 # internode_compression: none
 
+# Enables inter-node traffic compression metrics (`scylla_rpc_compression_...`)
+# and enables a new implementation of inter-node traffic compressors,
+# capable of using zstd (in addition to the default lz4)
+# and shared dictionaries.
+# (Those features must still be enabled by other settings).
+# Has minor CPU cost.
+#
+# internode_compression_enable_advanced: false
+
+# Enables training of shared compression dictionaries on inter-node traffic.
+# New dictionaries are distributed throughout the cluster via Raft,
+# and used to improve the effectiveness of inter-node traffic compression
+# when `internode_compression_enable_advanced` is enabled.
+#
+# WARNING: this may leak unencrypted data to disk. The trained dictionaries
+# contain randomly-selected pieces of data written to the cluster.
+# When the Raft log is unencrypted, those pieces of data will be
+# written to disk unencrypted. At the moment of writing, there is no
+# way to encrypt the Raft log.
+# This problem is tracked by https://github.com/scylladb/scylla-enterprise/issues/4717.
+#
+# Can be:  never       - Dictionaries aren't trained by this node.
+#          when_leader - New dictionaries are trained by this node only if
+#                        it's the current Raft leader.
+#          always      - Dictionaries are trained by this node unconditionally.
+#
+# For efficiency reasons, training shouldn't be enabled on more than one node.
+# To enable it on a single node, one can let the cluster pick the trainer
+# by setting `when_leader` on all nodes, or specify one manually by setting `always`
+# on one node and `never` on others.
+# 
+# rpc_dict_training_when: never
+
+# A number in range [0.0, 1.0] specifying the share of CPU which can be spent
+# by this node on compressing inter-node traffic with zstd.
+#
+# Depending on the workload, enabling zstd might have a drastic negative
+# effect on performance, so it shouldn't be done lightly.
+#
+# internode_compression_zstd_max_cpu_fraction: 0.0
+
 # Enable or disable tcp_nodelay for inter-dc communication.
 # Disabling it will result in larger (but fewer) network packets being sent,
 # reducing overhead from the TCP protocol itself, at the cost of increasing

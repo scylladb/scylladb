@@ -175,7 +175,9 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<qos::service_level_controller>& sl_controller,
     topology_state_machine& topology_state_machine,
     tasks::task_manager& tm,
-    gms::gossip_address_map& address_map)
+    gms::gossip_address_map& address_map,
+    std::function<future<void>()> compression_dictionary_updated_callback
+    )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -207,6 +209,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _cdc_gens(cdc_gens)
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
+        , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
