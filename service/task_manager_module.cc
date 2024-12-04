@@ -113,20 +113,19 @@ future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_tas
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
     utils::chunked_vector<locator::tablet_id> tablets;
     std::optional<locator::tablet_replica> pending_replica;
-    co_return co_await get_status_helper(id, tablets, std::move(hint), pending_replica);
+    size_t tablet_count;
+    co_return co_await get_status_helper(id, tablets, std::move(hint), pending_replica, tablet_count);
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
-    if (is_resize_task(task_type)) {
-        co_return std::nullopt;
-    }
     auto tablet_id_opt = tablet_id_provided(task_type) ? std::make_optional(hint.get_tablet_id()) : std::nullopt;
 
     utils::chunked_vector<locator::tablet_id> tablets;
     std::optional<locator::tablet_replica> pending_replica;
-    auto status = co_await get_status_helper(id, tablets, std::move(hint), pending_replica);
+    size_t tablet_count;
+    auto status = co_await get_status_helper(id, tablets, std::move(hint), pending_replica, tablet_count);
     if (!status) {
         co_return std::nullopt;
     }
@@ -134,19 +133,26 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
     co_await _ss._topology_state_machine.event.wait([&] {
         auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
-        if (tablet_id_opt.has_value()) {
+        if (is_resize_task(task_type)) {    // Resize task.
+            return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
+        } else if (tablet_id_opt.has_value()) {    // Migration task.
             return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
+        } else {    // Repair task.
+            return std::all_of(tablets.begin(), tablets.end(), [&] (const locator::tablet_id& tablet) {
+                return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
+            });
         }
-        return std::all_of(tablets.begin(), tablets.end(), [&] (const locator::tablet_id& tablet) {
-            return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
-        });
     });
 
     status->state = tasks::task_manager::task_state::done; // Failed repair task is retried.
-    if (!is_repair_task(task_type)) {
+    if (is_migration_task(task_type)) {
         auto& replicas = _ss.get_token_metadata().tablets().get_tablet_map(table).get_tablet_info(tablet_id_opt.value()).replicas;
         auto migration_failed = std::all_of(replicas.begin(), replicas.end(), [&] (const auto& replica) { return pending_replica.has_value() && replica != pending_replica.value(); });
         status->state = migration_failed ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::done;
+    } else if (is_resize_task(task_type)) {
+        auto new_tablet_count = _ss.get_token_metadata().tablets().get_tablet_map(table).tablet_count();
+        status->state = new_tablet_count == tablet_count ? tasks::task_manager::task_state::suspended : tasks::task_manager::task_state::done;
+        status->children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
     }
     status->end_time = db_clock::now(); // FIXME: Get precise end time.
     co_return status;
@@ -218,7 +224,7 @@ static void update_status(const locator::tablet_task_info& task_info, tasks::tas
     status.start_time = task_info.request_time;
 }
 
-future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica) {
+future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica, size_t& tablet_count) {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
     auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
@@ -249,6 +255,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
             tablets.push_back(tablet_id);
         }
     } else {    // Resize task.
+        tablet_count = tmap.tablet_count();
         auto& task_info = tmap.resize_task_info();
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res, sched_nr);
