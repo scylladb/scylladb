@@ -536,6 +536,7 @@ scylla_tests = set([
     'test/boost/sstable_resharding_test',
     'test/boost/sstable_test',
     'test/boost/stall_free_test',
+    'test/boost/stream_compressor_test',
     'test/boost/string_format_test',
     'test/boost/summary_test',
     'test/boost/tagged_integer_test',
@@ -774,6 +775,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/histogram_metrics_helper.cc',
                 'utils/on_internal_error.cc',
                 'utils/pretty_printers.cc',
+                'utils/stream_compressor.cc',
                 'converting_mutation_partition_applier.cc',
                 'readers/combined.cc',
                 'readers/multishard.cc',
@@ -1829,11 +1831,12 @@ pkgs = ['libsystemd',
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy',
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),
+                 maybe_static(True, '-llz4'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
                  '-lxxhash',
                  '-ldeflate',

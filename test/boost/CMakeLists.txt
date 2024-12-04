@@ -225,6 +225,11 @@ add_scylla_test(sstable_test
   KIND SEASTAR)
 add_scylla_test(stall_free_test
   KIND SEASTAR)
+add_scylla_test(stream_compressor_test
+  KIND BOOST
+  LIBRARIES
+    Seastar::seastar_testing
+    utils)
 add_scylla_test(string_format_test
   KIND BOOST)
 add_scylla_test(summary_test
