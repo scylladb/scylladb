@@ -918,6 +918,11 @@ future<> storage_service::update_service_levels_cache(qos::update_both_cache_lev
     co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
 }
 
+future<> storage_service::compression_dictionary_updated_callback() {
+    assert(this_shard_id() == 0);
+    return _compression_dictionary_updated_callback();
+}
+
 // Moves the coroutine lambda onto the heap and extends its
 // lifetime until the resulting future is completed.
 // This allows to use captures in coroutine lambda after co_await-s.
@@ -6989,6 +6994,9 @@ void storage_service::init_messaging_service() {
             if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
                 if (ss._feature_service.view_build_status_on_group0) {
                     additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+                }
+                if (ss._feature_service.compression_dicts) {
+                    additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
             }
 

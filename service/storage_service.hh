@@ -906,6 +906,13 @@ public:
     // update_both_cache_levels::no  - update only effective service levels cache
     future<> update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache = qos::update_both_cache_levels::yes, qos::query_context ctx = qos::query_context::unspecified);
 
+    // Should be called whenever new compression dictionaries are published to system.dicts.
+    // This is an arbitrary callback passed through the constructor,
+    // but its intended usage is to set up the RPC connections to use the new dictionaries.
+    //
+    // Must be called on shard 0.
+    future<> compression_dictionary_updated_callback();
+
     future<> do_cluster_cleanup();
 
     // Starts the upgrade procedure to topology on raft.
@@ -990,6 +997,8 @@ private:
 
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;
+
+    std::function<future<void>()> _compression_dictionary_updated_callback;
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
