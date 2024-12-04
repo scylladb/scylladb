@@ -513,7 +513,7 @@ enum class schema_diff_side {
     right, // new, after
 };
 
-static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
+static future<schema_diff> diff_table_or_view(distributed<service::storage_proxy>& proxy,
     const std::map<table_id, schema_mutations>& before,
     const std::map<table_id, schema_mutations>& after,
     bool reload,
@@ -522,16 +522,19 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
     schema_diff d;
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
+        co_await coroutine::maybe_yield();
         auto&& s = proxy.local().get_db().local().find_schema(key);
         slogger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.dropped.emplace_back(schema_diff::dropped_schema{s});
     }
     for (auto&& key : diff.entries_only_on_right) {
+        co_await coroutine::maybe_yield();
         auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
+        co_await coroutine::maybe_yield();
         auto s_before = create_schema(std::move(before.at(key)), schema_diff_side::left);
         auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
@@ -539,12 +542,13 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
     }
     if (reload) {
         for (auto&& key: diff.entries_in_common) {
+            co_await coroutine::maybe_yield();
             auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
             slogger.info("Reloading {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
             d.altered.emplace_back(schema_diff::altered_schema {s, s});
         }
     }
-    return d;
+    co_return d;
 }
 
 // Limit concurrency of user tables to prevent stalls.
@@ -568,10 +572,10 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     bool reload,
     locator::tablet_metadata_change_hint tablet_hint)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
+    auto tables_diff = co_await diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
+    auto views_diff = co_await diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
