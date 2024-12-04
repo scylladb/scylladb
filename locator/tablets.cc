@@ -425,6 +425,10 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
+void tablet_map::set_resize_task_info(tablet_task_info task_info) {
+    _resize_task_info = std::move(task_info);
+}
+
 void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
     _repair_scheduler_config = std::move(config);
 }
@@ -604,6 +608,10 @@ bool tablet_map::needs_merge() const {
 
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
+}
+
+const tablet_task_info& tablet_map::resize_task_info() const {
+    return _resize_task_info;
 }
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
