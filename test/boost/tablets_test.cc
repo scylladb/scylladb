@@ -979,7 +979,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3},
             });
             b.del_transition(last_token);
-            b.set_resize_decision(resize_decision);
+            b.set_resize_decision(resize_decision, nullptr);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
