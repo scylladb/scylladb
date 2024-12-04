@@ -25,6 +25,21 @@ static std::optional<locator::tablet_task_type> maybe_get_task_type(const locato
     return task_info.is_valid() && task_info.tablet_task_id.uuid() == task_id.uuid() ? std::make_optional(task_info.request_type) : std::nullopt;
 }
 
+static sstring get_scope(locator::tablet_task_type task_type) {
+    switch (task_type) {
+        case locator::tablet_task_type::user_repair:
+        case locator::tablet_task_type::split:
+        case locator::tablet_task_type::merge:
+            return "table";
+        case locator::tablet_task_type::auto_repair:
+        case locator::tablet_task_type::migration:
+        case locator::tablet_task_type::intranode_migration:
+            return "tablet";
+        case locator::tablet_task_type::none:
+            on_internal_error(tasks::tmlogger, "attempted to get the scope for none task type");
+    }
+}
+
 static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tablet_task_info& task_info, schema_ptr schema) {
     if (!task_info.is_valid()) {
         return std::nullopt;
@@ -34,7 +49,7 @@ static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tab
         .task_id = tasks::task_id{task_info.tablet_task_id.uuid()},
         .type = locator::tablet_task_type_to_string(task_info.request_type),
         .kind = tasks::task_kind::cluster,
-        .scope = task_info.is_user_repair_request() ? "table" : "tablet",
+        .scope = get_scope(task_info.request_type),
         .state = tasks::task_manager::task_state::running,
         .keyspace = schema->ks_name(),
         .table = schema->cf_name()
@@ -134,6 +149,10 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
         auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
         std::unordered_map<tasks::task_id, tasks::task_stats> user_requests;
         std::unordered_map<tasks::task_id, size_t> sched_num_sum;
+        auto resize_stats = maybe_make_task_stats(tmap.resize_task_info(), schema);
+        if (resize_stats) {
+            res.push_back(std::move(resize_stats.value()));
+        }
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             auto repair_stats = maybe_make_task_stats(info.repair_task_info, schema);
             if (repair_stats) {
