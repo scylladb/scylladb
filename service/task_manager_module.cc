@@ -111,11 +111,6 @@ future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_tas
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
-    auto task_type = hint.get_task_type();
-    if (is_resize_task(task_type)) {
-        co_return std::nullopt;
-    }
-
     utils::chunked_vector<locator::tablet_id> tablets;
     std::optional<locator::tablet_replica> pending_replica;
     co_return co_await get_status_helper(id, tablets, std::move(hint), pending_replica);
@@ -219,7 +214,7 @@ std::vector<table_id> tablet_virtual_task::get_table_ids() const {
 static void update_status(const locator::tablet_task_info& task_info, tasks::task_status& status, size_t& sched_nr) {
     sched_nr += task_info.sched_nr;
     status.type = locator::tablet_task_type_to_string(task_info.request_type);
-    status.scope = task_info.is_user_repair_request() ? "table" : "tablet";
+    status.scope = get_scope(task_info.request_type);
     status.start_time = task_info.request_time;
 }
 
@@ -245,13 +240,21 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
             }
             return make_ready_future();
         });
-    } else {    // Migration task.
+    } else if (is_migration_task(task_type)) {    // Migration task.
         auto tablet_id = hint.get_tablet_id();
         pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
         auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res, sched_nr);
             tablets.push_back(tablet_id);
+        }
+    } else {    // Resize task.
+        auto& task_info = tmap.resize_task_info();
+        if (task_info.tablet_task_id.uuid() == id.uuid()) {
+            update_status(task_info, res, sched_nr);
+            res.state = tasks::task_manager::task_state::running;
+            res.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
+            co_return res;
         }
     }
 
