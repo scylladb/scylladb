@@ -983,7 +983,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3},
             });
             b.del_transition(last_token);
-            b.set_resize_decision(resize_decision);
+            b.set_resize_decision(resize_decision, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -1006,6 +1006,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             expected_tmap.set_resize_decision(resize_decision);
 
             auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            expected_tmap.set_resize_task_info(tm_from_disk.get_tablet_map(table1).resize_task_info());
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
     }, tablet_cql_test_config());

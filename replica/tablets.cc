@@ -75,6 +75,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("migration_task_info", tablet_task_info_type)
+            .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_hash_version()
             .build();
 }
@@ -126,6 +127,9 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
+    if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
+        m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
+    }
     if (features.tablet_repair_scheduler) {
         m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
     }
@@ -212,9 +216,19 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_decision) {
+tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_decision, const gms::feature_service& features) {
     _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
     _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
+    if (resize_decision.split_or_merge()) {
+        auto resize_task_info = std::holds_alternative<resize_decision::split>(resize_decision.way)
+            ? locator::tablet_task_info::make_split_request()
+            : locator::tablet_task_info::make_merge_request();
+        resize_task_info.sched_nr++;
+        resize_task_info.sched_time = db_clock::now();
+        return set_resize_task_info(std::move(resize_task_info), features);
+    } else {
+        return del_resize_task_info(features);
+    }
     return *this;
 }
 
@@ -256,6 +270,23 @@ tablet_mutation_builder::del_migration_task_info(dht::token last_token, const gm
     if (features.tablet_migration_virtual_task) {
         auto col = _s->get_column_definition("migration_task_info");
         _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_resize_task_info(locator::tablet_task_info resize_task_info, const gms::feature_service& features) {
+    if (features.tablet_resize_virtual_task) {
+        _m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(resize_task_info), _ts);
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_resize_task_info(const gms::feature_service& features) {
+    if (features.tablet_resize_virtual_task) {
+        auto col = _s->get_column_definition("resize_task_info");
+        _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }
     return *this;
 }
@@ -545,6 +576,9 @@ struct tablet_metadata_builder {
 
                 locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
                 current->map.set_resize_decision(std::move(resize_decision));
+            }
+            if (row.has("resize_task_info")) {
+                current->map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
             }
 
             if (row.has("repair_scheduler_config")) {
