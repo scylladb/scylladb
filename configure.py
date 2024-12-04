@@ -2555,6 +2555,8 @@ def configure_using_cmake(args):
         settings['Boost_USE_STATIC_LIBS'] = 'ON'
     if args.clang_inline_threshold != -1:
         settings['Scylla_CLANG_INLINE_THRESHOLD'] = args.clang_inline_threshold
+    if args.target:
+        settings['Scylla_TARGET_ARCH'] = args.target
 
     source_dir = os.path.realpath(os.path.dirname(__file__))
     if os.path.isabs(args.build_dir):

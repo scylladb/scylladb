@@ -86,8 +86,10 @@ endfunction()
 add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}=.")
 
 default_target_arch(target_arch)
+set(Scylla_TARGET_ARCH "${target_arch}" CACHE STRING
+  "Target architecture (-march)")
 if(target_arch)
-  add_compile_options("-march=${target_arch}")
+  add_compile_options("-march=${Scylla_TARGET_ARCH}")
 endif()
 
 add_compile_options("SHELL:-Xclang -fexperimental-assignment-tracking=disabled")
