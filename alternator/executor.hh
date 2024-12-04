@@ -22,7 +22,6 @@
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
-#include "alternator/consumed_capacity.hh"
 
 #include "tracing/trace_state.hh"
 

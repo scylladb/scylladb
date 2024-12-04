@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include "alternator/executor.hh"
+#include "alternator/consumed_capacity.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "cdc/log.hh"
