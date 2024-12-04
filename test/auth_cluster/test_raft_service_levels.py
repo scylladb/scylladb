@@ -305,3 +305,30 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
 
     for cluster_conn in cluster_connections:
         cluster_conn.shutdown()
+
+@pytest.mark.asyncio
+async def test_service_level_cache_after_restart(manager: ManagerClient):
+    servers = await manager.servers_add(1)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
+
+    sls_list_before = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(sls_list_before) == 1
+
+    await manager.rolling_restart(servers)
+    cql = await reconnect_driver(manager)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    # after restart the service level cache is repopulated.
+    # we want to verify it's populated, and that operations that use
+    # the cache behave as expected.
+
+    sls_list_after = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert sls_list_after == sls_list_before
+
+    await cql.run_async(f"ALTER SERVICE LEVEL sl1 WITH timeout = 400ms")
+
+    result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
+    assert len(result) == 1 and result[0].workload_type == 'batch'
