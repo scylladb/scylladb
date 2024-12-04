@@ -6758,17 +6758,12 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         }
 
         if (params.replaced_id) {
-            try {
-                co_await wait_for_gossiper(*params.replaced_id, _gossiper, _group0_as);
-                auto rhid = locator::host_id{params.replaced_id->uuid()};
-                if (is_me(rhid) || _gossiper.is_alive(rhid)) {
-                    result.result = join_node_request_result::rejected{
-                        .reason = fmt::format("tried to replace alive node {}", *params.replaced_id),
-                    };
-                    co_return result;
-                }
-            } catch (wait_for_ip_timeout& ex) {
-                rtlogger.warn("Failed to check liveness for replaced id {}. Asumming it is dead, Error: {}", *params.replaced_id, ex);
+            auto rhid = locator::host_id{params.replaced_id->uuid()};
+            if (is_me(rhid) || _gossiper.is_alive(rhid)) {
+                result.result = join_node_request_result::rejected{
+                    .reason = fmt::format("tried to replace alive node {}", *params.replaced_id),
+                };
+                co_return result;
             }
 
             auto replaced_it = _topology_state_machine._topology.normal_nodes.find(*params.replaced_id);
