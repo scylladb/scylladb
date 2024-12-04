@@ -145,6 +145,7 @@ public:
     gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
 
     gms::feature tablet_repair_scheduler { *this, "TABLET_REPAIR_SCHEDULER"sv };
+    gms::feature tablet_merge { *this, "TABLET_MERGE"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.
