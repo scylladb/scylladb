@@ -946,6 +946,8 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
                 return client_state.maybe_update_per_service_level_params();
             });
             return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
+                _authenticating = false;
+                _ready = true;
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
             });
         });
