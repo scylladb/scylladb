@@ -304,6 +304,7 @@ public:
      * @return a list of unreachable gossip participants, including fat clients
      */
     std::set<inet_address> get_unreachable_members() const;
+    std::set<locator::host_id> get_unreachable_host_ids() const;
 
     /**
      * @return a list of unreachable token owners

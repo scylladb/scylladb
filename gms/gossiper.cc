@@ -1254,6 +1254,13 @@ std::set<inet_address> gossiper::get_unreachable_members() const {
     return ret;
 }
 
+std::set<locator::host_id> gossiper::get_unreachable_host_ids() const {
+    return get_unreachable_members() |
+            std::views::transform([this] (gms::inet_address ip) { return get_host_id(ip); }) |
+            std::ranges::to<std::set>();
+
+}
+
 version_type gossiper::get_max_endpoint_state_version(const endpoint_state& state) const noexcept {
     auto max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
