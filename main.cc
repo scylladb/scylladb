@@ -2113,6 +2113,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_authorization_cache(ctx).get();
             });
 
+            // update the service level cache after the SL data accessor and auth service are initialized.
+            if (sl_controller.local().is_v2()) {
+                sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+            }
+
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
                 lifecycle_notifier.local().register_subscriber(&controller);
             }).get();
