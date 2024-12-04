@@ -239,3 +239,44 @@ async def test_tablet_migration_task_list(manager: ManagerClient):
     migration_dst = (host_ids[1], 0)
     await enable_injection(manager, servers, injection)
     await asyncio.gather(move_tablet(servers[0], migration_src, migration_dst), check_migration_task_list("migration"))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_migration_task_failed(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    servers, host_ids = await prepare_migration_test(manager)
+
+    wait_injection = "stream_tablet_wait"
+    throw_injection = "stream_tablet_move_to_cleanup"
+
+    async def move_tablet(old_replica, new_replica):
+        await manager.api.move_tablet(servers[0].ip_addr, "test", "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+
+    async def wait_for_task(task_id, type):
+        status = await tm.wait_for_task(servers[0].ip_addr, task_id)
+        check_task_status(status, ["failed"], type, "tablet", False)
+
+    async def resume_migration(log, mark):
+        await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
+        await disable_injection(manager, servers, wait_injection)
+
+    async def check(type, log, mark):
+        # Wait until migration task is created.
+        migration_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, type)
+        assert len(migration_tasks) == 1
+
+        await asyncio.gather(wait_for_task(migration_tasks[0].task_id, type), resume_migration(log, mark))
+
+    await enable_injection(manager, servers, wait_injection)
+    await enable_injection(manager, servers, throw_injection)
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+    src = replicas[0].replicas[0]
+    dst = (src[0], 1 - src[1])
+    await asyncio.gather(move_tablet(src, dst), check("intranode_migration", log, mark))

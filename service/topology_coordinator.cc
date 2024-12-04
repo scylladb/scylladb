@@ -1404,14 +1404,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
-                case locator::tablet_transition_stage::streaming:
+                case locator::tablet_transition_stage::streaming: {
                     if (drain) {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
 
                     if (action_failed(tablet_state.streaming)) {
-                        if (check_excluded_replicas()) {
+                        bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
+                        if (cleanup || check_excluded_replicas()) {
                             if (do_barrier()) {
                                 rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
                                 updates.emplace_back(get_mutation_builder()
@@ -1423,7 +1424,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
 
-                    if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
+                    bool wait = utils::get_local_injector().enter("stream_tablet_wait");
+                    if (!wait && advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
+                        utils::get_local_injector().inject("stream_tablet_move_to_cleanup",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
+
                         if (!trinfo.pending_replica) {
                             rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
                             return make_ready_future<>();
@@ -1439,6 +1444,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .del_session(last_token)
                             .build());
                     }
+                }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new: {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
