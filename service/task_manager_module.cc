@@ -110,9 +110,6 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
 
 future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
     auto task_type = hint.get_task_type();
-    if (is_resize_task(task_type)) {
-        return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
-    }
     return make_ready_future<tasks::is_abortable>(is_repair_task(task_type));
 }
 
@@ -165,10 +162,6 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
-    if (is_resize_task(task_type)) {
-        co_return;
-    }
-
     if (!is_repair_task(task_type)) {
         on_internal_error(tasks::tmlogger, format("non-abortable task {} of type {} cannot be aborted", id, task_type));
     }
