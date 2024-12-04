@@ -17,6 +17,7 @@
 #include "exceptions.hh"
 #include "checksum_utils.hh"
 #include "data_source_types.hh"
+#include "checksummed_data_source.hh"
 
 namespace sstables {
 
@@ -29,6 +30,7 @@ class checksummed_file_data_source_impl : public data_source_impl {
     std::optional<input_stream<char>> _input_stream;
     const checksum& _checksum;
     [[no_unique_address]] digest_members<check_digest> _digests;
+    integrity_error_handler _error_handler;
     uint64_t _chunk_size_trailing_zeros;
     uint64_t _file_len;
     uint64_t _underlying_pos;
@@ -39,8 +41,10 @@ public:
     checksummed_file_data_source_impl(file f, uint64_t file_len,
                 const checksum& checksum, uint64_t pos, size_t len,
                 file_input_stream_options options,
-                std::optional<uint32_t> digest)
+                std::optional<uint32_t> digest,
+                integrity_error_handler error_handler)
             : _checksum(checksum)
+            , _error_handler(error_handler)
             , _file_len(file_len)
             , _pos(pos)
             , _beg_pos(pos)
@@ -100,10 +104,27 @@ public:
             throw std::runtime_error(format("Checksummed reader not aligned to chunk boundary: pos={}, chunk_size={}", _pos, chunk_size));
         }
         return _input_stream->read_exactly(chunk_size).then([this, chunk_size](temporary_buffer<char> buf) {
-            auto expected_checksum = _checksum.checksums[_pos >> _chunk_size_trailing_zeros];
+            uint32_t chunk_index = _pos >> _chunk_size_trailing_zeros;
+            if (buf.size() != chunk_size) {
+                auto actual_end = _underlying_pos + buf.size();
+                if (chunk_index + 1 < _checksum.checksums.size()) {
+                    throw malformed_sstable_exception(seastar::format("Checksummed reader hit premature end-of-file at file offset {}: expected {} chunks of size {} but data file has {}",
+                            actual_end, _checksum.checksums.size(), chunk_size, chunk_index + 1));
+                } else if (actual_end < _file_len) {
+                    // Truncation on last chunk. Update _end_pos so that future
+                    // calls to get() return immediately.
+                    _end_pos = actual_end;
+                }
+            }
+            if (chunk_index >= _checksum.checksums.size()) {
+                throw malformed_sstable_exception(seastar::format("Chunk count mismatch between CRC and Data.db: expected {} but data file has more", _checksum.checksums.size()));
+            }
+            auto expected_checksum = _checksum.checksums[chunk_index];
             auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
             if (expected_checksum != actual_checksum) {
-                throw sstables::malformed_sstable_exception(format("Checksummed chunk of size {} at file offset {} failed checksum: expected={}, actual={}", buf.size(), _underlying_pos, expected_checksum, actual_checksum));
+                _error_handler(seastar::format(
+                        "Checksummed chunk of size {} at file offset {} failed checksum: expected={}, actual={}",
+                        buf.size(), _underlying_pos, expected_checksum, actual_checksum));
             }
 
             if constexpr (check_digest) {
@@ -118,7 +139,7 @@ public:
 
             if constexpr (check_digest) {
                 if (_digests.can_calculate_digest && _pos == _file_len && _digests.expected_digest != _digests.actual_digest) {
-                    throw malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
+                    _error_handler(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
                 }
             }
             return buf;
@@ -161,39 +182,48 @@ class checksummed_file_data_source : public data_source {
 public:
     checksummed_file_data_source(file f, uint64_t file_len, const checksum& checksum,
             uint64_t offset, size_t len, file_input_stream_options options,
-            std::optional<uint32_t> digest)
+            std::optional<uint32_t> digest, integrity_error_handler error_handler)
         : data_source(std::make_unique<checksummed_file_data_source_impl<ChecksumType, check_digest>>(
-                std::move(f), file_len, checksum, offset, len, std::move(options), digest))
+                std::move(f), file_len, checksum, offset, len, std::move(options), digest,
+                error_handler))
     {}
 };
 
 template <ChecksumUtils ChecksumType>
 inline input_stream<char> make_checksummed_file_input_stream(
         file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
-        size_t len, file_input_stream_options options, std::optional<uint32_t> digest)
+        size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
+        integrity_error_handler error_handler)
 {
     if (digest) {
         return input_stream<char>(checksummed_file_data_source<ChecksumType, true>(
-            std::move(f), file_len, checksum, offset, len, std::move(options), digest));
+            std::move(f), file_len, checksum, offset, len, std::move(options), digest,
+            error_handler));
     }
     return input_stream<char>(checksummed_file_data_source<ChecksumType, false>(
-        std::move(f), file_len, checksum, offset, len, std::move(options), digest));
+        std::move(f), file_len, checksum, offset, len, std::move(options), digest, error_handler));
 }
 
 input_stream<char> make_checksummed_file_k_l_format_input_stream(
         file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
-        size_t len, file_input_stream_options options, std::optional<uint32_t> digest)
+        size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
+        integrity_error_handler error_handler)
 {
     return make_checksummed_file_input_stream<adler32_utils>(std::move(f), file_len,
-            checksum, offset, len, std::move(options), digest);
+            checksum, offset, len, std::move(options), digest, error_handler);
 }
 
 input_stream<char> make_checksummed_file_m_format_input_stream(
         file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
-        size_t len, file_input_stream_options options, std::optional<uint32_t> digest)
+        size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
+        integrity_error_handler error_handler)
 {
     return make_checksummed_file_input_stream<crc32_utils>(std::move(f), file_len,
-            checksum, offset, len, std::move(options), digest);
+            checksum, offset, len, std::move(options), digest, error_handler);
 }
+
+void throwing_integrity_error_handler(sstring msg) {
+        throw sstables::malformed_sstable_exception(msg);
+};
 
 }

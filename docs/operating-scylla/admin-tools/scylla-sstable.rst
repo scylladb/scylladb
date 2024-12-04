@@ -606,7 +606,8 @@ The digest and the per-chunk checksum of uncompressed SStables are currently not
 
 This operation reads the entire ``Data.db`` and validates both kinds of checksums against the data.
 Errors found are logged to stderr. The output contains an object for each SStable that indicates if the SStable has checksums (false only for uncompressed SStables
-for which ``CRC.db`` is not present in ``TOC.txt``), and if the SStable matches all checksums.
+for which ``CRC.db`` is not present in ``TOC.txt``), if the SStable has a digest, and if the SStable matches all checksums and the digest. If no digest is available,
+validation will proceed using only the per-chunk checksums.
 
 The content is dumped in JSON, using the following schema:
 
@@ -617,7 +618,8 @@ The content is dumped in JSON, using the following schema:
 
     $RESULT := {
         "has_checksums": Bool,
-        "valid_checksums": Bool, // optional
+        "has_digest": Bool,
+        "valid": Bool, // optional
     }
 
 decompress
