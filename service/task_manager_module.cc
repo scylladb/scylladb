@@ -60,14 +60,29 @@ static bool is_repair_task(const locator::tablet_task_type& task_type) {
     return task_type == locator::tablet_task_type::user_repair || task_type == locator::tablet_task_type::auto_repair;
 }
 
+static bool is_migration_task(const locator::tablet_task_type& task_type) {
+    return task_type == locator::tablet_task_type::migration || task_type == locator::tablet_task_type::intranode_migration;
+}
+
+static bool is_resize_task(const locator::tablet_task_type& task_type) {
+    return task_type == locator::tablet_task_type::split || task_type == locator::tablet_task_type::merge;
+}
+
 static bool tablet_id_provided(const locator::tablet_task_type& task_type) {
-    return !is_repair_task(task_type);
+    return is_migration_task(task_type);
 }
 
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {
     auto tables = get_table_ids();
     for (auto table : tables) {
         auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+        if (auto task_type = maybe_get_task_type(tmap.resize_task_info(), task_id); task_type.has_value()) {
+            co_return tasks::virtual_task_hint{
+                .table_id = table,
+                .task_type = task_type.value(),
+                .tablet_id = std::nullopt,
+            };
+        }
         std::optional<locator::tablet_id> tid = tmap.first_tablet();
         for (const locator::tablet_info& info : tmap.tablets()) {
             auto task_type = maybe_get_task_type(info.repair_task_info, task_id).or_else([&] () {
@@ -89,10 +104,18 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
 
 future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
     auto task_type = hint.get_task_type();
+    if (is_resize_task(task_type)) {
+        return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
+    }
     return make_ready_future<tasks::is_abortable>(is_repair_task(task_type));
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto task_type = hint.get_task_type();
+    if (is_resize_task(task_type)) {
+        co_return std::nullopt;
+    }
+
     utils::chunked_vector<locator::tablet_id> tablets;
     std::optional<locator::tablet_replica> pending_replica;
     co_return co_await get_status_helper(id, tablets, std::move(hint), pending_replica);
@@ -101,6 +124,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks:
 future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
+    if (is_resize_task(task_type)) {
+        co_return std::nullopt;
+    }
     auto tablet_id_opt = tablet_id_provided(task_type) ? std::make_optional(hint.get_tablet_id()) : std::nullopt;
 
     utils::chunked_vector<locator::tablet_id> tablets;
@@ -134,6 +160,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
+    if (is_resize_task(task_type)) {
+        co_return;
+    }
 
     if (!is_repair_task(task_type)) {
         on_internal_error(tasks::tmlogger, format("non-abortable task {} of type {} cannot be aborted", id, task_type));
