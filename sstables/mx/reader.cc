@@ -21,6 +21,13 @@
 namespace sstables {
 namespace mx {
 
+static integrity_check get_baseline_integrity_check_for_schema(const schema& s) {
+    if (s.crc_check_chance() == 0.0) {
+        return integrity_check::no;
+    }
+    return integrity_check::checksums_only;
+}
+
 class mp_row_consumer_reader_mx : public mp_row_consumer_reader_base, public mutation_reader::impl {
     friend class sstables::mx::mp_row_consumer_m;
 public:
@@ -1267,6 +1274,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
+    integrity_check _caller_requested_integrity;
     integrity_check _integrity;
     lw_shared_ptr<checksum> _checksum;
 
@@ -1297,7 +1305,8 @@ public:
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
-            , _integrity(integrity) {
+            , _caller_requested_integrity(integrity)
+            , _integrity(std::max(integrity, get_baseline_integrity_check_for_schema(*_schema))) {
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1563,7 +1572,7 @@ private:
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
             if (reversed()) {
-                if (_integrity != integrity_check::no) {
+                if (_caller_requested_integrity != integrity_check::no) {
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
@@ -1802,7 +1811,7 @@ public:
         : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
         , _monitor(mon)
-        , _integrity(integrity) {}
+        , _integrity(std::max(integrity, get_baseline_integrity_check_for_schema(*_schema))) {}
 private:
     bool is_initialized() const {
         return bool(_context);
