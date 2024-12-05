@@ -688,6 +688,14 @@ A table supports the following options:
      - simple
      - 0
      - Flush the memtables associated with this table every ``memtable_flush_period_in_ms`` milliseconds. When set to ``0``, periodic flush is disabled. Cannot set to values lower than ``60000`` (1 minute). Default: ``0``.
+   * - ``min_index_interval``
+     - simple
+     - 128
+     - Minimum gap between summary entries: ScyllaDB will create summary entries with at least this amount of partitions between them. Controls the maximums density of the summary.
+   * - ``max_index_interval``
+     - simple
+     - 2048
+     - Not implemented (option value is ignored).
    * - ``compaction``
      - map
      - see below
