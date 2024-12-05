@@ -48,7 +48,8 @@ function(generate_cxxbridge name)
     COMMAND ${command} --header --output ${header}
     COMMAND ${command} --output ${source})
 
-  set(${parsed_args_SOURCES} ${outputs} PARENT_SCOPE)
+  set(${parsed_args_SOURCES} ${outputs})
+  return(PROPAGATE ${parsed_args_SOURCES})
 endfunction(generate_cxxbridge)
 
 

@@ -21,7 +21,8 @@ function(generate_swagger)
       ${header_out}
       ${source_out})
 
-  set(${args_VAR} ${header_out} ${source_out} PARENT_SCOPE)
+  set(${args_VAR} ${header_out} ${source_out})
+  return(PROPAGATE ${args_VAR})
 endfunction()
 
 set(swagger_files
