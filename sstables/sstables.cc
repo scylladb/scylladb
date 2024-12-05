@@ -1957,7 +1957,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
-    auto reader = make_full_scan_reader(_schema, permit, nullptr, monitor, integrity_check::yes);
+    auto reader = make_full_scan_reader(_schema, permit, nullptr, monitor, integrity_check::checksums_and_digest);
 
     try {
         auto validator = mutation_fragment_stream_validator(*_schema);
@@ -2472,7 +2472,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
     }
 
     std::optional<uint32_t> digest;
-    if (integrity == integrity_check::yes) {
+    if (integrity == integrity_check::checksums_and_digest) {
         digest = get_digest();
     }
 
@@ -2485,7 +2485,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
                 pos, len, std::move(options), permit, digest);
         }
     }
-    if (_components->checksum && integrity == integrity_check::yes) {
+    if (_components->checksum && integrity >= integrity_check::checksums_only) {
         auto checksum = get_checksum();
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
@@ -2668,7 +2668,7 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
     } else {
         data_stream = sst->data_stream(0, sst->data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::no,
-                integrity_check::yes, [&ret](sstring msg) {
+                integrity_check::checksums_and_digest, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
                     ret.status = validate_checksums_status::invalid;
                 });

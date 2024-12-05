@@ -1549,9 +1549,11 @@ private:
 
         sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
 
-        if (_integrity) {
+        if (_integrity >= integrity_check::checksums_only) {
             // Caller must retain a reference to checksum component while in use by the stream.
             _checksum = co_await _sst->read_checksum();
+        }
+        if (_integrity == integrity_check::checksums_and_digest) {
             // The stream checks the digest only if the read range covers all data.
             if (begin == 0 && *end == _sst->data_size()) {
                 co_await _sst->read_digest();
@@ -1561,7 +1563,7 @@ private:
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
             if (reversed()) {
-                if (_integrity) {
+                if (_integrity != integrity_check::no) {
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
@@ -1809,9 +1811,11 @@ private:
         if (is_initialized()) {
             co_return;
         }
-        if (_integrity) {
+        if (_integrity >= integrity_check::checksums_only) {
             // Caller must retain a reference to checksum component while in use by the stream.
             _checksum = co_await _sst->read_checksum();
+        }
+        if (_integrity == integrity_check::checksums_and_digest) {
             co_await _sst->read_digest();
         }
         _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity);
@@ -2106,7 +2110,7 @@ future<uint64_t> validate(
         sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
-    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
+    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::checksums_and_digest);
 
     std::optional<sstables::index_reader> idx_reader;
     idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);

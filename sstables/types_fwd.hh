@@ -15,6 +15,11 @@
 namespace sstables {
 
 using run_id = utils::tagged_uuid<struct run_id_tag>;
-using integrity_check = bool_class<class integrity_check_tag>;
+
+enum class integrity_check {
+    no = 0,
+    checksums_only,
+    checksums_and_digest,
+};
 
 } // namespace sstables

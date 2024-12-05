@@ -730,7 +730,8 @@ public:
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
     //
-    // When created with `integrity_check::yes`, the integrity mechanisms
+    // When created with integrity_check::checksum_only` or
+    // `integrity_check::checksums_and_digest`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
     // The `error_handler` parameter allows to customize the error handling
