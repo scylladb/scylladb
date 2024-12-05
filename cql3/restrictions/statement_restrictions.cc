@@ -55,8 +55,6 @@ using namespace expr;
 static logging::logger rlogger("restrictions");
 static auto& expr_logger = rlogger; // compatibility with code moved from expression.cc
 
-extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
-
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
 extern interval<managed_bytes> to_range(const value_set&);
 
@@ -503,10 +501,6 @@ static value_set possible_lhs_values(const column_definition* cdef,
                 on_internal_error(expr_logger, "possible_lhs_values: a temporary cannot serve as a restriction by itself");
             },
         }, expr);
-}
-
-value_set possible_partition_token_values(const expression& e, const query_options& options, const schema& table_schema) {
-    return possible_lhs_values(nullptr, e, &table_schema, options);
 }
 
 interval<managed_bytes> to_range(const value_set& s) {
@@ -1022,7 +1016,7 @@ static partition_range_restrictions extract_partition_range(
         return token_range_restrictions{
             .token_restrictions = predicate{
                 // It's not really a column, but...
-                .solve_for = std::bind(possible_partition_token_values, *v.tokens, std::placeholders::_1, std::ref(*schema)),
+                .solve_for = std::bind_front(possible_lhs_values, /* col */ nullptr, *v.tokens, schema.get()),
                 .filter = *v.tokens,
                 .on = on_partition_key_token{schema.get()},
                 .is_singleton = false, // It could return a single token, but it's not important to track it
