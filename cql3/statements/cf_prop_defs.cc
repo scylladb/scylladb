@@ -399,6 +399,12 @@ std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_s
     return std::nullopt;
 }
 
+void cf_prop_defs::maybe_add_warning_for_deprecated_crc_check_chance_in_compression(std::vector<sstring>& warnings) const {
+    if (const auto co = get_compression_options(); co && co->contains(compression_parameters::CRC_CHECK_CHANCE)) {
+        warnings.push_back(fmt::format("{} is now a table-level option, it is deprecated as a compression option", compression_parameters::CRC_CHECK_CHANCE));
+    }
+}
+
 }
 
 }

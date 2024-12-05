@@ -108,6 +108,8 @@ public:
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name,
             is_create_statement is_create) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
+
+    void maybe_add_warning_for_deprecated_crc_check_chance_in_compression(std::vector<sstring>& warnings) const;
 };
 
 }

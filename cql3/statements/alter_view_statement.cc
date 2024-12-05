@@ -85,7 +85,12 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
             keyspace(),
             column_family());
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    cql3::cql_warnings_vec warnings;
+    if (_properties) {
+        _properties->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
+    }
+
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

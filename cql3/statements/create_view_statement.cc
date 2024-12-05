@@ -380,6 +380,8 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
         }
     }
 
+    _properties.properties()->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
+
     // If an IF NOT EXISTS clause was used and resource was already created
     // we shouldn't emit created event. However it interacts badly with
     // concurrent clients creating resources. The client seeing no create event
