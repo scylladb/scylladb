@@ -309,6 +309,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 1;
     cfg.commitlog_sync_period_in_ms = 1;
+    cfg.allow_going_over_size_limit = true;
     return cl_test(cfg, [](commitlog& log) {
             auto sem = make_lw_shared<semaphore>(0);
             auto segments = make_lw_shared<std::set<sstring>>();
