@@ -4638,18 +4638,18 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             // all sstables can be reshaped in a single round if there's enough space
             {
-                uint64_t free_space = free_space_for_reshaping_sstables(boost::make_iterator_range(sstables));
+                uint64_t free_space = free_space_for_reshaping_sstables(std::ranges::subrange(sstables));
                 BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, reshape_mode::strict, free_space).sstables.size() == sstables.size());
             }
 
             // only a subset can be reshaped in a single round to respect the 10% space overhead
             {
                 const size_t sstables_that_fit_in_target_overhead = 10;
-                uint64_t free_space = free_space_for_reshaping_sstables(boost::make_iterator_range(sstables.begin(), sstables.begin() + sstables_that_fit_in_target_overhead));
+                uint64_t free_space = free_space_for_reshaping_sstables(std::ranges::subrange(sstables.begin(), sstables.begin() + sstables_that_fit_in_target_overhead));
                 auto target_space_overhead = free_space * time_window_compaction_strategy::reshape_target_space_overhead;
                 auto job = get_reshaping_job(cs, sstables, s, reshape_mode::strict, free_space);
                 BOOST_REQUIRE(job.sstables.size() < sstables.size());
-                BOOST_REQUIRE(job_size(boost::make_iterator_range(job.sstables)) <= target_space_overhead);
+                BOOST_REQUIRE(job_size(std::ranges::subrange(job.sstables)) <= target_space_overhead);
             }
         }
     });

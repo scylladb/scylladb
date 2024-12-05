@@ -1114,7 +1114,7 @@ lw_shared_ptr<const sstable_list> compound_sstable_set::all() const {
     }
 
     auto ret = make_lw_shared<sstable_list>();
-    for (auto& set : boost::make_iterator_range(sets.begin(), it)) {
+    for (auto& set : std::ranges::subrange(sets.begin(), it)) {
         auto ssts = set->all();
         ret->reserve(ret->size() + ssts->size());
         ret->insert(ssts->begin(), ssts->end());
