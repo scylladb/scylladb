@@ -322,8 +322,8 @@ require_on_single_column(const predicate& p) {
 // the partition token.
 static value_set possible_lhs_values(const column_definition* cdef,
                                         const expression& expr,
-                                        const query_options& options,
-                                        const schema* table_schema_opt) {
+                                        const schema* table_schema_opt,
+                                        const query_options& options) {
     const auto type = cdef ? &cdef->type->without_reversed() : long_type.get();
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
@@ -338,7 +338,7 @@ static value_set possible_lhs_values(const column_definition* cdef,
             [&] (const conjunction& conj) {
                 return std::ranges::fold_left(conj.children, unbounded_value_set, [&](value_set&& acc, const expression& child) {
                     return intersection(
-                        std::move(acc), possible_lhs_values(cdef, child, options, table_schema_opt), type);
+                        std::move(acc), possible_lhs_values(cdef, child, table_schema_opt, options), type);
                 });
             },
             [&] (const binary_operator& oper) -> value_set {
@@ -530,11 +530,11 @@ static value_set possible_lhs_values(const column_definition* cdef,
 }
 
 value_set possible_column_values(const column_definition* col, const expression& e, const query_options& options) {
-    return possible_lhs_values(col, e, options, nullptr);
+    return possible_lhs_values(col, e, nullptr, options);
 }
 
 value_set possible_partition_token_values(const expression& e, const query_options& options, const schema& table_schema) {
-    return possible_lhs_values(nullptr, e, options, &table_schema);
+    return possible_lhs_values(nullptr, e, &table_schema, options);
 }
 
 interval<managed_bytes> to_range(const value_set& s) {
