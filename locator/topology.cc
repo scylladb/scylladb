@@ -359,7 +359,7 @@ void topology::index_node(const node* node) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
             if (eit->second->get_state() == node::state::none && eit->second->is_this_node()) {
-                // eit->second is default entry created for local node and it is replaced by existing node withe the same ip
+                // eit->second is default entry created for local node and it is replaced by existing node with the same ip
                 // it means this node is going to replace the existing node with the same ip, but it does not know it yet
                 // map ip to the old node
                 _nodes_by_endpoint.erase(node->endpoint());
