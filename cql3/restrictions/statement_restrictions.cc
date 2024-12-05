@@ -139,19 +139,7 @@ solve(const predicate& ac, const query_options& options) {
         return ac.solve_for(options);
     }
 
-    return std::visit(
-        overloaded_functor{
-            [&] (const on_column& oc) {
-                return possible_column_values(oc.column, ac.filter, options);
-            },
-            [&] (const on_partition_key_token& pkt) {
-                return possible_partition_token_values(ac.filter, options, *pkt.schema);
-            },
-            [&] (const on_clustering_key_prefix& ockp) -> value_set {
-                on_internal_error(rlogger, "asked to directly solve for clustering key prefix");
-            },
-        },
-        ac.on);
+    on_internal_error(rlogger, "solve: no solve_for function");
 }
 
 namespace {
