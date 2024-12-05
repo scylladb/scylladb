@@ -15,9 +15,6 @@
 #include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
 
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-
 using namespace std::chrono_literals;
 
 namespace node_ops {
@@ -207,16 +204,14 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
 {}
 
 std::set<gms::inet_address> task_manager_module::get_nodes() const noexcept {
-    return boost::copy_range<std::set<gms::inet_address>>(
-        boost::join(
-            _ss._topology_state_machine._topology.normal_nodes,
-            _ss._topology_state_machine._topology.transition_nodes
-        ) | boost::adaptors::transformed([&ss = _ss] (auto& node) {
+    return std::ranges::join_view(std::to_array({
+            std::views::all(_ss._topology_state_machine._topology.normal_nodes),
+            std::views::all(_ss._topology_state_machine._topology.transition_nodes)})
+        ) | std::views::transform([&ss = _ss] (auto& node) {
             return ss.host2ip(locator::host_id{node.first.uuid()});
-        }) | boost::adaptors::filtered([&ss = _ss] (auto& ip) {
+        }) | std::views::filter([&ss = _ss] (gms::inet_address ip) {
             return ss._gossiper.is_alive(ip);
-        })
-    );
+        }) | std::ranges::to<std::set<gms::inet_address>>();
 }
 
 }
