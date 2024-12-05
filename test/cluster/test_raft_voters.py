@@ -168,7 +168,7 @@ async def test_raft_limited_voters_upgrade(manager: ManagerClient):
     # (we can add another server to the cluster)
 
     logging.info('Waiting for the GROUP0_LIMITED_VOTERS feature to be enabled')
-    await asyncio.gather(*(log.wait_for("Feature GROUP0_LIMITED_VOTERS is enabled", mark, timeout=60)
+    await asyncio.gather(*(log.wait_for("Feature GROUP0_LIMITED_VOTERS is enabled", from_mark=mark, timeout=60)
                            for log, mark in zip(logs, marks)))
 
     logging.info('Adding a new server to the cluster')
