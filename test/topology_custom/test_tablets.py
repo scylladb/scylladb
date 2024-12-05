@@ -106,7 +106,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
         await manager.server_restart(server.server_id)
         await reconnect_driver(manager)
 
-        await log.wait_for(f"Reshape {ks}.test .* Reshaped 32 sstables to .*", mark, 30)
+        await log.wait_for(f"Reshape {ks}.test .* Reshaped 32 sstables to .*", from_mark=mark, timeout=30)
         sstable_info = await manager.api.get_sstable_info(server.ip_addr, ks, "test")
         assert len(sstable_info[0]['sstables']) == number_of_tablets
 
