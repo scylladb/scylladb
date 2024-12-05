@@ -329,7 +329,10 @@ public:
 private:
     // Returns true if and only if constraints of this group are not violated.
     // That's taking into account any constraints imposed by enclosing (parent) groups.
-    bool execution_permitted() noexcept;
+    bool execution_permitted() noexcept {
+        return !under_unspooled_pressure() && !_under_real_pressure;
+    }
+
 
     uint64_t top_region_evictable_space() const noexcept;
 
@@ -564,12 +567,7 @@ template <typename Func>
 requires (!is_future<std::invoke_result_t<Func>>::value)
 futurize_t<std::invoke_result_t<Func>>
 region_group::run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout) {
-    bool blocked = 
-        !_blocked_requests.empty()
-        || under_unspooled_pressure()
-        || _under_real_pressure;
-
-    if (!blocked) {
+    if (_blocked_requests.empty() && execution_permitted()) {
         return futurize_invoke(func);
     }
 
