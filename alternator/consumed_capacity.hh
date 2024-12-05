@@ -41,9 +41,9 @@ public:
      * \brief get_half_units calculate the half units from the total bytes based on the type of the request
      */
     virtual uint64_t get_half_units() const noexcept = 0;
+    uint64_t _total_bytes = 0;
 protected:
     bool _should_add_to_reponse = false;
-    uint64_t _total_bytes = 0;
 };
 
 class rcu_consumed_capacity_counter : public consumed_capacity_counter {

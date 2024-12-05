@@ -67,7 +67,7 @@ protected:
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
     write_isolation _write_isolation;
-    wcu_consumed_capacity_counter _consumed_capacity;
+    mutable wcu_consumed_capacity_counter _consumed_capacity;
     // All RMW operations can have a ReturnValues parameter from the following
     // choices. But note that only UpdateItem actually supports all of them:
     enum class returnvalues {
@@ -117,7 +117,8 @@ public:
             tracing::trace_state_ptr trace_state,
             service_permit permit,
             bool needs_read_before_write,
-            stats& stats);
+            stats& stats,
+            uint64_t& wcu_total);
     std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
 };
 
