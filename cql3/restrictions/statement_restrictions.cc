@@ -55,18 +55,6 @@ using namespace expr;
 static logging::logger rlogger("restrictions");
 static auto& expr_logger = rlogger; // compatibility with code moved from expression.cc
 
-/// A set of all column values that would satisfy an expression. The _token_values variant finds
-/// matching values for the partition token function call instead of the column.
-///
-/// An expression restricts possible values of a column or token:
-/// - `A>5` restricts A from below
-/// - `A>5 AND A>6 AND B<10 AND A=12 AND B>0` restricts A to 12 and B to between 0 and 10
-/// - `A IN (1, 3, 5)` restricts A to 1, 3, or 5
-/// - `A IN (1, 3, 5) AND A>3` restricts A to just 5
-/// - `A=1 AND A<=0` restricts A to an empty list; no value is able to satisfy the expression
-/// - `A>=NULL` also restricts A to an empty list; all comparisons to NULL are false
-/// - an expression without A "restricts" A to unbounded range
-extern value_set possible_column_values(const column_definition*, const expression&, const schema*, const query_options&);
 extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
 
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
@@ -517,10 +505,6 @@ static value_set possible_lhs_values(const column_definition* cdef,
         }, expr);
 }
 
-value_set possible_column_values(const column_definition* col, const expression& e, const schema* table_schema, const query_options& options) {
-    return possible_lhs_values(col, e, table_schema, options);
-}
-
 value_set possible_partition_token_values(const expression& e, const query_options& options, const schema& table_schema) {
     return possible_lhs_values(nullptr, e, &table_schema, options);
 }
@@ -862,7 +846,7 @@ static
 std::function<bytes_opt (const query_options&)>
 build_value_for_fn(const column_definition& cdef, const expression& e, const schema& s) {
   auto ac = predicate{
-      .solve_for = std::bind_front(possible_column_values, &cdef, e, &s),
+      .solve_for = std::bind_front(possible_lhs_values, &cdef, e, &s),
       .filter = e,
       .on = on_column{&cdef},
       .is_singleton = false, // Code below assumes 0 or 1 results.
@@ -966,7 +950,7 @@ static partition_range_restrictions extract_partition_range(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_column_values, s->col, b, table_schema.get()),
+                        .solve_for = std::bind_front(possible_lhs_values, s->col, b, table_schema.get()),
                         .filter = b,
                         .on = on_column{s->col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -1094,7 +1078,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             }
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 multi.push_back(predicate{
-                    .solve_for = std::bind_front(possible_column_values, /* col */ nullptr, b, table_schema.get()),
+                    .solve_for = std::bind_front(possible_lhs_values, /* col */ nullptr, b, table_schema.get()),
                     .filter = b,
                     .on = on_clustering_key_prefix{prefix},
                     .is_singleton = false,
@@ -1108,7 +1092,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_clustering_key()) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_column_values, s->col, b, table_schema.get()),
+                        .solve_for = std::bind_front(possible_lhs_values, s->col, b, table_schema.get()),
                         .filter = b,
                         .on  = on_column{s->col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -1127,7 +1111,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_clustering_key()) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_column_values, cval.col, b, table_schema.get()),
+                        .solve_for = std::bind_front(possible_lhs_values, cval.col, b, table_schema.get()),
                         .filter = b,
                         .on  = on_column{cval.col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -2526,10 +2510,10 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
         const column_definition& token_column,
         const predicate& token_restriction) {
 
-    // A workaround in order to make possible_column_values work properly.
-    // possible_column_values looks at the column type and uses this type's comparator.
+    // A workaround in order to make possible_lhs_values work properly.
+    // possible_lhs_values looks at the column type and uses this type's comparator.
     // This is a problem because when using blob's comparator, -4 is greater than 4.
-    // This makes possible_column_values think that an expression like token(p) > -4 and token(p) < 4
+    // This makes possible_lhs_values think that an expression like token(p) > -4 and token(p) < 4
     // is impossible to fulfill.
     // Create a fake token column with the type set to bigint, translate the restriction to use this column
     // and use this restriction to calculate possible lhs values.
@@ -2907,7 +2891,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
         _idx_tbl_ck_prefix = std::vector{predicate{
-            .solve_for = std::bind_front(possible_column_values, token_column, token_restriction, _schema.get()),
+            .solve_for = std::bind_front(possible_lhs_values, token_column, token_restriction, _schema.get()),
             .filter = token_restriction,
             .on = on_column{token_column},
             .is_singleton = false, // FIXME: could be a singleton token. Not very important.
@@ -3011,7 +2995,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
     // Translate the restriction to use column from the index schema and add it
     expr::expression replaced_idx_restriction = replace_column_def(idx_col_restriction_expr, &indexed_column);
     _idx_tbl_ck_prefix->push_back(predicate{
-        .solve_for = std::bind_front(possible_column_values, &indexed_column, replaced_idx_restriction, _schema.get()),
+        .solve_for = std::bind_front(possible_lhs_values, &indexed_column, replaced_idx_restriction, _schema.get()),
         .filter = replaced_idx_restriction,
         .on = on_column{&indexed_column},
         .is_singleton = false, // Could be true, but not important.
@@ -3035,7 +3019,7 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
         auto replaced = replace_column_def(e.filter, col_in_index);
         auto a = predicate{
-            .solve_for = std::bind_front(possible_column_values, col_in_index, replaced, &idx_tbl_schema),
+            .solve_for = std::bind_front(possible_lhs_values, col_in_index, replaced, &idx_tbl_schema),
             .filter = replaced,
             .on = on_column{col_in_index},
             .is_singleton = false, // FIXME: could be a singleton token. Not very important.
