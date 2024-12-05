@@ -3866,13 +3866,13 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
-        ctl.sync_nodes.insert(get_broadcast_address());
+        ctl.sync_nodes.insert(my_host_id());
 
         // Step 2: Wait until no pending node operations
-        std::unordered_map<gms::inet_address, std::list<node_ops_id>> pending_ops;
+        std::unordered_map<locator::host_id, std::list<node_ops_id>> pending_ops;
         auto req = node_ops_cmd_request(node_ops_cmd::query_pending_ops, uuid);
-        parallel_for_each(ctl.sync_nodes, [this, req, uuid, &pending_ops] (const gms::inet_address& node) {
-            return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging.local(), netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
+        parallel_for_each(ctl.sync_nodes, [this, req, uuid, &pending_ops] (const locator::host_id& node) {
+            return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging.local(), node, req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
                 if (!resp.pending_ops.empty()) {
                     pending_ops.emplace(node, resp.pending_ops);
@@ -3925,16 +3925,15 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     auto stop_ctl = deferred_stop(ctl);
     const auto& uuid = ctl.uuid();
     gms::inet_address replace_address = replace_info.address;
-    ctl.ignore_nodes = replace_info.ignore_nodes | std::views::transform([] (const auto& x) {
-        return x.second.endpoint;
-    }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
+    locator::host_id replace_host_id = replace_info.host_id;
+    ctl.ignore_nodes = replace_info.ignore_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
     // Step 1: Decide who needs to sync data for replace operation
     // The replacing node is not a normal token owner yet
     // Add it back explicitly after checking all other nodes.
-    ctl.start("replace", [&] (gms::inet_address node) {
-        return node != replace_address;
+    ctl.start("replace", [&] (locator::host_id node) {
+        return node != replace_host_id;
     });
-    ctl.sync_nodes.insert(get_broadcast_address());
+    ctl.sync_nodes.insert(my_host_id());
 
     auto sync_nodes_generations = _gossiper.get_generation_for_nodes(ctl.sync_nodes).get();
     // Map existing nodes to replacing nodes
@@ -4104,12 +4103,13 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
             auto stop_ctl = deferred_stop(ctl);
             auto uuid = ctl.uuid();
             const auto& tmptr = ctl.tmptr;
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id_if_known(host_id);
             SCYLLA_ASSERT(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
             bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
-            if (!endpoint_opt && !is_group0_member) {
+            bool removed_from_token_ring = !tmptr->get_topology().find_node(host_id);
+
+            if (removed_from_token_ring && !is_group0_member) {
                 throw std::runtime_error(::format("removenode[{}]: Node {} not found in the cluster", uuid, host_id));
             }
 
@@ -4121,22 +4121,21 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
             // endpoint_opt, while parts related to removing from group 0 are conditioned on
             // is_group0_member.
 
-            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
+            if (ss._gossiper.is_alive(host_id)) {
                 const std::string message = ::format(
                     "removenode[{}]: Rejected removenode operation (node={}); "
                     "the node being removed is alive, maybe you should use decommission instead?",
-                    uuid, *endpoint_opt);
+                    uuid, host_id);
                 slogger.warn("{}", message);
                 throw std::runtime_error(message);
             }
 
             for (auto& hoep : ignore_nodes_params) {
-                ctl.ignore_nodes.insert(hoep.resolve_endpoint(*tmptr));
+                ctl.ignore_nodes.insert(hoep.resolve_id(*tmptr));
             }
 
-            bool removed_from_token_ring = !endpoint_opt;
-            if (endpoint_opt) {
-                auto endpoint = *endpoint_opt;
+            if (!removed_from_token_ring) {
+                auto endpoint = ss._address_map.find(host_id).value();
                 ctl.endpoint = endpoint;
 
                 // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
@@ -4158,8 +4157,8 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
                 // If the user want the removenode operation to succeed even if some of the nodes
                 // are not available, the user has to explicitly pass a list of
                 // node that can be skipped for the operation.
-                ctl.start("removenode", [&] (gms::inet_address node) {
-                    return node != endpoint;
+                ctl.start("removenode", [&] (locator::host_id node) {
+                    return node != host_id;
                 });
 
                 auto tokens = tmptr->get_tokens(host_id);

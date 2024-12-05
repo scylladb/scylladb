@@ -423,8 +423,8 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_id* from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
     bool respond = true;
-    if (!_advertise_to_nodes.empty()) {
-        auto it = _advertise_to_nodes.find(from);
+    if (from_hid && !_advertise_to_nodes.empty()) {
+        auto it = _advertise_to_nodes.find(*from_hid);
         if (it == _advertise_to_nodes.end()) {
             respond = false;
         } else {
@@ -2085,10 +2085,10 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
 }
 
 future<gossiper::generation_for_nodes>
-gossiper::get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) const {
+gossiper::get_generation_for_nodes(std::unordered_set<locator::host_id> nodes) const {
     generation_for_nodes ret;
     for (const auto& node : nodes) {
-        auto es = get_endpoint_state_ptr(node);
+        auto es = get_endpoint_state_ptr(_address_map.find(node).value());
         if (es) {
             auto current_generation_number = es->get_heart_beat_state().get_generation();
             ret.emplace(node, current_generation_number);
