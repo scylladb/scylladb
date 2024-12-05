@@ -6,9 +6,9 @@ on:
       - master
       - branch-*.*
       - enterprise
-    pull_request_target:
-      types: [labeled]
-      branches: [master, next, enterprise]
+  pull_request_target:
+    types: [labeled]
+    branches: [master, next, enterprise]
 
 jobs:
   check-commit:
