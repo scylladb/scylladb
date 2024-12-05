@@ -1093,7 +1093,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //    token_metadata.stop().get();
             //});
 
-            api::set_server_token_metadata(ctx, token_metadata).get();
+            api::set_server_token_metadata(ctx, token_metadata, gossiper).get();
             auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
                 api::unset_server_token_metadata(ctx).get();
             });

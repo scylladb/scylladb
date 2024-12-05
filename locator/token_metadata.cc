@@ -162,8 +162,8 @@ public:
     /** Return the end-point for a unique host ID.*/
     inet_address get_endpoint_for_host_id(host_id) const;
 
-    /** @return a copy of the endpoint-to-id map for read-only operations */
-    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map() const;
+    /** @return a copy of host id set for read-only operations */
+    std::unordered_set<host_id> get_host_ids() const;
 
     void add_bootstrap_token(token t, host_id endpoint);
 
@@ -567,21 +567,11 @@ inet_address token_metadata_impl::get_endpoint_for_host_id(host_id host_id) cons
     }
 }
 
-std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_host_id_map() const {
-    const auto& nodes = _topology.get_nodes_by_endpoint();
-    std::unordered_map<inet_address, host_id> map;
-    map.reserve(nodes.size());
-    for (const auto& [endpoint, node] : nodes) {
-        if (node.get().left() || node.get().is_none()) {
-            continue;
-        }
-        if (const auto& host_id = node.get().host_id()) {
-            map[endpoint] = host_id;
-        } else {
-            tlogger.info("get_endpoint_to_host_id_map: endpoint {} has null host_id: state={}", endpoint, node.get().get_state());
-        }
-    }
-    return map;
+std::unordered_set<host_id> token_metadata_impl::get_host_ids() const {
+    return _topology.get_nodes() |
+            std::views::filter([&] (const node& n) { return !n.left() && !n.is_none(); }) |
+            std::views::transform([] (const node& n) { return n.host_id(); }) |
+            std::ranges::to<std::unordered_set>();
 }
 
 bool token_metadata_impl::is_normal_token_owner(host_id endpoint) const {
@@ -1067,9 +1057,9 @@ token_metadata::get_endpoint_for_host_id(host_id host_id) const {
     return _impl->get_endpoint_for_host_id(host_id);
 }
 
-std::unordered_map<inet_address, host_id>
-token_metadata::get_endpoint_to_host_id_map() const {
-    return _impl->get_endpoint_to_host_id_map();
+std::unordered_set<host_id>
+token_metadata::get_host_ids() const {
+    return _impl->get_host_ids();
 }
 
 void

@@ -188,8 +188,8 @@ future<> unset_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
 }
 
-future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm) {
-    return ctx.http_server.set_routes([&ctx, &tm] (routes& r) { set_token_metadata(ctx, r, tm); });
+future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm, sharded<gms::gossiper>& g) {
+    return ctx.http_server.set_routes([&ctx, &tm, &g] (routes& r) { set_token_metadata(ctx, r, tm, g); });
 }
 
 future<> unset_server_token_metadata(http_context& ctx) {
