@@ -243,6 +243,8 @@ add_scylla_test(radix_tree_test
   KIND SEASTAR)
 add_scylla_test(range_tombstone_list_test
   KIND BOOST)
+add_scylla_test(ranges_concat_test
+  KIND BOOST)
 add_scylla_test(rate_limiter_test
   KIND SEASTAR)
 add_scylla_test(reader_concurrency_semaphore_test

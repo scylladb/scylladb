@@ -544,6 +544,7 @@ scylla_tests = set([
     'test/boost/query_processor_test',
     'test/boost/radix_tree_test',
     'test/boost/range_tombstone_list_test',
+    'test/boost/ranges_concat_test',
     'test/boost/rate_limiter_test',
     'test/boost/reader_concurrency_semaphore_test',
     'test/boost/recent_entries_map_test',
