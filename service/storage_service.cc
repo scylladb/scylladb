@@ -5418,7 +5418,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
 
     auto split_all_compaction_groups = [&] () -> future<> {
         return _db.invoke_on_all([table] (replica::database& db) -> future<> {
-            return db.find_column_family(table).split_all_storage_groups();
+            return db.find_column_family(table).split_all_storage_groups(tasks::task_info{});
         });
     };
 

@@ -190,7 +190,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
         }
         auto& cf = env.local_db().find_column_family("test_tablet_sstable_set_copy_ctor", "test");
         auto& sgm = column_family_test::get_storage_group_manager(cf);
-        sgm->split_all_storage_groups().get();
+        sgm->split_all_storage_groups(tasks::task_info{}).get();
 
         auto tablet_sstable_set = replica::make_tablet_sstable_set(cf.schema(), *sgm.get(), locator::tablet_map(8));
         auto tablet_sstable_set_copy = *tablet_sstable_set.get();

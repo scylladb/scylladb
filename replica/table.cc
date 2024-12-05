@@ -723,7 +723,7 @@ public:
         };
     }
     bool all_storage_groups_split() override { return true; }
-    future<> split_all_storage_groups() override { return make_ready_future(); }
+    future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
     future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override {
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
@@ -856,7 +856,7 @@ public:
 
     locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept override;
     bool all_storage_groups_split() override;
-    future<> split_all_storage_groups() override;
+    future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
@@ -977,7 +977,7 @@ future<> storage_group::remove_empty_merging_groups() {
     std::erase_if(_merging_groups, std::mem_fn(&compaction_group::empty));
 }
 
-future<> storage_group::split(sstables::compaction_type_options::split opt) {
+future<> storage_group::split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
     if (set_split_mode()) {
         co_return;
     }
@@ -1054,17 +1054,17 @@ sstables::compaction_type_options::split tablet_storage_group_manager::split_com
     }};
 }
 
-future<> tablet_storage_group_manager::split_all_storage_groups() {
+future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
     sstables::compaction_type_options::split opt = split_compaction_options();
 
-    co_await for_each_storage_group_gently([opt] (storage_group& storage_group) {
-        return storage_group.split(opt);
+    co_await for_each_storage_group_gently([opt, tablet_split_task_info] (storage_group& storage_group) {
+        return storage_group.split(opt, tablet_split_task_info);
     });
 }
 
-future<> table::split_all_storage_groups() {
+future<> table::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
     auto holder = async_gate().hold();
-    co_await _sg_manager->split_all_storage_groups();
+    co_await _sg_manager->split_all_storage_groups(tablet_split_task_info);
 }
 
 future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t idx) {
@@ -1078,7 +1078,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
                                           idx, schema()->ks_name(), schema()->cf_name()));
     }
 
-    return sg->split(split_compaction_options());
+    return sg->split(split_compaction_options(), tasks::task_info{});
 }
 
 future<std::vector<sstables::shared_sstable>>

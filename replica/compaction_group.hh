@@ -264,7 +264,7 @@ public:
     //  1) Flushes all memtables which were created in non-split mode, and waits for that to complete.
     //  2) Compacts all sstables which overlap with the split point
     // Returns a future which resolves when this process is complete.
-    future<> split(sstables::compaction_type_options::split opt);
+    future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     // Make an sstable set spanning all sstables in the storage_group
     lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;
@@ -368,7 +368,7 @@ public:
 
     virtual locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept = 0;
     virtual bool all_storage_groups_split() = 0;
-    virtual future<> split_all_storage_groups() = 0;
+    virtual future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_sstable(const sstables::shared_sstable& sst) = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
