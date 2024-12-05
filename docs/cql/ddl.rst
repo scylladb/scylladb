@@ -771,8 +771,8 @@ available:
                                            that block for the purpose of detecting disk bitrot and avoiding the
                                            propagation of corruption to other replicas. This option defines the
                                            probability with which those checksums are checked during read. By default
-                                           they are always checked. Set to 0 to disable checksum checking and to 0.5 for
-                                           instance to check them every other read
+                                           they are always checked. Set to 0 to disable checksum checking and to 0.5, for
+                                           instance, to check them every other read.
 ========================= =============== =============================================================================
 
 For example, to enable compression:
