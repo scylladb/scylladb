@@ -2913,8 +2913,8 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
         _idx_tbl_ck_prefix = std::vector{predicate{
-            .solve_for = nullptr, // FIXME: adjust for solve_for
-            .filter = std::move(token_restriction),
+            .solve_for = std::bind_front(possible_column_values, token_column, token_restriction),
+            .filter = token_restriction,
             .on = on_column{token_column},
             .is_singleton = false, // FIXME: could be a singleton token. Not very important.
         }};
