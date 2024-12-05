@@ -71,6 +71,8 @@ struct predicate {
     > on;
     // Whether the returned value_set will resolve to a single value.
     bool is_singleton = false;
+    // Whether the returned value_set follows CQL comparison semantics
+    bool comparable = true;
 };
 
 ///In some cases checking if columns have indexes is undesired of even
