@@ -993,8 +993,8 @@ future<> storage_group::split(sstables::compaction_type_options::split opt, task
         auto holder = cg->async_gate().hold();
         co_await cg->flush();
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
-        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
-        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tablet_split_task_info);
+        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tablet_split_task_info);
     }
 }
 
@@ -1071,6 +1071,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
     if (!tablet_map().needs_split()) {
         return make_ready_future<>();
     }
+    tasks::task_info tablet_split_task_info{tasks::task_id{tablet_map().resize_task_info().tablet_task_id.uuid()}, 0};
 
     auto& sg = _storage_groups[idx];
     if (!sg) {
@@ -1078,7 +1079,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
                                           idx, schema()->ks_name(), schema()->cf_name()));
     }
 
-    return sg->split(split_compaction_options(), tasks::task_info{});
+    return sg->split(split_compaction_options(), tablet_split_task_info);
 }
 
 future<std::vector<sstables::shared_sstable>>
