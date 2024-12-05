@@ -21,6 +21,7 @@
 #include "map_difference.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/ranges_concat.hh"
 #include "utils/to_string.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
@@ -61,7 +62,6 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/join.hpp>
 
 #include "compaction/compaction_strategy.hh"
 #include "view_info.hh"
@@ -1029,7 +1029,7 @@ future<std::vector<user_type>> create_types(replica::database& db, const std::ve
             return r->get_nonnull<sstring>("keyspace_name") != keyspace;
         });
         auto ks = db.find_keyspace(keyspace).metadata();
-        auto v = co_await create_types(*ks, boost::make_iterator_range(i, next) | boost::adaptors::indirected);
+        auto v = co_await create_types(*ks, std::ranges::subrange(i, next) | std::views::transform([] (auto& ptr) { return *ptr; }));
         ret.insert(ret.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
         i = next;
     }
@@ -1897,7 +1897,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
     }
 
     // newly added columns and old columns with updated attributes
-    for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
+    for (auto&& name : utils::views::concat(diff.entries_differing, diff.entries_only_on_right)) {
         const column_definition& column = *new_table->v3().columns_by_name().at(name);
         if (column.is_view_virtual()) {
             add_column_to_schema_mutation(new_table, column, timestamp, view_virtual_columns_mutation);
@@ -1918,7 +1918,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
 
     // newly dropped columns
     // columns added then dropped again
-    for (auto& name : boost::range::join(dc_diff.entries_differing, dc_diff.entries_only_on_right)) {
+    for (auto& name : utils::views::concat(dc_diff.entries_differing, dc_diff.entries_only_on_right)) {
         add_drop_column_to_mutations(new_table, name, new_table->dropped_columns().at(name), timestamp, mutations);
     }
 }
@@ -2717,7 +2717,7 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_i
         }
     }
     std::vector<column_mapping_entry> cm_columns;
-    for (const column_definition& def : boost::range::join(static_columns, regular_columns)) {
+    for (const column_definition& def : utils::views::concat(static_columns, regular_columns)) {
         cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
     }
     column_mapping cm(std::move(cm_columns), static_columns.size());

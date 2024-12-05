@@ -11,7 +11,6 @@
 #include <list>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/transform.hpp>
-#include <boost/range/join.hpp>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
@@ -24,6 +23,7 @@
 #include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/ranges_concat.hh"
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
@@ -172,7 +172,7 @@ public:
                     std::function<std::optional<Res>(const task_essentials&)> map_finished_children) const {
                 auto shared_holder = co_await _lock.hold_read_lock();
 
-                co_return boost::join(
+                co_return utils::views::concat(
                             _children | boost::adaptors::map_values | boost::adaptors::transformed(map_children),
                             _finished_children | boost::adaptors::transformed(map_finished_children)
                         )

@@ -23,7 +23,6 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/join.hpp>
 
 #include <fmt/ranges.h>
 
@@ -44,6 +43,7 @@
 #include "map_difference.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
+#include "utils/ranges_concat.hh"
 #include "frozen_schema.hh"
 #include "schema/schema_registry.hh"
 #include "system_keyspace.hh"
@@ -272,7 +272,7 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     // 1. changes made to non-null columns...
     altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
     // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
-    for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
+    for (auto&& ks : utils::views::concat(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
         if (!created.contains(ks) && !dropped.contains(ks)) {
             altered.emplace(ks);
         }
@@ -646,7 +646,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
-        for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
+        for (auto&& altered : utils::views::concat(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
             co_await coroutine::maybe_yield();
         }
