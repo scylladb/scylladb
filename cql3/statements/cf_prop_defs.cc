@@ -154,6 +154,13 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         }
     }
 
+    if (get_simple(KW_CRC_CHECK_CHANCE)) {
+        const double crc_check_chance = get_double(KW_CRC_CHECK_CHANCE, 0.0/*not used*/);
+        if (crc_check_chance < 0.0 || crc_check_chance > 1.0) {
+            throw exceptions::configuration_exception(format("{} must be between 0.0 and 1.0.", KW_CRC_CHECK_CHANCE));
+        }
+    }
+
     auto memtable_flush_period = get_int(KW_MEMTABLE_FLUSH_PERIOD, DEFAULT_MEMTABLE_FLUSH_PERIOD);
     if (memtable_flush_period != 0 && memtable_flush_period < DEFAULT_MEMTABLE_FLUSH_PERIOD_MIN_VALUE) {
         throw exceptions::configuration_exception(format(
