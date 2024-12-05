@@ -8,6 +8,8 @@
 
 #include <fmt/ranges.h>
 
+#include <boost/range/join.hpp>
+
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>

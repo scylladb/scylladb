@@ -91,6 +91,7 @@
 #include <seastar/coroutine/exception.hh>
 #include "utils/stall_free.hh"
 #include "utils/error_injection.hh"
+#include "utils/ranges_concat.hh"
 #include "locator/util.hh"
 #include "idl/storage_service.dist.hh"
 #include "service/storage_proxy.hh"
@@ -108,7 +109,6 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/join.hpp>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -424,7 +424,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     {
         if (!used_ips) {
             used_ips.emplace();
-            for (const auto& [sid, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
+            for (const auto& [sid, rs]: utils::views::concat(t.normal_nodes, t.transition_nodes)) {
                 if (const auto used_ip = am.find(locator::host_id{sid.uuid()})) {
                     used_ips->insert(*used_ip);
                 }
@@ -6992,7 +6992,7 @@ void storage_service::init_messaging_service() {
                 }
             }
 
-            for (const auto& table : boost::join(params.tables, additional_tables)) {
+            for (const auto& table : utils::views::concat(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 
