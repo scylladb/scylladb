@@ -711,7 +711,7 @@ private:
     std::vector<fragmented_temporary_buffer> _row_key;
 
     struct row_schema {
-        using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
+        using column_range = std::ranges::subrange<std::vector<column_translation::column_info>::const_iterator>;
 
         // All columns for this kind of row inside column_translation of the current sstable
         column_range _all_columns;
@@ -729,7 +729,7 @@ private:
 
     uint64_t _missing_columns_to_read;
 
-    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
+    std::ranges::subrange<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
     tombstone _row_tombstone;
     tombstone _row_shadowable_tombstone;
@@ -766,7 +766,7 @@ private:
         _row->_columns = _row->_all_columns;
     }
     void setup_columns(row_schema& rs, const std::vector<column_translation::column_info>& columns) {
-        rs._all_columns = boost::make_iterator_range(columns);
+        rs._all_columns = std::ranges::subrange(columns);
         rs._columns_selector = boost::dynamic_bitset<uint64_t>(columns.size());
     }
     void skip_absent_columns() {
@@ -774,7 +774,8 @@ private:
         if (pos == boost::dynamic_bitset<uint64_t>::npos) {
             pos = _row->_columns.size();
         }
-        _row->_columns.advance_begin(pos);
+        _row->_columns = std::ranges::subrange(_row->_columns.begin() + pos,
+                                               _row->_columns.end());
     }
     bool no_more_columns() const { return _row->_columns.empty(); }
     void move_to_next_column() {
@@ -782,7 +783,8 @@ private:
         size_t next_pos = _row->_columns_selector.find_next(current_pos);
         size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
                                                                                   : next_pos - current_pos;
-        _row->_columns.advance_begin(jump_to_next);
+        _row->_columns = std::ranges::subrange(_row->_columns.begin() + jump_to_next,
+                                               _row->_columns.end());
     }
     bool is_column_simple() const { return !_row->_columns.front().is_collection; }
     bool is_column_counter() const { return _row->_columns.front().is_counter; }
@@ -796,16 +798,17 @@ private:
         _row_key.clear();
         _row_key.reserve(column_value_fix_lengths.size());
         if (column_value_fix_lengths.empty()) {
-            _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+            _ck_column_value_fix_lengths = std::ranges::subrange(column_value_fix_lengths);
         } else {
-            _ck_column_value_fix_lengths = boost::make_iterator_range(std::begin(column_value_fix_lengths),
-                                                                      std::begin(column_value_fix_lengths) + _ck_size);
+            _ck_column_value_fix_lengths = std::ranges::subrange(std::begin(column_value_fix_lengths),
+                                                                 std::begin(column_value_fix_lengths) + _ck_size);
         }
         _ck_blocks_header_offset = 0u;
     }
     bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
     void move_to_next_ck_block() {
-        _ck_column_value_fix_lengths.advance_begin(1);
+        _ck_column_value_fix_lengths = std::ranges::subrange(_ck_column_value_fix_lengths.begin() + 1,
+                                                             _ck_column_value_fix_lengths.end());
         ++_ck_blocks_header_offset;
         if (_ck_blocks_header_offset == 32u) {
             _ck_blocks_header_offset = 0u;

@@ -223,7 +223,7 @@ public:
 public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
 
-    using iterator_range = boost::iterator_range<const_iterator>;
+    using iterator_range = std::ranges::subrange<const_iterator>;
     // Returns range tombstones which overlap with given range
     iterator_range slice(const schema& s, const query::clustering_range&) const;
     // Returns range tombstones which overlap with [start, end)

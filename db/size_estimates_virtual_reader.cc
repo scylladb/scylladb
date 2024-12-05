@@ -316,7 +316,7 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
     });
     std::vector<db::system_keyspace::range_estimates> estimates;
     for (auto& range : _slice.row_ranges(*_schema, pkey)) {
-        auto rows = boost::make_iterator_range(
+        auto rows = std::ranges::subrange(
                 virtual_row_iterator(cf_names, local_ranges),
                 virtual_row_iterator(cf_names, local_ranges, virtual_row_iterator::end_iterator_tag()));
         auto rows_to_estimate = range.slice(rows, virtual_row_comparator(_schema));
