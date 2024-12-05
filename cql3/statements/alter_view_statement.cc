@@ -56,7 +56,7 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     _properties->validate(db, keyspace(), schema_extensions);
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
+    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), cf_prop_defs::is_create_statement::no);
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(

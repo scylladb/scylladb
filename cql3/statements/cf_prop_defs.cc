@@ -259,7 +259,8 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
     return &ext->get_options();
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
+void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name,
+        is_create_statement is_create) const {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -326,7 +327,19 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
 
     builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
+
     auto compression_options = get_compression_options();
+
+    if (has_property(KW_CRC_CHECK_CHANCE)) {
+        builder.set_crc_check_chance(get_double(KW_CRC_CHECK_CHANCE, builder.get_crc_check_chance()));
+    } else if (is_create == is_create_statement::yes) {
+        // We have to chose a default which is compatible with the historic de-facto value of this option:
+        // * for compressed sstables, the checksums was always checked, so the default is 1.0 if compression is used.
+        // * for uncompressed sstables, the checksums was never checked, so the default is 0.0 if compression is not used.
+        // Note that the way to disable compression is to specify an empty options map, so this is what we check for.
+        builder.set_crc_check_chance((compression_options && compression_options->empty()) ? 0.0 : 1.0);
+    }
+
     if (compression_options) {
         builder.set_compressor_params(compression_parameters(*compression_options));
     }

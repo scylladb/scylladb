@@ -104,7 +104,9 @@ public:
     std::optional<table_id> get_id() const;
     bool get_synchronous_updates_flag() const;
 
-    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const;
+    using is_create_statement = bool_class<struct is_create_statement_tag>;
+    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name,
+            is_create_statement is_create) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 
