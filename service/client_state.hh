@@ -346,6 +346,7 @@ public:
     future<bool> check_has_permission(auth::command_desc) const;
     future<> ensure_has_permission(auth::command_desc) const;
     future<> maybe_update_per_service_level_params();
+    void update_per_service_level_params(qos::service_level_options& slo);
 
     /**
      * Returns an exceptional future with \ref exceptions::invalid_request_exception if the resource does not exist.
