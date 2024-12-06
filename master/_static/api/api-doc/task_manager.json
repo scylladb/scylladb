@@ -1,0 +1,421 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/task_manager",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/task_manager/list_modules",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all modules names",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_modules",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/list_module_tasks/{module}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a list of tasks",
+               "type":"array",
+               "items":{
+                  "type":"task_stats"
+               },
+               "nickname":"get_tasks",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"module",
+                     "description":"The module to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"internal",
+                     "description":"Boolean flag indicating whether internal tasks should be shown (false by default)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"The table to query about",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/task_status/{task_id}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get task status",
+               "type":"task_status",
+               "nickname":"get_task_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/abort_task/{task_id}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Abort running task and its descendants",
+               "type":"void",
+               "nickname":"abort_task",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to abort; if the task is not abortable, 403 status code is returned",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/wait_task/{task_id}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Wait for a task to complete",
+               "type":"task_status",
+               "nickname":"wait_task",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to wait for",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout for waiting; if times out, 408 status code is returned",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/task_status_recursive/{task_id}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get statuses of the task and all its descendants",
+               "type":"array",
+               "items":{
+                  "type":"task_status"
+               },
+               "nickname":"get_task_status_recursively",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/ttl",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set ttl in seconds and get last value",
+               "type":"long",
+               "nickname":"get_and_update_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ttl",
+                     "description":"The number of seconds for which the task started internally will be kept in memory after it finishes",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get current ttl value",
+               "type":"long",
+               "nickname":"get_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager/user_ttl",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set user task ttl in seconds and get last value",
+               "type":"long",
+               "nickname":"get_and_update_user_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"user_ttl",
+                     "description":"The number of seconds for which the task started by user will be kept in memory after it finishes",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get current user task ttl value",
+               "type":"long",
+               "nickname":"get_user_ttl",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "task_identity":{
+         "id": "task_identity",
+         "description":"Id and node of a task",
+         "properties":{
+            "task_id":{
+               "type":"string",
+               "description":"The uuid of a task"
+            },
+            "node":{
+               "type":"string",
+               "description":"Address of a server on which a task is created"
+            }
+         }
+      },
+      "task_stats" :{
+         "id": "task_stats",
+         "description":"A task statistics object",
+         "properties":{
+            "task_id":{
+               "type":"string",
+               "description":"The uuid of a task"
+            },
+            "state":{
+               "type":"string",
+               "enum":[
+                  "created",
+                  "running",
+                  "done",
+                  "failed"
+               ],
+               "description":"The state of a task"
+            },
+            "type":{
+               "type":"string",
+               "description":"The description of the task"
+            },
+            "kind":{
+               "type":"string",
+               "enum":[
+                  "node",
+                  "cluster"
+               ],
+               "description":"The kind of a task"
+            },
+            "scope":{
+               "type":"string",
+               "description":"The scope of the task"
+            },
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace the task is working on (if applicable)"
+            },
+            "table":{
+               "type":"string",
+               "description":"The table the task is working on (if applicable)"
+            },
+            "entity":{
+               "type":"string",
+               "description":"Task-specific entity description"
+            },
+            "sequence_number":{
+               "type":"long",
+               "description":"The running sequence number of the task"
+            }
+         }
+      },
+      "task_status":{
+         "id":"task_status",
+         "description":"A task status object",
+         "properties":{
+            "id":{
+               "type":"string",
+               "description":"The uuid of the task"
+            },
+            "type":{
+               "type":"string",
+               "description":"The description of the task"
+            },
+            "kind":{
+               "type":"string",
+               "enum":[
+                  "node",
+                  "cluster"
+               ],
+               "description":"The kind of a task"
+            },
+            "scope":{
+               "type":"string",
+               "description":"The scope of the task"
+            },
+            "state":{
+               "type":"string",
+               "enum":[
+                  "created",
+                  "running",
+                  "done",
+                  "failed"
+               ],
+               "description":"The state of the task"
+            },
+            "is_abortable":{
+               "type":"boolean",
+               "description":"Boolean flag indicating whether the task can be aborted"
+            },
+            "start_time":{
+               "type":"datetime",
+               "description":"The start time of the task"
+            },
+            "end_time":{
+               "type":"datetime",
+               "description":"The end time of the task (unspecified when the task is not completed)"
+            },
+            "error":{
+               "type":"string",
+               "description":"Error string, if the task failed"
+            },
+            "parent_id":{
+               "type":"string",
+               "description":"The uuid of the parent task"
+            },
+            "sequence_number":{
+               "type":"long",
+               "description":"The running sequence number of the task"
+            },
+            "shard":{
+               "type":"long",
+               "description":"The number of a shard the task is running on"
+            },
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace the task is working on (if applicable)"
+            },
+            "table":{
+               "type":"string",
+               "description":"The table the task is working on (if applicable)"
+            },
+            "entity":{
+               "type":"string",
+               "description":"Task-specific entity description"
+            },
+            "progress_units":{
+               "type":"string",
+               "description":"A description of the progress units"
+            },
+            "progress_total":{
+               "type":"double",
+               "description":"The total number of units to complete for the task"
+            },
+            "progress_completed":{
+               "type":"double",
+               "description":"The number of units completed so far"
+            },
+            "children_ids":{
+               "type":"array",
+               "items":{
+                  "type":"task_identity"
+               },
+               "description":"Task identities of children of this task"
+            }
+         }
+      }
+   }
+}
