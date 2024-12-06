@@ -1355,7 +1355,7 @@ statement_restrictions::statement_restrictions(private_tag,
 
                 _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
             } else {
-                add_single_column_nonprimary_key_restriction(restr);
+                _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
             }
         } else {
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", restr));
@@ -1731,10 +1731,6 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         }
     }
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
-}
-
-void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
-    _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type) {
