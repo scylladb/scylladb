@@ -346,6 +346,17 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
     }
 }
 
+std::optional<service_level_options> service_level_controller::find_cached_effective_service_level(const sstring& role_name) {
+    if (!_sl_data_accessor->is_v2()) {
+        return std::nullopt;
+    }
+
+    auto effective_sl_it = _effective_service_levels_db.find(role_name);
+    return effective_sl_it != _effective_service_levels_db.end() 
+        ? std::optional<service_level_options>(effective_sl_it->second)
+        : std::nullopt;
+}
+
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
     return seastar::async( [this, name, sl_data] {
         _subscribers.thread_for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {

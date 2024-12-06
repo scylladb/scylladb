@@ -38,12 +38,13 @@ connection::~connection()
     _server._connections_list.erase(iter);
 }
 
-future<> server::for_each_gently(noncopyable_function<future<>(connection&)> fn) {
+future<> server::for_each_gently(noncopyable_function<void(connection&)> fn) {
     _gentle_iterators.emplace_front(*this);
     std::list<gentle_iterator>::iterator gi = _gentle_iterators.begin();
     return seastar::do_until([ gi ] { return gi->iter == gi->end; },
         [ gi, fn = std::move(fn) ] {
-            return fn(*(gi->iter++));
+            fn(*(gi->iter++));
+            return make_ready_future<>();
         }
     ).finally([ this, gi ] { _gentle_iterators.erase(gi); });
 }
