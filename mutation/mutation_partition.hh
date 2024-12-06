@@ -22,7 +22,6 @@
 #include "atomic_cell_or_collection.hh"
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
-#include "utils/assert.hh"
 #include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
 #include "utils/lru.hh"
@@ -31,6 +30,10 @@
 #include "utils/immutable-collection.hh"
 #include "tombstone_gc.hh"
 #include "mutation/compact_and_expire_result.hh"
+
+#ifdef SEASTAR_DEBUG
+#include "utils/assert.hh"
+#endif
 
 class mutation_fragment;
 class mutation_partition_view;

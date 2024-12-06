@@ -8,8 +8,11 @@
 
 #pragma once
 
-#include "utils/assert.hh"
 #include "partition_version.hh"
+
+#ifdef SEASTAR_DEBUG
+#include "utils/assert.hh"
+#endif
 
 // Double-ended chained list of partition_version objects
 // utilizing partition_version's intrinsic anchorless_list_base_hook.
