@@ -1215,7 +1215,29 @@ statement_restrictions::statement_restrictions(private_tag,
         }
 
         expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
-        add_restriction(prepared_restriction, schema, allow_filtering, for_view);
+
+        auto& restr = prepared_restriction;
+        if (restr.op == expr::oper_t::IS_NOT) {
+            // Handle IS NOT NULL restrictions separately
+            add_is_not_restriction(restr, schema, for_view);
+        } else if (is_multi_column(restr)) {
+            // Multi column restrictions are only allowed on clustering columns
+            add_multi_column_clustering_key_restriction(restr);
+        } else if (has_partition_token(restr, *_schema)) {
+            // Token always restricts the partition key
+            add_token_partition_key_restriction(restr);
+        } else if (is_single_column_restriction(restr)) {
+            const column_definition* def = get_the_only_column(restr).col;
+            if (def->is_partition_key()) {
+                add_single_column_parition_key_restriction(restr, schema, allow_filtering, for_view);
+            } else if (def->is_clustering_key()) {
+                add_single_column_clustering_key_restriction(restr, schema, allow_filtering);
+            } else {
+                add_single_column_nonprimary_key_restriction(restr);
+            }
+        } else {
+            throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", restr));
+        }
 
         if (prepared_restriction.op != expr::oper_t::IS_NOT) {
             _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
@@ -1587,30 +1609,6 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         }
     }
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
-}
-
-void statement_restrictions::add_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
-    if (restr.op == expr::oper_t::IS_NOT) {
-        // Handle IS NOT NULL restrictions separately
-        add_is_not_restriction(restr, schema, for_view);
-    } else if (is_multi_column(restr)) {
-        // Multi column restrictions are only allowed on clustering columns
-        add_multi_column_clustering_key_restriction(restr);
-    } else if (has_partition_token(restr, *_schema)) {
-        // Token always restricts the partition key
-        add_token_partition_key_restriction(restr);
-    } else if (is_single_column_restriction(restr)) {
-        const column_definition* def = get_the_only_column(restr).col;
-        if (def->is_partition_key()) {
-            add_single_column_parition_key_restriction(restr, schema, allow_filtering, for_view);
-        } else if (def->is_clustering_key()) {
-            add_single_column_clustering_key_restriction(restr, schema, allow_filtering);
-        } else {
-            add_single_column_nonprimary_key_restriction(restr);
-        }
-    } else {
-        throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", restr));
-    }
 }
 
 void statement_restrictions::add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view) {
