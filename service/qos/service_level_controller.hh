@@ -252,6 +252,10 @@ public:
      */
     future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
 
+    // Synchronous equivalent of `find_effective_service_level`. 
+    // The method uses only effective service level cache, so it requires service levels in v2.
+    std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
+
     /**
      * Gets the service level data by name.
      * @param service_level_name - the name of the requested service level
