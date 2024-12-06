@@ -126,7 +126,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
-                    }
+                    },
+                    db_clock::now(),
+                    locator::tablet_task_info::make_auto_repair_request(),
+                    locator::tablet_task_info::make_intranode_migration_request()
                 });
                 tm.set_tablet_map(table1, std::move(tmap));
             }
@@ -140,7 +143,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h1, 0},
-                    }
+                    },
+                    {},
+                    {},
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
@@ -152,7 +158,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h2, 2},
-                    }
+                    },
+                    {},
+                    {},
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
