@@ -11,6 +11,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
@@ -636,7 +637,8 @@ const storage_group_map& storage_group_manager::storage_groups() const {
 }
 
 future<> storage_group_manager::stop_storage_groups() noexcept {
-    return parallel_for_each(_storage_groups | std::views::values, [] (auto sg) { return sg->stop("table removal"); });
+    co_await parallel_for_each(_storage_groups | std::views::values, [] (auto sg) { return sg->stop("table removal"); });
+    co_await stop();
 }
 
 void storage_group_manager::clear_storage_groups() {
@@ -685,6 +687,10 @@ public:
         _single_sg = sg.get();
         r[0] = std::move(sg);
         _storage_groups = std::move(r);
+    }
+
+    future<> stop() override {
+        return make_ready_future<>();
     }
 
     future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override { return make_ready_future(); }
@@ -738,6 +744,8 @@ class tablet_storage_group_manager final : public storage_group_manager {
     // current split, and not a previously revoked (stale) decision.
     // The minimum value, which is a negative number, is not used by coordinator for first decision.
     locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
+    future<> _merge_completion_fiber;
+    condition_variable _merge_completion_event;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -757,6 +765,17 @@ private:
     // each tablet split into two, so this replica will remap all of its compaction groups
     // that were previously split.
     future<> handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+
+    // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
+    // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
+    // are merged into a new storage group with id (X >> 1).
+    future<> handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+
+    // When merge completes, compaction groups of sibling tablets are added to same storage
+    // group, but they're not merged yet into one, since the merge completion handler happens
+    // inside the erm updater which must complete ASAP. Therefore, those groups will be merged
+    // into a single one (main) in background.
+    future<> merge_completion_fiber();
 
     storage_group& storage_group_for_id(size_t i) const {
         return storage_group_manager::storage_group_for_id(schema(), i);
@@ -796,6 +815,7 @@ public:
         : _t(t)
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
+        , _merge_completion_fiber(merge_completion_fiber())
     {
         storage_group_map ret;
 
@@ -811,6 +831,11 @@ public:
             }
         }
         _storage_groups = std::move(ret);
+    }
+
+    future<> stop() override {
+        _merge_completion_event.signal();
+        return std::exchange(_merge_completion_fiber, make_ready_future<>());
     }
 
     future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
@@ -875,6 +900,9 @@ compaction_group_ptr& storage_group::select_compaction_group(locator::tablet_ran
 
 void storage_group::for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const noexcept {
     action(_main_cg);
+    for (auto& cg : _merging_groups) {
+        action(cg);
+    }
     for (auto& cg : _split_ready_groups) {
         action(cg);
     }
@@ -896,6 +924,17 @@ utils::small_vector<const_compaction_group_ptr, 3> storage_group::compaction_gro
     return cgs;
 }
 
+utils::small_vector<compaction_group_ptr, 3> storage_group::split_unready_groups() const {
+    utils::small_vector<compaction_group_ptr, 3> cgs;
+    cgs.push_back(_main_cg);
+    std::copy(_merging_groups.begin(), _merging_groups.end(), std::back_inserter(cgs));
+    return cgs;
+}
+
+bool storage_group::split_unready_groups_are_empty() const {
+    return std::ranges::all_of(split_unready_groups(), std::mem_fn(&compaction_group::empty));
+}
+
 bool storage_group::set_split_mode() {
     if (!splitting_mode()) {
         auto create_cg = [this] () -> compaction_group_ptr {
@@ -908,8 +947,23 @@ bool storage_group::set_split_mode() {
         _split_ready_groups = std::move(split_ready_groups);
     }
 
-    // The storage group is considered "split ready" if its main compaction group is empty.
-    return _main_cg->empty();
+    // The storage group is considered "split ready" if all split unready groups (main + merging) are empty.
+    return split_unready_groups_are_empty();
+}
+
+void storage_group::add_merging_group(compaction_group_ptr cg) {
+    _merging_groups.push_back(std::move(cg));
+}
+
+const std::vector<compaction_group_ptr>& storage_group::merging_groups() const {
+    return _merging_groups;
+}
+
+future<> storage_group::remove_empty_merging_groups() {
+    for (auto& group : _merging_groups | std::views::filter(std::mem_fn(&compaction_group::empty))) {
+        co_await group->stop("tablet merge");
+    }
+    std::erase_if(_merging_groups, std::mem_fn(&compaction_group::empty));
 }
 
 future<> storage_group::split(sstables::compaction_type_options::split opt) {
@@ -918,24 +972,34 @@ future<> storage_group::split(sstables::compaction_type_options::split opt) {
     }
     co_await utils::get_local_injector().inject("delay_split_compaction", 5s);
 
-    if (_main_cg->empty()) {
+    if (split_unready_groups_are_empty()) {
         co_return;
     }
-    auto holder = _main_cg->async_gate().hold();
-    co_await _main_cg->flush();
-    // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
-    co_await _main_cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
-    co_await _main_cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+    for (auto cg : split_unready_groups()) {
+        if (cg->async_gate().is_closed()) {
+            continue;
+        }
+        auto holder = cg->async_gate().hold();
+        co_await cg->flush();
+        // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
+        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tasks::task_info{});
+        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tasks::task_info{});
+    }
 }
 
 lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() const {
-    if (!splitting_mode()) {
+    if (_split_ready_groups.empty() && _merging_groups.empty()) {
         return _main_cg->make_sstable_set();
     }
     const auto& schema = _main_cg->_t.schema();
     std::vector<lw_shared_ptr<sstables::sstable_set>> underlying;
-    underlying.reserve(1 + _split_ready_groups.size());
+    underlying.reserve(1 + _merging_groups.size() + _split_ready_groups.size());
     underlying.emplace_back(_main_cg->make_sstable_set());
+    for (const auto& cg : _merging_groups) {
+        if (!cg->empty()) {
+            underlying.emplace_back(cg->make_sstable_set());
+        }
+    }
     for (const auto& cg : _split_ready_groups) {
         underlying.emplace_back(cg->make_sstable_set());
     }
@@ -1141,7 +1205,9 @@ future<> table::parallel_foreach_compaction_group(std::function<future<>(compact
 void table::for_each_compaction_group(std::function<void(compaction_group&)> action) {
     _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
-           action(*cg);
+            if (auto holder = try_hold_gate(cg->async_gate())) {
+                action(*cg);
+            }
        });
     });
 }
@@ -1149,7 +1215,9 @@ void table::for_each_compaction_group(std::function<void(compaction_group&)> act
 void table::for_each_compaction_group(std::function<void(const compaction_group&)> action) const {
     _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
-            action(*cg);
+            if (auto holder = try_hold_gate(cg->async_gate())) {
+                action(*cg);
+            }
         });
     });
 }
@@ -1803,6 +1871,35 @@ compaction_group::delete_unused_sstables(sstables::compaction_completion_desc de
     return delete_sstables_atomically(std::move(sstables_to_remove));
 }
 
+std::vector<sstables::shared_sstable> compaction_group::all_sstables() const {
+    std::vector<sstables::shared_sstable> all;
+    auto main_sstables = _main_sstables->all();
+    auto maintenance_sstables = _maintenance_sstables->all();
+    all.reserve(main_sstables->size() + maintenance_sstables->size());
+    std::ranges::copy(*main_sstables, std::back_inserter(all));
+    std::ranges::copy(*maintenance_sstables, std::back_inserter(all));
+    return all;
+}
+
+future<>
+compaction_group::merge_sstables_from(compaction_group& group) {
+    auto& cs = _t.get_compaction_strategy();
+    auto permit = co_await seastar::get_units(_t._sstable_set_mutation_sem, 1);
+    table::sstable_list_builder builder(std::move(permit));
+
+    auto sstables_to_merge = group.all_sstables();
+    // re-build new list for this group with sstables of the group being merged.
+    auto res = co_await builder.build_new_list(*main_sstables(), cs.make_sstable_set(_t.schema()), sstables_to_merge, {});
+    // execute:
+    std::invoke([&] noexcept {
+        set_main_sstables(std::move(res.new_sstable_set));
+        group.clear_sstables();
+        // FIXME: backlog adjustment is not exception safe.
+        backlog_tracker_adjust_charges({}, sstables_to_merge);
+    });
+    _t.rebuild_statistics();
+}
+
 future<>
 compaction_group::update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc) {
     // Build a new list of _sstables: We remove from the existing list the
@@ -2393,7 +2490,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     // Stop the released main compaction groups asynchronously
     future<> stop_fut = make_ready_future<>();
     for (auto& [id, sg] : _storage_groups) {
-        if (!sg->main_compaction_group()->empty()) {
+        if (!sg->split_unready_groups_are_empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
                                               "therefore groups cannot be remapped with the new tablet count.",
                                               id, table_id));
@@ -2428,6 +2525,79 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     return stop_fut;
 }
 
+future<> tablet_storage_group_manager::merge_completion_fiber() {
+    co_await coroutine::switch_to(_t.get_config().streaming_scheduling_group);
+
+    while (!_t.async_gate().is_closed()) {
+        try {
+            co_await for_each_storage_group_gently([] (storage_group& sg) -> future<> {
+                auto main_group = sg.main_compaction_group();
+                for (auto& group : sg.merging_groups()) {
+                    // Synchronize with ongoing writes that might be blocked waiting for memory.
+                    // Also, disabling compaction provides stability on the sstable set.
+                    co_await group->stop("tablet merge");
+                    // Flushes memtable, so all the data can be moved.
+                    co_await group->flush();
+                    co_await main_group->merge_sstables_from(*group);
+                }
+                co_await sg.remove_empty_merging_groups();
+            });
+        } catch (...) {
+            tlogger.error("Failed to merge compaction groups for table {}.{}", schema()->ks_name(), schema()->cf_name());
+        }
+        utils::get_local_injector().inject("replica_merge_completion_wait", [] () {
+            tlogger.info("Merge completion fiber finished, about to sleep");
+        });
+        co_await _merge_completion_event.wait();
+        tlogger.debug("Merge completion fiber woke up for {}.{}", schema()->ks_name(), schema()->cf_name());
+    }
+}
+
+future<> tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+    auto table_id = schema()->id();
+    size_t old_tablet_count = old_tmap.tablet_count();
+    size_t new_tablet_count = new_tmap.tablet_count();
+    storage_group_map new_storage_groups;
+
+    unsigned log2_reduce_factor = log2ceil(old_tablet_count / new_tablet_count);
+    unsigned merge_size = 1 << log2_reduce_factor;
+
+    if (merge_size != 2) {
+        throw std::runtime_error(format("Tablet count was not reduced by a factor of 2 (old: {}, new {}) for table {}",
+                                 old_tablet_count, new_tablet_count, table_id));
+    }
+
+    for (auto& [id, sg] : _storage_groups) {
+        // Pick first (even) tablet of each sibling pair.
+        if (id % merge_size != 0) {
+            continue;
+        }
+        auto new_tid = id >> log2_reduce_factor;
+
+        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)));
+        auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
+
+        for (unsigned i = 0; i < merge_size; i++) {
+            auto group_id = id + i;
+
+            auto it = _storage_groups.find(group_id);
+            if (it == _storage_groups.end()) {
+                throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
+            }
+            auto& sg = it->second;
+            sg->for_each_compaction_group([&new_sg, new_tid] (const compaction_group_ptr& cg) {
+                cg->update_id(new_tid);
+                new_sg->add_merging_group(cg);
+            });
+        }
+
+        new_storage_groups[new_tid] = std::move(new_sg);
+    }
+    _storage_groups = std::move(new_storage_groups);
+    _merge_completion_event.signal();
+    return make_ready_future<>();
+}
+
 future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
@@ -2438,6 +2608,11 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
         tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                         schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
         co_await handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
+        co_return;
+    } else if (new_tablet_count < old_tablet_count) {
+        tlogger.info0("Detected tablet merge for table {}.{}, decreasing from {} to {} tablets",
+                      schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
+        co_await handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
         co_return;
     }
 
@@ -2846,9 +3021,7 @@ size_t compaction_group::memtable_count() const noexcept {
 }
 
 size_t storage_group::memtable_count() const noexcept {
-    auto memtable_count = [] (const compaction_group_ptr& cg) { return cg ? cg->memtable_count() : 0; };
-    return memtable_count(_main_cg) +
-            std::ranges::fold_left(_split_ready_groups | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
+    return std::ranges::fold_left(compaction_groups() | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), size_t(0), std::plus{});
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
@@ -3799,6 +3972,9 @@ future<> storage_group::stop(sstring reason) noexcept {
     // exception while running under row_cache::external_updater::execute, resulting in node crash.
     co_await _main_cg->stop(reason);
     co_await coroutine::parallel_for_each(_split_ready_groups, [&reason] (const compaction_group_ptr& cg_ptr) {
+        return cg_ptr->stop(reason);
+    });
+    co_await coroutine::parallel_for_each(_merging_groups, [&reason] (const compaction_group_ptr& cg_ptr) {
         return cg_ptr->stop(reason);
     });
     co_await std::move(closed_gate_fut);

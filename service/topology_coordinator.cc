@@ -1537,7 +1537,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
-    future<> handle_tablet_split_finalization(group0_guard g) {
+    future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
@@ -1550,7 +1550,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.split_tablets(tm, table_id);
+            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             updates.emplace_back(co_await replica::tablet_map_to_mutation(
                 new_tablet_map,
                 table_id,
@@ -2168,8 +2168,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard), false);
                 break;
-            case topology::transition_state::tablet_split_finalization:
-                co_await handle_tablet_split_finalization(std::move(guard));
+            case topology::transition_state::tablet_resize_finalization:
+                co_await handle_tablet_resize_finalization(std::move(guard));
                 break;
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -2616,8 +2616,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet split finalization path.
-    future<bool> maybe_start_tablet_split_finalization(group0_guard, const table_resize_plan& plan);
+    // Returns true if the state machine was transitioned into tablet resize finalization path.
+    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
 
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
@@ -2717,10 +2717,10 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await generate_migration_updates(updates, guard, plan);
 
-    // We only want to consider transitioning into tablet split finalization path, if there's no other work
+    // We only want to consider transitioning into tablet resize finalization path, if there's no other work
     // to be done (e.g. start migration or/and emit split decision).
     if (updates.empty()) {
-        co_return co_await maybe_start_tablet_split_finalization(std::move(guard), plan.resize_plan());
+        co_return co_await maybe_start_tablet_resize_finalization(std::move(guard), plan.resize_plan());
     }
 
     updates.emplace_back(
@@ -2733,7 +2733,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     co_return true;
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_guard guard, const table_resize_plan& plan) {
+future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
     if (plan.finalize_resize.empty()) {
         co_return false;
     }
@@ -2745,11 +2745,11 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
 
     updates.emplace_back(
         topology_mutation_builder(guard.write_timestamp())
-            .set_transition_state(topology::transition_state::tablet_split_finalization)
+            .set_transition_state(topology::transition_state::tablet_resize_finalization)
             .set_version(_topo_sm._topology.version + 1)
             .build());
 
-    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet split finalization");
+    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
     co_return true;
 }
 
