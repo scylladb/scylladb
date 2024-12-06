@@ -876,8 +876,8 @@ private:
     schema_ptr _s;
 
 public:
-    mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter)
-        : _builder(s, slice, std::move(accounter))
+    mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter, uint64_t tombstone_limit)
+        : _builder(s, slice, std::move(accounter), tombstone_limit)
         , _s(s.shared_from_this())
      { }
 
@@ -993,7 +993,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         db::timeout_clock::time_point timeout) {
     return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
             [query_schema, &cmd] (query::result_memory_accounter&& accounter) {
-        return mutation_query_result_builder(*query_schema, cmd.slice, std::move(accounter));
+        return mutation_query_result_builder(*query_schema, cmd.slice, std::move(accounter), cmd.tombstone_limit);
     });
 }
 
