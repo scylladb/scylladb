@@ -1329,7 +1329,31 @@ statement_restrictions::statement_restrictions(private_tag,
                 _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
                 _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
             } else if (def->is_clustering_key()) {
-                add_single_column_clustering_key_restriction(restr, schema, allow_filtering);
+                if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+                            return expr::is<expr::tuple_constructor>(b.lhs);
+                        })) {
+                    throw exceptions::invalid_request_exception(
+                        "Mixing single column relations and multi column relations on clustering columns is not allowed");
+                }
+
+                const column_definition* new_column = get_the_only_column(restr).col;
+                const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
+
+                if (last_column != nullptr && !allow_filtering) {
+                    if (has_slice(_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
+                        throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
+                            new_column->name_as_text(), last_column->name_as_text()));
+                    }
+
+                    if (schema->position(*new_column) < schema->position(*last_column)) {
+                        if (has_slice(restr)) {
+                            throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
+                                last_column->name_as_text(), new_column->name_as_text()));
+                        }
+                    }
+                }
+
+                _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
             } else {
                 add_single_column_nonprimary_key_restriction(restr);
             }
@@ -1707,34 +1731,6 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         }
     }
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
-}
-
-void statement_restrictions::add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering) {
-    if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
-                return expr::is<expr::tuple_constructor>(b.lhs);
-            })) {
-        throw exceptions::invalid_request_exception(
-            "Mixing single column relations and multi column relations on clustering columns is not allowed");
-    }
-
-    const column_definition* new_column = get_the_only_column(restr).col;
-    const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
-
-    if (last_column != nullptr && !allow_filtering) {
-        if (has_slice(_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
-            throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
-                new_column->name_as_text(), last_column->name_as_text()));
-        }
-
-        if (schema->position(*new_column) < schema->position(*last_column)) {
-            if (has_slice(restr)) {
-                throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
-                    last_column->name_as_text(), new_column->name_as_text()));
-            }
-        }
-    }
-
-    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
 }
 
 void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
