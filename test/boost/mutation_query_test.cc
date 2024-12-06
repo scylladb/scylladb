@@ -86,7 +86,7 @@ static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, co
 
     auto querier = query::querier(source, s, std::move(permit), range, slice, {});
     auto close_querier = deferred_close(querier);
-    auto rrb = reconcilable_result_builder(*s, slice, make_accounter());
+    auto rrb = reconcilable_result_builder(*s, slice, make_accounter(), query::max_tombstones);
     return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
 }
 

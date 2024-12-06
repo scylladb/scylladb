@@ -149,13 +149,17 @@ class reconcilable_result_builder {
     utils::chunked_vector<partition> _result;
     size_t _used_at_entry;
 
+    const uint64_t _tombstone_limit = query::max_tombstones;
+    uint64_t _tombstones = 0;
+
 private:
     stop_iteration consume(range_tombstone&& rt);
+    stop_iteration bump_and_check_tombstone_limit();
 
 public:
     // Expects reversed schema and reversed slice when building results for reverse query.
     reconcilable_result_builder(const schema& query_schema, const query::partition_slice& slice,
-                                query::result_memory_accounter&& accounter) noexcept
+                                query::result_memory_accounter&& accounter, uint64_t tombstone_limit) noexcept
         : _query_schema(query_schema.shared_from_this()), _slice(slice)
         , _memory_accounter(std::move(accounter))
     { }
