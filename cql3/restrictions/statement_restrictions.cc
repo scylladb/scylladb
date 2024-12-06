@@ -1296,7 +1296,17 @@ statement_restrictions::statement_restrictions(private_tag,
             }
         } else if (has_partition_token(restr, *_schema)) {
             // Token always restricts the partition key
-            add_token_partition_key_restriction(restr);
+            if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
+                throw exceptions::invalid_request_exception(
+                        seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                                fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                        std::views::transform([](auto* p) {
+                                            return maybe_column_definition{p};
+                                        }),
+                                        ", ")));
+            }
+
+            _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
         } else if (is_single_column_restriction(restr)) {
             const column_definition* def = get_the_only_column(restr).col;
             if (def->is_partition_key()) {
@@ -1701,20 +1711,6 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
 
     _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
     _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
-}
-
-void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
-    if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
-        throw exceptions::invalid_request_exception(
-                seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
-                                  std::views::transform([](auto* p) {
-                                    return maybe_column_definition{p};
-                                  }),
-                                  ", ")));
-    }
-
-    _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
 }
 
 void statement_restrictions::add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering) {
