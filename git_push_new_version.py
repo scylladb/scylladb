@@ -44,12 +44,14 @@ def fetch_pr_data(repo: str, branch: str, token: str, author: str) -> Optional[D
 
 def get_new_version_and_branch(old_branch: str) -> tuple[int, str]:
     match = re.search(r"(.+)-v(\d+)$", old_branch)
-    if not match:
-        logging.error(f"Old branch name %s does not follow the pattern branch-vN.", old_branch)
-        sys.exit(1)
+    if match:
+        old_branch_pref = str(match.group(1))
+        new_version = int(match.group(2)) + 1
+    else:
+        logging.warning(f"Old branch name %s does not follow the pattern `branch-vN`. Will append `-v2` to new branch name", old_branch)
+        old_branch_pref = old_branch
+        new_version = 2
 
-    old_branch_pref = str(match.group(1))
-    new_version = int(match.group(2)) + 1
     new_branch = f"{old_branch_pref}-v{new_version}"
     logging.info("New branch name will be: %s", new_branch)
     return new_version, new_branch
