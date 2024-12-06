@@ -92,6 +92,7 @@ public:
         active_await,
         inactive,
         evicted,
+        aborted,
     };
 
     class impl;
