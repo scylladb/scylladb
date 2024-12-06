@@ -368,7 +368,6 @@ public:
     schema_ptr get_view_schema() const { return _view_schema; }
 private:
     std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(const secondary_index::secondary_index_manager& sim) const;
-    void add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering);
     void add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr);
 
     void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);
