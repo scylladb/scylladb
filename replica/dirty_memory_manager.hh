@@ -100,7 +100,7 @@ struct reclaim_config {
 // A container for memtables. Called "region_group" for historical
 // reasons. Receives updates about memtable size change via the
 // LSA region_listener interface.
-class region_group : public logalloc::region_listener {
+class region_group {
     using region_heap = dirty_memory_manager_logalloc::region_heap;
 public:
     struct allocating_function {
@@ -238,8 +238,6 @@ private:
     future<> release_queued_allocations();
     void notify_unspooled_pressure_relieved();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
-private: // from region_listener
-    virtual void moved(logalloc::region* old_address, logalloc::region* new_address) override;
 public:
     // When creating a region_group, one can specify an optional throttle_threshold parameter. This
     // parameter won't affect normal allocations, but an API is provided, through the region_group's
@@ -268,28 +266,22 @@ public:
     }
     void update_unspooled(ssize_t delta);
 
-    // It would be easier to call update, but it is unfortunately broken in boost versions up to at
-    // least 1.59.
-    //
-    // One possibility would be to just test for delta sigdness, but we adopt an explicit call for
-    // two reasons:
-    //
-    // 1) it save us a branch
-    // 2) some callers would like to pass delta = 0. For instance, when we are making a region
-    //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
-    //    the full update cycle even then.
-    virtual void increase_usage(logalloc::region* r, ssize_t delta) override { // From region_listener
+    void increase_usage(logalloc::region* r) { // Called by memtable's region_listener
+        // It would be easier to call update, but it is unfortunately broken in boost versions up to at
+        // least 1.59.
+        //
+        // One possibility would be to just test for delta sigdness, but we adopt an explicit call for
+        // two reasons:
+        //
+        // 1) it save us a branch
+        // 2) some callers would like to pass delta = 0. For instance, when we are making a region
+        //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
+        //    the full update cycle even then.
         _regions.increase(*static_cast<size_tracked_region*>(r)->_heap_handle);
-        update_unspooled(delta);
     }
 
-    virtual void decrease_evictable_usage(logalloc::region* r) override { // From region_listener
+    void decrease_usage(logalloc::region* r) { // Called by memtable's region_listener
         _regions.decrease(*static_cast<size_tracked_region*>(r)->_heap_handle);
-    }
-
-    virtual void decrease_usage(logalloc::region* r, ssize_t delta) override { // From region_listener
-        decrease_evictable_usage(r);
-        update_unspooled(delta);
     }
 
     //
@@ -332,10 +324,11 @@ private:
     bool execution_permitted() noexcept;
 
     uint64_t top_region_evictable_space() const noexcept;
-
-    virtual void add(logalloc::region* child) override; // from region_listener
-    virtual void del(logalloc::region* child) override; // from region_listener
-
+public:
+    void add(logalloc::region* child); // Called by memtable's region_listener
+    void del(logalloc::region* child); // Called by memtable's region_listener
+    void moved(logalloc::region* old_address, logalloc::region* new_address); // Called by memtable's region_listener
+private:
     friend class ::test_region_group;
 };
 

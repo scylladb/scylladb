@@ -2133,7 +2133,7 @@ private:
         _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
         if (_listener) {
             _evictable_space -= allocated_size;
-            _listener->decrease_usage(_region, allocated_size);
+            _listener->decrease_usage(_region, -allocated_size);
         }
         segment_pool().subtract_non_lsa_memory_in_use(allocated_size);
     }
