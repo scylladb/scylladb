@@ -46,7 +46,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks:
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
-    auto table = get_table_id(hint);
+    auto table = hint.get_table_id();
 
     utils::chunked_vector<locator::tablet_id> tablets;
     auto status = co_await get_status_helper(id, tablets, std::move(hint));
@@ -67,7 +67,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 }
 
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
-    auto table = get_table_id(hint);
+    auto table = hint.get_table_id();
     co_await _ss.del_repair_tablet_request(table, locator::tablet_task_id{id.uuid()});
 }
 
@@ -118,7 +118,7 @@ std::vector<table_id> tablet_virtual_task::get_table_ids() const {
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint) {
-    auto table = get_table_id(hint);
+    auto table = hint.get_table_id();
     auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
     tasks::task_status res{
         .task_id = id,
@@ -146,13 +146,6 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
     }
     // FIXME: Show finished tasks.
     co_return std::nullopt;
-}
-
-table_id tablet_virtual_task::get_table_id(const tasks::virtual_task_hint& hint) const {
-    if (!hint.table_id.has_value()) {
-        on_internal_error(tasks::tmlogger, "tablet_virtual_task hint does not contain table_id");
-    }
-    return hint.table_id.value();
 }
 
 task_manager_module::task_manager_module(tasks::task_manager& tm) noexcept

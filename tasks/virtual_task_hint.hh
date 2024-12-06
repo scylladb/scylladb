@@ -20,6 +20,7 @@ struct virtual_task_hint {
 
     locator::tablet_task_type get_task_type() const;
     locator::tablet_id get_tablet_id() const;
+    ::table_id get_table_id() const;
 };
 
 }

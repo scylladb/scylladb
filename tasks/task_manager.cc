@@ -809,4 +809,11 @@ locator::tablet_id virtual_task_hint::get_tablet_id() const {
     return tablet_id.value();
 }
 
+::table_id virtual_task_hint::get_table_id() const {
+    if (!table_id.has_value()) {
+        on_internal_error(tasks::tmlogger, "tablet_virtual_task hint does not contain table_id");
+    }
+    return table_id.value();
+}
+
 }
