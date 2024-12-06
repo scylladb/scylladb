@@ -151,6 +151,7 @@ public:
     using builder_base::del;
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
+    topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
 

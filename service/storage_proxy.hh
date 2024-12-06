@@ -38,6 +38,7 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
+#include "service/storage_service.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -475,7 +476,8 @@ private:
 
 public:
     storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+            locator::effective_replication_map_factory& erm_factory);
     ~storage_proxy();
 
     const distributed<replica::database>& get_db() const {
@@ -510,7 +512,7 @@ public:
     }
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
-    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks);
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, raft_group0_client&, topology_state_machine&);
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;

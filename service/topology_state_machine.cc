@@ -9,6 +9,7 @@
 
 #include "topology_state_machine.hh"
 #include "utils/log.hh"
+#include "db/system_keyspace.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
@@ -212,6 +213,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::new_cdc_generation, "new_cdc_generation"},
     {global_topology_request::cleanup, "cleanup"},
     {global_topology_request::keyspace_rf_change, "keyspace_rf_change"},
+    {global_topology_request::truncate_table, "truncate_table"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
@@ -258,6 +260,25 @@ future<> topology_state_machine::await_not_busy() {
     while (_topology.is_busy()) {
         co_await event.wait();
     }
+}
+
+future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
+    tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
+    while (true) {
+        auto c = reload_count;
+        auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        if (done) {
+            tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
+            co_return error;
+        }
+        if (c == reload_count) {
+            // wait only if the state was not reloaded while we were preempted
+            tsmlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
+            co_await event.when();
+        }
+    }
+
+    co_return sstring();
 }
 
 }

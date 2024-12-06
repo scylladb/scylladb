@@ -155,8 +155,20 @@ transition. An example of this is the `rebuilding` state which does not change
 the topology but requires streaming data.
 
 Separately from the per-node requests, there is also a 'global' request field
-for operations that don't affect any specific node but the entire cluster,
-such as `check_and_repair_cdc_streams`.
+for operations that don't affect any specific node but the entire cluster. These
+are the currently supported global topology operations:
+
+- `new_cdc_generation` aka `check_and_repair_cdc_streams`
+- `cleanup`
+- `keyspace_rf_change`
+- `truncate_table` Truncate for keyspaces with tablets is implemented as a topology
+   request in order to serialize it with other topology operations (migration, repair)
+   and avoid issues with data resurrection when truncate is executed during tablet
+   migrations. Truncate has only one implicit transition stage. When the topology
+   coordinator executes the truncate request, it issues truncate RPCs to nodes which
+   contain replicas of the table being truncated. It uses [sessions](#Topology guards)
+   to make sure that no stale RPCs are executed outside of the scope of the request.
+
 
 # Load balancing
 
