@@ -54,9 +54,9 @@ static constexpr std::string_view application_state_name(application_state state
     case application_state::SHARD_COUNT:
         return "SHARD_COUNT";
     case application_state::IGNORE_MSB_BITS:
-        return "IGNORE_MSB_BITS";
+        return "IGNOR_MSB_BITS"; /* keeping the typo in "IGNOR_MSB_BITS" (missing "E") for backward compatibility */
     case application_state::CDC_GENERATION_ID:
-        return "CDC_GENERATION_ID";
+        return "CDC_STREAMS_TIMESTAMP"; /* not named "CDC_GENERATION_ID" for backward compatibility */
     case application_state::SNITCH_NAME:
         return "SNITCH_NAME";
     case application_state::GROUP0_STATE_ID:
