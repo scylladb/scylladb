@@ -1219,7 +1219,23 @@ statement_restrictions::statement_restrictions(private_tag,
         auto& restr = prepared_restriction;
         if (restr.op == expr::oper_t::IS_NOT) {
             // Handle IS NOT NULL restrictions separately
-            add_is_not_restriction(restr, schema, for_view);
+            const expr::column_value* lhs_col_def = expr::as_if<expr::column_value>(&restr.lhs);
+            // The "IS NOT NULL" restriction is only supported (and
+            // mandatory) for materialized view creation:
+            if (lhs_col_def == nullptr) {
+                throw exceptions::invalid_request_exception("IS NOT only supports single column");
+            }
+            // currently, the grammar only allows the NULL argument to be
+            // "IS NOT", so this assertion should not be able to fail
+            if (!expr::is<expr::constant>(restr.rhs) || !expr::as<expr::constant>(restr.rhs).is_null()) {
+                throw exceptions::invalid_request_exception("Only IS NOT NULL is supported");
+            }
+
+            _not_null_columns.insert(lhs_col_def->col);
+
+            if (!for_view) {
+                throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", restr));
+            }
         } else if (is_multi_column(restr)) {
             // Multi column restrictions are only allowed on clustering columns
             add_multi_column_clustering_key_restriction(restr);
@@ -1609,26 +1625,6 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         }
     }
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
-}
-
-void statement_restrictions::add_is_not_restriction(const expr::binary_operator& restr, schema_ptr schema, bool for_view) {
-    const expr::column_value* lhs_col_def = expr::as_if<expr::column_value>(&restr.lhs);
-    // The "IS NOT NULL" restriction is only supported (and
-    // mandatory) for materialized view creation:
-    if (lhs_col_def == nullptr) {
-        throw exceptions::invalid_request_exception("IS NOT only supports single column");
-    }
-    // currently, the grammar only allows the NULL argument to be
-    // "IS NOT", so this assertion should not be able to fail
-    if (!expr::is<expr::constant>(restr.rhs) || !expr::as<expr::constant>(restr.rhs).is_null()) {
-        throw exceptions::invalid_request_exception("Only IS NOT NULL is supported");
-    }
-
-    _not_null_columns.insert(lhs_col_def->col);
-
-    if (!for_view) {
-        throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", restr));
-    }
 }
 
 void statement_restrictions::add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
