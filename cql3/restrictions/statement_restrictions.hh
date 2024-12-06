@@ -371,7 +371,6 @@ private:
     void add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view);
     void add_token_partition_key_restriction(const expr::binary_operator& restr);
     void add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering);
-    void add_multi_column_clustering_key_restriction(const expr::binary_operator& restr);
     void add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr);
 
     void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);

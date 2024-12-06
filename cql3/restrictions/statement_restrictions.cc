@@ -1238,7 +1238,62 @@ statement_restrictions::statement_restrictions(private_tag,
             }
         } else if (is_multi_column(restr)) {
             // Multi column restrictions are only allowed on clustering columns
-            add_multi_column_clustering_key_restriction(restr);
+            if (is_empty_restriction(_clustering_columns_restrictions)) {
+                _clustering_columns_restrictions = restr;
+            } else {
+
+                if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
+                            return expr::is<expr::tuple_constructor>(b.lhs);
+                })) {
+                    throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
+                }
+
+                if (restr.op == expr::oper_t::EQ) {
+                    throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
+                        expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                } else if (restr.op == expr::oper_t::IN) {
+                    throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
+                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                } else if (is_slice(restr.op)) {
+                    if (!expr::has_slice(_clustering_columns_restrictions)) {
+                        throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
+                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                    }
+
+                    const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
+                    if (other_slice == nullptr) {
+                        on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _clustering_columns_restrictions is empty!");
+                    }
+
+                    // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
+                    if (other_slice->order != restr.order) {
+                        static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
+                        throw exceptions::invalid_request_exception(
+                                format("Invalid combination of restrictions ({} / {})",
+                                order2str(other_slice->order), order2str(restr.order)));
+                    }
+
+                    // Here check that there aren't two < <= or two > and >=
+                    auto is_greater = [](expr::oper_t op) {return op == expr::oper_t::GT || op == expr::oper_t::GTE; };
+                    auto is_less = [](expr::oper_t op) {return op == expr::oper_t::LT || op == expr::oper_t::LTE; };
+
+                    if (is_greater(restr.op) && is_greater(other_slice->op)) {
+                        throw exceptions::invalid_request_exception(format(
+                        "More than one restriction was found for the start bound on {}",
+                            expr::get_columns_in_commons(restr, *other_slice)));
+                    }
+
+                    if (is_less(restr.op) && is_less(other_slice->op)) {
+                        throw exceptions::invalid_request_exception(format(
+                            "More than one restriction was found for the end bound on {}",
+                            expr::get_columns_in_commons(restr, *other_slice)));
+                    }
+
+                    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
+                } else {
+                    throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
+                }
+            }
         } else if (has_partition_token(restr, *_schema)) {
             // Token always restricts the partition key
             add_token_partition_key_restriction(restr);
@@ -1688,65 +1743,6 @@ void statement_restrictions::add_single_column_clustering_key_restriction(const 
     }
 
     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
-}
-
-void statement_restrictions::add_multi_column_clustering_key_restriction(const expr::binary_operator& restr) {
-  if (is_empty_restriction(_clustering_columns_restrictions)) {
-        _clustering_columns_restrictions = restr;
-  } else {
-
-    if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
-                return expr::is<expr::tuple_constructor>(b.lhs);
-    })) {
-        throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
-    }
-
-    if (restr.op == expr::oper_t::EQ) {
-        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
-            expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
-    } else if (restr.op == expr::oper_t::IN) {
-        throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
-                                                           expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
-    } else if (is_slice(restr.op)) {
-        if (!expr::has_slice(_clustering_columns_restrictions)) {
-            throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
-                                                           expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
-        }
-
-        const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
-        if (other_slice == nullptr) {
-            on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _clustering_columns_restrictions is empty!");
-        }
-
-        // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
-        if (other_slice->order != restr.order) {
-            static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
-            throw exceptions::invalid_request_exception(
-                    format("Invalid combination of restrictions ({} / {})",
-                    order2str(other_slice->order), order2str(restr.order)));
-        }
-
-        // Here check that there aren't two < <= or two > and >=
-        auto is_greater = [](expr::oper_t op) {return op == expr::oper_t::GT || op == expr::oper_t::GTE; };
-        auto is_less = [](expr::oper_t op) {return op == expr::oper_t::LT || op == expr::oper_t::LTE; };
-
-        if (is_greater(restr.op) && is_greater(other_slice->op)) {
-            throw exceptions::invalid_request_exception(format(
-            "More than one restriction was found for the start bound on {}",
-                expr::get_columns_in_commons(restr, *other_slice)));
-        }
-
-        if (is_less(restr.op) && is_less(other_slice->op)) {
-            throw exceptions::invalid_request_exception(format(
-                "More than one restriction was found for the end bound on {}",
-                expr::get_columns_in_commons(restr, *other_slice)));
-        }
-
-        _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
-    } else {
-        throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
-    }
-  }
 }
 
 void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
