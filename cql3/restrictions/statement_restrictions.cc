@@ -1310,7 +1310,24 @@ statement_restrictions::statement_restrictions(private_tag,
         } else if (is_single_column_restriction(restr)) {
             const column_definition* def = get_the_only_column(restr).col;
             if (def->is_partition_key()) {
-                add_single_column_parition_key_restriction(restr, schema, allow_filtering, for_view);
+                // View definition allows PK slices, because it's not a performance problem.
+                if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
+                    throw exceptions::invalid_request_exception(
+                            "Only EQ and IN relation are supported on the partition key "
+                            "(unless you use the token() function or ALLOW FILTERING)");
+                }
+                if (has_token_restrictions()) {
+                    throw exceptions::invalid_request_exception(
+                            seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                                fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                            std::views::transform([](auto* p) {
+                                            return maybe_column_definition{p};
+                                            }),
+                                            ", ")));
+                }
+
+                _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
+                _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
             } else if (def->is_clustering_key()) {
                 add_single_column_clustering_key_restriction(restr, schema, allow_filtering);
             } else {
@@ -1690,27 +1707,6 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         }
     }
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
-}
-
-void statement_restrictions::add_single_column_parition_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering, bool for_view) {
-    // View definition allows PK slices, because it's not a performance problem.
-    if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
-        throw exceptions::invalid_request_exception(
-                "Only EQ and IN relation are supported on the partition key "
-                "(unless you use the token() function or ALLOW FILTERING)");
-    }
-    if (has_token_restrictions()) {
-        throw exceptions::invalid_request_exception(
-                seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                       fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
-                                 std::views::transform([](auto* p) {
-                                   return maybe_column_definition{p};
-                                 }),
-                                 ", ")));
-    }
-
-    _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
-    _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
 }
 
 void statement_restrictions::add_single_column_clustering_key_restriction(const expr::binary_operator& restr, schema_ptr schema, bool allow_filtering) {
