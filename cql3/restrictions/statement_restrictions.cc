@@ -1691,10 +1691,9 @@ void statement_restrictions::add_single_column_clustering_key_restriction(const 
 }
 
 void statement_restrictions::add_multi_column_clustering_key_restriction(const expr::binary_operator& restr) {
-    if (is_empty_restriction(_clustering_columns_restrictions)) {
+  if (is_empty_restriction(_clustering_columns_restrictions)) {
         _clustering_columns_restrictions = restr;
-        return;
-    }
+  } else {
 
     if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
                 return expr::is<expr::tuple_constructor>(b.lhs);
@@ -1747,6 +1746,7 @@ void statement_restrictions::add_multi_column_clustering_key_restriction(const e
     } else {
         throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
     }
+  }
 }
 
 void statement_restrictions::add_single_column_nonprimary_key_restriction(const expr::binary_operator& restr) {
