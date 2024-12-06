@@ -845,7 +845,7 @@ public:
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_request();
+                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
                 if (is_user_reuqest) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
