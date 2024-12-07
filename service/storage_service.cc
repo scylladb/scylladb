@@ -3160,7 +3160,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& table_erms = pending_table_erms[this_shard_id()];
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
                 auto& cf = db.find_column_family(it->first);
-                co_await cf.update_effective_replication_map(std::move(it->second));
+                cf.update_effective_replication_map(std::move(it->second));
                 co_await utils::get_local_injector().inject("delay_after_erm_update", [&cf, &ss] (auto& handler) -> future<> {
                     auto& ss_ = ss;
                     const auto ks_name = handler.get("ks_name");
