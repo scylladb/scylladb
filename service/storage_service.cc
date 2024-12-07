@@ -3143,6 +3143,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
                 co_await utils::clear_gently(erms);
                 co_await utils::clear_gently(tmptr);
+                co_await utils::clear_gently(table_erms);
+                co_await utils::clear_gently(view_erms);
             });
         } catch (...) {
             slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
