@@ -21,6 +21,7 @@ import requests
 import random
 import os
 import glob
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -571,3 +572,57 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
     # Verify that the view has the expected number of rows
     rows = await cql.run_async("SELECT c from test.mv1")
     assert len(list(rows)) == expected_num_of_rows
+
+@pytest.mark.asyncio
+async def test_orphaned_sstables_on_startup(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/18038
+        1) Start a node (node1)
+        2) Create a table with 1 initial tablet and populate it
+        3) Start another node (node2)
+        4) Migrate the existing tablet from node1 to node2
+        5) Stop node1
+        6) Copy the sstables from node2 to node1
+        7) Attempting to start node1 should fail as it now has an 'orphaned' sstable
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(256)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+    node0_workdir = await manager.server_get_workdir(servers[0].server_id)
+    node0_table_dir = glob.glob(os.path.join(node0_workdir, "data", "test", "test-*"))[0]
+
+    logger.info("Start Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    await manager.api.disable_tablet_balancing(servers[1].ip_addr)
+    node1_workdir = await manager.server_get_workdir(servers[1].server_id)
+    node1_table_dir = glob.glob(os.path.join(node1_workdir, "data", "test", "test-*"))[0]
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Migrate the tablet from node1 to node2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    logger.info("Stop node1 and copy the sstables from node2")
+    await manager.server_stop(servers[0].server_id)
+    for src_path in glob.glob(os.path.join(node1_table_dir, "me-*")):
+        dst_path = os.path.join(node0_table_dir, os.path.basename(src_path))
+        shutil.copy(src_path, dst_path)
+
+    # try starting the server again
+    logger.info("Start node1 with the orphaned sstables and expect it to fail")
+    # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table test.test"
+    await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
