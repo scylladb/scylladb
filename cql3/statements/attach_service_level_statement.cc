@@ -43,13 +43,12 @@ attach_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-    auto sli = co_await state.get_service_level_controller().get_distributed_service_level(_service_level);
-    if (sli.empty()) {
+    auto& sl = state.get_service_level_controller();
+    if (!sl.has_service_level(_service_level)) {
         throw qos::nonexistant_service_level_exception(_service_level);
     }
 
     auto& as = *state.get_client_state().get_auth_service();
-    auto& sl = state.get_service_level_controller();
     service::group0_batch mc{std::move(guard)};
     co_await auth::set_attribute(as, _role_name, "service_level", _service_level, mc);
     co_await sl.commit_mutations(std::move(mc));

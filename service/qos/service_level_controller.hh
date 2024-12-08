@@ -241,6 +241,7 @@ public:
     future<> drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc);
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
+    future<service_levels_info> get_service_levels();
 
     /**
      * Returns the service level options **in effect** for a user having the given

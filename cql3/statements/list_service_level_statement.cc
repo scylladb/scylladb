@@ -54,9 +54,15 @@ list_service_level_statement::execute(query_processor& qp,
 
     return make_ready_future().then([this, &state] () {
                                   if (_describe_all) {
-                                      return state.get_service_level_controller().get_distributed_service_levels();
+                                      return state.get_service_level_controller().get_service_levels();
                                   } else {
-                                      return state.get_service_level_controller().get_distributed_service_level(_service_level);
+                                      qos::service_levels_info sl_info;
+                                      try {
+                                          auto& sl = state.get_service_level_controller().get_service_level(_service_level, false);
+                                          sl_info.emplace(_service_level, sl.slo);
+                                      } catch (const qos::nonexistant_service_level_exception&) {}
+
+                                      return make_ready_future<qos::service_levels_info>(sl_info);
                                   }
                               })
             .then([] (qos::service_levels_info sl_info) {
