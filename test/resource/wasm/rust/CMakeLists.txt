@@ -8,7 +8,7 @@ function(compile_rust_to_wasm input)
   set(input "${CMAKE_CURRENT_SOURCE_DIR}/${input}")
   set(output_dir "${parsed_args_OUT_DIR}")
   set(output "${output_dir}/${basename}.wasm")
-  set(target "wasm32-wasi")
+  set(target "wasm32-wasip1")
   set(mode "debug")
   set(package "examples")
   add_custom_command(

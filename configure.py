@@ -1966,8 +1966,8 @@ def write_build_file(f,
             command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
             description = C2WASM $out
         rule rust2wasm
-            command = cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
-                && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
+            command = cargo build --target=wasm32-wasip1 --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+                && wasm-opt -Oz $builddir/wasm/wasm32-wasip1/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
                 && wasm-strip $builddir/wasm/$example.wasm
             description = RUST2WASM $out
         rule wasm2wat
