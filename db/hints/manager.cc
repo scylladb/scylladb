@@ -335,10 +335,11 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 
     for (const auto& [addr, rp] : rps) {
         if (std::holds_alternative<gms::inet_address>(addr)) {
-            const auto maybe_hid = tmptr->get_host_id_if_known(std::get<gms::inet_address>(addr));
-            // Ignore the IPs we cannot map.
-            if (maybe_hid) [[likely]] {
-                hid_rps.emplace(*maybe_hid, rp);
+            try {
+                const auto hid = _gossiper_anchor->get_host_id(std::get<gms::inet_address>(addr));
+                hid_rps.emplace(hid, rp);
+            } catch (...) {
+                // Ignore the IPs we cannot map.
             }
         } else {
             hid_rps.emplace(std::get<locator::host_id>(addr), rp);
