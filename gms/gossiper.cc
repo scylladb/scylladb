@@ -1505,6 +1505,14 @@ endpoint_state_ptr gossiper::get_endpoint_state_ptr(inet_address ep) const noexc
     }
 }
 
+endpoint_state_ptr gossiper::get_endpoint_state_ptr(locator::host_id id) const noexcept {
+    auto ip = _address_map.find(id);
+    if (!ip) {
+        return nullptr;
+    }
+    return get_endpoint_state_ptr(*ip);
+}
+
 void gossiper::update_timestamp(const endpoint_state_ptr& eps) noexcept {
     const_cast<endpoint_state&>(*eps).update_timestamp();
 }

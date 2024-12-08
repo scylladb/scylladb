@@ -435,6 +435,7 @@ public:
     // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
     // the endpoint_state_ptr is held.
     endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
+    endpoint_state_ptr get_endpoint_state_ptr(locator::host_id ep) const noexcept;
 
     // Return this node's endpoint_state_ptr
     endpoint_state_ptr get_this_endpoint_state_ptr() const noexcept {
