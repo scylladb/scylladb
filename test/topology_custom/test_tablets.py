@@ -5,8 +5,10 @@
 #
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
 from test.topology.conftest import skip_mode
@@ -626,3 +628,130 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     logger.info("Start node1 with the orphaned sstables and expect it to fail")
     # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table test.test"
     await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21826")
+async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Reproducer for #21826
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    node_to_replace = servers['dc1'][1]
+    replaced_host_id = await manager.get_host_id(node_to_replace.server_id)
+    initiator_node = servers['dc2'][0]
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+    await manager.server_stop_gracefully(node_to_replace.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_replace} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter.
+    And then verify that that node can be replaced successfully.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc2'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    initiator_node = servers['dc2'][0]
+
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_remove} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that nodes can be successfully replaced with tablets when
+    even when there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    with and without zero-token nodes in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners,
+    but other datacenters can be used to rebuild the data.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    stmt = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ALL
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+
+    nodes_to_replace = servers['dc1'][0:2]
+    replaced_host_id = await manager.get_host_id(nodes_to_replace[1].server_id)
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    for node in nodes_to_replace:
+        await manager.server_stop_gracefully(node.server_id)
+
+    logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+                                ignore_dead_nodes=[replaced_host_id])
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info("Verifying data")
+    for node in servers['dc2']:
+        await manager.server_stop_gracefully(node.server_id)
+    query = SimpleStatement("SELECT * FROM test.test;", consistency_level=ConsistencyLevel.ONE)
+    rows = await cql.run_async(query)
+    assert len(rows) == len(keys)
+    for r in rows:
+        assert r.c == r.pk
