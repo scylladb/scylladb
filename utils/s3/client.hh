@@ -106,7 +106,7 @@ public:
     future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* = nullptr);
     future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
 
-    file make_readable_file(sstring object_name);
+    file make_readable_file(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_sink(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3

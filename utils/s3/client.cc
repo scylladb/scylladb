@@ -1198,6 +1198,7 @@ class client::readable_file : public file_impl {
     shared_ptr<client> _client;
     sstring _object_name;
     std::optional<stats> _stats;
+    seastar::abort_source* _as;
 
     [[noreturn]] void unsupported() {
         throw_with_backtrace<std::logic_error>("unsupported operation on s3 readable file");
@@ -1215,9 +1216,10 @@ class client::readable_file : public file_impl {
     }
 
 public:
-    readable_file(shared_ptr<client> cln, sstring object_name)
+    readable_file(shared_ptr<client> cln, sstring object_name, seastar::abort_source* as = nullptr)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
+        , _as(as)
     {
     }
 
@@ -1245,7 +1247,8 @@ public:
         }
 
         virtual shared_ptr<file_impl> to_file() && override {
-            return make_shared<readable_file>(std::move(_h).to_client(), std::move(_object_name));
+            // TODO: cannot traverse abort source across shards. 
+            return make_shared<readable_file>(std::move(_h).to_client(), std::move(_object_name), nullptr);
         }
     };
 
@@ -1277,7 +1280,7 @@ public:
             co_return 0;
         }
 
-        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len });
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len }, _as);
         std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
         co_return buf.size();
     }
@@ -1288,7 +1291,7 @@ public:
             co_return 0;
         }
 
-        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) });
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) }, _as);
         uint64_t off = 0;
         for (auto& v : iov) {
             auto sz = std::min(v.iov_len, buf.size() - off);
@@ -1307,7 +1310,7 @@ public:
             co_return temporary_buffer<uint8_t>();
         }
 
-        auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size });
+        auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size }, _as);
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
     }
 
@@ -1316,8 +1319,8 @@ public:
     }
 };
 
-file client::make_readable_file(sstring object_name) {
-    return file(make_shared<readable_file>(shared_from_this(), std::move(object_name)));
+file client::make_readable_file(sstring object_name, seastar::abort_source* as) {
+    return file(make_shared<readable_file>(shared_from_this(), std::move(object_name), as));
 }
 
 future<> client::close() {
