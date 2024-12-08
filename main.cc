@@ -662,7 +662,7 @@ static int scylla_main(int ac, char** av) {
   try {
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
-    app_template::config app_cfg;
+    app_template::seastar_options app_cfg;
     app_cfg.name = "Scylla";
     app_cfg.description =
 R"(scylla - NoSQL data store using the seastar framework
@@ -677,17 +677,38 @@ For more information about individual tools, run: scylla {tool_name} --help
 
 To start the scylla server proper, simply invoke as: scylla server (or just scylla).
 )";
-    app_cfg.default_task_quota = 500us;
 #ifdef DEBUG
     // Increase the task quota to improve work:poll ratio in slow debug mode.
-    app_cfg.default_task_quota = 5ms;
+    app_cfg.reactor_opts.task_quota_ms.set_default_value(5);
+#else
+    app_cfg.reactor_opts.task_quota_ms.set_default_value(0.5);
 #endif
     app_cfg.auto_handle_sigint_sigterm = false;
-    app_cfg.max_networking_aio_io_control_blocks = 50000;
+    app_cfg.reactor_opts.max_networking_io_control_blocks.set_default_value(50000);
+    {
+        const auto candidates = app_cfg.reactor_opts.reactor_backend.get_candidate_names();
+
+        // We don't wan't ScyllaDB to run with the io_uring backend.
+        // So select the default reactor backend explicitely here.
+        if (std::ranges::contains(candidates, "linux-aio")) {
+            app_cfg.reactor_opts.reactor_backend.select_default_candidate("linux-aio");
+        } else {
+            app_cfg.reactor_opts.reactor_backend.select_default_candidate("epoll");
+        }
+
+        // Leave some reserve IOCBs for scylla-nodetool and other native tool apps.
+        if (std::ranges::contains(candidates, "io_uring")) {
+            app_cfg.reactor_opts.reserve_io_control_blocks.set_default_value(10);
+        } else {
+            startlog.warn("Need to leave extra IOCBs in reserve for tools because the io_uring reactor backend is not available."
+                    " Tools will fall-back to the epoll reactor backend, which requires more IOCBs to function.");
+            app_cfg.reactor_opts.reserve_io_control_blocks.set_default_value(1024);
+        }
+    }
     // We need to have the entire app config to run the app, but we need to
     // run the app to read the config file with UDF specific options so that
     // we know whether we need to reserve additional memory for UDFs.
-    app_cfg.reserve_additional_memory_per_shard = db::config::wasm_udf_reserved_memory;
+    app_cfg.smp_opts.reserve_additional_memory_per_shard = db::config::wasm_udf_reserved_memory;
     app_template app(std::move(app_cfg));
 
     auto ext = std::make_shared<db::extensions>();

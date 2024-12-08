@@ -147,7 +147,13 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
     opts.reactor_opts.relaxed_dma.set_value();
     opts.reactor_opts.unsafe_bypass_fsync.set_value(true);
     opts.reactor_opts.kernel_page_cache.set_value(true);
-    opts.reactor_opts.reactor_backend.select_candidate("epoll");
+    if (std::ranges::contains(opts.reactor_opts.reactor_backend.get_candidate_names(), "io_uring")) {
+        opts.reactor_opts.reactor_backend.select_candidate("io_uring");
+    } else {
+        // On some systems (e.g. docker), io_uring is not available.
+        // In this case fall back to epoll.
+        opts.reactor_opts.reactor_backend.select_candidate("epoll");
+    }
     opts.smp_opts.thread_affinity.set_value(false);
     opts.smp_opts.mbind.set_value(false);
     opts.smp_opts.smp.set_value(1);
