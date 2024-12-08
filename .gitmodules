@@ -18,3 +18,6 @@
 [submodule "tools/cqlsh"]
 	path = tools/cqlsh
 	url = ../scylla-cqlsh
+[submodule "libkmip"]
+	path = libkmip
+	url = https://github.com/elcallio/libkmip.git
