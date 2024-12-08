@@ -226,6 +226,7 @@ repair_neighbors::repair_neighbors(std::vector<locator::host_id> nodes, std::vec
 
 // Return all of the neighbors with whom we share the provided range.
 static std::vector<locator::host_id> get_neighbors(
+        const gms::gossiper& gossiper,
         const locator::effective_replication_map& erm,
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
@@ -282,17 +283,19 @@ static std::vector<locator::host_id> get_neighbors(
             } catch(...) {
                 throw std::runtime_error(format("Unknown host specified: {}", host));
             }
-            auto endpoint = erm.get_token_metadata().get_host_id_if_known(ip);
-            if (endpoint) {
+
+            try {
+                auto endpoint = gossiper.get_host_id(ip);
+
                 if (endpoint == my_address) {
                     found_me = true;
-                } else if (neighbor_set.contains(*endpoint)) {
-                    ret.push_back(*endpoint);
+                } else if (neighbor_set.contains(endpoint)) {
+                    ret.push_back(endpoint);
                     // If same host is listed twice, don't add it again later
-                    neighbor_set.erase(*endpoint);
-                } else {
-                    rlogger.warn("Provided host ip {} has no corresponding host id", ip);
+                    neighbor_set.erase(endpoint);
                 }
+            } catch (...) {
+                    rlogger.warn("Provided host ip {} has no corresponding host id", ip);
             }
             // Nodes which aren't neighbors for this range are ignored.
             // This allows the user to give a list of "good" nodes, where
@@ -329,6 +332,7 @@ static std::vector<locator::host_id> get_neighbors(
 }
 
 static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
+        const gms::gossiper& gossiper,
         const locator::effective_replication_map& erm,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
@@ -344,7 +348,7 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
     participating_hosts.insert(my_address);
 
     co_await do_for_each(ranges, [&] (const dht::token_range& range) {
-        const auto nbs = get_neighbors(erm, ksname, range, data_centers, hosts, ignore_nodes);
+        const auto nbs = get_neighbors(gossiper, erm, ksname, range, data_centers, hosts, ignore_nodes);
         for (const auto& nb : nbs) {
             participating_hosts.insert(nb);
         }
@@ -676,7 +680,7 @@ void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
 
 repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(*erm, _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
+        repair_neighbors(get_neighbors(gossiper, *erm, _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
         neighbors[range];
 }
 
@@ -1306,7 +1310,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     }
 
     auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism);
+    auto task = co_await _repair_module->make_and_start_task<repair::user_requested_repair_task_impl>({}, id, std::move(keyspace), "", germs, std::move(cfs), std::move(ranges), std::move(options.hosts), std::move(options.data_centers), std::move(ignore_nodes), small_table_optimization, ranges_parallelism, _gossiper.local());
     co_return id.id;
 }
 
@@ -1331,7 +1335,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto normal_nodes = germs->get().get_token_metadata().get_normal_token_owners();
             participants = std::list<locator::host_id>(normal_nodes.begin(), normal_nodes.end());
         } else {
-            participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
+            participants = get_hosts_participating_in_repair(_gossiper, germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
         auto [hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
 
