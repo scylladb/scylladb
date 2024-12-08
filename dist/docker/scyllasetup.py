@@ -102,7 +102,7 @@ class ScyllaSetup:
             args += ["--overprovisioned"]
 
         if self._listenAddress is None:
-            self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+            self._listenAddress = subprocess.check_output(['hostname', '-I']).decode('ascii').strip().split(' ')[0]
 
         if self._rpcAddress is None:
             self._rpcAddress = self._listenAddress
