@@ -9,9 +9,7 @@
 #pragma once
 
 #include <list>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm/transform.hpp>
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/rwlock.hh>
@@ -172,13 +170,16 @@ public:
                     std::function<std::optional<Res>(const task_essentials&)> map_finished_children) const {
                 auto shared_holder = co_await _lock.hold_read_lock();
 
-                co_return boost::join(
-                            _children | boost::adaptors::map_values | boost::adaptors::transformed(map_children),
-                            _finished_children | boost::adaptors::transformed(map_finished_children)
-                        )
-                        | std::views::filter([] (const auto& task) { return bool(task); })
-                        | std::views::transform([] (const auto& res) { return res.value(); })
-                        | std::ranges::to<std::vector<Res>>();
+                auto deopt = std::views::filter([] (const auto& task) { return bool(task); })
+                        | std::views::transform([] (const auto& res) { return res.value(); });
+
+                auto kids = _children | std::views::values | std::views::transform(map_children) | deopt;
+                auto finished_kids = _finished_children | std::views::transform(map_finished_children) | deopt;
+                std::vector<Res> result;
+                // Want to use insert_range(), but libstd++ hasn't implemented it yet.
+                result.insert(result.end(), kids.begin(), kids.end());
+                result.insert(result.end(), finished_kids.begin(), finished_kids.end());
+                co_return result;
             }
         };
 
