@@ -2469,6 +2469,11 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
+    if (_db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2494,6 +2499,11 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+    if (_db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2511,6 +2521,11 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    if (_db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
