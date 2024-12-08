@@ -34,6 +34,7 @@ from abc import ABC, abstractmethod
 from io import StringIO
 from scripts import coverage    # type: ignore
 from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.util import ninja, get_configured_modes
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.s3_proxy import S3ProxyServer
@@ -101,15 +102,6 @@ def path_to(mode, *components):
     elif not os.access(exe_path, os.X_OK):
         raise PermissionError(f"{exe_path} is not executable.")
     return exe_path
-
-
-def ninja(target):
-    """Build specified target using ninja"""
-    build_dir = 'build'
-    args = ['ninja', target]
-    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        args = ['ninja', '-C', build_dir, target]
-    return subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0].decode()
 
 
 class TestSuite(ABC):
@@ -1442,11 +1434,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.modes:
         try:
-            out = ninja('mode_list')
-            # [1/1] List configured modes
-            # debug release dev
-            args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
-                                out, 1, re.DOTALL).split("\n")[-1].split(' ')
+            args.modes = get_configured_modes()
         except Exception:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise

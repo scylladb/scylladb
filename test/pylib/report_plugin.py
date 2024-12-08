@@ -17,7 +17,10 @@ class ReportPlugin:
 
     # Pytest hook to modify test name to include mode and run_id
     def pytest_configure(self, config):
-        self.build_mode = config.getoption('mode')
+        # getting build_mode is needed for the cases when there will be no mode provided
+        self.build_mode = config.getoption("modes")
+        if self.build_mode:
+            self.build_mode = self.build_mode[0]
         self.config = config
         self.run_id = config.getoption("run_id")
 
@@ -44,7 +47,8 @@ class ReportPlugin:
         Add mode tag to be able to search by it.
         Add parameters to make allure distinguish them and not put them to retries.
         """
-        request.node.name = f"{request.node.name}.{self.build_mode}.{self.run_id}"
-        allure.dynamic.tag(self.build_mode)
-        allure.dynamic.parameter('mode', self.build_mode)
-        allure.dynamic.parameter('run_id', self.run_id)
+        if self.build_mode is not None or self.run_id is not None:
+            request.node.name = f"{request.node.name}.{self.build_mode}.{self.run_id}"
+            allure.dynamic.tag(self.build_mode)
+            allure.dynamic.parameter('mode', self.build_mode)
+            allure.dynamic.parameter('run_id', self.run_id)
