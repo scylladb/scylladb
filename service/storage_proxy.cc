@@ -1058,7 +1058,9 @@ private:
     void connection_dropped(gms::inet_address addr, std::optional<locator::host_id> id) {
         slogger.debug("Drop hit rate info for {} because of disconnect", addr);
         if (!id) {
-            id = _sp.get_token_metadata_ptr()->get_host_id_if_known(addr);
+            try {
+                id = _gossiper.get_host_id(addr);
+            } catch (...) {}
         }
         if (!id) {
             return;
