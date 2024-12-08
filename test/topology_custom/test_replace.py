@@ -111,7 +111,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
 
     # make sure that after we start snapshot transfer we no longer have stale writes
     log = await manager.server_open_log(s.server_id)
-    m = await log.wait_for("group0_raft_sm - transfer snapshot from ")
+    m, _ = await log.wait_for("group0_raft_sm - transfer snapshot from ")
     errs = await log.grep("storage_proxy - Failed to apply mutation from", from_mark=m)
     assert len(errs) == 0
 
