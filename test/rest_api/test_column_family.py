@@ -123,3 +123,26 @@ def test_sstables_by_key_reader_closed(cql, this_dc, rest_api):
             with scylla_inject_error(rest_api, "advance_lower_and_check_if_present"):
                 resp = rest_api.send("GET", f"column_family/sstables/by_key/{test_keyspace}:{test_table}?key=1")
                 assert resp.status_code == 500
+
+# Test how reading and changing compaction strategy works
+def test_column_family_compaction_strategy(cql, this_dc, rest_api):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "a int, PRIMARY KEY (a)", extra = "with compaction = { 'class': 'NullCompactionStrategy' }") as t:
+            table_name = t.replace('.', ':')
+
+            def check_strategy(strategy):
+                resp = rest_api.send("GET", f"column_family/compaction_strategy/{table_name}")
+                resp.raise_for_status()
+                assert resp.json() == strategy
+
+            check_strategy("NullCompactionStrategy")
+
+            resp = rest_api.send("POST", f"column_family/compaction_strategy/{table_name}", params={"class_name": "NoSuchCompactionStrategy"})
+            assert resp.status_code == requests.codes.internal_server_error
+            check_strategy("NullCompactionStrategy")
+
+            for strategy in [ "SizeTieredCompactionStrategy", "LeveledCompactionStrategy", "TimeWindowCompactionStrategy" ]:
+                resp = rest_api.send("POST", f"column_family/compaction_strategy/{table_name}", params={"class_name": strategy})
+                resp.raise_for_status()
+                check_strategy(strategy)
