@@ -30,7 +30,7 @@ template <ContiguousSharedBuffer Buffer>
 class clustering_parser {
     using FragmentedBuffer = basic_fragmented_buffer<Buffer>;
     const schema& _s;
-    column_values_fixed_lengths _clustering_values_fixed_lengths;
+    const column_values_fixed_lengths& _clustering_values_fixed_lengths;
     bool _parsing_start_key;
     boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
 
@@ -95,9 +95,9 @@ class clustering_parser {
 public:
     using read_status = data_consumer::read_status;
 
-    clustering_parser(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl, bool parsing_start_key)
+    clustering_parser(const schema& s, reader_permit permit, const column_values_fixed_lengths& cvfl, bool parsing_start_key)
         : _s(s)
-        , _clustering_values_fixed_lengths(std::move(cvfl))
+        , _clustering_values_fixed_lengths(cvfl)
         , _parsing_start_key(parsing_start_key)
         , _primitive(std::move(permit))
     { }
@@ -237,8 +237,8 @@ class promoted_index_block_parser {
 public:
     using read_status = data_consumer::read_status;
 
-    promoted_index_block_parser(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
-        : _clustering(s, permit, std::move(cvfl), true)
+    promoted_index_block_parser(const schema& s, reader_permit permit, const column_values_fixed_lengths& cvfl)
+        : _clustering(s, permit, cvfl, true)
         , _primitive(permit)
     { }
 
