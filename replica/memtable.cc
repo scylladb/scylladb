@@ -253,15 +253,15 @@ memtable::contains_partition(const dht::decorated_key& key) const {
     return partitions.find(key, dht::ring_position_comparator(*_schema)) != partitions.end();
 }
 
-boost::iterator_range<memtable::partitions_type::const_iterator>
+std::ranges::subrange<memtable::partitions_type::const_iterator>
 memtable::slice(const dht::partition_range& range) const {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         auto i = partitions.find(pos, dht::ring_position_comparator(*_schema));
         if (i != partitions.end()) {
-            return boost::make_iterator_range(i, std::next(i));
+            return {i, std::next(i)};
         } else {
-            return boost::make_iterator_range(i, i);
+            return {i, i};
         }
     } else {
         auto cmp = dht::ring_position_comparator(*_schema);
@@ -278,7 +278,7 @@ memtable::slice(const dht::partition_range& range) const {
                         : partitions.lower_bound(range.end()->value(), cmp))
                   : partitions.cend();
 
-        return boost::make_iterator_range(i1, i2);
+        return {i1, i2};
     }
 }
 

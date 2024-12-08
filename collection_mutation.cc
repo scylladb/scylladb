@@ -230,11 +230,11 @@ template <typename Iterator>
 static collection_mutation serialize_collection_mutation(
         const abstract_type& type,
         const tombstone& tomb,
-        boost::iterator_range<Iterator> cells) {
+        std::ranges::subrange<Iterator> cells) {
     auto element_size = [] (size_t c, auto&& e) -> size_t {
         return c + 8 + e.first.size() + e.second.serialize().size();
     };
-    auto size = accumulate(cells, (size_t)4, element_size);
+    auto size = std::ranges::fold_left(cells, (size_t)4, element_size);
     size += 1;
     if (tomb) {
         size += sizeof(int64_t) + sizeof(int64_t);
@@ -255,7 +255,7 @@ static collection_mutation serialize_collection_mutation(
         write_fragmented(out, v);
     };
     // FIXME: overflow?
-    write<int32_t>(out, boost::distance(cells));
+    write<int32_t>(out, std::ranges::distance(cells));
     for (auto&& kv : cells) {
         auto&& k = kv.first;
         auto&& v = kv.second;
@@ -267,11 +267,11 @@ static collection_mutation serialize_collection_mutation(
 }
 
 collection_mutation collection_mutation_description::serialize(const abstract_type& type) const {
-    return serialize_collection_mutation(type, tomb, boost::make_iterator_range(cells.begin(), cells.end()));
+    return serialize_collection_mutation(type, tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
 collection_mutation collection_mutation_view_description::serialize(const abstract_type& type) const {
-    return serialize_collection_mutation(type, tomb, boost::make_iterator_range(cells.begin(), cells.end()));
+    return serialize_collection_mutation(type, tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
 template <typename C>

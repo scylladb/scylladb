@@ -63,7 +63,7 @@ public:
     }
     std::vector<shared_ptr<user_function>> get_user_functions(const sstring& keyspace) const;
     std::vector<shared_ptr<user_aggregate>> get_user_aggregates(const sstring& keyspace) const;
-    boost::iterator_range<declared_t::const_iterator> find(const function_name& name) const;
+    std::ranges::subrange<declared_t::const_iterator> find(const function_name& name) const;
     declared_t::const_iterator find_iter(const function_name& name, const std::vector<data_type>& arg_types) const;
     shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types) const;
     shared_ptr<function> mock_get(const function_name& name, const std::vector<data_type>& arg_types) const;

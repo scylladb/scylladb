@@ -127,7 +127,7 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
             auto min = gc_clock::time_point::max();
             auto max = gc_clock::time_point::min();
             bool contains_all = false;
-            for (auto& x : boost::make_iterator_range(m->equal_range(interval))) {
+            for (const auto& [i, s] = m->equal_range(interval); auto& x : std::ranges::subrange(i, s)) {
                 auto r = locator::token_metadata::interval_to_range(x.first);
                 min = std::min(x.second, min);
                 max = std::max(x.second, max);

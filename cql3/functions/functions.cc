@@ -446,11 +446,11 @@ functions::get_user_aggregates(const sstring& keyspace) const {
     return get_filtered_transformed<user_aggregate>(keyspace);
 }
 
-boost::iterator_range<functions::declared_t::const_iterator>
+std::ranges::subrange<functions::declared_t::const_iterator>
 functions::find(const function_name& name) const {
     SCYLLA_ASSERT(name.has_keyspace()); // : "function name not fully qualified";
     auto pair = _declared.equal_range(name);
-    return boost::make_iterator_range(pair.first, pair.second);
+    return std::ranges::subrange(pair.first, pair.second);
 }
 
 functions::declared_t::const_iterator
