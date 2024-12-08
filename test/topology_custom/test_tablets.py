@@ -7,6 +7,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxExc
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
 from test.topology.conftest import skip_mode
@@ -571,3 +572,35 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
     # Verify that the view has the expected number of rows
     rows = await cql.run_async("SELECT c from test.mv1")
     assert len(list(rows)) == expected_num_of_rows
+
+@pytest.mark.asyncio
+async def test_remove_failure_then_replace_with_zero_token_node(manager: ManagerClient):
+    """
+    Make sure that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in another datacenter.
+    """
+    servers = dict()
+    for i in [1, 2]:
+        dc = f"dc{i}"
+        servers[dc] = await manager.servers_add(servers_num=2, property_file={'dc': dc, 'rack': f'rack{i}'})
+    servers["dc3"] = await manager.servers_add(servers_num=1, config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 2 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    num_keys = 1000
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(num_keys)])
+
+    node_to_remove = servers['dc1'][0]
+    initiator_node = servers['dc1'][1]
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_remove} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    replacing_node = await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+    servers['dc1'].append(replacing_node)
