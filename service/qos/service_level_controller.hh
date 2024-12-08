@@ -137,7 +137,6 @@ private:
     std::map<sstring, service_level> _service_levels_db;
     // role name -> effective service_level_options 
     std::map<sstring, service_level_options> _effective_service_levels_db;
-    service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;

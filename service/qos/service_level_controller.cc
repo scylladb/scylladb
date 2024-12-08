@@ -77,11 +77,7 @@ future<> service_level_controller::start() {
         return make_ready_future();
     }
     return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
-        return do_add_service_level(default_service_level_name, _global_controller_db->default_service_level_config, true).then([this] () {
-            return container().invoke_on_all([] (service_level_controller& sl) {
-                sl._default_service_level =  sl.get_service_level(default_service_level_name);
-            });
-        });
+        return do_add_service_level(default_service_level_name, _global_controller_db->default_service_level_config, true);
     });
 }
 
