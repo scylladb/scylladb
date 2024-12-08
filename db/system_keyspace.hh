@@ -16,6 +16,7 @@
 #include <vector>
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
+#include "timestamp.hh"
 #include "utils/UUID.hh"
 #include "query-result-set.hh"
 #include "db_clock.hh"
@@ -28,6 +29,7 @@
 #include "virtual_tables.hh"
 #include "types/types.hh"
 #include "auth_version.hh"
+#include "service/view_building_coordinator.hh"
 
 namespace utils {
     class shared_dict;
@@ -190,6 +192,7 @@ public:
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
+    static constexpr auto VIEW_BUILDING_COORDINATOR_TASKS = "view_building_coordinator_tasks";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -285,6 +288,7 @@ public:
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
+    static schema_ptr view_building_coordinator_tasks();
 
     // auth
     static schema_ptr roles();
@@ -540,6 +544,11 @@ public:
     future<> remove_built_view(sstring ks_name, sstring view_name);
     future<std::vector<view_name>> load_built_views();
     future<std::vector<view_build_progress>> load_view_build_progress();
+
+    future<service::view_building_coordinator_tasks> get_view_building_coordinator_tasks();
+    future<mutation> make_vbc_task_mutation(api::timestamp_type ts, table_id view_id, const service::view_building_target& target, const dht::token_range& range);
+    future<mutation> make_vbc_task_done_mutation(api::timestamp_type ts, table_id view_id, const service::view_building_target& target, const dht::token_range& range);
+    future<std::vector<mutation>> make_vbc_remove_view_tasks_mutations(api::timestamp_type ts, table_id view_id);
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
