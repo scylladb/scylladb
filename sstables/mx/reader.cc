@@ -21,6 +21,13 @@
 namespace sstables {
 namespace mx {
 
+static integrity_check get_baseline_integrity_check_for_schema(const schema& s) {
+    if (s.crc_check_chance() == 0.0) {
+        return integrity_check::no;
+    }
+    return integrity_check::checksums_only;
+}
+
 class mp_row_consumer_reader_mx : public mp_row_consumer_reader_base, public mutation_reader::impl {
     friend class sstables::mx::mp_row_consumer_m;
 public:
@@ -1267,6 +1274,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
+    integrity_check _caller_requested_integrity;
     integrity_check _integrity;
     lw_shared_ptr<checksum> _checksum;
 
@@ -1297,7 +1305,8 @@ public:
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
-            , _integrity(integrity) {
+            , _caller_requested_integrity(integrity)
+            , _integrity(std::max(integrity, get_baseline_integrity_check_for_schema(*_schema))) {
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1549,9 +1558,11 @@ private:
 
         sstlog.trace("sstable_reader: {}: data file range [{}, {})", fmt::ptr(this), begin, *end);
 
-        if (_integrity) {
+        if (_integrity >= integrity_check::checksums_only) {
             // Caller must retain a reference to checksum component while in use by the stream.
             _checksum = co_await _sst->read_checksum();
+        }
+        if (_integrity == integrity_check::checksums_and_digest) {
             // The stream checks the digest only if the read range covers all data.
             if (begin == 0 && *end == _sst->data_size()) {
                 co_await _sst->read_digest();
@@ -1561,7 +1572,7 @@ private:
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
             if (reversed()) {
-                if (_integrity) {
+                if (_caller_requested_integrity != integrity_check::no) {
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
@@ -1800,7 +1811,7 @@ public:
         : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
         , _monitor(mon)
-        , _integrity(integrity) {}
+        , _integrity(std::max(integrity, get_baseline_integrity_check_for_schema(*_schema))) {}
 private:
     bool is_initialized() const {
         return bool(_context);
@@ -1809,9 +1820,11 @@ private:
         if (is_initialized()) {
             co_return;
         }
-        if (_integrity) {
+        if (_integrity >= integrity_check::checksums_only) {
             // Caller must retain a reference to checksum component while in use by the stream.
             _checksum = co_await _sst->read_checksum();
+        }
+        if (_integrity == integrity_check::checksums_and_digest) {
             co_await _sst->read_digest();
         }
         _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity);
@@ -2106,7 +2119,7 @@ future<uint64_t> validate(
         sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
-    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
+    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::checksums_and_digest);
 
     std::optional<sstables::index_reader> idx_reader;
     idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);

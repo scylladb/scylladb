@@ -358,7 +358,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                 throw exceptions::invalid_request_exception(format("The synchronous_updates option is only applicable to materialized views, not to base tables"));
             }
 
-            _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace());
+            _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), cf_prop_defs::is_create_statement::no);
         }
         break;
 
@@ -401,18 +401,23 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
-  data_dictionary::database db = qp.db();
-  auto [cfm, view_updates] = prepare_schema_update(db, options);
-  auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm.build(), std::move(view_updates), ts);
+    data_dictionary::database db = qp.db();
+    auto [cfm, view_updates] = prepare_schema_update(db, options);
+    auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm.build(), std::move(view_updates), ts);
 
-  using namespace cql_transport;
-  auto ret = ::make_shared<event::schema_change>(
+    using namespace cql_transport;
+    auto ret = ::make_shared<event::schema_change>(
             event::schema_change::change_type::UPDATED,
             event::schema_change::target_type::TABLE,
             keyspace(),
             column_family());
 
-  co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    cql3::cql_warnings_vec warnings;
+    if (_properties) {
+        _properties->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
+    }
+
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
