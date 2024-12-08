@@ -6,7 +6,7 @@ Shared C++ utils, libraries are in lib/, for Python - pylib/
 
 alternator - Python tests which connect to a single server and use the DynamoDB API
 unit, boost, raft - unit tests in C++
-cql-pytest - Python tests which connect to a single server and use CQL
+cqlpy - Python tests which connect to a single server and use CQL
 topology* - tests that set up clusters and add/remove nodes
 cql - approval tests that use CQL and pre-recorded output
 rest\_api - tests for Scylla REST API Port 9000
