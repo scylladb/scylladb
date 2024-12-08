@@ -1536,6 +1536,9 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     if (!vm.contains("sstables")) {
       throw std::invalid_argument("missing required possitional argument: sstables");
     }
+    if (vm.contains("scope")) {
+        params["scope"] = vm["scope"].as<sstring>();
+    }
     sstring sstables_body = std::invoke([&vm] {
         std::stringstream output;
         rjson::streaming_writer writer(output);
@@ -3943,6 +3946,7 @@ For more information, see: {}"
                     typed_option<sstring>("keyspace", "Name of a keyspace to copy SSTables to"),
                     typed_option<sstring>("table", "Name of a table to copy SSTables to"),
                     typed_option<>("nowait", "Don't wait on the restore process"),
+                    typed_option<sstring>("scope", "Load-and-stream scope (node, rack or dc)"),
                 },
                 {
                     typed_option<std::vector<sstring>>("sstables", "The object keys of the TOC component of the SSTables to be restored", -1),
