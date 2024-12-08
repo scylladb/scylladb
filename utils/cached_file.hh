@@ -156,7 +156,8 @@ private:
 private:
     future<cached_page::ptr_type> get_page_ptr(page_idx_type idx,
             page_count_type read_ahead,
-            tracing::trace_state_ptr trace_state) {
+            tracing::trace_state_ptr trace_state,
+            std::optional<reader_permit> permit = {}) {
         auto i = _cache.lower_bound(idx);
         if (i != _cache.end() && i->idx == idx) {
             ++_metrics.page_hits;
@@ -169,8 +170,16 @@ private:
         size_t size = (idx + read_ahead) > _last_page
                 ? (_last_page_size + (_last_page - idx) * page_size)
                 : read_ahead * page_size;
+
+        std::optional<reader_permit::resource_units> units;
+        std::optional<reader_permit::awaits_guard> await_guard;
+        if (permit) {
+            units = permit->consume_memory(size);
+            await_guard.emplace(*permit);
+        }
+
         return _file.dma_read_exactly<char>(idx * page_size, size)
-            .then([this, idx] (temporary_buffer<char>&& buf) mutable {
+            .then([this, ag = std::move(await_guard), units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
                     auto this_size = std::min(page_size, buf.size());
@@ -202,9 +211,22 @@ private:
     }
     future<temporary_buffer<char>> get_page(page_idx_type idx,
                                             page_count_type count,
+<<<<<<< HEAD
                                             tracing::trace_state_ptr trace_state) {
         return get_page_ptr(idx, count, std::move(trace_state)).then([] (cached_page::ptr_type cp) {
             return cp->get_buf();
+=======
+                                            tracing::trace_state_ptr trace_state,
+                                            std::optional<reader_permit> permit = {}) {
+        return get_page_ptr(idx, count, std::move(trace_state), permit).then([permit] (std::pair<cached_page::ptr_type, bool> cp) mutable {
+            auto buf = cp.first->get_buf();
+            if (permit) {
+                auto units = permit->consume_memory(buf.size());
+                buf = temporary_buffer<char>(buf.get_write(), buf.size(),
+                                             make_object_deleter(buf.release(), std::move(units)));
+            }
+            return std::make_pair(std::move(buf), cp.second);
+>>>>>>> 868f5b59c4 (utils: cached_file: Push resource_unit management down to cached_file)
         });
     }
 public:
@@ -322,18 +344,18 @@ public:
             if (!_cached_file || _page_idx > _cached_file->_last_page) {
                 return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>());
             }
-            auto units = get_page_units(_size_hint);
             page_count_type readahead = div_ceil(_size_hint, page_size);
+<<<<<<< HEAD
             _size_hint = page_size;
             return _cached_file->get_page(_page_idx, readahead, _trace_state).then(
                     [units = std::move(units), this] (temporary_buffer<char> page) mutable {
+=======
+            return _cached_file->get_page(_page_idx, readahead, _trace_state, _permit).then(
+                    [this] (std::pair<temporary_buffer<char>, bool> read_result) mutable {
+                auto page = std::move(read_result.first);
+>>>>>>> 868f5b59c4 (utils: cached_file: Push resource_unit management down to cached_file)
                 if (_page_idx == _cached_file->_last_page) {
                     page.trim(_cached_file->_last_page_size);
-                }
-                if (units) {
-                    units = get_page_units();
-                    page = temporary_buffer<char>(page.get_write(), page.size(),
-                                                  make_object_deleter(page.release(), std::move(*units)));
                 }
                 page.trim_front(_offset_in_page);
                 _offset_in_page = 0;
@@ -350,16 +372,20 @@ public:
             if (!_cached_file || _page_idx > _cached_file->_last_page) {
                 return make_ready_future<page_view>(page_view());
             }
-            auto units = get_page_units(_size_hint);
             page_count_type readahead = div_ceil(_size_hint, page_size);
+<<<<<<< HEAD
             _size_hint = page_size;
             return _cached_file->get_page_ptr(_page_idx, readahead, _trace_state).then(
                     [this, units = std::move(units)] (cached_page::ptr_type page) mutable {
+=======
+            return _cached_file->get_page_ptr(_page_idx, readahead, _trace_state, _permit).then(
+                    [this] (std::pair<cached_page::ptr_type, bool> read_result) mutable {
+                auto page = std::move(read_result.first);
+>>>>>>> 868f5b59c4 (utils: cached_file: Push resource_unit management down to cached_file)
                 size_t size = _page_idx == _cached_file->_last_page
                         ? _cached_file->_last_page_size
                         : page_size;
-                units = get_page_units(page_size);
-                page_view buf(_offset_in_page, size - _offset_in_page, std::move(page), std::move(units));
+                page_view buf(_offset_in_page, size - _offset_in_page, std::move(page), get_page_units());
                 _offset_in_page = 0;
                 ++_page_idx;
                 return buf;
