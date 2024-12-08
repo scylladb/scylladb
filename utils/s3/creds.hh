@@ -24,13 +24,15 @@ struct endpoint_config {
         std::string secret_access_key;
         // the security token, only for session credentials
         std::string session_token;
-        std::string region;
+      std::chrono::system_clock::time_point expiration;
 
-        std::strong_ordering operator<=> (const aws_config& o) const = default;
+        std::strong_ordering operator<=>(const aws_config& o) const = default;
     };
 
     std::optional<aws_config> aws;
-
+    // Amazon Resource Names (ARNs) to access AWS resources
+    std::optional<std::string> role_arn;
+    std::string region;
     std::strong_ordering operator<=> (const endpoint_config& o) const = default;
 };
 
