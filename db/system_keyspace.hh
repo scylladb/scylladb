@@ -189,6 +189,7 @@ public:
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
+    static constexpr auto VIEW_BUILDING_COORDINATOR_TASKS = "view_building_coordinator_tasks";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -284,6 +285,7 @@ public:
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
+    static schema_ptr view_building_coordinator_tasks();
 
     // auth
     static schema_ptr roles();
