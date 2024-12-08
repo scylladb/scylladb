@@ -77,11 +77,7 @@ future<> service_level_controller::start() {
         return make_ready_future();
     }
     return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
-        return do_add_service_level(default_service_level_name, _global_controller_db->default_service_level_config, true).then([this] () {
-            return container().invoke_on_all([] (service_level_controller& sl) {
-                sl._default_service_level =  sl.get_service_level(default_service_level_name);
-            });
-        });
+        return do_add_service_level(default_service_level_name, _global_controller_db->default_service_level_config, true);
     });
 }
 
@@ -516,6 +512,27 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
 
 future<service_levels_info> service_level_controller::get_distributed_service_level(sstring service_level_name) {
     return _sl_data_accessor ? _sl_data_accessor->get_service_level(service_level_name) : make_ready_future<service_levels_info>();
+}
+
+future<service_levels_info> service_level_controller::get_service_levels() {
+    service_levels_info service_levels;
+
+    if (!_sl_data_accessor) {
+        return make_ready_future<service_levels_info>(service_levels);
+    }
+
+    if (!_sl_data_accessor->is_v2()) {
+        // the cache may not be up to date, so read from the table instead of cache
+        return _sl_data_accessor->get_service_levels();
+    }
+
+    for (auto const& p : _service_levels_db) {
+        if (p.first == default_service_level_name) {
+            continue;
+        }
+        service_levels.emplace(p.first, p.second.slo);
+    }
+    return make_ready_future<service_levels_info>(service_levels);
 }
 
 future<> service_level_controller::set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc) {

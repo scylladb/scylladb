@@ -117,10 +117,11 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
 
 qos::service_level_options attributes::get_service_level(qos::service_level_controller& sl_controller) const {
     auto sl_name = *_service_level;
-    if (!sl_controller.has_service_level(sl_name)) {
+    try {
+        return sl_controller.get_service_level(sl_name, false).slo;
+    } catch (const qos::nonexistant_service_level_exception&) {
         throw exceptions::invalid_request_exception(format("Service level {} doesn't exist", sl_name));
     }
-    return sl_controller.get_service_level(sl_name).slo;
 }
 
 void attributes::fill_prepare_context(prepare_context& ctx) {
