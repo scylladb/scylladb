@@ -197,7 +197,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
 # In a multi-dc environment, we can create replicas in a DC that didn't have replicas before,
 # but the above requirement should still be honoured, because we'd be changing RF from 0 to N in the new DC.
 # Reproduces https://github.com/scylladb/scylladb/issues/20039#issuecomment-2271365060
-# See also cql-pytest/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
+# See also cqlpy/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
 @pytest.mark.asyncio
 async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": "true"}

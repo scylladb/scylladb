@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Use the run.py library from ../cql-pytest:
+# Use the run.py library from ../cqlpy:
 import sys
-sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+sys.path.insert(1, sys.path[0] + '/../cqlpy')
 import run
 
 success = run.run_pytest(sys.path[0], sys.argv[1:])
