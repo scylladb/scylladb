@@ -8,7 +8,7 @@
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a ScyllaDB and Cassandra clusters.
 * :doc:`SSTabledump </operating-scylla/admin-tools/sstabledump>`
 * :doc:`SSTableMetadata </operating-scylla/admin-tools/sstablemetadata>`
-* `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb collectd/prometheus metrics.
+* `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb Prometheus metrics.
 * :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run ScyllaDB in Developer Mode.
 * :doc:`perftune</operating-scylla/admin-tools/perftune>` - performance configuration.
 * :doc:`Reading mutation fragments</operating-scylla/admin-tools/select-from-mutation-fragments/>` - dump the underlying mutation data from tables.
