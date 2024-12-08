@@ -258,13 +258,19 @@ public:
     /**
      * Gets the service level data by name.
      * @param service_level_name - the name of the requested service level
+     * @param or_default - in case the service level doesn't exist, if true
+     * returns the default service level, otherwise throws.
      * @return the service level data if it exists (in the local controller) or
      * get_service_level("default") otherwise.
      */
-    service_level& get_service_level(sstring service_level_name) {
+    service_level& get_service_level(sstring service_level_name, bool or_default) {
         auto sl_it = _service_levels_db.find(service_level_name);
         if (sl_it == _service_levels_db.end()) {
-            sl_it = _service_levels_db.find(default_service_level_name);
+            if (or_default) {
+                sl_it = _service_levels_db.find(default_service_level_name);
+            } else {
+                throw nonexistant_service_level_exception(service_level_name);
+            }
         }
         return sl_it->second;
     }
