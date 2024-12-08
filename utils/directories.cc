@@ -16,10 +16,13 @@
 #include "sstables/exceptions.hh"
 #include "sstables/open_info.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/disk_space_monitor.hh"
 #include "utils/fmt-compat.hh"
 #include "utils/lister.hh"
 
 namespace utils {
+
+seastar::logger dsmlog("disk_space_monitor");
 
 static future<> disk_sanity(fs::path path, bool developer_mode) {
     try {

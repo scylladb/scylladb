@@ -31,7 +31,7 @@ public:
         void add(std::vector<sstring> path);
         void add_sharded(sstring path);
 
-        const std::set<fs::path> get_paths() const {
+        const std::set<fs::path>& get_paths() const noexcept {
             return _paths;
         }
 
