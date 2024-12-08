@@ -2671,7 +2671,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         // In the v1 table we may have left over rows that belong to nodes that were removed
         // and we didn't clean them, so do that now.
         auto host_id = row.get_as<utils::UUID>("host_id");
-        if (!tmptr->get_endpoint_for_host_id_if_known(locator::host_id(host_id))) {
+        if (!tmptr->get_topology().find_node(locator::host_id(host_id))) {
             vlogger.warn("Dropping a row from view_build_status: host {} does not exist", host_id);
             continue;
         }
@@ -3151,7 +3151,7 @@ future<bool> view_builder::check_view_build_ongoing(const locator::token_metadat
     return view_status(ks_name, cf_name).then([&tm] (view_statuses_type&& view_statuses) {
         return std::ranges::any_of(view_statuses, [&tm] (const view_statuses_type::value_type& view_status) {
             // Only consider status of known hosts.
-            return view_status.second == "STARTED" && tm.get_endpoint_for_host_id_if_known(view_status.first);
+            return view_status.second == "STARTED" && tm.get_topology().find_node(view_status.first);
         });
     });
 }
