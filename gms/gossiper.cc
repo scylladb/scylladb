@@ -377,10 +377,45 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
                 delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
             }
         }
+<<<<<<< HEAD
         gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
         logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
         return ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
     });
+||||||| parent of 6c90a25014 (Fix gossiper orphan node floating problem by adding a remover fiber)
+        // Local generation for addr may have been increased since the
+        // current node sent an initial SYN. Comparing versions across
+        // different generations in get_state_for_version_bigger_than
+        // could result in losing some app states with smaller versions.
+        const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
+            ? version_type(0)
+            : g_digest.get_max_version();
+        auto local_ep_state_ptr = get_state_for_version_bigger_than(addr, version);
+        if (local_ep_state_ptr) {
+            delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+        }
+    }
+    gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
+=======
+        // Local generation for addr may have been increased since the
+        // current node sent an initial SYN. Comparing versions across
+        // different generations in get_state_for_version_bigger_than
+        // could result in losing some app states with smaller versions.
+        const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
+            ? version_type(0)
+            : g_digest.get_max_version();
+        auto local_ep_state_ptr = get_state_for_version_bigger_than(addr, version);
+        if (local_ep_state_ptr) {
+            delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+        }
+    }
+    gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
+    logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+>>>>>>> 6c90a25014 (Fix gossiper orphan node floating problem by adding a remover fiber)
 }
 
 // Depends on
