@@ -21,7 +21,6 @@
 #include "messaging_service.hh"
 #include "storage_proxy.hh"
 #include "cache_service.hh"
-#include "collectd.hh"
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
@@ -300,9 +299,12 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "lsa", "Log-structured allocator API");
         set_lsa(ctx, r);
 
-        rb->register_function(r, "collectd",
-                "The collectd API");
-        set_collectd(ctx, r);
+        rb->register_function(r, "commitlog",
+                "The commit log API");
+        set_commitlog(ctx,r);
+        rb->register_function(r, "error_injection",
+                "The error injection API");
+        set_error_injection(ctx, r);
     });
 }
 
