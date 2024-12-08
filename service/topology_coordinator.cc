@@ -57,6 +57,8 @@
 
 #include "service/topology_coordinator.hh"
 
+#include <boost/range/join.hpp>
+
 using token = dht::token;
 using inet_address = gms::inet_address;
 
