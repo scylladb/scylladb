@@ -1599,6 +1599,9 @@ class ScyllaClusterManager:
                         f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
                         f" ignore_dead: {ignore_dead}) but did not contain expected error (\"{expected_error}\"),"
                         f"check log file at {initiator.log_filename}, error: \"{exc}\"")
+                else:
+                    self.logger.info(f"removenode (initiator: {initiator}, to_remove: {to_remove}, ignore_dead: {ignore_dead})"
+                                     f" failed as expected: {exc}")
             else:
                 raise RuntimeError(
                     f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
@@ -1611,6 +1614,7 @@ class ScyllaClusterManager:
                     f"removenode succeeded when it should have failed (initiator: {initiator},"
                     f"to_remove: {to_remove}, ignore_dead: {ignore_dead}, expected error: \"{expected_error}\"),"
                     f" check log file at {initiator.log_filename}")
+            self.logger.info(f"removenode (initiator: {initiator}, to_remove: {to_remove}, ignore_dead: {ignore_dead}) succeeded")
 
     async def _cluster_decommission_node(self, request) -> None:
         """Run decommission node on Scylla REST API for a specified server"""
