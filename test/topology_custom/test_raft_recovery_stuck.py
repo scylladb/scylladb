@@ -21,13 +21,20 @@ from test.topology.util import (delete_raft_data_and_upgrade_state, enter_recove
 @log_run_time
 async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     """
-    After creating a cluster, we enter RECOVERY state on every server. Then, we delete the Raft data
-    and the upgrade state on all servers. We restart them and the upgrade procedure starts. One of the
-    servers fails, the rest enter 'synchronize' state. We assume the failed server cannot be recovered.
-    We cannot just remove it at this point; it's already part of group 0, `remove_from_group0` will wait
-    until upgrade procedure finishes - but the procedure is stuck.  To proceed we enter RECOVERY state on
-    the other servers, remove the failed one, and clear existing Raft data. After leaving RECOVERY the
-    remaining nodes will restart the procedure, establish a new group 0 and finish upgrade.
+    1. Create a cluster,
+    2. Enter RECOVERY state on every server.
+    3. Delete the Raft data and the upgrade state on all servers.
+    4. Restart them and the upgrade procedure starts.
+    5. Start the first node with a group 0 upgrade error injected to it, so it fails.
+    6. Start the rest of the nodes in the cluster, they enter 'synchronize' state.
+       We assume the failed server cannot be recovered. We cannot just remove it at this point;
+       it's already part of group 0, `remove_from_group0` will wait until upgrade procedure
+       finishes - but the procedure is stuck.  To proceed we:
+    7. Enter RECOVERY state on the other servers,
+    8. Remove the failed node, and
+    9. Clear existing Raft data.
+    10. After leaving RECOVERY, the remaining nodes will restart the procedure, establish a new
+        group 0 and finish upgrade.
     """
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True}
