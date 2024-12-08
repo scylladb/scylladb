@@ -96,11 +96,6 @@ region_group::moved(logalloc::region* old_address, logalloc::region* new_address
     region_group_binomial_group_sanity_check(_regions);
 }
 
-bool
-region_group::execution_permitted() noexcept {
-    return !under_unspooled_pressure() && !_under_real_pressure;
-}
-
 void
 region_group::execute_one() {
     auto req = std::move(_blocked_requests.front());
