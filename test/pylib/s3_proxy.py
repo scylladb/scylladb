@@ -30,6 +30,7 @@ class Policy:
     def __init__(self, max_retries: int):
         self.should_forward: bool = True
         self.should_fail: bool = False
+        self.server_should_fail: bool = False
         self.error_count: int = 0
         self.max_errors: int = random.choice(list(range(1, max_retries)))
 
@@ -101,7 +102,6 @@ class InjectingHandler(BaseHTTPRequestHandler):
                          self.log_date_time_string(),
                          format % args)
 
-
     def parsed_qs(self):
         parsed_url = urlparse(self.path)
         query_components = parse_qs(parsed_url.query)
@@ -119,6 +119,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 policy.should_fail = true_or_false()
             else:
                 policy.should_fail = True
+
+            if policy.should_fail:
+                policy.server_should_fail = true_or_false()
             self.policies.put(self.path, policy)
 
         # Unfortunately MPU completion retry on already completed upload would introduce flakiness to unit tests, for example `s3_test`
@@ -130,7 +133,15 @@ class InjectingHandler(BaseHTTPRequestHandler):
     def get_retryable_http_codes(self):
         return random.choice(self.retryable_codes), random.choice(self.error_names)
 
-    def respond_with_error(self):
+    def respond_with_error(self, reset_connection: bool):
+        if reset_connection:
+            try:
+                # Forcefully close the connection to simulate a connection reset
+                self.request.shutdown_request()
+            except OSError:
+                pass
+            finally:
+                return
         code, error_name = self.get_retryable_http_codes()
         self.send_response(code)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
@@ -154,6 +165,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
             if policy.error_count >= policy.max_errors:
                 policy.should_fail = False
+                policy.server_should_fail = False
                 policy.should_forward = True
 
             response = Response()
@@ -170,7 +182,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
             if policy.should_fail:
                 policy.error_count += 1
-                self.respond_with_error()
+                self.respond_with_error(reset_connection=policy.server_should_fail)
             else:
                 self.send_response(response.status_code)
                 for key, value in response.headers.items():

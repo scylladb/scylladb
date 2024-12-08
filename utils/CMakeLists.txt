@@ -48,7 +48,13 @@ target_sources(utils
     aws_sigv4.cc
     s3/aws_error.cc
     s3/client.cc
-    s3/retry_strategy.cc)
+    s3/retryable_http_client.cc
+    s3/retry_strategy.cc
+    s3/credentials_providers/config_file_aws_credentials_provider.cc
+    s3/credentials_providers/environment_aws_credentials_provider.cc
+    s3/credentials_providers/instance_profile_credentials_provider.cc
+    s3/credentials_providers/sts_assume_role_credentials_provider.cc
+    s3/credentials_providers/aws_credentials_provider_chain.cc)
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}
