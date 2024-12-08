@@ -14,6 +14,7 @@
 
 #include "gms/inet_address.hh"
 #include "service/storage_proxy.hh"
+#include "gms/gossiper.hh"
 
 namespace api {
 
@@ -21,18 +22,18 @@ using namespace json;
 using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
-void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_proxy>& proxy) {
-    hh::create_hints_sync_point.set(r, [&proxy] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto parse_hosts_list = [] (sstring arg) {
+void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_proxy>& proxy, sharded<gms::gossiper>& g) {
+    hh::create_hints_sync_point.set(r, [&proxy, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto parse_hosts_list = [&g] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
-            std::vector<gms::inet_address> hosts;
+            std::vector<locator::host_id> hosts;
             hosts.reserve(hosts_str.size());
 
             for (const auto& host_str : hosts_str) {
                 try {
                     gms::inet_address host;
                     host = gms::inet_address(host_str);
-                    hosts.push_back(host);
+                    hosts.push_back(g.local().get_host_id(host));
                 } catch (std::exception& e) {
                     throw httpd::bad_param_exception(format("Failed to parse host address {}: {}", host_str, e.what()));
                 }
@@ -41,7 +42,7 @@ void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_p
             return hosts;
         };
 
-        std::vector<gms::inet_address> target_hosts = parse_hosts_list(req->get_query_param("target_hosts"));
+        std::vector<locator::host_id> target_hosts = parse_hosts_list(req->get_query_param("target_hosts"));
         return proxy.local().create_hint_sync_point(std::move(target_hosts)).then([] (db::hints::sync_point sync_point) {
             return json::json_return_type(sync_point.encode());
         });

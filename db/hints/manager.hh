@@ -278,7 +278,7 @@ public:
     ///
     /// \param target_eps The list of endpoints the sync point should correspond to. When empty, the function assumes all endpoints.
     /// \return Sync point corresponding to the specified endpoints.
-    sync_point::shard_rps calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const;
+    sync_point::shard_rps calculate_current_sync_point(std::span<const locator::host_id> target_eps) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);

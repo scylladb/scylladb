@@ -273,10 +273,10 @@ future<> unset_server_cache(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_cache_service(ctx, r); });
 }
 
-future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy) {
+future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy, sharded<gms::gossiper>& g) {
     return register_api(ctx, "hinted_handoff",
-                "The hinted handoff API", [&proxy] (http_context& ctx, routes& r) {
-                    set_hinted_handoff(ctx, r, proxy);
+                "The hinted handoff API", [&proxy, &g] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r, proxy, g);
                 });
 }
 

@@ -266,21 +266,14 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     }
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const {
+sync_point::shard_rps manager::calculate_current_sync_point(std::span<const locator::host_id> target_eps) const {
     sync_point::shard_rps rps;
-    const auto tmptr = _proxy.get_token_metadata_ptr();
 
     for (auto addr : target_eps) {
-        const auto hid = tmptr->get_host_id_if_known(addr);
-        // Ignore the IPs that we cannot map.
-        if (!hid) {
-            continue;
-        }
-
-        auto it = _ep_managers.find(*hid);
+        auto it = _ep_managers.find(addr);
         if (it != _ep_managers.end()) {
             const hint_endpoint_manager& ep_man = it->second;
-            rps[*hid] = ep_man.last_written_replay_position();
+            rps[addr] = ep_man.last_written_replay_position();
         }
     }
 
