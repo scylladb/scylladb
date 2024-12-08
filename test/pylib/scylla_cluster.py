@@ -1605,14 +1605,12 @@ class ScyllaClusterManager:
                     f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
                     f" error: \"{exc}\"")
         else:
+            self.cluster.server_mark_removed(server_id)
             if expected_error:
-                self.cluster.server_mark_removed(server_id)
                 raise RuntimeError(
                     f"removenode succeeded when it should have failed (initiator: {initiator},"
                     f"to_remove: {to_remove}, ignore_dead: {ignore_dead}, expected error: \"{expected_error}\"),"
                     f" check log file at {initiator.log_filename}")
-
-        self.cluster.server_mark_removed(server_id)
 
     async def _cluster_decommission_node(self, request) -> None:
         """Run decommission node on Scylla REST API for a specified server"""
