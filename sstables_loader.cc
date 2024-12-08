@@ -27,6 +27,8 @@
 #include <cfloat>
 #include <algorithm>
 
+#include <boost/range/adaptor/transformed.hpp>
+
 static logging::logger llog("sstables_loader");
 
 namespace {
