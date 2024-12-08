@@ -151,7 +151,7 @@ public:
     // the "features_enable_test_feature" injection is enabled.
     // This feature MUST NOT be advertised in release mode!
     gms::feature test_only_feature { *this, "TEST_ONLY_FEATURE"sv };
-    gms::feature address_nodes_by_host_ids { *this, "ADRESS_NODES_BY_HOST_IDS"sv };
+    gms::feature address_nodes_by_host_ids { *this, "ADDRESS_NODES_BY_HOST_IDS"sv };
 
 public:
 
