@@ -7227,7 +7227,7 @@ future<> storage_service::force_remove_completion() {
                 auto leaving = tm.get_leaving_endpoints();
                 slogger.warn("Removal not confirmed, Leaving={}", leaving);
                 for (auto host_id : leaving) {
-                    const auto endpoint = tm.get_endpoint_for_host_id_if_known(host_id);
+                    const auto endpoint = ss._address_map.find(host_id);
                     if (!endpoint) {
                         slogger.warn("No endpoint is found for host_id {}", host_id);
                         continue;
