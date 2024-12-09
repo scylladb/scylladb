@@ -64,6 +64,7 @@
 #include "version.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>
+#include <boost/range/join.hpp>
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
