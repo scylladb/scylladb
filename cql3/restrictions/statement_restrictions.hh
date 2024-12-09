@@ -434,9 +434,8 @@ std::vector<expr::expression> extract_single_column_restrictions_for_column(cons
 // Checks whether this expression is empty - doesn't restrict anything
 bool is_empty_restriction(const expr::expression&);
 
-// Finds the value of the given column in the expression
-// In case of multpiple possible values calls on_internal_error
-bytes_opt value_for(const column_definition&, const expr::expression&, const query_options&);
+// Finds the possible values of the given column in the expression and returns them as a vector
+std::vector<bytes_opt> value_for(const column_definition&, const expr::expression&, const query_options&);
 
 }
 
