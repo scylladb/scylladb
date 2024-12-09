@@ -41,7 +41,7 @@ static s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
         .port = get_port(),
         .use_https = false,
-        .aws = {{
+        .credentials = {{
             .access_key_id = "foo",
             .secret_access_key = "bar",
             .session_token = "baz",

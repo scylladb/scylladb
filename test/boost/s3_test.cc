@@ -7,29 +7,35 @@
  */
 
 
-#include <unordered_set>
-#include <boost/test/unit_test.hpp>
-#include <boost/algorithm/string/split.hpp>
-#include <boost/algorithm/string/classification.hpp>
-#include <seastar/core/thread.hh>
-#include <seastar/core/reactor.hh>
-#include <seastar/core/file.hh>
-#include <seastar/core/fstream.hh>
-#include <seastar/http/exception.hh>
-#include <seastar/util/closeable.hh>
-#include <seastar/util/short_streams.hh>
-#include <seastar/core/units.hh>
-#include "test/lib/scylla_test_case.hh"
+#include "gc_clock.hh"
+#include "sstables/checksum_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/assert.hh"
+#include "utils/exceptions.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
-#include "utils/exceptions.hh"
-#include "sstables/checksum_utils.hh"
-#include "gc_clock.hh"
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/test/unit_test.hpp>
+#include <seastar/core/file.hh>
+#include <seastar/core/fstream.hh>
+#include <seastar/core/reactor.hh>
+#include <seastar/core/thread.hh>
+#include <seastar/core/units.hh>
+#include <seastar/http/exception.hh>
+#include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
+#include <unordered_set>
+#include <utils/s3/aws_credentials_provider_chain.hh>
+#include <utils/s3/config_file_aws_credentials_provider.hh>
+
+#include <utils/s3/environment_aws_credentials_provider.hh>
+#include <utils/s3/instance_profile_credentials_provider.hh>
+#include <utils/s3/sts_assume_role_credentials_provider.hh>
 
 using namespace std::string_view_literals;
 
@@ -49,12 +55,13 @@ static shared_ptr<s3::client> make_proxy_client(semaphore& mem) {
     s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("PROXY_S3_SERVER_PORT")),
         .use_https = false,
-        .aws = {{
-            .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-            .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-            .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
-            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
-        }},
+        .credentials =
+            {
+                .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
+                .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+                .session_token = ::getenv("AWS_SESSION_TOKEN") ?: "",
+            },
+        .region = ::getenv("AWS_DEFAULT_REGION") ?: "local",
     };
     return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem);
 }
@@ -63,12 +70,13 @@ static shared_ptr<s3::client> make_minio_client(semaphore& mem) {
     s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
-        .aws = {{
-            .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-            .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-            .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
-            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
-        }},
+        .credentials =
+            {
+                .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
+                .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+                .session_token = ::getenv("AWS_SESSION_TOKEN") ?: "",
+            },
+        .region = ::getenv("AWS_DEFAULT_REGION") ?: "local",
     };
     return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem);
 }
@@ -101,23 +109,21 @@ void client_put_get_object(const client_maker_function& client_maker) {
     s3::stats st = cln->get_object_stats(name).get();
     BOOST_REQUIRE_EQUAL(st.size, 10);
     // forgive timezone difference as minio server is GMT by default
-    BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);
+    BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24 * 3600);
 
     testlog.info("Get object content\n");
     temporary_buffer<char> res = cln->get_object_contiguous(name).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), sstring("1234567890"));
 
     testlog.info("Get object part\n");
-    res = cln->get_object_contiguous(name, s3::range{ 1, 3 }).get();
+    res = cln->get_object_contiguous(name, s3::range{1, 3}).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(res)), sstring("234"));
 
     testlog.info("Delete object\n");
     cln->delete_object(name).get();
 
     testlog.info("Verify it's gone\n");
-    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), storage_io_error, [] (const storage_io_error& ex) {
-        return ex.code().value() == ENOENT;
-    });
+    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), storage_io_error, [](const storage_io_error& ex) { return ex.code().value() == ENOENT; });
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_minio) {
@@ -139,7 +145,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     const sstring name(fmt::format("/{}/test{}object-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), with_copy_upload ? "jumbo" : "large", ::getpid()));
 
     testlog.info("Make client\n");
-    semaphore mem(16<<20);
+    semaphore mem(16 << 20);
     auto cln = client_maker(mem);
     auto close_client = deferred_close(*cln);
 
@@ -147,8 +153,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     auto out = output_stream<char>(
         // Make it 3 parts per piece, so that 128Mb buffer below
         // would be split into several 15Mb pieces
-        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name)
-    );
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
     auto close = seastar::deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
@@ -175,7 +180,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
         uint64_t len = tests::random::get_int(1u, chunk_size);
         uint64_t off = tests::random::get_int(object_size - len);
 
-        auto s_buf = cln->get_object_contiguous(name, s3::range{ off, len }).get();
+        auto s_buf = cln->get_object_contiguous(name, s3::range{off, len}).get();
         unsigned align = off % chunk_size;
         testlog.info("Got [{}:{}) chunk\n", off, len);
         testlog.info("Checking {} vs {} len {}\n", align, 0, std::min<uint64_t>(chunk_size - align, len));
@@ -255,21 +260,15 @@ future<> test_client_upload_file(const client_maker_function& client_maker, std:
         // so we can test !with_remainder case properly with multiple writes
         SCYLLA_ASSERT(total_size % data.size() == 0);
 
-        for (size_t bytes_written = 0;
-             bytes_written < total_size;
-             bytes_written += data.size()) {
+        for (size_t bytes_written = 0; bytes_written < total_size; bytes_written += data.size()) {
             co_await output.write(data.data(), data.size());
             uint32_t chunk_checksum = crc32_utils::checksum(data.data(), data.size());
-            expected_checksum = checksum_combine_or_feed<crc32_utils>(
-                expected_checksum, chunk_checksum, data.data(), data.size());
+            expected_checksum = checksum_combine_or_feed<crc32_utils>(expected_checksum, chunk_checksum, data.data(), data.size());
         }
         co_await output.close();
     }
 
-    const auto object_name = fmt::format("/{}/{}-{}",
-                                         tests::getenv_safe("S3_BUCKET_FOR_TEST"),
-                                         test_name,
-                                         ::getpid());
+    const auto object_name = fmt::format("/{}/{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), test_name, ::getpid());
 
     // 2. upload the file to s3
     semaphore mem{memory_size};
@@ -289,10 +288,9 @@ future<> test_client_upload_file(const client_maker_function& client_maker, std:
         }
         actual_size += buf.size();
         bytes_view bv{reinterpret_cast<const int8_t*>(buf.get()), buf.size()};
-        //fmt::print("{}", fmt_hex(bv));
+        // fmt::print("{}", fmt_hex(bv));
         uint32_t chunk_checksum = crc32_utils::checksum(buf.get(), buf.size());
-        actual_checksum = checksum_combine_or_feed<crc32_utils>(
-            actual_checksum, chunk_checksum, buf.get(), buf.size());
+        actual_checksum = checksum_combine_or_feed<crc32_utils>(actual_checksum, chunk_checksum, buf.get(), buf.size());
     }
     BOOST_CHECK_EQUAL(total_size, actual_size);
     BOOST_CHECK_EQUAL(expected_checksum, actual_checksum);
@@ -350,7 +348,7 @@ void client_readable_file(const client_maker_function& client_maker) {
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    semaphore mem(16<<20);
+    semaphore mem(16 << 20);
     auto cln = client_maker(mem);
     auto close_client = deferred_close(*cln);
 
@@ -400,7 +398,7 @@ void client_readable_file_stream(const client_maker_function& client_maker) {
     const sstring name(fmt::format("/{}/teststreamobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    semaphore mem(16<<20);
+    semaphore mem(16 << 20);
     auto cln = client_maker(mem);
     auto close_client = deferred_close(*cln);
 
@@ -429,9 +427,8 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream_proxy) {
 }
 
 void client_put_get_tagging(const client_maker_function& client_maker) {
-    const sstring name(fmt::format("/{}/testobject-{}",
-                                   tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
-    semaphore mem(16<<20);
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+    semaphore mem(16 << 20);
     auto client = client_maker(mem);
 
     auto close_client = deferred_close(*client);
@@ -482,7 +479,7 @@ static std::unordered_set<sstring> populate_bucket(shared_ptr<s3::client> client
 void client_list_objects(const client_maker_function& client_maker) {
     const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
     const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
-    semaphore mem(16<<20);
+    semaphore mem(16 << 20);
     auto client = client_maker(mem);
     auto close_client = deferred_close(*client);
 
@@ -514,7 +511,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
 void client_list_objects_incomplete(const client_maker_function& client_maker) {
     const sstring bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST");
     const sstring prefix(fmt::format("testprefix-{}/", ::getpid()));
-    semaphore mem(16<<20);
+    semaphore mem(16 << 20);
     auto client = client_maker(mem);
     auto close_client = deferred_close(*client);
 
@@ -629,4 +626,75 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
             BOOST_REQUIRE_EQUAL(st.size, object_size);
         }
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_creds) {
+    auto old_access_key_id = ::getenv("AWS_ACCESS_KEY_ID") ?: "";
+    auto old_secret_access_key = ::getenv("AWS_SECRET_ACCESS_KEY") ?: "";
+    auto old_session_token = ::getenv("AWS_SESSION_TOKEN") ?: "";
+
+    setenv("AWS_ACCESS_KEY_ID", "ENV_AWS_ACCESS_KEY_ID", 1);
+    setenv("AWS_SECRET_ACCESS_KEY", "ENV_AWS_SECRET_ACCESS_KEY", 1);
+    setenv("AWS_SESSION_TOKEN", "ENV_AWS_SESSION_TOKEN", 1);
+
+    auto env_provider = std::make_unique<aws::environment_aws_credentials_provider>();
+    auto creds = env_provider->get_aws_credentials().get();
+
+    BOOST_WARN_EQUAL(creds.access_key_id, "ENV_AWS_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "ENV_AWS_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "ENV_AWS_SESSION_TOKEN");
+
+    auto cf_provider =
+        std::make_unique<aws::config_file_aws_credentials_provider>("/home/ernest.zaslavsky/Development/scylladb/test/boost/test_config_file.yaml");
+    creds = cf_provider->get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "EXAMPLE_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "");
+
+    /*auto sts_provider = std::make_unique<aws::sts_assume_role_credentials_provider>("us-east-1", "arn:aws:iam::797456418907:role/DeveloperAccessRole");
+    creds = sts_provider->get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "EXAMPLE_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "");
+
+    auto md_provider = std::make_unique<aws::instance_profile_credentials_provider>();
+    creds = md_provider->get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "EXAMPLE_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "");*/
+
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain.add_credentials_provider(std::move(env_provider)).add_credentials_provider(std::move(cf_provider));
+    // .add_credentials_provider(std::move(sts_provider))
+    // .add_credentials_provider(std::move(md_provider));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "ENV_AWS_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "ENV_AWS_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "ENV_AWS_SESSION_TOKEN");
+
+    setenv("AWS_ACCESS_KEY_ID", "", 1);
+    setenv("AWS_SECRET_ACCESS_KEY", "", 1);
+    setenv("AWS_SESSION_TOKEN", "", 1);
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
+        .add_credentials_provider(
+            std::make_unique<aws::config_file_aws_credentials_provider>("/home/ernest.zaslavsky/Development/scylladb/test/boost/test_config_file.yaml"));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "CF_AWS_ACCESS_KEY_ID");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "CF_AWS_SECRET_ACCESS_KEY");
+    BOOST_WARN_EQUAL(creds.session_token, "CF_AWS_SESSION_TOKEN");
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
+        .add_credentials_provider(
+            std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_WARN_EQUAL(creds.access_key_id, "");
+    BOOST_WARN_EQUAL(creds.secret_access_key, "");
+    BOOST_WARN_EQUAL(creds.session_token, "");
+
+    setenv("AWS_ACCESS_KEY_ID", old_access_key_id, 1);
+    setenv("AWS_SECRET_ACCESS_KEY", old_secret_access_key, 1);
+    setenv("AWS_SESSION_TOKEN", old_session_token, 1);
 }

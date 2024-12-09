@@ -618,4 +618,4 @@ maintenance_socket: ignore
 #
 # Note that creating keyspaces with tablets enabled or disabled is irreversible.
 # The `tablets` option cannot be changed using `ALTER KEYSPACE`.
-enable_tablets: true
+enable_tablets: false
