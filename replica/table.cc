@@ -2981,8 +2981,6 @@ static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, c
 }
 
 void table::add_or_update_view(view_ptr v) {
-    v->view_info()->set_base_info(
-        v->view_info()->make_base_dependent_view_info(*_schema));
     auto existing = find_view(_views, v);
     if (existing != _views.end()) {
         *existing = std::move(v);
