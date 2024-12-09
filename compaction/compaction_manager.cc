@@ -26,6 +26,7 @@
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_keyspace_compaction_history_entry.hh"
 #include "tombstone_gc-internals.hh"
 #include <cmath>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -469,7 +470,7 @@ future<> compaction_task_executor::update_history(table_state& t, sstables::comp
             rows_merged[id] = res.stats.reader_statistics.rows_merged_histogram[id];
         }
 
-        db::compaction_history_entry entry {
+        db::system_keyspace_compaction_history_entry entry {
             .id = cdata.compaction_uuid,
             .ks = t.schema()->ks_name(),
             .cf = t.schema()->cf_name(),

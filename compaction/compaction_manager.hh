@@ -35,7 +35,7 @@
 
 namespace db {
 class system_keyspace;
-class compaction_history_entry;
+class system_keyspace_compaction_history_entry;
 }
 
 namespace sstables { class test_env_compaction_manager; }
@@ -300,7 +300,7 @@ public:
     // unless it is moved back to enabled state.
     future<> drain();
 
-    using compaction_history_consumer = noncopyable_function<future<>(const db::compaction_history_entry&)>;
+    using compaction_history_consumer = noncopyable_function<future<>(const db::system_keyspace_compaction_history_entry&)>;
     future<> get_compaction_history(compaction_history_consumer&& f);
 
     // Submit a table to be compacted.

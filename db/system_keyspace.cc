@@ -47,6 +47,7 @@
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "replica/database.hh"
+#include "db/system_keyspace_compaction_history_entry.hh"
 
 #include <unordered_map>
 
@@ -2391,7 +2392,7 @@ static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t
     return tmp;
 }
 
-future<> system_keyspace::update_compaction_history(compaction_history_entry entry)
+future<> system_keyspace::update_compaction_history(system_keyspace_compaction_history_entry entry)
 {
     // don't write anything when the history table itself is compacted, since that would in turn cause new compactions
     if (entry.ks == "system" && entry.cf == COMPACTION_HISTORY) {
@@ -2413,7 +2414,7 @@ future<> system_keyspace::update_compaction_history(compaction_history_entry ent
 future<> system_keyspace::get_compaction_history(compaction_history_consumer consumer) {
     sstring req = format("SELECT * from system.{}", COMPACTION_HISTORY);
     co_await _qp.query_internal(req, [&consumer] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        compaction_history_entry entry;
+        system_keyspace_compaction_history_entry entry;
         entry.id = row.get_as<utils::UUID>("id");
         entry.ks = row.get_as<sstring>("keyspace_name");
         entry.cf = row.get_as<sstring>("columnfamily_name");

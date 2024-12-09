@@ -15,6 +15,7 @@
 #include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_keyspace_compaction_history_entry.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
 #include "storage_service.hh"
@@ -157,7 +158,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
             std::exception_ptr ex;
             try {
                 co_await s.write("[");
-                co_await cm.local().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
+                co_await cm.local().get_compaction_history([&s, &first](const db::system_keyspace_compaction_history_entry& entry) mutable -> future<> {
                         cm::history h;
                         h.id = fmt::to_string(entry.id);
                         h.ks = std::move(entry.ks);
