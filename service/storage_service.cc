@@ -4469,11 +4469,11 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                         // and waits for ring_delay. It's possible the node being decommissioned might
                         // die after it has sent this notification. If this happens, the node would
                         // have already been removed from this token_metadata, so we wouldn't find it here.
-                        const auto node_id = tmptr->get_host_id_if_known(node);
-                        slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        if (node_id) {
-                            tmptr->del_leaving_endpoint(*node_id);
-                        }
+                        try {
+                            const auto node_id = _gossiper.get_host_id(node);
+                            slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
+                            tmptr->del_leaving_endpoint(node_id);
+                        } catch (...) {}
                     }
                     return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
                 });
@@ -4489,7 +4489,10 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 check_again = false;
                 for (auto& node : req.leaving_nodes) {
                     auto tmptr = get_token_metadata_ptr();
-                    const auto host_id = tmptr->get_host_id_if_known(node);
+                    std::optional<locator::host_id> host_id;
+                    try {
+                        host_id = _gossiper.get_host_id(node);
+                    } catch(...) {};
                     if (host_id && tmptr->is_normal_token_owner(*host_id)) {
                         check_again = true;
                         if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
