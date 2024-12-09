@@ -716,7 +716,241 @@ public:
         return *shard_info.candidates_all_tables.begin();
     }
 
+<<<<<<< HEAD
     void erase_candidate(shard_load& shard_info, global_tablet_id tablet) {
+||||||| parent of bf18a17bd6 (tablets: scheduler: Fix temporary imbalance in a mixed-capacity cluster on decommission)
+    // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
+    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[dst.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+
+        // max number of tablets per shard to keep perfect distribution.
+        // Rounded up because we don't want to consider movement which is within the best possible
+        // per-shard distribution as bad.
+        double shard_balance_threshold = div_ceil(total_load, total_shard_count);
+        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       shard_balance_threshold, new_shard_load, dst_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double node_balance_threshold = div_ceil(total_load, node_count);
+        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
+        auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       node_balance_threshold, new_node_load, dst_node_badness);
+
+        return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src.
+    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[src.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+        size_t node_count = _total_capacity_nodes;
+
+        // For determining impact on leaving, round down, because we don't want to consider movement which is within
+        // the best possible per-shard distribution as bad.
+        double leaving_shard_balance_threshold = total_load / total_shard_count;
+        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+
+        auto src_shard_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_shard_balance_threshold - new_shard_load) / total_load;
+
+        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double leaving_node_balance_threshold = total_load / node_count;
+        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
+
+        auto src_node_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_node_balance_threshold - new_node_load) / total_load;
+
+        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_node_balance_threshold, new_node_load, src_node_badness);
+
+        return migration_badness{src_shard_badness, src_node_badness, 0, 0};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+        auto src_badness = evaluate_src_badness(nodes, table, src);
+        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
+
+        if (src.host == dst.host) {
+            src_badness.src_node_badness = 0;
+            dst_badness.dst_node_badness = 0;
+        }
+
+        return {
+            src_badness.shard_badness(),
+            src_badness.node_badness(),
+            dst_badness.shard_badness(),
+            dst_badness.node_badness()
+        };
+    }
+
+    future<migration_candidate> peek_candidate(node_load_map& nodes, shard_load& shard_info, tablet_replica src, tablet_replica dst) {
+        if (!_use_table_aware_balancing) {
+            co_return migration_candidate{peek_candidate(shard_info), src, dst, migration_badness{}};
+        }
+
+        if (shard_info.candidates.empty()) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        std::optional<migration_candidate> best_candidate;
+
+        for (auto&& [table, tablets] : shard_info.candidates) {
+            if (!tablets.empty()) {
+                auto badness = evaluate_candidate(nodes, table, src, dst);
+                auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
+                lblogger.trace("Candidate: {}", candidate);
+                if (!best_candidate || candidate.badness < best_candidate->badness) {
+                    best_candidate = candidate;
+                }
+            }
+        }
+
+        if (!best_candidate) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        lblogger.trace("Best candidate: {}", *best_candidate);
+        co_return *best_candidate;
+    }
+
+    void erase_candidate(shard_load& shard_info, migration_tablet_set tablets) {
+=======
+    // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
+    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[dst.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+
+        // Load per shard in a perfectly balanced state.
+        // Assumes each shard has same capacity.
+        double desired_load_per_shard = double(total_load) / total_shard_count;
+
+        // max number of tablets per shard to keep perfect distribution.
+        // Rounded up because we don't want to consider movement which is within the best possible
+        // per-shard distribution as bad.
+        double shard_balance_threshold = std::ceil(desired_load_per_shard);
+        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       shard_balance_threshold, new_shard_load, dst_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double node_balance_threshold = std::ceil(desired_load_per_shard * node_info.shard_count);
+        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
+        auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
+        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
+                       node_balance_threshold, new_node_load, dst_node_badness);
+
+        return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src.
+    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+        _stats.for_dc(_dc).candidates_evaluated++;
+
+        auto& node_info = nodes[src.host];
+        size_t total_load = _tablet_count_per_table[table];
+        size_t total_shard_count = _total_capacity_shards;
+
+        // Load per shard in a perfectly balanced state.
+        // Assumes each shard has same capacity.
+        double desired_load_per_shard = double(total_load) / total_shard_count;
+
+        // For determining impact on leaving, round down, because we don't want to consider movement which is within
+        // the best possible per-shard distribution as bad.
+        double leaving_shard_balance_threshold = std::floor(desired_load_per_shard);
+        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+
+        auto src_shard_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_shard_balance_threshold - new_shard_load) / total_load;
+
+        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
+
+        // max number of tablets per node to keep perfect distribution.
+        double leaving_node_balance_threshold = std::floor(desired_load_per_shard * node_info.shard_count);
+        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
+
+        auto src_node_badness = node_info.drained
+                ? 0 // Moving a tablet away from a drained node is always good.
+                : (leaving_node_balance_threshold - new_node_load) / total_load;
+
+        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
+                       leaving_node_balance_threshold, new_node_load, src_node_badness);
+
+        return migration_badness{src_shard_badness, src_node_badness, 0, 0};
+    }
+
+    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
+        auto src_badness = evaluate_src_badness(nodes, table, src);
+        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
+
+        if (src.host == dst.host) {
+            src_badness.src_node_badness = 0;
+            dst_badness.dst_node_badness = 0;
+        }
+
+        return {
+            src_badness.shard_badness(),
+            src_badness.node_badness(),
+            dst_badness.shard_badness(),
+            dst_badness.node_badness()
+        };
+    }
+
+    future<migration_candidate> peek_candidate(node_load_map& nodes, shard_load& shard_info, tablet_replica src, tablet_replica dst) {
+        if (!_use_table_aware_balancing) {
+            co_return migration_candidate{peek_candidate(shard_info), src, dst, migration_badness{}};
+        }
+
+        if (shard_info.candidates.empty()) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        std::optional<migration_candidate> best_candidate;
+
+        for (auto&& [table, tablets] : shard_info.candidates) {
+            if (!tablets.empty()) {
+                auto badness = evaluate_candidate(nodes, table, src, dst);
+                auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
+                lblogger.trace("Candidate: {}", candidate);
+                if (!best_candidate || candidate.badness < best_candidate->badness) {
+                    best_candidate = candidate;
+                }
+            }
+        }
+
+        if (!best_candidate) {
+            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+        }
+
+        lblogger.trace("Best candidate: {}", *best_candidate);
+        co_return *best_candidate;
+    }
+
+    void erase_candidate(shard_load& shard_info, migration_tablet_set tablets) {
+>>>>>>> bf18a17bd6 (tablets: scheduler: Fix temporary imbalance in a mixed-capacity cluster on decommission)
         if (_use_table_aware_balancing) {
             shard_info.candidates[tablet.table].erase(tablet);
             if (shard_info.candidates[tablet.table].empty()) {
