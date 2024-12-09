@@ -816,16 +816,6 @@ public:
 
 } // namespace raft
 
-#if FMT_VERSION < 100000
-// fmt v10 introduced formatter for std::exception
-template <std::derived_from<raft::error> T>
-struct fmt::formatter<T> : fmt::formatter<string_view> {
-    auto format(const T& e, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", e.what());
-    }
-};
-#endif
-
 template <>
 struct fmt::formatter<raft::server_address> : fmt::formatter<string_view> {
     auto format(const raft::server_address&, fmt::format_context& ctx) const -> decltype(ctx.out());

@@ -34,8 +34,6 @@
 
 #include "db/config.hh"
 
-#include "utils/fmt-compat.hh"
-
 cql_test_config auth_on(bool with_authorizer = true) {
     cql_test_config cfg;
     if (with_authorizer) {

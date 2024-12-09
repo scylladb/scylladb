@@ -59,13 +59,3 @@ public:
 };
 
 }
-
-#if FMT_VERSION < 100000
- // fmt v10 introduced formatter for std::exception
- template <std::derived_from<sstables::malformed_sstable_exception> T>
- struct fmt::formatter<T> : fmt::formatter<string_view> {
-     auto format(const T& e, fmt::format_context& ctx) const {
-         return fmt::format_to(ctx.out(), "{}", e.what());
-     }
- };
- #endif
