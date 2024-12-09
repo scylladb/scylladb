@@ -1283,19 +1283,22 @@ public:
         auto& node_info = nodes[dst.host];
         size_t total_load = _tablet_count_per_table[table];
         size_t total_shard_count = _total_capacity_shards;
-        size_t node_count = _total_capacity_nodes;
+
+        // Load per shard in a perfectly balanced state.
+        // Assumes each shard has same capacity.
+        double desired_load_per_shard = double(total_load) / total_shard_count;
 
         // max number of tablets per shard to keep perfect distribution.
         // Rounded up because we don't want to consider movement which is within the best possible
         // per-shard distribution as bad.
-        double shard_balance_threshold = div_ceil(total_load, total_shard_count);
+        double shard_balance_threshold = std::ceil(desired_load_per_shard);
         auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
         auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
         lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
                        shard_balance_threshold, new_shard_load, dst_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
-        double node_balance_threshold = div_ceil(total_load, node_count);
+        double node_balance_threshold = std::ceil(desired_load_per_shard * node_info.shard_count);
         size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
         auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
         lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
@@ -1311,11 +1314,14 @@ public:
         auto& node_info = nodes[src.host];
         size_t total_load = _tablet_count_per_table[table];
         size_t total_shard_count = _total_capacity_shards;
-        size_t node_count = _total_capacity_nodes;
+
+        // Load per shard in a perfectly balanced state.
+        // Assumes each shard has same capacity.
+        double desired_load_per_shard = double(total_load) / total_shard_count;
 
         // For determining impact on leaving, round down, because we don't want to consider movement which is within
         // the best possible per-shard distribution as bad.
-        double leaving_shard_balance_threshold = total_load / total_shard_count;
+        double leaving_shard_balance_threshold = std::floor(desired_load_per_shard);
         auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
 
         auto src_shard_badness = node_info.drained
@@ -1326,7 +1332,7 @@ public:
                        leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
-        double leaving_node_balance_threshold = total_load / node_count;
+        double leaving_node_balance_threshold = std::floor(desired_load_per_shard * node_info.shard_count);
         size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
 
         auto src_node_badness = node_info.drained
