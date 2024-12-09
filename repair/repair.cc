@@ -1521,6 +1521,7 @@ future<> repair::data_sync_repair_task_impl::run() {
         static const std::unordered_set<sstring> small_table_optimization_enabled_ks = {
             "system_distributed",
             "system_distributed_everywhere",
+            "system_replicated_keys",
             "system_auth",
             "system_traces"
         };
