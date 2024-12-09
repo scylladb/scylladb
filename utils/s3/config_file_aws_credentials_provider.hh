@@ -12,18 +12,21 @@
 namespace aws {
 
 /**
- * Reads credentials profile from the default Profile Config File. Refreshes at set interval for credential rotation. Looks for environment variables
- * AWS_SHARED_CREDENTIALS_FILE and AWS_PROFILE. If they aren't found, then it defaults to the default profile in ~/.aws/credentials. Optionally a user can
- * specify the profile and it will override the environment variable and defaults. To alter the file this pulls from, then the user should alter the
- * AWS_SHARED_CREDENTIALS_FILE variable.
+ * Reads credentials form yaml file as described in https://github.com/scylladb/scylladb/blob/master/docs/dev/object_storage.md
  */
 
 class config_file_aws_credentials_provider final : public aws_credentials_provider {
 public:
-    s3::endpoint_config::aws_config get_aws_credentials() override;
+    explicit config_file_aws_credentials_provider(const std::string& _creds_file);
+    [[nodiscard]] seastar::future<s3::endpoint_config::aws_credentials> get_aws_credentials() override;
+    [[nodiscard]] const char* get_name() const override { return "config_file_aws_credentials_provider"; }
 
 protected:
-    bool is_time_to_refresh(long reloadFrequency) override;
-    void reload() override;
+    [[nodiscard]] bool is_time_to_refresh() const override { return false; }
+    seastar::future<> reload() override;
+
+private:
+    std::string creds_file;
+    s3::endpoint_config::aws_credentials creds;
 };
 } // namespace aws

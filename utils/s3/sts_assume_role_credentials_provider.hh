@@ -8,6 +8,7 @@
 
 #pragma once
 #include "aws_credentials_provider.hh"
+
 namespace aws {
 
 /*
@@ -15,11 +16,21 @@ namespace aws {
  */
 class sts_assume_role_credentials_provider final : public aws_credentials_provider {
 public:
-    s3::endpoint_config::aws_config get_aws_credentials() override;
+    sts_assume_role_credentials_provider(const std::string& _region, const std::string& _role_arn);
+    [[nodiscard]] seastar::future<s3::endpoint_config::aws_credentials> get_aws_credentials() override;
+    [[nodiscard]] const char* get_name() const override { return "sts_assume_role_credentials_provider"; }
 
 protected:
-    bool is_time_to_refresh(long reloadFrequency) override;
-    void reload() override;
+    [[nodiscard]] bool is_time_to_refresh() const override;
+    seastar::future<> reload() override;
+
+private:
+    seastar::future<> update_credentials();
+    void parse_creds(seastar::sstring& body);
+    static constexpr unsigned session_duration = 43200;
+    std::string sts_host;
+    std::string role_arn;
+    s3::endpoint_config::aws_credentials creds;
 };
 
 } // namespace aws

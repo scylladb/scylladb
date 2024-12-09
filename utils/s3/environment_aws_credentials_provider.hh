@@ -17,10 +17,15 @@ namespace aws {
  */
 class environment_aws_credentials_provider final : public aws_credentials_provider {
 public:
-    s3::endpoint_config::aws_config get_aws_credentials() override;
+    environment_aws_credentials_provider();
+    [[nodiscard]] seastar::future<s3::endpoint_config::aws_credentials> get_aws_credentials() override;
+    [[nodiscard]] const char* get_name() const override { return "environment_aws_credentials_provider"; }
 
 protected:
-    bool is_time_to_refresh(long reloadFrequency) override;
-    void reload() override;
+    [[nodiscard]] bool is_time_to_refresh() const override { return false; }
+    seastar::future<> reload() override { return seastar::make_ready_future(); }
+
+private:
+    s3::endpoint_config::aws_credentials creds;
 };
 } // namespace aws

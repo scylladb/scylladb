@@ -1,0 +1,8 @@
+endpoints:
+  - name: s3.us-east-1.amazonaws.com
+    port: 443
+    https: true
+    aws_region: us-east-1
+    aws_access_key_id: CF_AWS_ACCESS_KEY_ID
+    aws_secret_access_key: CF_AWS_SECRET_ACCESS_KEY
+    aws_session_token: CF_AWS_SESSION_TOKEN

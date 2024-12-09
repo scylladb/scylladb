@@ -52,7 +52,8 @@ target_sources(utils
     s3/config_file_aws_credentials_provider.cc
     s3/environment_aws_credentials_provider.cc
     s3/instance_profile_credentials_provider.cc
-    s3/sts_assume_role_credentials_provider.cc)
+    s3/sts_assume_role_credentials_provider.cc
+    s3/aws_credentials_provider_chain.cc)
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}

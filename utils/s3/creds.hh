@@ -17,19 +17,19 @@ struct endpoint_config {
     unsigned port;
     bool use_https;
 
-    struct aws_config {
+    struct aws_credentials {
         // the access key of the credentials
         std::string access_key_id;
         // the secret key of the credentials
         std::string secret_access_key;
         // the security token, only for session credentials
         std::string session_token;
-      std::chrono::system_clock::time_point expiration;
-
-        std::strong_ordering operator<=>(const aws_config& o) const = default;
+        std::chrono::system_clock::time_point expires_at{std::chrono::system_clock::time_point::min()};
+        operator bool() const { return !access_key_id.empty() && !secret_access_key.empty(); }
+        std::strong_ordering operator<=>(const aws_credentials& o) const = default;
     };
 
-    std::optional<aws_config> aws;
+    aws_credentials credentials;
     // Amazon Resource Names (ARNs) to access AWS resources
     std::optional<std::string> role_arn;
     std::string region;
