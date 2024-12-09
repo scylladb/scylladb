@@ -243,27 +243,33 @@ future<> service::client_state::maybe_update_per_service_level_params() {
         if (!slo_opt) {
             co_return;
         }
-        auto slo_timeout_or = [&] (const lowres_clock::duration& default_timeout) {
-            return std::visit(overloaded_functor{
-                [&] (const qos::service_level_options::unset_marker&) -> lowres_clock::duration {
-                    return default_timeout;
-                },
-                [&] (const qos::service_level_options::delete_marker&) -> lowres_clock::duration {
-                    return default_timeout;
-                },
-                [&] (const lowres_clock::duration& d) -> lowres_clock::duration {
-                    return d;
-                },
-            }, slo_opt->timeout);
-        };
-        _timeout_config.read_timeout = slo_timeout_or(_default_timeout_config.read_timeout);
-        _timeout_config.write_timeout = slo_timeout_or(_default_timeout_config.write_timeout);
-        _timeout_config.range_read_timeout = slo_timeout_or(_default_timeout_config.range_read_timeout);
-        _timeout_config.counter_write_timeout = slo_timeout_or(_default_timeout_config.counter_write_timeout);
-        _timeout_config.truncate_timeout = slo_timeout_or(_default_timeout_config.truncate_timeout);
-        _timeout_config.cas_timeout = slo_timeout_or(_default_timeout_config.cas_timeout);
-        _timeout_config.other_timeout = slo_timeout_or(_default_timeout_config.other_timeout);
-
-        _workload_type = slo_opt->workload;
+        
+        update_per_service_level_params(*slo_opt);
     }
+}
+
+void service::client_state::update_per_service_level_params(qos::service_level_options& slo) {
+    auto slo_timeout_or = [&] (const lowres_clock::duration& default_timeout) {
+        return std::visit(overloaded_functor{
+            [&] (const qos::service_level_options::unset_marker&) -> lowres_clock::duration {
+                return default_timeout;
+            },
+            [&] (const qos::service_level_options::delete_marker&) -> lowres_clock::duration {
+                return default_timeout;
+            },
+            [&] (const lowres_clock::duration& d) -> lowres_clock::duration {
+                return d;
+            },
+        }, slo.timeout);
+    };
+
+    _timeout_config.read_timeout = slo_timeout_or(_default_timeout_config.read_timeout);
+    _timeout_config.write_timeout = slo_timeout_or(_default_timeout_config.write_timeout);
+    _timeout_config.range_read_timeout = slo_timeout_or(_default_timeout_config.range_read_timeout);
+    _timeout_config.counter_write_timeout = slo_timeout_or(_default_timeout_config.counter_write_timeout);
+    _timeout_config.truncate_timeout = slo_timeout_or(_default_timeout_config.truncate_timeout);
+    _timeout_config.cas_timeout = slo_timeout_or(_default_timeout_config.cas_timeout);
+    _timeout_config.other_timeout = slo_timeout_or(_default_timeout_config.other_timeout);
+
+    _workload_type = slo.workload;
 }
