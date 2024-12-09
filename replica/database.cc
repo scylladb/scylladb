@@ -52,7 +52,6 @@
 #include "multishard_mutation_query.hh"
 
 #include "utils/human_readable.hh"
-#include "utils/fmt-compat.hh"
 #include "utils/error_injection.hh"
 
 #include "db/timeout_clock.hh"

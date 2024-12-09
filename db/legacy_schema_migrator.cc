@@ -32,7 +32,6 @@
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
-#include "utils/fmt-compat.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"

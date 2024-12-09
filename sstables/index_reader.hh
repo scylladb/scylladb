@@ -131,16 +131,6 @@ inline std::string_view format_as(index_consume_entry_context_state s) {
 
 } // namespace sstables
 
-#if FMT_VERSION < 10'00'00
-template <>
-struct fmt::formatter<sstables::index_consume_entry_context_state> {
-    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(sstables::index_consume_entry_context_state s, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", format_as(s));
-    }
-};
-#endif
-
 namespace sstables {
 
 // TODO: make it templated on SSTables version since the exact format can be passed in at compile time
