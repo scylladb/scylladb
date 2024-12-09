@@ -8,7 +8,6 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <seastar/core/condition-variable.hh>
 #include <fmt/core.h>
 #include "raft.hh"
 
