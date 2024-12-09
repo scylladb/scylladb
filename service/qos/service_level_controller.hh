@@ -137,7 +137,6 @@ private:
     std::map<sstring, service_level> _service_levels_db;
     // role name -> effective service_level_options 
     std::map<sstring, service_level_options> _effective_service_levels_db;
-    service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
     locator::shared_token_metadata& _token_metadata;
@@ -242,6 +241,7 @@ public:
     future<> drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc);
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
+    future<service_levels_info> get_service_levels();
 
     /**
      * Returns the service level options **in effect** for a user having the given
@@ -259,10 +259,23 @@ public:
     /**
      * Gets the service level data by name.
      * @param service_level_name - the name of the requested service level
+     * @return the service level data if it exists (in the local controller), otherwise throws
+     */
+    service_level& get_service_level(sstring service_level_name) {
+        auto sl_it = _service_levels_db.find(service_level_name);
+        if (sl_it == _service_levels_db.end()) {
+            throw nonexistant_service_level_exception(service_level_name);
+        }
+        return sl_it->second;
+    }
+
+    /**
+     * Gets the service level data by name.
+     * @param service_level_name - the name of the requested service level
      * @return the service level data if it exists (in the local controller) or
      * get_service_level("default") otherwise.
      */
-    service_level& get_service_level(sstring service_level_name) {
+    service_level& get_service_level_or_default(sstring service_level_name) {
         auto sl_it = _service_levels_db.find(service_level_name);
         if (sl_it == _service_levels_db.end()) {
             sl_it = _service_levels_db.find(default_service_level_name);

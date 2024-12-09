@@ -90,7 +90,7 @@ public:
 class nonexistant_service_level_exception : public service_level_argument_exception {
 public:
     nonexistant_service_level_exception(sstring service_level_name)
-            : service_level_argument_exception(format("Service Level {} doesn't exists.", service_level_name)) {
+            : service_level_argument_exception(format("Service Level {} doesn't exist.", service_level_name)) {
     }
 };
 
