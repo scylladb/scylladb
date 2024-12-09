@@ -17,7 +17,6 @@
 #include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
-#include <boost/intrusive/list.hpp>
 #include <absl/container/flat_hash_map.h>
 
 #pragma once

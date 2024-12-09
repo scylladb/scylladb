@@ -13,7 +13,6 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/shared_mutex.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
 #include "utils/hash.hh"
