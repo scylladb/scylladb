@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <fmt/format.h>
-
 #include <vector>
 #include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"

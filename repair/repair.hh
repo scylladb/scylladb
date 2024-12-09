@@ -8,19 +8,13 @@
 
 #pragma once
 
-#include <boost/range/adaptor/map.hpp>
-
 #include <unordered_map>
 #include <exception>
-#include <absl/container/btree_set.h>
 #include <fmt/core.h>
 
-#include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/condition-variable.hh>
-#include <seastar/core/gate.hh>
 
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -31,7 +25,6 @@
 #include "utils/stall_free.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
-#include "schema/schema.hh"
 #include "gms/gossip_address_map.hh"
 
 namespace tasks {
