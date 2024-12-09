@@ -156,12 +156,12 @@ public:
 
     virtual ~sstable_streamer() {}
 
-    virtual future<> stream(std::function<void(unsigned)> on_streamed);
+    virtual future<> stream(std::function<void(double, double)> on_streamed);
     inet_address_vector_replica_set get_endpoints(const dht::token& token) const;
     future<> stream_sstable_mutations(streaming::plan_id, const dht::partition_range&, std::vector<sstables::shared_sstable>);
 protected:
     virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const;
-    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, std::function<void(unsigned)> on_streamed);
+    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, std::function<void(double, double)> on_streamed);
 };
 
 class tablet_sstable_streamer : public sstable_streamer {
@@ -172,7 +172,7 @@ public:
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
-    virtual future<> stream(std::function<void(unsigned)> on_streamed) override;
+    virtual future<> stream(std::function<void(double, double)> on_streamed) override;
     virtual inet_address_vector_replica_set get_primary_endpoints(const dht::token& token) const override;
 
 private:
@@ -186,7 +186,7 @@ private:
         return result;
     }
 
-    future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, std::function<void(unsigned)> on_streamed) {
+    future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, std::function<void(double, double)> on_streamed) {
         // FIXME: fully contained sstables can be optimized.
         return stream_sstables(pr, std::move(sstables), std::move(on_streamed));
     }
@@ -214,13 +214,20 @@ inet_address_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(c
     return to_replica_set(replicas);
 }
 
-future<> sstable_streamer::stream(std::function<void(unsigned)> on_streamed) {
+future<> sstable_streamer::stream(std::function<void(double, double)> on_streamed) {
+    if (on_streamed) {
+        std::invoke(on_streamed, 0., _sstables.size());
+    }
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
 
     co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(on_streamed));
 }
 
-future<> tablet_sstable_streamer::stream(std::function<void(unsigned)> on_streamed) {
+future<> tablet_sstable_streamer::stream(std::function<void(double, double)> on_streamed) {
+    if (on_streamed) {
+        std::invoke(on_streamed, 0, _tablet_map.tablet_count());
+    }
+
     // sstables are sorted by first key in reverse order.
     auto sstable_it = _sstables.rbegin();
 
@@ -259,14 +266,26 @@ future<> tablet_sstable_streamer::stream(std::function<void(unsigned)> on_stream
             co_await coroutine::maybe_yield();
         }
 
+        if (on_streamed) {
+            double progress_unit = 1. / _tablet_map.tablet_count();
+            size_t num_sstables = sstables_fully_contained.size() + sstables_partially_contained.size();
+            if (num_sstables > 0) {
+                on_streamed = [unit = progress_unit / num_sstables, on_streamed = std::move(on_streamed)] (double processed, double) {
+                    std::invoke(on_streamed, processed * unit, 0.);
+                };
+            } else {
+                // consider this unit completed if nothing to stream
+                std::invoke(on_streamed, progress_unit, 0.);
+            }
+        }
         auto tablet_pr = dht::to_partition_range(tablet_range);
         co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), on_streamed);
         co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), on_streamed);
     }
 }
 
-future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, std::function<void(unsigned)> on_streamed) {
-    size_t nr_sst_total = _sstables.size();
+future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, std::function<void(double, double)> on_streamed) {
+    size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
 
     while (!sstables.empty()) {
@@ -284,7 +303,7 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
         nr_sst_current += sst_processed.size();
         co_await stream_sstable_mutations(ops_uuid, pr, std::move(sst_processed));
         if (on_streamed) {
-            std::invoke(on_streamed, batch_sst_nr);
+            std::invoke(on_streamed, static_cast<double>(batch_sst_nr) / nr_sst_total, 0.);
         }
     }
 }
@@ -396,7 +415,7 @@ static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary, bool unlink,
-        std::function<void(unsigned)> on_streamed) {
+        std::function<void(double, double)> on_streamed) {
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
     auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
@@ -464,7 +483,11 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _cf;
     sstring _prefix;
     std::vector<sstring> _sstables;
-    std::vector<unsigned> _num_sstables_processed;
+    struct progress {
+        double processed = 0.;
+        double total = 0.;
+    };
+    std::vector<progress> _batches_processed;
 
 protected:
     virtual future<> run() override;
@@ -481,9 +504,9 @@ public:
         , _cf(std::move(cf))
         , _prefix(std::move(prefix))
         , _sstables(std::move(sstables))
-        , _num_sstables_processed(smp::count)
+        , _batches_processed(smp::count)
     {
-        _status.progress_units = "sstables";
+        _status.progress_units = "batches";
     }
 
     virtual std::string type() const override {
@@ -498,13 +521,30 @@ public:
         return tasks::is_user_task::yes;
     }
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        llog.debug("get_progress: {}", _num_sstables_processed);
-        unsigned processed = co_await _loader.map_reduce(adder<unsigned>(), [this] (auto&) {
-            return _num_sstables_processed[this_shard_id()];
-        });
+        struct adder {
+            progress result;
+            future<> operator()(const progress p) {
+                llog.debug("get_progress: {} / {}", p.processed, p.total);
+                result.processed += p.processed;
+                if (result.total == 0.) {
+                    // total number of batches can be tracked on multiple shards,
+                    // let's keep the first non-zero one.
+                    result.total = p.total;
+                }
+                return make_ready_future<>();
+            }
+            progress get() const {
+                return result;
+            }
+        };
+        progress p = co_await _loader.map_reduce(
+            adder{},
+            [this] (auto&) {
+              return _batches_processed[this_shard_id()];
+            });
         co_return tasks::task_manager::task::progress {
-            .completed = processed,
-            .total = _sstables.size(),
+            .completed = p.processed,
+            .total = p.total,
         };
     }
 };
@@ -520,8 +560,12 @@ future<> sstables_loader::download_task_impl::run() {
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
     co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
         co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false, false,
-                                        [this] (unsigned num_streamed) {
-            _num_sstables_processed[this_shard_id()] += num_streamed;
+                                        [this] (double progress, double total) {
+            auto& processed = _batches_processed[this_shard_id()];
+            processed.processed += progress;
+            if (total != 0.) {
+                processed.total = total;
+            }
         });
     });
 }
