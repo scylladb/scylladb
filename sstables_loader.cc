@@ -144,6 +144,9 @@ public:
             , _unlink_sstables(unlink)
             , _stream_scope(stream_scope::all)
     {
+        if (_primary_replica_only == primary_replica_only::yes && _stream_scope != stream_scope::all) {
+            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
+        }
         // By sorting SSTables by their primary key, we allow SSTable runs to be
         // incrementally streamed.
         // Overlapping run fragments can have their content deduplicated, reducing
