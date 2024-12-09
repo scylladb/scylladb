@@ -40,8 +40,9 @@ void everywhere_replication_strategy::validate_options(const gms::feature_servic
     }
 }
 
-sstring everywhere_replication_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
-    const auto replication_factor = erm.get_replication_factor();
+sstring everywhere_replication_strategy::sanity_check_read_replicas(
+        const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, const dht::token token) const {
+    const auto replication_factor = erm.get_replication_factor(token);
     if (read_replicas.size() > replication_factor) {
         return seastar::format("everywhere_replication_strategy: the number of replicas for everywhere_replication_strategy is {}, cannot be higher than replication factor {}", read_replicas.size(), replication_factor);
     }
