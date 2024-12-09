@@ -588,7 +588,9 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     check_not_aborted();
 
     if (as && as->abort_requested()) {
-        throw request_aborted(format("Abort requested before waiting for entry with idx: {}, term: {}", eid.idx, eid.term));
+        throw request_aborted(format(
+                "Abort requested before waiting for entry with idx: {}, term: {}; last committed entry: {}, last applied entry: {}",
+                eid.idx, eid.term, _fsm->commit_idx(), _applied_idx));
     }
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
@@ -636,9 +638,11 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     }
     SCYLLA_ASSERT(inserted);
     if (as) {
-        it->second.abort = as->subscribe([it = it, &container] noexcept {
+        it->second.abort = as->subscribe([this, it = it, &container] noexcept {
             it->second.done.set_exception(
-                request_aborted(format("Abort requested while waiting for entry with idx: {}, term: {}", it->first, it->second.term)));
+                request_aborted(format(
+                        "Abort requested while waiting for entry with idx: {}, term: {}; last committed entry: {}, last applied entry: {}",
+                        it->first, it->second.term, _fsm->commit_idx(), _applied_idx)));
             container.erase(it);
         });
         SCYLLA_ASSERT(it->second.abort);
@@ -1450,7 +1454,9 @@ term_t server_impl::get_current_term() const {
 
 future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
     if (as && as->abort_requested()) {
-        throw request_aborted(format("Aborted before waiting for applying entry: {}, last applied entry: {}", idx, _applied_idx));
+        throw request_aborted(format(
+                "Aborted before waiting for applying entry: {}, last committed entry: {}, last applied entry: {}",
+                idx, _fsm->commit_idx(), _applied_idx));
     }
 
     check_not_aborted();
@@ -1462,7 +1468,9 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
         if (as) {
             it->second.abort = as->subscribe([this, it] noexcept {
                 it->second.promise.set_exception(
-                    request_aborted(format("Aborted while waiting to apply entry: {}, last applied entry: {}", it->first, _applied_idx)));
+                    request_aborted(format(
+                            "Aborted while waiting to apply entry: {}, last committed entry: {}, last applied entry: {}",
+                            it->first, _fsm->commit_idx(), _applied_idx)));
                 _awaited_indexes.erase(it);
             });
             SCYLLA_ASSERT(it->second.abort);
