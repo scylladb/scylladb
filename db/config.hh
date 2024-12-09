@@ -499,6 +499,10 @@ public:
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
 
+    named_value<int> disk_space_monitor_normal_polling_interval_in_seconds;
+    named_value<int> disk_space_monitor_high_polling_interval_in_seconds;
+    named_value<float> disk_space_monitor_polling_interval_threshold;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
