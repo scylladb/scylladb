@@ -49,6 +49,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "utils/shared_dict.hh"
 #include "replica/database.hh"
+#include "db/compaction_history_entry.hh"
 
 #include <unordered_map>
 

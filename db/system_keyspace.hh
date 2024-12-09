@@ -110,18 +110,7 @@ class system_keyspace_view_build_progress;
 struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
-
-struct compaction_history_entry {
-    utils::UUID id;
-    sstring ks;
-    sstring cf;
-    int64_t compacted_at = 0;
-    int64_t bytes_in = 0;
-    int64_t bytes_out = 0;
-    // Key: number of rows merged
-    // Value: counter
-    std::unordered_map<int32_t, int64_t> rows_merged;
-};
+struct compaction_history_entry;
 
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     cql3::query_processor& _qp;

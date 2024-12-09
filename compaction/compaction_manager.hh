@@ -35,8 +35,8 @@
 #include "utils/pluggable.hh"
 
 namespace db {
-class system_keyspace;
 class compaction_history_entry;
+class system_keyspace;
 }
 
 namespace sstables { class test_env_compaction_manager; }

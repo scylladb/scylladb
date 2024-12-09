@@ -14,6 +14,7 @@
 #include "api/api.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "db/compaction_history_entry.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
