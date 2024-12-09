@@ -17,7 +17,6 @@
 #include "utils/chunked_vector.hh"
 
 #include <boost/intrusive/parent_from_member.hpp>
-#include <boost/intrusive/slist.hpp>
 
 class static_row;
 

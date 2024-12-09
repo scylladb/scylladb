@@ -43,7 +43,6 @@
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 #include "utils/user_provided_param.hh"
@@ -111,6 +110,8 @@ class raft_group0;
 class group0_guard;
 class group0_info;
 class raft_group0_client;
+class tablet_virtual_task;
+class task_manager_module;
 
 struct join_node_request_params;
 struct join_node_request_result;
@@ -184,7 +185,9 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
-    shared_ptr<node_ops::task_manager_module> _task_manager_module;
+    shared_ptr<node_ops::task_manager_module> _node_ops_module;
+    shared_ptr<service::task_manager_module> _tablets_module;
+    gms::gossip_address_map& _address_map;
     void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
                          std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
@@ -228,10 +231,11 @@ public:
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
         topology_state_machine& topology_state_machine,
-        tasks::task_manager& tm);
+        tasks::task_manager& tm,
+        gms::gossip_address_map& address_map);
     ~storage_service();
 
-    node_ops::task_manager_module& get_task_manager_module() noexcept;
+    node_ops::task_manager_module& get_node_ops_module() noexcept;
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service();
@@ -383,7 +387,7 @@ public:
 
     void set_group0(service::raft_group0&);
 
-    future<> init_address_map(raft_address_map& address_map, gms::generation_type new_generation);
+    future<> init_address_map(gms::gossip_address_map& address_map);
 
     future<> uninit_address_map();
     bool is_topology_coordinator_enabled() const;
@@ -780,7 +784,7 @@ private:
     future<> notify_up(inet_address endpoint);
     future<> notify_joined(inet_address endpoint);
     future<> notify_cql_change(inet_address endpoint, bool ready);
-    future<> remove_rpc_client_with_ignored_topology(inet_address endpoint);
+    future<> remove_rpc_client_with_ignored_topology(inet_address endpoint, locator::host_id id);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
@@ -859,12 +863,12 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
-    class raft_ip_address_updater;
+    class ip_address_updater;
     // Represents a subscription to gossiper on_change events,
     // updating the raft data structures that depend on
-    // IP addresses (raft_address_map, token_metadata.topology, erm-s),
+    // IP addresses (token_metadata.topology, erm-s),
     // as well as the system.peers table.
-    shared_ptr<raft_ip_address_updater> _raft_ip_address_updater;
+    shared_ptr<ip_address_updater> _ip_address_updater;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const;
 
@@ -990,6 +994,7 @@ private:
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
     friend class node_ops::task_manager_module;
+    friend class tablet_virtual_task;
 };
 
 }

@@ -14,7 +14,6 @@
 #include <chrono>
 #include <optional>
 #include "production_snitch_base.hh"
-#include <seastar/core/file.hh>
 
 namespace locator {
 

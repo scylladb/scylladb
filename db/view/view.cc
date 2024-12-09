@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <boost/range/adaptor/transformed.hpp>
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -17,10 +16,8 @@
 #include <vector>
 #include <algorithm>
 
-#include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/transform.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
 
@@ -720,8 +717,8 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_or_s
 
     std::vector<view_updates::view_row_entry> ret;
     auto compute_row = [&]<typename Range>(Range&& pk, Range&& ck) {
-        partition_key pkey = partition_key::from_range(boost::adaptors::transform(pk, view_managed_key_view_and_action::get_key_view));
-        clustering_key ckey = clustering_key::from_range(boost::adaptors::transform(ck, view_managed_key_view_and_action::get_key_view));
+        partition_key pkey = partition_key::from_range(std::views::transform(pk, view_managed_key_view_and_action::get_key_view));
+        clustering_key ckey = clustering_key::from_range(std::views::transform(ck, view_managed_key_view_and_action::get_key_view));
         auto action = (action_column < pk.size() ? pk[action_column] : ck[action_column - pk.size()])._action;
         mutation_partition& partition = partition_for(std::move(pkey));
 
@@ -738,11 +735,11 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_or_s
     if (had_multiple_values_in_pk) {
         // cartesian_product expects std::vector<std::vector<>>, while we have std::vector<small_vector>.
         std::vector<std::vector<view_managed_key_view_and_action>> pk_elems_, ck_elems_;
-        auto std_vector_from_small_vector = boost::adaptors::transformed([](const auto& vector) {
+        auto std_vector_from_small_vector = std::views::transform([](const auto& vector) {
             return std::vector<view_managed_key_view_and_action>{vector.begin(), vector.end()};
         });
-        boost::copy(pk_elems | std_vector_from_small_vector, std::back_inserter(pk_elems_));
-        boost::copy(ck_elems | std_vector_from_small_vector, std::back_inserter(ck_elems_));
+        std::ranges::copy(pk_elems | std_vector_from_small_vector, std::back_inserter(pk_elems_));
+        std::ranges::copy(ck_elems | std_vector_from_small_vector, std::back_inserter(ck_elems_));
 
         auto cartesian_product_pk = cartesian_product(pk_elems_),
              cartesian_product_ck = cartesian_product(ck_elems_);
@@ -776,7 +773,7 @@ view_updates::get_view_rows(const partition_key& base_key, const clustering_or_s
         }
     } else {
         // Here it's the old regular index over regular values. Each vector has just one element.
-        auto get_front = boost::adaptors::transformed([](const auto& v) { return v.front(); });
+        auto get_front = std::views::transform([](const auto& v) { return v.front(); });
         compute_row(pk_elems | get_front, ck_elems | get_front);
     }
 
@@ -1613,14 +1610,14 @@ view_update_builder make_view_update_builder(
         mutation_reader&& updates,
         mutation_reader_opt&& existings,
         gc_clock::time_point now) {
-    auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (view_and_base v) {
+    auto vs = views_to_update | std::views::transform([&] (view_and_base v) {
         if (base->version() != v.base->base_schema()->version()) {
             on_internal_error(vlogger, format("Schema version used for view updates ({}) does not match the current"
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
                 base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
         return view_updates(std::move(v));
-    }));
+    }) | std::ranges::to<std::vector<view_updates>>();
     return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
 
@@ -1678,11 +1675,11 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     // this mutation.
 
     //FIXME: Unfortunate copy.
-    co_return boost::copy_range<query::clustering_row_ranges>(
-            interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
-            | boost::adaptors::transformed([] (auto&& v) {
+    co_return interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
+            | std::views::transform([] (auto&& v) {
                 return std::move(v).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); });
-            }));
+            })
+            | std::ranges::to<query::clustering_row_ranges>();
 
 }
 
@@ -1732,7 +1729,7 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static std::optional<gms::inet_address>
+static std::optional<locator::host_id>
 get_view_natural_endpoint(
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
@@ -1762,7 +1759,7 @@ get_view_natural_endpoint(
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
             if (view_endpoint == me && it != base_endpoints.end()) {
-                return topology.my_address();
+                return me;
             }
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
@@ -1792,23 +1789,20 @@ get_view_natural_endpoint(
 
     // https://github.com/scylladb/scylladb/issues/19439
     // With tablets, a node being replaced might transition to "left" state
-    // but still be kept as a replica. In such case, the IP of the replaced
-    // node will be lost and `endpoint()` will return an empty IP here.
-    // As of writing this, storage proxy was not migrated to host IDs yet
-    // (#6403) and hints are not prepared to handle nodes that are left
+    // but still be kept as a replica.
+    // As of writing this hints are not prepared to handle nodes that are left
     // but are still replicas. Therefore, there is no other sensible option
     // right now but to give up attempt to send the update or write a hint
     // to the paired, permanently down replica.
-    const auto ep = view_topology.get_node(replica).endpoint();
-    if (ep != gms::inet_address{}) {
-        return ep;
+    if (!view_topology.get_node(replica).left()) {
+        return replica;
     } else {
         return std::nullopt;
     }
 }
 
 static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator::effective_replication_map_ptr ermp,
-        gms::inet_address target, inet_address_vector_topology_change pending_endpoints,
+        locator::host_id target, host_id_vector_topology_change pending_endpoints,
         frozen_mutation_and_schema mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
     // The "delay_before_remote_view_update" injection point can be
@@ -1878,7 +1872,7 @@ future<> view_update_generator::mutate_MV(
         // on a view, like we have the synchronous_updates_flag.
         bool use_legacy_self_pairing = !ks.uses_tablets();
         auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
-        auto remote_endpoints = view_ermp->get_pending_endpoints(view_token);
+        auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
         const bool update_synchronously = should_update_synchronously(*mut.s);
@@ -1893,7 +1887,7 @@ future<> view_update_generator::mutate_MV(
         // First, find the local endpoint and ensure that if it exists,
         // it will be the target endpoint. That way, all endpoints in the
         // remote_endpoints list are guaranteed to be remote.
-        auto my_address = view_ermp->get_topology().my_address();
+        auto my_address = view_ermp->get_topology().my_host_id();
         auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), my_address);
         if (remote_it != remote_endpoints.end()) {
             if (!target_endpoint) {
@@ -2419,12 +2413,13 @@ view_status_common(cql3::query_processor& qp, sstring ks_name, sstring cf_name, 
             view_builder_query_state(),
             { std::move(view_ks_name), std::move(view_name) },
             cql3::query_processor::cache_internal::no).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        return boost::copy_range<std::unordered_map<locator::host_id, sstring>>(*cql_result
-                | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
+        return *cql_result
+                | std::views::transform([] (const cql3::untyped_result_set::row& row) {
                     auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
                     auto status = row.get_as<sstring>("status");
                     return std::pair(std::move(host_id), std::move(status));
-                }));
+                })
+                | std::ranges::to<std::unordered_map<locator::host_id, sstring>>();
     });
 }
 
@@ -2659,7 +2654,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
 
     co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2", utils::wait_for_message(5min));
 
-    auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
+    auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = boost::algorithm::join(col_names, ", ");
     sstring val_binders_str = "?";
     for (size_t i = 1; i < col_names.size(); ++i) {
@@ -2986,10 +2981,9 @@ public:
     built_views consume_end_of_stream() {
         inject_failure("view_builder_consume_end_of_stream");
         if (vlogger.is_enabled(log_level::debug)) {
-            auto view_names = boost::copy_range<std::vector<sstring>>(
-                    _views_to_build | boost::adaptors::transformed([](auto v) {
+            auto view_names = _views_to_build | std::views::transform([](auto v) {
                         return v->cf_name();
-                    }));
+                    }) | std::ranges::to<std::vector<sstring>>();
             vlogger.debug("Completed build step for base {}.{}, at token {}; views={}", _step.base->schema()->ks_name(),
                           _step.base->schema()->cf_name(), _step.current_token(), view_names);
         }
@@ -3231,9 +3225,9 @@ view_updating_consumer::view_updating_consumer(view_update_generator& gen, schem
 { }
 
 std::vector<db::view::view_and_base> with_base_info_snapshot(std::vector<view_ptr> vs) {
-    return boost::copy_range<std::vector<db::view::view_and_base>>(vs | boost::adaptors::transformed([] (const view_ptr& v) {
+    return vs | std::views::transform([] (const view_ptr& v) {
         return db::view::view_and_base{v, v->view_info()->base_info()};
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration)

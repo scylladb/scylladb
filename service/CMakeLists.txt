@@ -29,6 +29,7 @@ target_sources(service
     storage_proxy.cc
     storage_service.cc
     tablet_allocator.cc
+    task_manager_module.cc
     topology_coordinator.cc
     topology_mutation.cc
     topology_state_machine.cc)

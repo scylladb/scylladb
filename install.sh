@@ -624,7 +624,7 @@ if $nonroot; then
     chmod 644 $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
     chmod 644 $rprefix/SCYLLA-NONROOT-FILE
-    if ! $without_systemd_check && check_usermode_support; then
+    if ! $skip_systemd_check && check_usermode_support; then
         systemctl --user daemon-reload
     fi
     echo "Scylla non-root install completed."

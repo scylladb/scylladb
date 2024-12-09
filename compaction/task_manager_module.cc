@@ -7,6 +7,8 @@
  */
 
 #include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/numeric.hpp>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
 #include "compaction/task_manager_module.hh"
@@ -722,7 +724,7 @@ future<> table_resharding_compaction_task_impl::run() {
     auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
 
-    uint64_t total_size = boost::accumulate(destinations | boost::adaptors::transformed(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0));
+    uint64_t total_size = std::ranges::fold_left(destinations | std::views::transform(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0), std::plus{});
     if (total_size == 0) {
         co_return;
     }

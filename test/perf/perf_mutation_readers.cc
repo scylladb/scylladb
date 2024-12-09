@@ -71,28 +71,26 @@ public:
 
 std::vector<mutation> combined::create_one_row(simple_schema& s, reader_permit permit)
 {
-    return boost::copy_range<std::vector<mutation>>(
-        s.make_pkeys(1)
-        | boost::adaptors::transformed([&] (auto& dkey) {
+    return s.make_pkeys(1)
+        | std::views::transform([&] (auto& dkey) {
             auto m = mutation(s.schema(), dkey);
             m.apply(s.make_row(permit, s.make_ckey(0), "value"));
             return m;
-        })
-    );
+          })
+        | std::ranges::to<std::vector<mutation>>();
 }
 
 std::vector<mutation> combined::create_single_stream(simple_schema& s, reader_permit permit)
 {
-    return boost::copy_range<std::vector<mutation>>(
-        s.make_pkeys(32)
-        | boost::adaptors::transformed([&] (auto& dkey) {
+    return s.make_pkeys(32)
+        | std::views::transform([&] (auto& dkey) {
             auto m = mutation(s.schema(), dkey);
             for (auto i = 0; i < 16; i++) {
                 m.apply(s.make_row(permit, s.make_ckey(i), "value"));
             }
             return m;
-        })
-    );
+          })
+        | std::ranges::to<std::vector<mutation>>();
 }
 
 std::vector<std::vector<mutation>> combined::create_disjoint_interleaved_streams(simple_schema& s, reader_permit permit)
@@ -127,16 +125,15 @@ std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjo
     auto keys = s.make_pkeys(4);
     std::vector<std::vector<mutation>> mss;
     for (int i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
-            keys
-            | boost::adaptors::transformed([&] (auto& dkey) {
+        mss.emplace_back(keys
+            | std::views::transform([&] (auto& dkey) {
                 auto m = mutation(s.schema(), dkey);
                 for (int j = 0; j < 32; j++) {
                     m.apply(s.make_row(permit, s.make_ckey(32 * i + j), "value"));
                 }
                 return m;
-            })
-        ));
+              })
+            | std::ranges::to<std::vector<mutation>>());
     }
     return mss;
 }
@@ -192,36 +189,33 @@ PERF_TEST_F(combined, many_overlapping)
 PERF_TEST_F(combined, disjoint_interleaved)
 {
     return consume_all(make_combined_reader(schema().schema(), permit(),
-        boost::copy_range<std::vector<mutation_reader>>(
-            disjoint_interleaved_streams()
-            | boost::adaptors::transformed([this] (auto&& ms) {
+        disjoint_interleaved_streams()
+            | std::views::transform([this] (auto&& ms) {
                 return schema().schema(), make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
-            })
-        )
+              })
+            | std::ranges::to<std::vector<mutation_reader>>()
     ));
 }
 
 PERF_TEST_F(combined, disjoint_ranges)
 {
     return consume_all(make_combined_reader(schema().schema(), permit(),
-        boost::copy_range<std::vector<mutation_reader>>(
-            disjoint_ranges_streams()
-            | boost::adaptors::transformed([this] (auto&& ms) {
+        disjoint_ranges_streams()
+            | std::views::transform([this] (auto&& ms) {
                 return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
-            })
-        )
+              })
+            | std::ranges::to<std::vector<mutation_reader>>()
     ));
 }
 
 PERF_TEST_F(combined, overlapping_partitions_disjoint_rows)
 {
     return consume_all(make_combined_reader(schema().schema(), permit(),
-        boost::copy_range<std::vector<mutation_reader>>(
             overlapping_partitions_disjoint_rows_streams()
-            | boost::adaptors::transformed([this] (auto&& ms) {
+            | std::views::transform([this] (auto&& ms) {
                 return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
-            })
-        )
+              })
+            | std::ranges::to<std::vector<mutation_reader>>()
     ));
 }
 
@@ -288,23 +282,21 @@ future<size_t> clustering_combined::consume_all(mutation_reader mr) const
 PERF_TEST_F(clustering_combined, ranges_generic)
 {
     return consume_all(make_combined_reader(schema().schema(), permit(),
-        boost::copy_range<std::vector<mutation_reader>>(
-            almost_disjoint_clustering_ranges()
-            | boost::adaptors::transformed([this] (auto&& mb) {
+        almost_disjoint_clustering_ranges()
+            | std::views::transform([this] (auto&& mb) {
                 return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(mb.m));
-            })
-        )
+              })
+            | std::ranges::to<std::vector<mutation_reader>>()
     ));
 }
 
 PERF_TEST_F(clustering_combined, ranges_specialized)
 {
-    auto rbs = boost::copy_range<std::vector<reader_bounds>>(
-        almost_disjoint_clustering_ranges() | boost::adaptors::transformed([this] (auto&& mb) {
+    auto rbs = almost_disjoint_clustering_ranges() | std::views::transform([this] (auto&& mb) {
             return reader_bounds{
                 make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(mb.m)),
                 std::move(mb.lower), std::move(mb.upper)};
-        }));
+        }) | std::ranges::to<std::vector<reader_bounds>>();
     auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));
     return consume_all(make_clustering_combined_reader(
         schema().schema(), permit(), streamed_mutation::forwarding::no, std::move(q)));
@@ -360,9 +352,9 @@ public:
     memtable_single_row()
         :  _mt(make_lw_shared<replica::memtable>(schema()))
     {
-        boost::for_each(
+        std::ranges::for_each(
             _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
+            | std::views::transform([&] (auto& dkey) {
                 auto m = mutation(schema(), dkey);
                 m.apply(_schema.make_row(_permit, _schema.make_ckey(0), "value"));
                 return m;
@@ -392,9 +384,9 @@ public:
     memtable_multi_row()
         :  _mt(make_lw_shared<replica::memtable>(_schema.schema()))
     {
-        boost::for_each(
+        std::ranges::for_each(
             _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
+            | std::views::transform([&] (auto& dkey) {
                 auto m = mutation(_schema.schema(), dkey);
                 for (auto i = 0u; i < row_count; i++) {
                     m.apply(_schema.make_row(_permit, _schema.make_ckey(i), "value"));
@@ -427,9 +419,9 @@ public:
     memtable_large_partition()
         :  _mt(make_lw_shared<replica::memtable>(_schema.schema()))
     {
-        boost::for_each(
+        std::ranges::for_each(
             _dkeys
-            | boost::adaptors::transformed([&] (auto& dkey) {
+            | std::views::transform([&] (auto& dkey) {
                 auto m = mutation(_schema.schema(), dkey);
                 // Make sure the partition fills buffers in flat mutation reader multiple times
                 for (auto i = 0u; i < 8 * 1024; i++) {

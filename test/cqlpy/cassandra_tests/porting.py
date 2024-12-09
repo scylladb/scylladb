@@ -13,14 +13,14 @@ import re
 import collections
 import struct
 import time
-from util import unique_name
+from ..util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
 from cassandra.protocol import ConfigurationException
 from cassandra.util import SortedSet, OrderedMapSerializedKey
 from cassandra.query import UNSET_VALUE
 
-import nodetool
+from .. import nodetool
 
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables

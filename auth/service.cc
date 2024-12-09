@@ -36,6 +36,7 @@
 #include "utils/log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <variant>
 #include "service/migration_manager.hh"

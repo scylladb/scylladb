@@ -8,9 +8,9 @@
 
 import pytest
 import time
-import rest_api
+from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
-from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
+from .util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 from contextlib import contextmanager
 
 # Test that granting permissions to various resources works for the default user.

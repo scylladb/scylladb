@@ -9,8 +9,6 @@
 #include "db/system_keyspace.hh"
 #include "service/raft/group0_state_machine_merger.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 namespace service {
 
 static logging::logger slogger("group0_raft_sm_merger");
@@ -29,7 +27,7 @@ size_t group0_state_machine_merger::cmd_size(group0_command& cmd) {
     if (holds_alternative<broadcast_table_query>(cmd.change)) {
         return 0;
     }
-    auto r = get_command_mutations(cmd) | boost::adaptors::transformed([] (const canonical_mutation& m) { return m.representation().size(); });
+    auto r = get_command_mutations(cmd) | std::views::transform([] (const canonical_mutation& m) { return m.representation().size(); });
     return std::accumulate(std::begin(r), std::end(r), size_t(0));
 }
 

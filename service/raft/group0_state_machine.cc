@@ -36,7 +36,6 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "service/raft/raft_address_map.hh"
 #include "partition_slice_builder.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
@@ -55,10 +54,10 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        const raft_address_map& address_map, group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
+        group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
         bool topology_change_enabled)
-    : _client(client), _mm(mm), _sp(sp), _ss(ss), _address_map(address_map), _topology_change_enabled(topology_change_enabled)
-    , _state_id_handler(sp.local_db(), gossiper, address_map, server_accessor)
+    : _client(client), _mm(mm), _sp(sp), _ss(ss), _topology_change_enabled(topology_change_enabled)
+    , _state_id_handler(sp.local_db(), gossiper, server_accessor)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots
         // or not is technically not correct because we also use features to guard
@@ -186,7 +185,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
-        return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+        return _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -198,7 +197,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
     },
     [&] (mixed_change& chng) -> future<> {
-        co_await _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
+        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
         co_await _ss.topology_transition();
         co_return;
     },
@@ -321,28 +320,19 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {
-  // FIXME: The translation will ultimately be done by messaging_service
-  auto from_ip = _address_map.find(from_id);
-  if (!from_ip.has_value()) {
-    // This is virtually impossible. We've just received the
-    // snapshot from the sender and must have updated our
-    // address map with its IP address.
-    const auto msg = seastar::format("Failed to apply snapshot from {}: ip address of the sender is not found", from_ip);
-    co_await coroutine::return_exception(raft::transport_error(msg));
-  }
   try {
     // Note that this may bring newer state than the group0 state machine raft's
     // log, so some raft entries may be double applied, but since the state
     // machine is idempotent it is not a problem.
+    locator::host_id hid{from_id.uuid()};
 
     auto holder = _gate.hold();
 
-    slogger.trace("transfer snapshot from {} index {} snp id {}", from_ip, snp.idx, snp.id);
-    netw::messaging_service::msg_addr addr{*from_ip, 0};
+    slogger.trace("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
-    auto [_, cm] = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_mm._messaging, addr, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
+    auto [_, cm] = co_await ser::migration_manager_rpc_verbs::send_migration_request(&_mm._messaging, hid, as, netw::schema_pull_options { .group0_snapshot_transfer = true });
     if (!cm) {
         // If we're running this code then remote supports Raft group 0, so it should also support canonical mutations
         // (which were introduced a long time ago).
@@ -361,7 +351,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
         topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
         tables = std::vector<table_id>();
         tables.reserve(auth_tables.size() + 1);
@@ -372,7 +362,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         tables.push_back(db::system_keyspace::service_levels_v2()->id());
 
         raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, addr, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
@@ -381,7 +371,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
-    co_await _mm.merge_schema_from(addr, std::move(*cm));
+    co_await _mm.merge_schema_from(hid, std::move(*cm));
 
     if (topology_snp && !topology_snp->mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
@@ -396,7 +386,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
   } catch (const abort_requested_exception&) {
     throw raft::request_aborted(fmt::format(
-        "Abort requested while transferring snapshot from ID/IP: {}/{}, snapshot descriptor id: {}, snapshot index: {}", from_id, from_ip, snp.id, snp.idx));
+        "Abort requested while transferring snapshot from ID: {}, snapshot descriptor id: {}, snapshot index: {}", from_id, snp.id, snp.idx));
   }
 }
 

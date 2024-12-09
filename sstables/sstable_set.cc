@@ -15,6 +15,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/copy.hpp>
+#include <boost/range/numeric.hpp>
 
 #include "sstables.hh"
 
@@ -92,11 +93,11 @@ void sstable_run::erase(shared_sstable sst) {
 }
 
 uint64_t sstable_run::data_size() const {
-    return boost::accumulate(_all | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
+    return std::ranges::fold_left(_all | std::views::transform(std::mem_fn(&sstable::data_size)), uint64_t(0), std::plus{});
 }
 
 double sstable_run::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
-    auto estimate_sum = boost::accumulate(_all | boost::adaptors::transformed(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, compaction_time, gc_state, s)), double(0));
+    auto estimate_sum = std::ranges::fold_left(_all | std::views::transform(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, compaction_time, gc_state, s)), double(0), std::plus{});
     return _all.size() ? estimate_sum / _all.size() : double(0);
 }
 
@@ -303,9 +304,9 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unordered_map<run_id, shared_sstable_run>& runs) {
-    return boost::copy_range<std::unordered_map<run_id, shared_sstable_run>>(runs | boost::adaptors::transformed([] (auto& p) {
+    return runs | std::views::transform([] (auto& p) {
         return std::make_pair(p.first, make_lw_shared<sstable_run>(*p.second));
-    }));
+    }) | std::ranges::to<std::unordered_map<run_id, shared_sstable_run>>();
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
@@ -951,13 +952,12 @@ sstable_set_impl::create_single_key_sstable_reader(
     if (!num_sstables) {
         return make_empty_flat_reader_v2(schema, permit);
     }
-    auto readers = boost::copy_range<std::vector<mutation_reader>>(
-        filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
-        | boost::adaptors::transformed([&] (const shared_sstable& sstable) {
+    auto readers = filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
+        | std::views::transform([&] (const shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
             return sstable->make_reader(schema, permit, pr, slice, trace_state, fwd);
-        })
-    );
+          })
+        | std::ranges::to<std::vector<mutation_reader>>();
 
     // If filter_sstable_for_reader_by_ck filtered any sstable that contains the partition
     // we want to emit partition_start/end if no rows were found,
@@ -1150,12 +1150,12 @@ bool compound_sstable_set::erase(shared_sstable sst) {
 
 size_t
 compound_sstable_set::size() const noexcept {
-    return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::size)), size_t(0));
+    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::size)), size_t(0), std::plus{});
 }
 
 uint64_t
 compound_sstable_set::bytes_on_disk() const noexcept {
-    return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::bytes_on_disk)), uint64_t(0));
+    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::bytes_on_disk)), uint64_t(0), std::plus{});
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {
@@ -1164,9 +1164,9 @@ class compound_sstable_set::incremental_selector : public incremental_selector_i
     std::vector<sstable_set::incremental_selector> _selectors;
 private:
     std::vector<sstable_set::incremental_selector> make_selectors(const std::vector<lw_shared_ptr<sstable_set>>& sets) {
-        return boost::copy_range<std::vector<sstable_set::incremental_selector>>(_sets | boost::adaptors::transformed([] (const auto& set) {
+        return _sets | std::views::transform([] (const auto& set) {
             return set->make_incremental_selector();
-        }));
+        }) | std::ranges::to<std::vector<sstable_set::incremental_selector>>();
     }
 public:
     incremental_selector(const schema& schema, const std::vector<lw_shared_ptr<sstable_set>>& sets)
@@ -1246,12 +1246,11 @@ compound_sstable_set::create_single_key_sstable_reader(
         return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
     }
 
-    auto readers = boost::copy_range<std::vector<mutation_reader>>(
-        boost::make_iterator_range(sets.begin(), it)
-        | boost::adaptors::transformed([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
+    auto readers = std::ranges::subrange(sets.begin(), it)
+        | std::views::transform([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
             return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
-        })
-    );
+          })
+        | std::ranges::to<std::vector<mutation_reader>>();
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 

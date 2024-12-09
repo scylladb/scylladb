@@ -106,6 +106,7 @@ struct table_resize_plan {
                 resize[id] = std::move(other_resize);
             }
         }
+
         finalize_resize.merge(std::move(other.finalize_resize));
     }
 };
@@ -153,6 +154,12 @@ public:
         _migrations.emplace_back(std::move(info));
     }
 
+    void add(migrations_vector migrations) {
+        for (auto&& mig : migrations) {
+            add(std::move(mig));
+        }
+    }
+
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
@@ -166,8 +173,8 @@ public:
 
     const table_resize_plan& resize_plan() const { return _resize_plan; }
 
-    void set_resize_plan(table_resize_plan resize_plan) {
-        _resize_plan = std::move(resize_plan);
+    void merge_resize_plan(table_resize_plan resize_plan) {
+        _resize_plan.merge(std::move(resize_plan));
     }
 
     const tablet_repair_plan& repair_plan() const { return _repair_plan; }
@@ -228,7 +235,7 @@ public:
 
     void set_use_table_aware_balancing(bool);
 
-    future<locator::tablet_map> split_tablets(locator::token_metadata_ptr, table_id);
+    future<locator::tablet_map> resize_tablets(locator::token_metadata_ptr, table_id);
 
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();

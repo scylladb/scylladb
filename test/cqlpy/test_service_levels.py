@@ -9,7 +9,7 @@
 #############################################################################
 
 from contextlib import contextmanager
-from util import unique_name, new_test_table, new_user
+from .util import unique_name, new_test_table, new_user
 
 from cassandra.protocol import InvalidRequest, ReadTimeout
 from cassandra.util import Duration

@@ -65,12 +65,11 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
         auto function_args = functions_view.function_args();
         std::vector<data_type> parsed_types;
         if (function_args) {
-            parsed_types = boost::copy_range<std::vector<data_type>>(
-                *function_args | boost::adaptors::transformed([&] (std::string_view raw_type) {
+            parsed_types =
+                *function_args | std::views::transform([&] (std::string_view raw_type) {
                     auto parsed = db::cql_type_parser::parse(sstring(keyspace->data(), keyspace->size()), sstring(raw_type.data(), raw_type.size()), utm);
                     return parsed->is_user_type() ? parsed->freeze() : parsed;
-                })
-            );
+                }) | std::ranges::to<std::vector>();
         }
         resource = auth::make_functions_resource(*keyspace, auth::encode_signature(function_name, parsed_types));
     }

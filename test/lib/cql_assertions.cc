@@ -8,7 +8,6 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include "test/lib/cql_assertions.hh"
@@ -105,7 +104,7 @@ rows_assertions::with_column_types(std::initializer_list<data_type> column_types
 rows_assertions
 rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
     const auto& rs = _rows->rs().result_set();
-    std::vector<managed_bytes_opt> expected_row = boost::copy_range<std::vector<managed_bytes_opt>>((values | boost::adaptors::transformed(to_managed_bytes_opt)));
+    std::vector<managed_bytes_opt> expected_row = values | std::views::transform(to_managed_bytes_opt) | std::ranges::to<std::vector<managed_bytes_opt>>();
     for (auto&& row : rs.rows()) {
         if (row == expected_row) {
             return {*this};
@@ -127,10 +126,10 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
             fail(format("Expected more rows ({:d}), got {:d}", rows.size(), rs.size()));
         }
         auto& actual = *actual_i;
-        auto expected_row = row | boost::adaptors::transformed(to_managed_bytes_opt);
-        if (!std::equal(
-            std::begin(expected_row), std::end(expected_row),
-            std::begin(actual), std::end(actual))) {
+        auto expected_row = row | std::views::transform(to_managed_bytes_opt);
+        if (!std::ranges::equal(
+            expected_row,
+            actual)) {
             fail(seastar::format("row {} differs, expected {} got {}", row_nr, row, actual));
         }
         ++actual_i;
@@ -149,7 +148,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
     const auto& rs = _rows->rs().result_set();
     auto& actual = rs.rows();
     for (auto&& expected : rows) {
-        auto expected_row = expected | boost::adaptors::transformed(to_managed_bytes_opt);
+        auto expected_row = expected | std::views::transform(to_managed_bytes_opt);
         auto found = std::find_if(std::begin(actual), std::end(actual), [&] (auto&& row) {
             return std::equal(
                     std::begin(row), std::end(row),
@@ -157,7 +156,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
         });
         if (found == std::end(actual)) {
             fail(seastar::format("row {} not found in result set ({})", expected,
-               fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return fmt::to_string(r); }), ", ")));
+               fmt::join(actual | std::views::transform([] (auto& r) { return fmt::to_string(r); }), ", ")));
         }
     }
     if (rs.size() != rows.size()) {

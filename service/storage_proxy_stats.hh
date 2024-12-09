@@ -12,6 +12,7 @@
 #include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include "locator/host_id.hh"
 
 namespace locator { class topology; }
 
@@ -54,7 +55,7 @@ public:
     split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type, bool auto_register_metrics = true);
 
     void register_metrics_local();
-    void register_metrics_for(sstring dc, gms::inet_address ep);
+    void register_metrics_for(sstring dc, locator::host_id ep);
 
     /**
      * Get a reference to the statistics counter corresponding to the given
@@ -64,7 +65,7 @@ public:
      *
      * @return a reference to the requested counter
      */
-    uint64_t& get_ep_stat(const locator::topology& topo, gms::inet_address ep) noexcept;
+    uint64_t& get_ep_stat(const locator::topology& topo, locator::host_id ep) noexcept;
 };
 
 struct write_stats {

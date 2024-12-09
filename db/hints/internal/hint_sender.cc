@@ -259,23 +259,23 @@ void hint_sender::start() {
 future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     auto ermp = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
-    inet_address_vector_replica_set natural_endpoints = ermp->get_natural_endpoints(std::move(token));
+    host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(std::move(token));
 
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         const auto& tm = ermp->get_token_metadata();
-        const auto maybe_addr = tm.get_endpoint_for_host_id_if_known(end_point_key());
+        const auto dst = end_point_key();
 
-        if (maybe_addr && boost::range::find(natural_endpoints, *maybe_addr) != natural_endpoints.end() && !tm.is_leaving(end_point_key())) {
-            manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), *maybe_addr);
+        if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
+            manager_logger.trace("Sending directly to {}", dst);
+            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst);
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
                 if (tm.is_leaving(end_point_key())) {
-                    manager_logger.trace("The original target endpoint {} is leaving. Mutating from scratch...", end_point_key());
+                    manager_logger.trace("The original target endpoint {} is leaving. Mutating from scratch...", dst);
                 } else {
-                    manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
+                    manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", dst);
                 }
             }
             return _proxy.send_hint_to_all_replicas(std::move(m));

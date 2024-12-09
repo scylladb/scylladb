@@ -13,10 +13,12 @@
 #include "utils/log.hh"
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/numeric.hpp>
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/when_all.hh>
 #include "utils/div_ceil.hh"
 #include "utils/lister.hh"
 

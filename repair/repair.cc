@@ -7,6 +7,7 @@
  */
 
 #include "repair.hh"
+#include "gms/gossip_address_map.hh"
 #include "repair/row_level.hh"
 
 #include "locator/network_topology_strategy.hh"
@@ -30,6 +31,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
 
@@ -37,10 +39,11 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/sleep.hh>
-#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include <exception>
 #include <cfloat>
@@ -1128,7 +1131,7 @@ future<> repair::shard_repair_task_impl::run() {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
     auto& sharded_db = get_db();
     auto& db = sharded_db.local();
@@ -1193,10 +1196,10 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                 throw std::invalid_argument("Cannot combine ignore_nodes and hosts options.");
             }
 
-            auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
-                auto ip = addr_map.local().find(raft::server_id(host.uuid()));
+            auto host2ip = [&addr_map] (locator::host_id host) -> future<gms::inet_address> {
+                auto ip = addr_map.find(host);
                 if (!ip) {
-                    throw std::runtime_error(format("Could not get ip address for host {} from raft_address_map", host));
+                    throw std::runtime_error(format("Could not get ip address for host {} from gossiper_address_map", host));
                 }
                 co_return *ip;
             };
@@ -1448,10 +1451,10 @@ std::optional<double> repair::user_requested_repair_task_impl::expected_children
     return smp::count;
 }
 
-future<int> repair_start(seastar::sharded<repair_service>& repair,
+future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
-    return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {
-        return local_repair.do_repair_start(std::move(keyspace), std::move(options));
+    return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options), &am] (repair_service& local_repair) {
+        return local_repair.do_repair_start(am.local(), std::move(keyspace), std::move(options));
     });
 }
 
@@ -2424,17 +2427,17 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
-future<> repair_service::repair_tablet(locator::tablet_metadata_guard& guard, locator::global_tablet_id gid) {
+future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid) {
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
     auto table_id = gid.table;
     auto tablet_id = gid.tablet;
 
-    auto host2ip = [&addr_map = _addr_map] (locator::host_id host) -> future<gms::inet_address> {
-        auto ip = addr_map.local().find(raft::server_id(host.uuid()));
+    auto host2ip = [&addr_map] (locator::host_id host) -> future<gms::inet_address> {
+        auto ip = addr_map.find(host);
         if (!ip) {
-            throw std::runtime_error(format("Could not get ip address for host {} from raft_address_map", host));
+            throw std::runtime_error(format("Could not get ip address for host {} from gossiper_address_map", host));
         }
         co_return *ip;
     };

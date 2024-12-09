@@ -13,7 +13,6 @@
 #include "message/messaging_service.hh"
 #include "db/timeout_clock.hh"
 #include "idl/raft.dist.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_state_machine.hh"
 
 namespace service {
@@ -27,9 +26,9 @@ raft_ticker_type::time_point timeout() {
 }
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-        raft_address_map& address_map, shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
+          shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
-    , _address_map(address_map), _failure_detector(std::move(failure_detector))
+    , _failure_detector(std::move(failure_detector))
 {}
 
 
@@ -42,13 +41,7 @@ raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
                 loc.file_name(), loc.line(), loc.function_name(), id);
             return make_ready_future<>();
         }
-        auto ip_addr = _address_map.find(id);
-        if (!ip_addr) {
-            rlogger.debug("{}:{}: {} dropping outgoing message to {} - IP address not found",
-                loc.file_name(), loc.line(), loc.function_name(), id);
-            return make_ready_future<>();
-        }
-        return verb(&_messaging, netw::msg_addr(*ip_addr), timeout(), _group_id, _my_id, id, std::forward<Msg>(msg))
+        return verb(&_messaging, locator::host_id{id.uuid()}, timeout(), _group_id, _my_id, id, std::forward<Msg>(msg))
             .handle_exception([loc = std::move(loc), id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -70,12 +63,7 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
     if (!_failure_detector->is_alive(id)) {
         return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
     }
-    auto ip_addr = _address_map.find(id);
-    if (!ip_addr) {
-        const auto msg = format("Failed to send {} {}: ip address not found", loc.function_name(), id);
-        return make_exception_future<Ret>(raft::transport_error(msg));
-    }
-    return verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
+    return verb(&_messaging, locator::host_id{id.uuid()}, db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
         .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {;
             const auto msg = fmt::format("Failed to execute {}, destination {}: {}", loc.function_name(), id, e);
             rlogger.trace("{}", msg);
@@ -84,7 +72,8 @@ raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
 }
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_send_snapshot, snap);
+    auto l = [](auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_send_snapshot(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), snap);
 }
 
 future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_request& append_request) {
@@ -92,51 +81,55 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
         rlogger.debug("Failed to send append_entires to {}: node is not seen as alive by the failure detector", id);
         co_return;
     }
-    auto ip_addr = _address_map.find(id);
-    if (!ip_addr) {
-        const auto msg = format("Failed to send append_entires to {}: ip address not found", id);
-        co_await coroutine::return_exception_ptr(std::make_exception_ptr(raft::transport_error(msg)));
-    }
-    co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, netw::msg_addr(*ip_addr),
+    co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, locator::host_id{id.uuid()},
             db::no_timeout, _group_id, _my_id, id, append_request);
 }
 
 void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_append_entries_reply, reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_append_entries_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), reply);
 }
 
 void raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_request, vote_request);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_vote_request(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), vote_request);
 }
 
 void raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_vote_reply, vote_reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_vote_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), vote_reply);
 }
 
 void raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_timeout_now, timeout_now);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_timeout_now(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), timeout_now);
 }
 
 void raft_rpc::send_read_quorum(raft::server_id id, const raft::read_quorum& read_quorum) {
-    one_way_rpc<one_way_kind::request>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum, read_quorum);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_quorum(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::request>(sloc::current(), id, std::move(l), read_quorum);
 }
 
 void raft_rpc::send_read_quorum_reply(raft::server_id id, const raft::read_quorum_reply& read_quorum_reply) {
-    one_way_rpc<one_way_kind::reply>(sloc::current(), id, ser::raft_rpc_verbs::send_raft_read_quorum_reply, read_quorum_reply);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_quorum_reply(std::forward<decltype(args)>(args)...); };
+    one_way_rpc<one_way_kind::reply>(sloc::current(), id, std::move(l), read_quorum_reply);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_add_entry(raft::server_id id, const raft::command& cmd) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_add_entry, cmd);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_add_entry(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), cmd);
 }
 
 future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
         const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_modify_config, add, del);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_modify_config(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l), add, del);
 }
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
-    return two_way_rpc(sloc::current(), id, ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader);
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l));
 }
 
 future<> raft_rpc::abort() {

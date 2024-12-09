@@ -31,7 +31,7 @@
 #include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
-#include "service/raft/raft_address_map.hh"
+#include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
@@ -161,7 +161,7 @@ private:
     sharded<streaming::stream_manager> _stream_manager;
     sharded<service::mapreduce_service> _mapreduce_service;
     sharded<direct_failure_detector::failure_detector> _fd;
-    sharded<service::raft_address_map> _raft_address_map;
+    sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
 
@@ -694,6 +694,11 @@ private:
                 return make_ready_future<>();
             }).get();
 
+            _gossip_address_map.start().get();
+            auto stop_gossip_address_map = defer([this] {
+                _gossip_address_map.stop().get();
+            });
+
             uint16_t port = 7000;
             seastar::server_socket tmp;
 
@@ -714,7 +719,7 @@ private:
                        port = tmp.local_address().port();
                     }
                     // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
-                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service)).get();
+                    _ms.start(host_id, listen, std::move(port), std::ref(_feature_service), std::ref(_gossip_address_map)).get();
                     stop_ms = defer(stop_type(stop_ms_func));
 
                     if (cfg_in.ms_listen) {
@@ -765,18 +770,13 @@ private:
             gcfg.seeds = std::move(seeds);
             gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg)).get();
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
             auto stop_ms_fd_gossiper = defer([this] {
                 _gossiper.stop().get();
             });
             _gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            _raft_address_map.start().get();
-            auto stop_address_map = defer([this] {
-                _raft_address_map.stop().get();
-            });
-
-            _fd_pinger.start(std::ref(_ms), std::ref(_raft_address_map)).get();
+            _fd_pinger.start(std::ref(_ms)).get();
             auto stop_fd_pinger = defer([this] { _fd_pinger.stop().get(); });
 
             service::direct_fd_clock fd_clock;
@@ -791,7 +791,6 @@ private:
 
             _group0_registry.start(
                 raft::server_id{host_id.id},
-                std::ref(_raft_address_map),
                 std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
@@ -842,7 +841,8 @@ private:
                 std::ref(_qp),
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),
-                std::ref(_task_manager)).get();
+                std::ref(_task_manager),
+                std::ref(_gossip_address_map)).get();
             auto stop_storage_service = defer([this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());
@@ -965,10 +965,8 @@ private:
                 _cdc.stop().get();
             });
 
-            const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
-
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            _ss.local().init_address_map(_raft_address_map.local(), generation_number).get();
+            _ss.local().init_address_map(_gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer([this] {
                 _ss.local().uninit_address_map().get();
             });
@@ -978,6 +976,8 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 
             try {
                 _ss.local().join_cluster(_sys_dist_ks, _proxy, service::start_hint_manager::no, generation_number).get();

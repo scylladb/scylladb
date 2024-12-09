@@ -110,7 +110,7 @@ struct topology {
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
-        tablet_split_finalization,
+        tablet_resize_finalization,
         left_token_ring,
         rollback_to_normal,
     };
@@ -228,6 +228,7 @@ struct topology_state_machine {
     using topology_type = topology;
     topology_type _topology;
     condition_variable event;
+    size_t reload_count = 0;
 
     future<> await_not_busy();
 };
@@ -239,7 +240,7 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // request to stream data, return when streaming is
                                 // done
-          wait_for_ip           // wait for a joining node IP to appear in raft_address_map
+          wait_for_ip           // wait for a joining node IP to appear in gossiper
       };
       command cmd;
 

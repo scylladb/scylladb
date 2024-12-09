@@ -9,6 +9,7 @@
 #include <set>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
+#include <boost/range/numeric.hpp>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include "partition_slice_builder.hh"
@@ -2100,7 +2101,7 @@ public:
         // The pre-existing assumption here is that the type of all the primary key components is blob.
         // So we generate partition keys and take the single blob component and save it as a random blob value.
         auto keys = tests::generate_partition_keys(n_blobs, _schema, _local_shard_only, tests::key_size{_external_blob_size, _external_blob_size});
-        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& dk) { return dk.key().explode().front(); }));
+        _blobs =  keys | std::views::transform([] (const dht::decorated_key& dk) { return dk.key().explode().front(); }) | std::ranges::to<std::vector<bytes>>();
     }
 
     void set_key_cardinality(size_t n_keys) {
@@ -2558,12 +2559,10 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     }
 
     auto max_generator_count = std::max(
-        // boost::max_elements wants the iterators to be copy-assignable. The ones we get
-        // from boost::adaptors::transformed aren't.
-        boost::accumulate(static_columns | boost::adaptors::transformed([] (const column_description& c) {
+        std::ranges::fold_left(static_columns | std::views::transform([] (const column_description& c) {
             return c.data_generators.size();
         }), 0u, [] (size_t a, size_t b) { return std::max(a, b); }),
-        boost::accumulate(regular_columns | boost::adaptors::transformed([] (const column_description& c) {
+        std::ranges::fold_left(regular_columns | std::views::transform([] (const column_description& c) {
             return c.data_generators.size();
         }), 0u, [] (size_t a, size_t b) { return std::max(a, b); })
     );

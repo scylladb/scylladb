@@ -13,6 +13,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -210,10 +211,10 @@ future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
     auto&& rs = co_await db::system_keyspace::query(proxy.local().get_db(), schema_table->ks_name(), schema_table->cf_name(), pkey);
-    co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
+    co_return rs->rows() | std::views::transform([schema_table] (const query::result_set_row& row) {
         const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
         return row.get_nonnull<sstring>(name);
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 // Applies deletion of the "version" column to system_schema.scylla_tables mutation rows
@@ -270,7 +271,7 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     // For the ALTER case, we have to also consider changes made to SCYLLA_KEYSPACES, not only to KEYSPACES:
     // 1. changes made to non-null columns...
     altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
-    // 2. ... and new or deleted entries - these change only when ALTERing, not CREATEing or DROPing
+    // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
     for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
         if (!created.contains(ks) && !dropped.contains(ks)) {
             altered.emplace(ks);

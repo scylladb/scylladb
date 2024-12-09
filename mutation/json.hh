@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "dht/decorated_key.hh"
 #include "dht/token.hh"
 #include "schema/schema.hh"
 #include "utils/rjson.hh"
@@ -48,6 +49,9 @@ public:
         Key("value");
         AsString(key.with_schema(schema));
         EndObject();
+    }
+    void DataKey(const schema& schema, const dht::decorated_key& dk) {
+        DataKey(schema, dk.key(), dk.token());
     }
     void StartStream() {
         StartObject();

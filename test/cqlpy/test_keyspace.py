@@ -5,7 +5,7 @@
 # Tests for basic keyspace operations: CREATE KEYSPACE, DROP KEYSPACE,
 # ALTER KEYSPACE
 
-from util import new_test_keyspace, unique_name
+from .util import new_test_keyspace, unique_name
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread

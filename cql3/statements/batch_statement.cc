@@ -19,6 +19,7 @@
 #include "service/storage_proxy.hh"
 #include "tracing/trace_state.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
 
 template<typename T = void>

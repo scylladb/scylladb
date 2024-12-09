@@ -4559,7 +4559,7 @@ For more information, see: {})";
     const auto operations = get_operations_with_func() | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = seastar::format(description_template, app_name, nlog.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            .description = seastar::format(description_template, app_name, nlog.name(), fmt::join(operations | std::views::transform([] (const auto& op) {
                 return seastar::format("* {}: {}", op.name(), op.summary());
             }), "\n"), doc_link("operating-scylla/nodetool.html")),
             .logger_name = nlog.name(),

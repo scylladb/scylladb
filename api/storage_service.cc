@@ -349,8 +349,8 @@ void unset_thrift_controller(http_context& ctx, routes& r) {
     ss::is_thrift_server_running.unset(r);
 }
 
-void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
-    ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am) {
+    ss::repair_async.set(r, [&ctx, &repair, &am](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         static std::unordered_set<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "ignore_nodes", "trace",
                 "startToken", "endToken", "ranges_parallelism", "small_table_optimization"};
@@ -379,7 +379,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
         try {
-            int res = co_await repair_start(repair, validate_keyspace(ctx, req), options_map);
+            int res = co_await repair_start(repair, am, validate_keyspace(ctx, req), options_map);
             co_return json::json_return_type(res);
         } catch (const std::invalid_argument& e) {
             // if the option is not sane, repair_start() throws immediately, so

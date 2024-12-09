@@ -14,8 +14,6 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "mutation/mutation.hh"
 #include "types/user.hh"
 

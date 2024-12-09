@@ -11,15 +11,12 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
-#include <boost/icl/interval.hpp>
-#include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
 #include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/token-sharding.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
-#include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
@@ -100,7 +97,7 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     // Check that the read replica set does not exceed what's allowed by the schema.
-    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const inet_address_vector_replica_set& read_replicas) const = 0;
+    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const = 0;
 
     abstract_replication_strategy(
         replication_strategy_params params,
@@ -170,7 +167,22 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
 
-using ring_mapping = boost::icl::interval_map<token, std::unordered_set<locator::host_id>>;
+struct ring_mapping_impl;
+
+class ring_mapping {
+    std::unique_ptr<ring_mapping_impl> _impl;
+public:
+    ring_mapping();
+    ring_mapping(ring_mapping&&) noexcept;
+    ring_mapping& operator=(ring_mapping&&) noexcept;
+    ~ring_mapping();
+    // Return auto since we don't want to expose the wrapped type, it's a complicated boost type
+    auto* operator->() const;
+    auto* operator->();
+    auto& operator*() const;
+    auto& operator*();
+};
+
 using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
 using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
@@ -227,6 +239,9 @@ public:
     /// The returned addresses are present in the topology object associated with this instance.
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
 
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const = 0;
+
     /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
 
@@ -235,8 +250,14 @@ public:
     /// Non-empty only during topology change.
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
 
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const = 0;
+
     /// Returns a list of nodes to which a read request should be directed.
     virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
+
+    /// Same as above but returns host ids instead of addresses
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const = 0;
 
     /// Returns replicas for a given token.
     /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
@@ -330,9 +351,12 @@ private:
     friend class effective_replication_map_factory;
 public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
+    host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
     host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;

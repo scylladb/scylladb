@@ -31,6 +31,7 @@
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 #include "schema/schema.hh"
+#include "gms/gossip_address_map.hh"
 
 namespace tasks {
 namespace repair {
@@ -96,7 +97,7 @@ constexpr shard_id repair_unspecified_shard = shard_id(-1);
 // repair_get_status(). The returned future<int> becomes available quickly,
 // as soon as repair_get_status() can be used - it doesn't wait for the
 // repair to complete.
-future<int> repair_start(seastar::sharded<repair_service>& repair,
+future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
         sstring keyspace, std::unordered_map<sstring, sstring> options);
 
 // TODO: Have repair_progress contains a percentage progress estimator

@@ -9,10 +9,8 @@
 #include <fstream>
 
 #include <fmt/ranges.h>
-#include <boost/range/irange.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <json/json.h>
 
 #include <seastar/core/app-template.hh>
@@ -258,10 +256,10 @@ int main(int argc, char** argv) {
             auto median = median_result.throughput;
             auto min = results[0].throughput;
             auto max = results[results.size() - 1].throughput;
-            auto absolute_deviations = boost::copy_range<std::vector<double>>(
-                    results
-                    | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
-                    | boost::adaptors::transformed([&] (double r) { return abs(r - median); }));
+            auto absolute_deviations = results
+                    | std::views::transform(std::mem_fn(&perf_result::throughput))
+                    | std::views::transform([&] (double r) { return abs(r - median); })
+                    | std::ranges::to<std::vector<double>>();
             std::sort(absolute_deviations.begin(), absolute_deviations.end());
             auto mad = absolute_deviations[results.size() / 2];
             std::cout << format("\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median_result, mad, max, min);

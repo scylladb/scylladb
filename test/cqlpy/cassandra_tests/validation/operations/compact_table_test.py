@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra_tests.porting import *
+from ...porting import *
 
 # ALTER ... DROP COMPACT STORAGE was recently dropped (unless a special
 # flag is used) by Cassandra, and it was never implemented in Scylla, so

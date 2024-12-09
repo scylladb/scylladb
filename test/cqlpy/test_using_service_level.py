@@ -4,7 +4,7 @@
 
 # Tests for USING SERVICE LEVEL extension
 
-from util import new_test_keyspace, unique_name, unique_key_int
+from .util import new_test_keyspace, unique_name, unique_key_int
 import pytest
 from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException
 from cassandra.cluster import NoHostAvailable

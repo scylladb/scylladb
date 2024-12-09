@@ -25,10 +25,19 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <type_traits>
 
 namespace locator {
 
 seastar::logger tablet_logger("tablets");
+
+std::optional<std::pair<tablet_id, tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
+    if (tablet_count() == 1) {
+        return std::nullopt;
+    }
+    auto first_sibling = tablet_id(t.value() & ~0x1);
+    return std::make_pair(first_sibling, *next_tablet(first_sibling));
+}
 
 
 static
@@ -151,6 +160,32 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
+tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info)
+    : replicas(std::move(replicas))
+    , repair_time(repair_time)
+    , repair_task_info(std::move(repair_task_info))
+{}
+
+tablet_info::tablet_info(tablet_replica_set replicas)
+    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{})
+{}
+
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
+    if (a.repair_task_info.is_valid() || b.repair_task_info.is_valid()) {
+        return {};
+    }
+
+    auto sorted = [] (tablet_replica_set rs) {
+        std::ranges::sort(rs, std::less<tablet_replica>());
+        return rs;
+    };
+    if (sorted(a.replicas) != sorted(b.replicas)) {
+        return {};
+    }
+
+    auto repair_time = std::max(a.repair_time, b.repair_time);
+    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info);
+}
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     auto leaving = substract_sets(tinfo.replicas, trinfo.next);
@@ -406,6 +441,24 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tabl
     }
 }
 
+future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const {
+    auto make_desc = [this] (tablet_id tid) {
+        return tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
+    };
+    if (_tablets.size() == 1) {
+        co_return co_await func(make_desc(first_tablet()), std::nullopt);
+    }
+    for (std::optional<tablet_id> tid = first_tablet(); tid; tid = next_tablet(*tid)) {
+        auto tid1 = tid;
+        auto tid2 = tid = next_tablet(*tid);
+        if (!tid2) {
+            // Cannot happen with power-of-two invariant.
+            throw std::logic_error(format("Cannot retrieve sibling tablet with tablet count {}", tablet_count()));
+        }
+        co_await func(make_desc(*tid1), make_desc(*tid2));
+    }
+}
+
 void tablet_map::clear_transitions() {
     _transitions.clear();
 }
@@ -540,6 +593,10 @@ bool tablet_map::needs_split() const {
     return std::holds_alternative<resize_decision::split>(_resize_decision.way);
 }
 
+bool tablet_map::needs_merge() const {
+    return std::holds_alternative<resize_decision::merge>(_resize_decision.way);
+}
+
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
 }
@@ -578,6 +635,10 @@ resize_decision::seq_number_t resize_decision::next_sequence_number() const {
     // for it to happen, about 21x the age of the universe, or ~11x according to the new
     // prediction after james webb.
     return (sequence_number == std::numeric_limits<seq_number_t>::max()) ? 0 : sequence_number + 1;
+}
+
+bool resize_decision::initial_decision() const {
+    return sequence_number == 0;
 }
 
 table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {
@@ -752,6 +813,65 @@ private:
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
     }
+
+    template<typename Set>
+    Set get_pending_helper(const token& search_token) const {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_transition_info(tablet);
+        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+            return {};
+        }
+        switch (info->writes) {
+            case write_replica_set_selector::previous:
+                return {};
+            case write_replica_set_selector::both: {
+                if (!info->pending_replica) {
+                    return {};
+                }
+                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
+                                    search_token, _table, tablet, *info->pending_replica);
+                if constexpr (std::is_same_v<Set, inet_address_vector_topology_change>) {
+                    return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
+                } else {
+                    return {info->pending_replica->host};
+                }
+            }
+            case write_replica_set_selector::next:
+                return {};
+        }
+        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+    }
+
+    template<typename Set>
+    Set get_for_reading_helper(const token& search_token) const {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_transition_info(tablet);
+        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
+            if (!info) {
+                return tablets.get_tablet_info(tablet).replicas;
+            }
+            switch (info->reads) {
+                case read_replica_set_selector::previous:
+                    return tablets.get_tablet_info(tablet).replicas;
+                case read_replica_set_selector::next: {
+                    return info->next;
+                }
+            }
+            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
+        });
+        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        if constexpr (std::is_same_v<Set, inet_address_vector_replica_set>) {
+            auto result = to_replica_set(replicas);
+            maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
+            return result;
+        } else {
+            return to_host_set(replicas);
+        }
+    }
+
+
 public:
     tablet_effective_replication_map(table_id table,
                                      replication_strategy_ptr rs,
@@ -770,6 +890,10 @@ public:
 
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
         return to_replica_set(get_replicas_for_write(search_token));
+    }
+
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const override {
+        return to_host_set(get_replicas_for_write(search_token));
     }
 
     virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
@@ -796,49 +920,19 @@ public:
     }
 
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
-        auto&& tablets = get_tablet_map();
-        auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
-            return {};
-        }
-        switch (info->writes) {
-            case write_replica_set_selector::previous:
-                return {};
-            case write_replica_set_selector::both:
-                if (!info->pending_replica) {
-                    return {};
-                }
-                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                                    search_token, _table, tablet, *info->pending_replica);
-                return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
-            case write_replica_set_selector::next:
-                return {};
-        }
-        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+        return get_pending_helper<inet_address_vector_topology_change>(search_token);
+    }
+
+    virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const override {
+        return get_pending_helper<host_id_vector_topology_change>(search_token);
     }
 
     virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
-        auto&& tablets = get_tablet_map();
-        auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->reads) {
-                case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case read_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
-        });
-        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        auto result = to_replica_set(replicas);
-        maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
-        return result;
+        return get_for_reading_helper<inet_address_vector_replica_set>(search_token);
+    }
+
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const override {
+        return get_for_reading_helper<host_id_vector_replica_set>(search_token);
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token) const override {

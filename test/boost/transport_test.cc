@@ -17,17 +17,6 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 
-namespace boost {
-
-template <typename F, typename R>
-requires fmt::is_formattable<std::ranges::range_value_t<R>>::value
-std::ostream& boost_test_print_type(std::ostream& os, const transformed_range<F, R>& rng) {
-    fmt::print(os, "{}", rng);
-    return os;
-}
-
-}
-
 namespace cql3 {
 
 bool operator==(const cql3::raw_value_view& a, const cql3::raw_value_view& b) {
@@ -126,15 +115,15 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     cql3::unset_bind_variable_vector unset;
     req.read_name_and_value_list(version, names, values, unset);
     BOOST_CHECK(std::none_of(unset.begin(), unset.end(), std::identity()));
-    BOOST_CHECK_EQUAL(names, names_and_values | boost::adaptors::transformed([] (auto& name_and_value) {
+    BOOST_CHECK(std::ranges::equal(names, names_and_values | std::views::transform([] (auto& name_and_value) {
         return std::string_view(name_and_value.first);
-    }));
-    BOOST_CHECK_EQUAL(values, names_and_values | boost::adaptors::transformed([] (auto& name_and_value) {
+    })));
+    BOOST_CHECK(std::ranges::equal(values, names_and_values | std::views::transform([] (auto& name_and_value) {
         if (!name_and_value.second) {
             return cql3::raw_value_view::make_null();
         }
         return cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(*name_and_value.second));
-    }));
+    })));
 
     auto received_string_list = std::vector<sstring>();
     req.read_string_list(received_string_list);

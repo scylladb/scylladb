@@ -23,6 +23,7 @@
 #include "locator/host_id.hh"
 #include "service/session.hh"
 #include "service/maintenance_mode.hh"
+#include "gms/gossip_address_map.hh"
 #include "tasks/types.hh"
 
 #include <list>
@@ -230,6 +231,10 @@ struct schema_pull_options {
     bool group0_snapshot_transfer = false;
 };
 
+struct unknown_address : public std::runtime_error {
+    unknown_address(locator::host_id id) : std::runtime_error(fmt::format("no ip address mapping for {}", id)) {}
+};
+
 class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;
@@ -240,6 +245,7 @@ public:
     using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
     using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
+    using clients_map_host_id = std::unordered_map<locator::host_id, shard_info>;
 
     // This should change only if serialization format changes
     static constexpr int32_t current_version = 0;
@@ -335,6 +341,7 @@ private:
     std::unique_ptr<seastar::tls::credentials_builder> _credentials_builder;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::vector<clients_map> _clients;
+    std::vector<clients_map_host_id> _clients_with_host_id;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
     connection_drop_signal_t _connection_dropped;
@@ -346,6 +353,7 @@ private:
     struct connection_ref;
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
     std::unordered_set<locator::host_id> _banned_hosts;
+    gms::gossip_address_map& _address_map;
 
     future<> shutdown_tls_server();
     future<> shutdown_nontls_server();
@@ -356,8 +364,8 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service);
-    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service);
+    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
     ~messaging_service();
 
     future<> start();
@@ -371,6 +379,10 @@ public:
     gms::inet_address broadcast_address() const noexcept {
         return _cfg.broadcast_address;
     }
+    locator::host_id host_id() const noexcept {
+        return _cfg.id;
+    }
+
     future<> shutdown();
     future<> stop();
     static rpc::no_wait_type no_wait();
@@ -493,10 +505,14 @@ public:
     // No further RPC handlers will be called for that node,
     // but we don't prevent handlers that were started concurrently from finishing.
     future<> ban_host(locator::host_id);
+
+    msg_addr addr_for_host_id(locator::host_id hid);
 private:
-    template <typename Fn>
-    requires std::is_invocable_r_v<bool, Fn, const shard_info&>
-    void find_and_remove_client(clients_map& clients, msg_addr id, Fn&& filter);
+    template <typename Fn, typename Map>
+    requires (std::is_invocable_r_v<bool, Fn, const shard_info&> &&
+            (std::is_same_v<typename Map::key_type, msg_addr> || std::is_same_v<typename Map::key_type, locator::host_id>))
+    void find_and_remove_client(Map& clients, typename Map::key_type id, Fn&& filter);
+
     void do_start_listen();
 
     bool topology_known_for(inet_address) const;
@@ -509,9 +525,10 @@ private:
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id, std::optional<locator::host_id> host_id);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
-    void remove_rpc_client_with_ignored_topology(msg_addr id);
+    void remove_error_rpc_client(messaging_verb verb, locator::host_id id);
+    void remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid);
     void remove_rpc_client(msg_addr id);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);

@@ -48,7 +48,6 @@ class group0_state_id_handler {
 
     replica::database& _local_db;
     gms::gossiper& _gossiper;
-    const raft_address_map& _address_map;
     group0_server_accessor _server_accessor;
     lowres_clock::duration _refresh_interval;
 
@@ -62,7 +61,7 @@ class group0_state_id_handler {
     void refresh();
 
 public:
-    group0_state_id_handler(replica::database& local_db, gms::gossiper& gossiper, const raft_address_map& address_map, group0_server_accessor server_accessor);
+    group0_state_id_handler(replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor);
 
     void run();
 

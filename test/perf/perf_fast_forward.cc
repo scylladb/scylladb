@@ -15,6 +15,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
+#include <boost/range/numeric.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"
@@ -1284,12 +1285,12 @@ void print_all(const test_result_vector& results) {
     if (!dump_all_results || results.empty()) {
         return;
     }
-    output_mgr->add_all_test_values(results.back().get_params(), boost::copy_range<std::vector<stats_values>>(
-        results
-        | boost::adaptors::transformed([] (const test_result& tr) {
+    output_mgr->add_all_test_values(results.back().get_params(), results
+        | std::views::transform([] (const test_result& tr) {
             return tr.get_stats_values();
         })
-    ));
+        | std::ranges::to<std::vector<stats_values>>()
+    );
 }
 
 class result_collector {
@@ -1965,9 +1966,9 @@ int scylla_fast_forward_main(int argc, char** argv) {
     app.add_options()
         ("random-seed", boost::program_options::value<unsigned>(), "Random number generator seed")
         ("run-tests", bpo::value<std::vector<std::string>>()->default_value(
-                boost::copy_range<std::vector<std::string>>(
-                    test_groups | boost::adaptors::transformed([] (auto&& tc) { return tc.name; }))
-                ),
+                test_groups
+                    | std::views::transform([] (auto&& tc) { return tc.name; })
+                    | std::ranges::to<std::vector<std::string>>()),
             "Test groups to run")
         ("datasets", bpo::value<std::vector<std::string>>()->default_value(
                 datasets
@@ -2069,13 +2070,13 @@ int scylla_fast_forward_main(int argc, char** argv) {
                 output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
 
                 auto enabled_dataset_names = app.configuration()["datasets"].as<std::vector<std::string>>();
-                auto enabled_datasets = boost::copy_range<std::vector<dataset*>>(enabled_dataset_names
-                                        | boost::adaptors::transformed([&](auto&& name) {
+                auto enabled_datasets = enabled_dataset_names
+                                        | std::views::transform([&](auto&& name) {
                     if (!datasets.contains(name)) {
                         throw std::runtime_error(seastar::format("No such dataset: {}", name));
                     }
                     return datasets[name].get();
-                }));
+                }) | std::ranges::to<std::vector<dataset*>>();
 
                 if (app.configuration().contains("populate")) {
                     int n_rows = app.configuration()["rows"].as<int>();
@@ -2112,10 +2113,11 @@ int scylla_fast_forward_main(int argc, char** argv) {
                         return requested_test_groups.contains(tc.name);
                     });
 
-                    auto compaction_guard = make_compaction_disabling_guard(db, boost::copy_range<std::vector<replica::table*>>(
-                        enabled_datasets | boost::adaptors::transformed([&] (auto&& ds) {
+                    auto compaction_guard = make_compaction_disabling_guard(db, enabled_datasets
+                        | std::views::transform([&] (auto&& ds) {
                             return &find_table(db, *ds);
-                        })));
+                          })
+                        | std::ranges::to<std::vector<replica::table*>>());
 
                     auto run_tests = [&] (test_group::type type) {
                                 std::ranges::for_each(

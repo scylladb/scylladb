@@ -8,8 +8,6 @@
 
 #pragma once
 
-#include <iosfwd>
-
 #include "mutation_partition.hh"
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
@@ -21,9 +19,8 @@
 #include "mutation/mutation_consumer_concepts.hh"
 #include "utils/preempt.hh"
 
+#include <seastar/util/later.hh>
 #include <seastar/util/optimized_optional.hh>
-#include <seastar/core/coroutine.hh>
-#include <seastar/coroutine/maybe_yield.hh>
 
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;

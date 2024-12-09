@@ -109,10 +109,10 @@
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
 
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "gms/gossip_address_map.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -524,7 +524,7 @@ public:
 // "[key1: value1_1 value1_2 ..., key2: value2_1 value 2_2 ..., (positional) value3, ...]"
 std::string format_parsed_options(const std::vector<bpo::option>& opts) {
     return fmt::format("[{}]",
-        boost::algorithm::join(opts | boost::adaptors::transformed([] (const bpo::option& opt) {
+        fmt::join(opts | std::views::transform([] (const bpo::option& opt) {
             if (opt.value.empty()) {
                 return opt.string_key;
             }
@@ -1390,6 +1390,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               }
             }
 
+            static sharded<gms::gossip_address_map> gossip_address_map;
+            supervisor::notify("starting gossip address map");
+            gossip_address_map.start().get();
+            auto stop_gossip_address_map = defer_verbose_shutdown("gossip_address_map", [] {
+                gossip_address_map.stop().get();
+            });
+
             sys_ks.local().build_bootstrap_info().get();
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
@@ -1472,7 +1479,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             // Delay listening messaging_service until gossip message handlers are registered
-            messaging.start(mscfg, scfg, creds, std::ref(feature_service)).get();
+            messaging.start(mscfg, scfg, creds, std::ref(feature_service), std::ref(gossip_address_map)).get();
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
@@ -1522,13 +1529,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
                 gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
                 gcfg.group0_id = group0_id;
+                gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
                 gcfg.force_gossip_generation = cfg->force_gossip_generation;
                 return gcfg;
             });
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::move(get_gossiper_cfg), std::ref(gossip_address_map)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
@@ -1543,19 +1551,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_gossip(ctx).get();
             });
 
-            static sharded<service::raft_address_map> raft_address_map;
-            supervisor::notify("starting Raft address map");
-            raft_address_map.start().get();
-            auto stop_address_map = defer_verbose_shutdown("raft_address_map", [] {
-                raft_address_map.stop().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_raft_address_map",
-                [] { std::raise(SIGSTOP); });
-
             static sharded<service::direct_fd_pinger> fd_pinger;
             supervisor::notify("starting direct failure detector pinger service");
-            fd_pinger.start(std::ref(messaging), std::ref(raft_address_map)).get();
+            fd_pinger.start(std::ref(messaging)).get();
 
             auto stop_fd_pinger = defer_verbose_shutdown("fd_pinger", [] {
                 fd_pinger.stop().get();
@@ -1573,8 +1571,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(raft::server_id{host_id.id}, std::ref(raft_address_map),
-                    std::ref(messaging), std::ref(fd)).get();
+            raft_gr.start(raft::server_id{host_id.id}, std::ref(messaging), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
@@ -1630,7 +1627,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
-                std::ref(tsm), std::ref(task_manager)).get();
+                std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map)).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -1836,12 +1833,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // both)
             supervisor::notify("starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(raft_address_map), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
             repair.invoke_on_all(&repair_service::start).get();
-            api::set_server_repair(ctx, repair).get();
+            api::set_server_repair(ctx, repair, gossip_address_map).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
             });
@@ -2012,10 +2009,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
-
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(raft_address_map.local(), generation_number).get();
+            ss.local().init_address_map(gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
                 ss.local().uninit_address_map().get();
             });
@@ -2036,6 +2031,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
             }).get();
+
+            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);

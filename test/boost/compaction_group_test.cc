@@ -155,10 +155,10 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
             compaction_group->rebuild_main_set(ssts, {});
 
             auto& cm = t->get_compaction_manager();
-            auto expected_compaction_size = boost::accumulate(ssts | boost::adaptors::transformed([&] (auto& sst) {
+            auto expected_compaction_size = std::ranges::fold_left(ssts | std::views::transform([&] (auto& sst) {
                 // sstables that doesn't need split will have compaction bypassed.
                 return sstable_needs_split(sst) ? sst->bytes_on_disk() : size_t(0);
-            }), int64_t(0));
+            }), int64_t(0), std::plus{});
 
             auto ret = cm.perform_split_compaction(*compaction_group, sstables::compaction_type_options::split{classifier}, tasks::task_info{}).get();
             BOOST_REQUIRE_EQUAL(ret->start_size, expected_compaction_size);

@@ -18,7 +18,43 @@
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
 
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
+
 namespace locator {
+
+using ring_mapping_underlying_type = boost::icl::interval_map<token, std::unordered_set<locator::host_id>>;
+
+struct ring_mapping_impl {
+     ring_mapping_underlying_type map;
+};
+
+ring_mapping::ring_mapping()
+    : _impl(std::make_unique<ring_mapping_impl>()) {
+}
+
+ring_mapping::ring_mapping(ring_mapping&&) noexcept = default;
+
+ring_mapping&
+ring_mapping::operator=(ring_mapping&&) noexcept = default;
+
+ring_mapping::~ring_mapping() = default;
+
+auto* ring_mapping::operator->() {
+    return &_impl->map;
+}
+
+auto* ring_mapping::operator->() const {
+    return &std::as_const(_impl->map);
+}
+
+auto& ring_mapping::operator*() {
+    return _impl->map;
+}
+
+auto& ring_mapping::operator*() const {
+    return std::as_const(_impl->map);
+}
 
 template <typename ResultSet, typename SourceSet>
 static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metadata& tm) {
@@ -116,12 +152,12 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
 }
 
 static const std::unordered_set<locator::host_id>* find_token(const ring_mapping& ring_mapping, const token& token) {
-    if (ring_mapping.empty()) {
+    if (ring_mapping->empty()) {
         return nullptr;
     }
     const auto interval = token_metadata::range_to_interval(wrapping_interval<dht::token>(token));
-    const auto it = ring_mapping.find(interval);
-    return it != ring_mapping.end() ? &it->second : nullptr;
+    const auto it = ring_mapping->find(interval);
+    return it != ring_mapping->end() ? &it->second : nullptr;
 }
 
 inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
@@ -134,6 +170,14 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     return endpoints;
 }
 
+host_id_vector_topology_change vnode_effective_replication_map::get_pending_replicas(const token& search_token) const {
+    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
+    if (!pending_endpoints) {
+        return host_id_vector_topology_change{};
+    }
+    return *pending_endpoints | std::ranges::to<host_id_vector_topology_change>();
+}
+
 inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
@@ -142,12 +186,20 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_f
     return resolve_endpoints<inet_address_vector_replica_set>(*endpoints, *_tmptr);
 }
 
+host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_reading(const token& token) const {
+    const auto* endpoints = find_token(_read_endpoints, token);
+    if (endpoints == nullptr) {
+        return get_natural_replicas(token);
+    }
+    return *endpoints | std::ranges::to<host_id_vector_replica_set>();
+}
+
 std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token& token) const {
     return {};
 }
 
 bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoint) const {
-    for (const auto& item : _pending_endpoints) {
+    for (const auto& item : *_pending_endpoints) {
         const auto& nodes = item.second;
         if (nodes.contains(endpoint)) {
             return true;
@@ -158,7 +210,7 @@ bool vnode_effective_replication_map::has_pending_ranges(locator::host_id endpoi
 
 std::unordered_set<locator::host_id> vnode_effective_replication_map::get_all_pending_nodes() const {
     std::unordered_set<locator::host_id> endpoints;
-    for (const auto& item : _pending_endpoints) {
+    for (const auto& item : *_pending_endpoints) {
         endpoints.insert(item.second.begin(), item.second.end());
     }
 
@@ -407,20 +459,20 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
             auto target_endpoints = co_await rs->calculate_natural_endpoints(token, *topology_changes->target_token_metadata);
 
             auto add_mapping = [&](ring_mapping& target, std::unordered_set<locator::host_id>&& endpoints) {
-                using interval = ring_mapping::interval_type;
+                using interval = ring_mapping_underlying_type::interval_type;
                 if (!depend_on_token) {
-                    target += std::make_pair(
+                    *target += std::make_pair(
                         interval::open(dht::minimum_token(), dht::maximum_token()),
                         std::move(endpoints));
                 } else if (i == 0) {
-                    target += std::make_pair(
+                    *target += std::make_pair(
                         interval::open(all_tokens.back(), dht::maximum_token()),
                         endpoints);
-                    target += std::make_pair(
+                    *target += std::make_pair(
                         interval::left_open(dht::minimum_token(), token),
                         std::move(endpoints));
                 } else {
-                    target += std::make_pair(
+                    *target += std::make_pair(
                         interval::left_open(all_tokens[i - 1], token),
                         std::move(endpoints));
                 }
@@ -482,13 +534,13 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
         co_await coroutine::maybe_yield();
     }
 
-    for (const auto& i : _pending_endpoints) {
-        result->pending_endpoints += i;
+    for (const auto& i : *_pending_endpoints) {
+        *result->pending_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
-    for (const auto& i : _read_endpoints) {
-        result->read_endpoints += i;
+    for (const auto& i : *_read_endpoints) {
+        *result->read_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
@@ -522,6 +574,10 @@ inet_address_vector_replica_set vnode_effective_replication_map::get_natural_end
     return do_get_natural_endpoints(search_token, false);
 }
 
+host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas(const token& search_token) const {
+    return get_replicas(search_token);
+}
+
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
     for (const auto& ep : do_get_natural_endpoints(vnode_tok, true)) {
         if (func(ep) == stop_iteration::yes) {
@@ -536,8 +592,8 @@ vnode_effective_replication_map::~vnode_effective_replication_map() {
         _factory->erase_effective_replication_map(this);
         try {
             _factory->submit_background_work(clear_gently(std::move(_replication_map),
-                std::move(_pending_endpoints),
-                std::move(_read_endpoints),
+                std::move(*_pending_endpoints),
+                std::move(*_read_endpoints),
                 std::move(_tmptr)));
         } catch (...) {
             // ignore

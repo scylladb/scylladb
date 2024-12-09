@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/rpc/rpc.hh>

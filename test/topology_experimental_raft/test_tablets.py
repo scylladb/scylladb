@@ -37,6 +37,10 @@ async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
+async def disable_injection_on(manager, error_name, servers):
+    errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
+    await asyncio.gather(*errs)
+
 async def repair_on_node(manager: ManagerClient, server: ServerInfo, servers: list[ServerInfo], ranges: str = ''):
     node = server.ip_addr
     await manager.servers_see_each_other(servers)

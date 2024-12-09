@@ -9,12 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <iosfwd>
-#include <boost/intrusive/set.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
-
-#include <seastar/core/bitset-iter.hh>
-#include <seastar/util/optimized_optional.hh>
 
 #include "mutation_partition.hh"
 

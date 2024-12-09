@@ -10,6 +10,7 @@
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/smp.hh>
@@ -172,7 +173,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
             }
         } else {
             auto& info = request.aggregation_infos.value()[i];
-            auto types = boost::copy_range<std::vector<data_type>>(info.column_names | boost::adaptors::transformed(name_as_type));
+            auto types = info.column_names | std::views::transform(name_as_type) | std::ranges::to<std::vector<data_type>>();
             
             auto func = cql3::functions::instance().mock_get(info.name, types);
             if (!func) {
@@ -195,7 +196,7 @@ static const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-static void retain_local_endpoints(const locator::topology& topo, inet_address_vector_replica_set& eps) {
+static void retain_local_endpoints(const locator::topology& topo, host_id_vector_replica_set& eps) {
     auto itend = boost::range::remove_if(eps, std::not_fn(topo.get_local_dc_filter()));
     eps.erase(itend, eps.end());
 }
@@ -263,9 +264,8 @@ public:
         _tr_info(tracing::make_trace_info(tr_state))
     {}
 
-    future<query::mapreduce_result> dispatch_to_node(netw::msg_addr id, query::mapreduce_request req) {
-        auto my_address = _mapreducer._messaging.broadcast_address();
-        if (id.addr == my_address) {
+    future<query::mapreduce_result> dispatch_to_node(const locator::effective_replication_map& erm, locator::host_id id, query::mapreduce_request req) {
+        if (_mapreducer._proxy.is_me(erm, id)) {
             co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
         }
 
@@ -345,7 +345,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         }
 
         auto reducible_aggr = aggr_function->reducible_aggregate_function();
-        auto arg_exprs =boost::copy_range<std::vector<cql3::expr::expression>>(info->column_names | boost::adaptors::transformed(name_as_expression));
+        auto arg_exprs = info->column_names | std::views::transform(name_as_expression) | std::ranges::to<std::vector<cql3::expr::expression>>();
         auto fc_expr = cql3::expr::function_call{reducible_aggr, arg_exprs};
         auto column_identifier = make_shared<cql3::column_identifier>(info->name.name, false);
         auto prepared_expr = cql3::expr::prepare_expression(fc_expr, db.as_data_dictionary(), "", schema.get(), nullptr);
@@ -505,7 +505,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
-        query::mapreduce_result res = { .query_results = boost::copy_range<std::vector<bytes_opt>>(rows[0] | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })) };
+        query::mapreduce_result res = { .query_results = rows[0] | std::views::transform([] (const managed_bytes_opt& x) { return to_bytes_opt(x); }) | std::ranges::to<std::vector<bytes_opt>>() };
 
         auto printer = seastar::value_of([&req, &res] {
             return query::mapreduce_result::printer {
@@ -549,10 +549,10 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     };
 
     // Group vnodes by assigned endpoint.
-    std::map<netw::messaging_service::msg_addr, dht::partition_range_vector> vnodes_per_addr;
+    std::map<locator::host_id, dht::partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
     while (std::optional<dht::partition_range> vnode = next_vnode()) {
-        inet_address_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
+        host_id_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
             retain_local_endpoints(topo, live_endpoints);
@@ -562,8 +562,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
             throw std::runtime_error("No live endpoint available");
         }
 
-        auto endpoint_addr = netw::messaging_service::msg_addr{*live_endpoints.begin(), 0};
-        vnodes_per_addr[endpoint_addr].push_back(std::move(*vnode));
+        vnodes_per_addr[*live_endpoints.begin()].push_back(std::move(*vnode));
         // can potentially stall e.g. with a large tablet count.
         co_await coroutine::maybe_yield();
     }
@@ -575,8 +574,8 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
-            [&] (std::pair<const netw::messaging_service::msg_addr, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
-        netw::messaging_service::msg_addr addr = vnodes_with_addr.first;
+            [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+        locator::host_id addr = vnodes_with_addr.first;
         query::mapreduce_result& result_ = result;
         tracing::trace_state_ptr& tr_state_ = tr_state;
         retrying_dispatcher& dispatcher_ = dispatcher;
@@ -587,7 +586,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
         tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
         flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
 
-        query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(addr, std::move(req_with_modified_pr));
+        query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(*erm, addr, std::move(req_with_modified_pr));
         auto partial_printer = seastar::value_of([&req, &partial_result] {
             return query::mapreduce_result::printer {
                 .functions = get_functions(req),

@@ -11,7 +11,7 @@
 # we should just merge these two test files.
 
 import pytest
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")

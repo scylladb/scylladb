@@ -32,8 +32,8 @@ import re
 
 from cassandra import InvalidRequest
 
-from util import new_test_table, local_process_id
-from test_batch import generate_big_batch
+from .util import new_test_table, local_process_id
+from .test_batch import generate_big_batch
 
 # A fixture to find the Scylla log file, returning the log file's path.
 # If the log file cannot be found, or it's not Scylla, the fixture calls

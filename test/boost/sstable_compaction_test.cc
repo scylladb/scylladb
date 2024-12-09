@@ -429,8 +429,9 @@ static future<> check_compacted_sstables(test_env& env, compact_sstables_result 
         std::sort(keys.begin(), keys.end(), partition_key::less_compare(*s));
         BOOST_REQUIRE_EQUAL(keys.size(), res.input_sstables.size());
 
-        auto generations = boost::copy_range<std::vector<sstables::generation_type>>(res.input_sstables |
-            boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation(); }));
+        auto generations = res.input_sstables
+            | std::views::transform([] (const sstables::shared_sstable& sst) { return sst->generation(); })
+            | std::ranges::to<std::vector<sstables::generation_type>>();
         for (auto& k : keys) {
             bool found = false;
             for (auto it = generations.begin(); it != generations.end(); ++it) {
@@ -2950,7 +2951,8 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         f.close().get();
 
         auto res = sstables::validate_checksums(sst, permit).get();
-        BOOST_REQUIRE(res == validate_checksums_result::invalid);
+        BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+        BOOST_REQUIRE(res.has_digest);
 
 
         const auto errors = sst->validate(permit, abort, error_handler{count}).get();
@@ -3377,6 +3379,45 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     r.produces_end_of_stream();
 }
 
+SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
+    // Test to verify that scrub removes the source sstable from the table upon completion
+    // https://github.com/scylladb/scylladb/issues/20030
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+
+        // add the sstable to cf's maintenance set
+        cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
+        auto& cf_ts = cf.as_table_state();
+        auto maintenance_sst_set = cf_ts.maintenance_sstable_set();
+        BOOST_REQUIRE_EQUAL(maintenance_sst_set.size(), 1);
+        BOOST_REQUIRE_EQUAL(*maintenance_sst_set.all()->begin(), sst);
+        // confirm main sstable_set is empty
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 0);
+
+        // Perform scrub on the table
+        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+
+        // main set should have the resultant sst and the maintenance set should be empty now
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+
+        // Now that there is an sstable in main set, perform scrub on the table
+        // again to verify that the result ends up again in main sstable_set
+        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto builder = schema_builder("tests", "sstable_run_based_compaction_test")
@@ -3452,8 +3493,9 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             });
 
             BOOST_REQUIRE_EQUAL(desc.sstables.size(), expected_input);
-            auto sstable_run = boost::copy_range<std::set<sstables::generation_type>>(desc.sstables
-                | boost::adaptors::transformed([] (auto& sst) { return sst->generation(); }));
+            auto sstable_run = desc.sstables
+                | std::views::transform([] (auto& sst) { return sst->generation(); })
+                | std::ranges::to<std::set<sstables::generation_type>>();
             auto expected_sst = sstable_run.begin();
             auto closed_sstables_tracker = sstable_run.begin();
             auto replacer = [&] (sstables::compaction_completion_desc desc) {
@@ -4588,7 +4630,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             }
 
             auto job_size = [] (auto&& sst_range) {
-                return boost::accumulate(sst_range | boost::adaptors::transformed(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0));
+                return std::ranges::fold_left(sst_range | std::views::transform(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0), std::plus{});
             };
             auto free_space_for_reshaping_sstables = [&job_size] (auto&& sst_range) {
                 return job_size(std::move(sst_range)) * (time_window_compaction_strategy::reshape_target_space_overhead * 100);
@@ -5264,7 +5306,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             auto [candidates, descriptors] = get_cleanup_jobs(compaction_strategy_type, std::forward<decltype(args)>(args)...);
             testlog.info("get_cleanup_jobs() returned {} descriptors; expected={}", descriptors.size(), target_job_count);
             BOOST_REQUIRE(descriptors.size() == target_job_count);
-            auto generations = boost::copy_range<std::unordered_set<generation_type>>(candidates | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
+            auto generations = candidates | std::views::transform(std::mem_fn(&sstables::sstable::generation)) | std::ranges::to<std::unordered_set<generation_type>>();
             auto check_desc = [&] (const auto& desc) {
                 BOOST_REQUIRE(desc.sstables.size() == per_job_files);
                 for (auto& sst: desc.sstables) {

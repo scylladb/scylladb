@@ -15,7 +15,6 @@
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "service/raft/raft_address_map.hh"
 
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
@@ -40,6 +39,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <stdexcept>
 #include <csignal>
+#include <unordered_set>
 
 #include "idl/group0.dist.hh"
 #include "idl/migration_manager.dist.hh"
@@ -104,30 +104,16 @@ static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/a
 
 class group0_rpc: public service::raft_rpc {
     direct_failure_detector::failure_detector& _direct_fd;
-    gms::gossiper& _gossiper;
 public:
     explicit group0_rpc(direct_failure_detector::failure_detector& direct_fd,
             raft_state_machine& sm, netw::messaging_service& ms,
-            raft_address_map& address_map, shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id, gms::gossiper& gossiper)
-        : raft_rpc(sm, ms, address_map, std::move(raft_fd), gid, srv_id)
-        , _direct_fd(direct_fd), _gossiper(gossiper)
+            shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id)
+        : raft_rpc(sm, ms, std::move(raft_fd), gid, srv_id)
+        , _direct_fd(direct_fd)
     {}
 
     virtual void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
         for (const auto& addr: add) {
-            auto ip_for_id = _address_map.find(addr.id);
-            if (!ip_for_id) {
-                // Make sure that the addresses of new nodes in the configuration are in the address map
-                auto ips = _gossiper.get_nodes_with_host_id(locator::host_id(addr.id.uuid()));
-                for (auto ip : ips) {
-                    if (_gossiper.is_normal(ip)) {
-                        _address_map.add_or_update_entry(addr.id, ip);
-                    }
-                }
-            }
-            // Entries explicitly managed via `rpc::on_configuration_change() should NOT be
-            // expirable.
-            _address_map.set_nonexpiring(addr.id);
             // Notify the direct failure detector that it should track
             // (or liveness of a specific raft server id.
             if (addr != _my_id) {
@@ -136,10 +122,6 @@ public:
             }
         }
         for (const auto& addr: del) {
-            // RPC 'send' may yield before resolving IP address,
-            // e.g. on _shutdown_gate, so keep the deleted
-            // entries in the map for a bit.
-            _address_map.set_expiring(addr.id);
             _direct_fd.remove_endpoint(addr.id.id);
         }
     }
@@ -199,8 +181,8 @@ future<> raft_group0::uninit_rpc_verbs(netw::messaging_service& ms) {
     ).discard_result();
 }
 
-static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messaging_service& ms, const gms::inet_address& addr, abort_source& as) {
-    auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, netw::msg_addr(addr), as);
+static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messaging_service& ms, const locator::host_id addr, abort_source& as) {
+    auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, addr, as);
     auto state_int = static_cast<int8_t>(state);
     if (state_int > group0_upgrade_state_last) {
         on_internal_error(upgrade_log, format(
@@ -217,8 +199,8 @@ const raft::server_id& raft_group0::load_my_id() {
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
                                                             service::migration_manager& mm, bool topology_change_enabled) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, address_map(), group0_server_accessor{_raft_gr, gid}, _gossiper, _feat, topology_change_enabled);
-    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), _raft_gr.failure_detector(), gid, my_id, _gossiper);
+            _client, mm, qp.proxy(), ss, group0_server_accessor{_raft_gr, gid}, _gossiper, _feat, topology_change_enabled);
+    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);
@@ -574,12 +556,11 @@ shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(bool 
         }
 
         future<bool> post_server_start(const group0_info& g0_info, abort_source& as) override {
-            netw::msg_addr peer(g0_info.ip_addr);
             auto timeout = db::timeout_clock::now() + std::chrono::milliseconds{1000};
             auto my_id = _group0.load_my_id();
             raft::server_address my_addr{my_id, {}};
             try {
-                co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, peer, timeout, g0_info.group0_id, {{my_addr, _can_vote}}, {});
+                co_await ser::group0_rpc_verbs::send_group0_modify_config(&_ms, locator::host_id{g0_info.id.uuid()}, timeout, g0_info.group0_id, {{my_addr, _can_vote}}, {});
                 co_return true;
             } catch (std::runtime_error& e) {
                 group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e.what());
@@ -593,36 +574,15 @@ shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(bool 
 
 struct group0_members {
     const raft::server& _group0_server;
-    const raft_address_map& _address_map;
 
     raft::config_member_set get_members() const {
         return _group0_server.get_configuration().current;
     }
 
-    std::optional<gms::inet_address> get_inet_addr(const raft::config_member& member) const {
-        return _address_map.find(member.addr.id);
-    }
-
-    std::vector<gms::inet_address> get_inet_addrs(seastar::compat::source_location l =
-            seastar::compat::source_location::current()) const {
-        const raft::config_member_set& members = _group0_server.get_configuration().current;
-        std::vector<gms::inet_address> ret;
-        std::vector<raft::server_id> missing;
-        ret.reserve(members.size());
-        for (const auto& srv: members) {
-            auto addr = _address_map.find(srv.addr.id);
-            if (!addr.has_value()) {
-                missing.push_back(srv.addr.id);
-            } else {
-                ret.push_back(addr.value());
-            }
-        }
-        if (!missing.empty()) {
-            upgrade_log.info("{}: failed to resolve IP addresses of some of the cluster members ({})",
-                l.function_name(), missing);
-            ret.clear();
-        }
-        return ret;
+    std::vector<locator::host_id> get_host_ids() const {
+        return _group0_server.get_configuration().current |
+                std::views::transform([] (const auto& m) { return locator::host_id(m.addr.id.uuid()); }) |
+                std::ranges::to<std::vector<locator::host_id>>();
     }
 
     bool is_joint() const {
@@ -709,27 +669,7 @@ future<> raft_group0::setup_group0(
         co_return;
     }
 
-    if (replace_info) {
-        // Insert the replaced node's (Raft ID, IP address) pair into `raft_address_map`.
-        // In general, the mapping won't be obtained through the regular gossiping route:
-        // if we (the replacing node) use the replaced node's IP address, the replaced node's
-        // application states are gone by this point (our application states overrode them
-        // - the application states map is using the IP address as the key).
-        // Even when we use a different IP, there's no guarantee the IPs were exchanged by now.
-        // Instead, we obtain `replace_info` during the shadow round (which guarantees to contact
-        // another node and fetch application states from it) and pass it to `setup_group0`.
-
-        group0_log.info("Replacing a node with Raft ID: {}, IP address: {}",
-                        replace_info->raft_id, replace_info->ip_addr);
-
-        // `opt_add_entry` is shard-local, but that's fine - we only need this info on shard 0.
-        _raft_gr.address_map().opt_add_entry(replace_info->raft_id, replace_info->ip_addr);
-    }
-
-    std::vector<gms::inet_address> seeds;
-    for (auto& addr: initial_contact_nodes) {
-        seeds.push_back(addr);
-    }
+    std::vector<gms::inet_address> seeds(initial_contact_nodes.begin(), initial_contact_nodes.end());
 
     group0_log.info("setup_group0: joining group 0...");
     co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, topology_change_enabled);
@@ -749,7 +689,7 @@ future<> raft_group0::setup_group0(
 
     group0_log.info("setup_group0: ensuring that the cluster has fully upgraded to use Raft...");
     auto& group0_server = _raft_gr.group0();
-    group0_members members0{group0_server, _raft_gr.address_map()};
+    group0_members members0{group0_server};
 
     // Perform a Raft read barrier so we know the set of group 0 members and our group 0 state is up-to-date.
     co_await group0_server.read_barrier(&_abort_source);
@@ -1226,17 +1166,17 @@ static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks,
         // We fetch both config and peers on each iteration; we don't assume that they don't change.
         // No new node should join while the procedure is running, but nodes may leave.
 
-        auto current_config = members0.get_inet_addrs();
+        auto current_config = members0.get_host_ids();
         if (current_config.empty()) {
             // Not all addresses are known
             continue;
         }
         std::sort(current_config.begin(), current_config.end());
 
-        auto peers = co_await sys_ks.load_peers();
+        auto peers = co_await sys_ks.load_peers_ids();
         std::sort(peers.begin(), peers.end());
 
-        std::vector<gms::inet_address> missing_peers;
+        std::vector<locator::host_id> missing_peers;
         std::set_difference(peers.begin(), peers.end(), current_config.begin(), current_config.end(), std::back_inserter(missing_peers));
 
         if (missing_peers.empty()) {
@@ -1262,9 +1202,9 @@ static future<bool> anyone_finished_upgrade(
     static constexpr auto max_concurrency = 10;
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
 
-    auto current_config = members0.get_inet_addrs();
+    auto current_config = members0.get_host_ids();
     bool finished = false;
-    co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+    co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
         try {
             auto state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(ms), node));
             if (state == group0_upgrade_state::use_post_raft_procedures) {
@@ -1283,7 +1223,7 @@ static future<bool> anyone_finished_upgrade(
 
 // Check if it's possible to reach everyone through `get_group0_upgrade_state` RPC.
 static future<> check_remote_group0_upgrade_state_dry_run(
-        const noncopyable_function<future<std::vector<gms::inet_address>>()>& get_inet_addrs,
+        const noncopyable_function<future<std::vector<locator::host_id>>()>& get_host_ids,
         netw::messaging_service& ms, abort_source& as) {
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
@@ -1293,13 +1233,13 @@ static future<> check_remote_group0_upgrade_state_dry_run(
         // so we don't skip nodes which responded in earlier iterations.
         // We contact everyone in each iteration even if some of these guys already answered.
         // We fetch peers again on every attempt to handle the possibility of leaving nodes.
-        auto cluster_config = co_await get_inet_addrs();
+        auto cluster_config = co_await get_host_ids();
         if (cluster_config.empty()) {
             continue;
         }
 
         bool retry = false;
-        co_await max_concurrent_for_each(cluster_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+        co_await max_concurrent_for_each(cluster_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
             try {
                 upgrade_log.info("check_remote_group0_upgrade_state_dry_run: `send_get_group0_upgrade_state({})`", node);
                 co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(ms), node));
@@ -1326,14 +1266,14 @@ future<> raft_group0::wait_for_all_nodes_to_finish_upgrade(abort_source& as) {
     static constexpr auto max_concurrency = 10;
 
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
-        auto current_config = members0.get_inet_addrs();
+        group0_members members0{_raft_gr.group0()};
+        auto current_config = members0.get_host_ids();
         if (current_config.empty()) {
             continue;
         }
 
-        std::unordered_set<gms::inet_address> pending_nodes{current_config.begin(), current_config.end()};
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+        std::unordered_set<locator::host_id> pending_nodes{current_config.begin(), current_config.end()};
+        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
             try {
                 upgrade_log.info("wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})`", node);
                 const auto upgrade_state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(_ms.local()), node));
@@ -1370,12 +1310,12 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
 
-    auto entered_synchronize = make_lw_shared<std::unordered_set<gms::inet_address>>();
+    auto entered_synchronize = make_lw_shared<std::unordered_set<locator::host_id>>();
 
     // This is a work-around for boost tests where RPC module is not listening so we cannot contact ourselves.
     // But really, except the (arguably broken) test code, we don't need to be treated as an edge case. All nodes are symmetric.
     // For production code this line is unnecessary.
-    entered_synchronize->insert(ms.broadcast_address());
+    entered_synchronize->insert(ms.host_id());
 
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
         // We fetch the config again on every attempt to handle the possibility of removing failed nodes.
@@ -1394,18 +1334,10 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 
         (void) [] (netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown,
                    raft::config_member_set current_members_set, group0_members members0,
-                   lw_shared_ptr<std::unordered_set<gms::inet_address>> entered_synchronize,
+                   lw_shared_ptr<std::unordered_set<locator::host_id>> entered_synchronize,
                    lw_shared_ptr<bool> retry, ::tracker<bool> tracker) -> future<> {
             co_await max_concurrent_for_each(current_members_set, max_concurrency, [&] (const raft::config_member& member) -> future<> {
-                auto node_opt = members0.get_inet_addr(member);
-
-                if (!node_opt.has_value()) {
-                    upgrade_log.warn("wait_for_peers_to_enter_synchronize_state: cannot resolve the IP of {}", member);
-                    *retry = true;
-                    co_return;
-                }
-
-                auto node = *node_opt;
+                locator::host_id node{member.addr.id.uuid()};
 
                 if (entered_synchronize->contains(node)) {
                     co_return;
@@ -1457,7 +1389,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 }
 
 // Returning nullopt means we finished early (`can_finish_early` returned true).
-static future<std::optional<std::unordered_map<gms::inet_address, table_schema_version>>>
+static future<std::optional<std::unordered_map<locator::host_id, table_schema_version>>>
 collect_schema_versions_from_group0_members(
         netw::messaging_service& ms, const group0_members& members0,
         const noncopyable_function<future<bool>()>& can_finish_early,
@@ -1465,17 +1397,20 @@ collect_schema_versions_from_group0_members(
     static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
 
-    std::unordered_map<gms::inet_address, table_schema_version> versions;
+    std::unordered_map<locator::host_id, table_schema_version> versions;
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
 
         // We fetch the config on each iteration; some nodes may leave.
-        auto current_config = members0.get_inet_addrs();
+        auto current_config = members0.get_members() |
+                    std::views::transform([] (auto m) { return locator::host_id{m.addr.id.uuid()}; }) |
+                    std::ranges::to<std::vector<locator::host_id>>();
+
         if (current_config.empty()) {
             continue;
         }
 
         bool failed = false;
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (locator::host_id& node) -> future<> {
             if (versions.contains(node)) {
                 // This node was already contacted in a previous iteration.
                 co_return;
@@ -1484,8 +1419,8 @@ collect_schema_versions_from_group0_members(
             try {
                 upgrade_log.info("synchronize_schema: `send_schema_check({})`", node);
                 versions.emplace(node,
-                    co_await with_timeout(as, rpc_timeout, [&ms, addr = netw::msg_addr(node)] (abort_source& as) mutable {
-                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, std::move(addr), as);
+                    co_await with_timeout(as, rpc_timeout, [&ms, node] (abort_source& as) mutable {
+                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, node, as);
                         }));
             } catch (abort_requested_exception&) {
                 upgrade_log.warn("synchronize_schema: abort requested during `send_schema_check({})`", node);
@@ -1583,7 +1518,7 @@ static future<bool> synchronize_schema(
 
             try {
                 upgrade_log.info("synchronize_schema: `merge_schema_from({})`", addr);
-                co_await mm.merge_schema_from(netw::msg_addr(addr));
+                co_await mm.merge_schema_from(addr);
             } catch (const rpc::closed_error& e) {
                 upgrade_log.warn("synchronize_schema: `merge_schema_from({})` failed due to connection error: {}", addr, e);
                 last_pull_successful = false;
@@ -1696,12 +1631,12 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
     // step, on the other hand, allows nodes to leave and will unblock as soon as all remaining peers are
     // ready to answer.
     upgrade_log.info("Waiting until everyone is ready to start upgrade...");
-    auto get_inet_addrs = [this]() -> future<std::vector<gms::inet_address>> {
-        auto current_config = co_await _sys_ks.load_peers();
-        current_config.push_back(_gossiper.get_broadcast_address());
+    auto get_host_ids = [this]() -> future<std::vector<locator::host_id>> {
+        auto current_config = co_await _sys_ks.load_peers_ids();
+        current_config.push_back(_gossiper.my_host_id());
         co_return current_config;
     };
-    co_await check_remote_group0_upgrade_state_dry_run(get_inet_addrs, _ms.local(), _abort_source);
+    co_await check_remote_group0_upgrade_state_dry_run(get_host_ids, _ms.local(), _abort_source);
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
@@ -1716,7 +1651,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
     // Start group 0 leadership monitor fiber.
     _leadership_monitor = leadership_monitor_fiber();
 
-    group0_members members0{_raft_gr.group0(), _raft_gr.address_map()};
+    group0_members members0{_raft_gr.group0()};
 
     // After we joined, we shouldn't be removed from group 0 until the end of the procedure.
     // The implementation of `leave_group0` waits until upgrade finishes before leaving the group.
@@ -1752,7 +1687,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
         upgrade_log.info("Performing a dry run of remote `get_group0_upgrade_state` calls...");
         co_await check_remote_group0_upgrade_state_dry_run(
                 [members0] {
-                    return make_ready_future<std::vector<gms::inet_address>>(members0.get_inet_addrs());
+                    return make_ready_future<std::vector<locator::host_id>>(members0.get_host_ids());
                 }, _ms.local(), _abort_source);
 
         utils::get_local_injector().inject("group0_upgrade_before_synchronize",
@@ -1786,14 +1721,6 @@ void raft_group0::register_metrics() {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
             sm::description("status of the raft group, 1 - normal, 2 - aborted"))
     });
-}
-
-const raft_address_map& raft_group0::address_map() const {
-    return _raft_gr.address_map();
-}
-
-raft_address_map& raft_group0::modifiable_address_map(){
-    return _raft_gr.address_map();
 }
 
 std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {

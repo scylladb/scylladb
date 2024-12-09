@@ -28,17 +28,17 @@
 import decimal
 from decimal import Decimal
 
-# Monkey-patch the boto3 library to stop doing its own error-checking on
-# numbers. This works around a bug https://github.com/boto/boto3/issues/2500
-# of incorrect checking of responses, and we also need to get boto3 to not do
-# its own error checking of requests, to allow us to check the server's
-# handling of such errors.
 import boto3.dynamodb.types
 import pytest
 from botocore.exceptions import ClientError
 
 from test.alternator.util import random_string, client_no_transform
 
+# Monkey-patch the boto3 library to stop doing its own error-checking on
+# numbers. This works around a bug https://github.com/boto/boto3/issues/2500
+# of incorrect checking of responses, and we also need to get boto3 to not do
+# its own error checking of requests, to allow us to check the server's
+# handling of such errors.
 boto3.dynamodb.types.DYNAMODB_CONTEXT = decimal.Context(prec=100)
 
 # Test that numbers of allowed magnitudes - between to 1e-130 and 1e125 -

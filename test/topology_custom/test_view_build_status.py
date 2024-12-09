@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.internal_types import ServerInfo
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for
 from test.topology.conftest import skip_mode
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -489,3 +489,64 @@ async def test_view_build_status_migration_to_v2_with_cleanup(request, manager: 
         return (len(result) == 3) or None
 
     await wait_for(rows_migrated, time.time() + 60)
+
+# Reproduces scylladb/scylladb#20754
+# View build status migration is doing read with CL=ALL, so it requires all nodes to be up.
+# Before the fix, the migration was triggered too early, causing unavailable exception in topology coordinator.
+# The error was triggered when the cluster started in raft topology without view build status v2.
+# It wasn't happening in gossip topology -> raft topology upgrade.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injection is not supported in release mode')
+async def test_migration_on_existing_raft_topology(request, manager: ManagerClient):
+    cfg = {
+        "error_injections_at_startup": [
+            {
+                "name": "suppress_features",
+                "value": "VIEW_BUILD_STATUS_ON_GROUP0"
+            },
+            "skip_vb_v2_version_mut"
+        ]
+    }
+    servers = await manager.servers_add(3, config=cfg)
+
+    logging.info("Waiting until driver connects to every server")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    await create_keyspace(cql)
+    await create_table(cql)
+    await create_mv(cql, "vt1")
+
+    # Verify we're using v1 now
+    v = await get_view_builder_version(cql)
+    assert v == 1
+
+    async def _view_build_finished():
+        result = await cql.run_async("SELECT * FROM system_distributed.view_build_status")
+        return len(result) == 3
+    await wait_for(_view_build_finished, time.time() + 10, period=.5)
+
+    result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+    assert len(result) == 0
+
+    # Enable suppressed `VIEW_BUILD_STATUS_ON_GROUP0` cluster feature
+    for srv in servers:
+        await manager.server_stop_gracefully(srv.server_id)
+        await manager.server_update_config(srv.server_id, "error_injections_at_startup", [])
+        await manager.server_start(srv.server_id)
+        await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 60)
+
+    logging.info("Waiting until view builder status is migrated")
+    await asyncio.gather(*(wait_for(lambda: view_builder_is_v2(cql, host=h), time.time() + 60) for h in hosts))
+
+    # Check that new writes are written to the v2 table
+    await create_mv(cql, "vt2")
+    await asyncio.gather(*(wait_for_view_v2(cql, "ks", "vt2", 3, host=h) for h in hosts))
+
+    result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
+    assert len(result) == 6
+
+    # Check if there is no error logs from raft topology
+    for srv in servers:
+        log = await manager.server_open_log(srv.server_id)
+        res = await log.grep(r'ERROR.*\[shard [0-9]: [a-z]+\] raft_topology - topology change coordinator fiber got error exceptions::unavailable_exception \(Cannot achieve consistency level for')
+        assert len(res) == 0

@@ -10,7 +10,7 @@
 
 #include <seastar/core/iostream.hh>
 #include <seastar/core/fstream.hh>
-#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/numeric.hpp>
 #include "sstables/types.hh"
 #include "checksum_utils.hh"
 #include "vint-serialization.hh"
@@ -46,7 +46,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> put(std::vector<temporary_buffer<char>> data) override {
-        _size += boost::accumulate(data | boost::adaptors::transformed(std::mem_fn(&temporary_buffer<char>::size)), 0);
+        _size += std::ranges::fold_left(data | std::views::transform(std::mem_fn(&temporary_buffer<char>::size)), 0, std::plus{});
         return make_ready_future<>();
     }
     virtual future<> put(temporary_buffer<char> buf) override {

@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <chrono>
-#include <boost/range/adaptor/transformed.hpp>
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
 #include "timestamp.hh"
@@ -28,7 +27,7 @@ struct trace_state::params_values {
         explicit prepared_statement_info(prepared_checked_weak_ptr statement) : statement(std::move(statement)) {}
     };
 
-    std::optional<inet_address_vector_replica_set> batchlog_endpoints;
+    std::optional<host_id_vector_replica_set> batchlog_endpoints;
     std::optional<api::timestamp_type> user_timestamp;
     std::vector<sstring> queries;
     std::optional<db::consistency_level> cl;
@@ -48,7 +47,7 @@ void trace_state::params_values_deleter::operator()(params_values* pv) {
     delete pv;
 }
 
-void trace_state::set_batchlog_endpoints(const inet_address_vector_replica_set& val) {
+void trace_state::set_batchlog_endpoints(const host_id_vector_replica_set& val) {
     _params_ptr->batchlog_endpoints.emplace(val);
 }
 
@@ -113,7 +112,7 @@ void trace_state::build_parameters_map() {
     params_values& vals = *_params_ptr;
 
     if (vals.batchlog_endpoints) {
-        auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | boost::adaptors::transformed([](gms::inet_address ep) {return seastar::format("/{}", ep);}), ","));
+        auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | std::views::transform([](locator::host_id ep) {return seastar::format("/{}", ep);}), ","));
         params_map.emplace("batch_endpoints", std::move(batch_endpoints));
     }
 

@@ -2038,8 +2038,9 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto mut = [&] (auto shard) {
                 return make_insert(tests::generate_partition_key(key_schema, shard));
             };
-            auto muts = boost::copy_range<std::vector<mutation>>(shards
-                | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
+            auto muts = shards
+                | std::views::transform([&] (auto shard) { return mut(shard); })
+                | std::ranges::to<std::vector<mutation>>();
             auto sst_gen = [&] () mutable {
                 auto schema = schema_builder(s).with_sharder(1, ignore_msb).build();
                 auto sst = env.make_sstable(std::move(schema));
@@ -2718,7 +2719,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
 
-        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0)) == 6);
+        BOOST_REQUIRE(std::ranges::fold_left(*compound->all() | std::views::transform([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0), std::plus{}) == 6);
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
@@ -2788,6 +2789,16 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
         const auto muts = tests::generate_random_mutations(random_schema).get();
 
+        auto make_sstable = [&env, &permit, &muts] (schema_ptr schema, sstable_version_types version) {
+            auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
+            auto close_mr = deferred_close(mr);
+            auto sst = env.make_sstable(schema, version);
+            sstable_writer_config cfg = env.manager().configure_writer();
+            auto wr = sst->get_writer(*schema, 1, cfg, encoding_stats{});
+            mr.consume_in_thread(std::move(wr));
+            return sst;
+        };
+
         const std::map<sstring, sstring> no_compression_params = {};
         const std::map<sstring, sstring> lz4_compression_params = {{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}};
 
@@ -2796,16 +2807,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
             for (const auto& compression_params : {no_compression_params, lz4_compression_params}) {
                 testlog.info("compression={}", compression_params);
                 auto sst_schema = schema_builder(schema).set_compressor_params(compression_params).build();
-
-                auto mr = make_mutation_reader_from_mutations_v2(schema, permit, muts);
-                auto close_mr = deferred_close(mr);
-
-                auto sst = env.make_sstable(sst_schema, version);
-                sstable_writer_config cfg = env.manager().configure_writer();
-
-                auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{});
-                mr.consume_in_thread(std::move(wr));
-
+                auto sst = make_sstable(sst_schema, version);
                 sst->load(sst->get_schema()->get_sharder()).get();
 
                 validate_checksums_result res;
@@ -2813,12 +2815,23 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 testlog.info("Validating intact {}", sst->get_filename());
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::valid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+                BOOST_REQUIRE(res.has_digest);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
-                testlog.info("Validating corrupted {}", sst->get_filename());
+                testlog.info("Validating digest-corrupted {}", sst->get_filename());
+                auto valid_digest = sst->read_digest().get();
+                BOOST_REQUIRE(valid_digest.has_value());
+                sstables::test(sst).set_digest(valid_digest.value() + 1);
+
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
+                sstables::test(sst).set_digest(valid_digest); // restore it for next test cases
+
+                testlog.info("Validating checksum-corrupted {}", sst->get_filename());
 
                 { // corrupt the sstable
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
@@ -2828,22 +2841,96 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
 
-                testlog.info("Validating truncated {}", sst->get_filename());
+                testlog.info("Validating post-load minor truncation (last byte removed) on {}", sst->get_filename());
+
+                { // truncate the sstable
+                    sst_file.truncate(sst->ondisk_data_size() - 1).get();
+                }
+
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
+
+                testlog.info("Validating post-load major truncation (half of data removed) on {}", sst->get_filename());
 
                 { // truncate the sstable
                     sst_file.truncate(sst->ondisk_data_size() / 2).get();
                 }
 
                 res = sstables::validate_checksums(sst, permit).get();
-                BOOST_REQUIRE(res == validate_checksums_result::invalid);
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(res.has_digest);
+
+                testlog.info("Validating with no digest {}", sst->get_filename());
+
+                sstables::test(sst).set_digest(std::nullopt);
+                sstables::test(sst).rewrite_toc_without_component(component_type::Digest);
+                res = sstables::validate_checksums(sst, permit).get();
+                BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                BOOST_REQUIRE(!res.has_digest);
 
                 if (compression_params == no_compression_params) {
                     testlog.info("Validating with no checksums {}", sst->get_filename());
                     sstables::test(sst).rewrite_toc_without_component(component_type::CRC);
                     auto res = sstables::validate_checksums(sst, permit).get();
-                    BOOST_REQUIRE(res == validate_checksums_result::no_checksum);
+                    BOOST_REQUIRE(res.status == validate_checksums_status::no_checksum);
+                    BOOST_REQUIRE(!res.has_digest);
+                }
+
+                { // truncate the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating pre-load minor truncation (last byte removed) on {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    sst_file.truncate(sst_file.size().get() - 1).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
+                }
+
+                { // truncate the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating pre-load major truncation (half of data removed) on {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    sst_file.truncate(sst_file.size().get() / 2).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
+                }
+
+                { // append data to the sstable
+                    auto sst = make_sstable(sst_schema, version);
+
+                    testlog.info("Validating appended {}", sst->get_filename());
+
+                    auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::rw).get();
+                    auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
+                    auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), 2 * 64 * 1024);
+                    std::fill(buf.get_write(), buf.get_write() + buf.size(), 0xba);
+                    auto fsize = sst_file.size().get();
+                    auto wpos = align_down(fsize, sst_file.disk_write_dma_alignment());
+                    sst_file.dma_read<char>(wpos, buf.get_write(), fsize - wpos).get();
+                    sst_file.dma_write(wpos, buf.begin(), buf.size()).get();
+
+                    sst->load(sst->get_schema()->get_sharder()).get();
+
+                    res = sstables::validate_checksums(sst, permit).get();
+                    BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+                    BOOST_REQUIRE(res.has_digest);
                 }
             }
         }

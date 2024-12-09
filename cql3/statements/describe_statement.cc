@@ -9,8 +9,6 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/iterator_range_core.hpp>
 
 #include "cdc/cdc_options.hh"
 #include "cdc/log.hh"
@@ -331,9 +329,9 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
     }
 
     replica::schema_describe_helper describe_helper{db};
-    co_return boost::copy_range<std::vector<description>>(tables | boost::adaptors::transformed([&describe_helper] (auto&& t) {
+    co_return tables | std::views::transform([&describe_helper] (auto&& t) {
         return t->describe(describe_helper, describe_option::NO_STMTS);
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 // DESCRIBE UTILITY
@@ -446,9 +444,9 @@ std::vector<lw_shared_ptr<column_specification>> get_element_column_specificatio
 }
 
 std::vector<std::vector<bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
-    return boost::copy_range<std::vector<std::vector<bytes_opt>>>(descs | boost::adaptors::transformed([serialize_create_statement] (const description& desc) {
+    return descs | std::views::transform([serialize_create_statement] (const description& desc) {
         return desc.serialize(serialize_create_statement);
-    }));
+    }) | std::ranges::to<std::vector>();
 }
 
 
@@ -535,15 +533,15 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
         return std::stol(r._start_token);
     });
 
-    auto ring_ranges = boost::copy_range<std::vector<std::pair<data_value, data_value>>>(ranges | boost::adaptors::transformed([list_type = std::move(list_type)] (auto& range) {
+    auto ring_ranges = ranges | std::views::transform([list_type = std::move(list_type)] (auto& range) {
         auto token_end = data_value(range._end_token);
-        auto endpoints = boost::copy_range<std::vector<data_value>>(range._endpoints | boost::adaptors::transformed([] (const auto& endpoint) {
+        auto endpoints = range._endpoints | std::views::transform([] (const auto& endpoint) {
             return data_value(endpoint);
-        }));
+        }) | std::ranges::to<std::vector>();
         auto endpoints_list = make_list_value(list_type, endpoints);
 
         return std::pair(token_end, endpoints_list);
-    }));
+    }) | std::ranges::to<std::vector>();
 
     co_return make_map_value(map_type, map_type_impl::native_type(
         std::make_move_iterator(ring_ranges.begin()),

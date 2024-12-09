@@ -12,7 +12,7 @@
 
 import pytest
 import re
-from util import new_test_table, new_type, user_type
+from .util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
 from cassandra.query import UNSET_VALUE
 

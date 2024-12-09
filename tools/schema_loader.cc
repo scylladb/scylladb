@@ -118,7 +118,7 @@ private:
         return wrap(*it);
     }
     virtual std::vector<data_dictionary::keyspace> get_keyspaces(data_dictionary::database db) const override {
-        return boost::copy_range<std::vector<data_dictionary::keyspace>>(unwrap(db).keyspaces | boost::adaptors::transformed([this] (const keyspace& ks) { return wrap(ks); }));
+        return unwrap(db).keyspaces | std::views::transform([this] (const keyspace& ks) { return wrap(ks); }) | std::ranges::to<std::vector<data_dictionary::keyspace>>();
     }
     virtual std::vector<sstring> get_user_keyspaces(data_dictionary::database db) const override {
         return std::ranges::to<std::vector<sstring>>(
@@ -128,10 +128,10 @@ private:
         );
     }
     virtual std::vector<sstring> get_all_keyspaces(data_dictionary::database db) const override {
-        return boost::copy_range<std::vector<sstring>>(unwrap(db).keyspaces | boost::adaptors::transformed([] (const keyspace& ks) { return ks.metadata->name(); }));
+        return unwrap(db).keyspaces | std::views::transform([] (const keyspace& ks) { return ks.metadata->name(); }) | std::ranges::to<std::vector<sstring>>();
     }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
-        return boost::copy_range<std::vector<data_dictionary::table>>(unwrap(db).tables | boost::adaptors::transformed([this] (const table& ks) { return wrap(ks); }));
+        return unwrap(db).tables | std::views::transform([this] (const table& ks) { return wrap(ks); }) | std::ranges::to<std::vector<data_dictionary::table>>();
     }
     virtual std::optional<data_dictionary::table> try_find_table(data_dictionary::database db, std::string_view ks, std::string_view tab) const override {
         auto& tables = unwrap(db).tables;
@@ -244,6 +244,8 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
     locator::token_metadata::config tm_cfg;
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
+
     token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
     auto stop_token_metadata = deferred_stop(token_metadata);
 
@@ -445,9 +447,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         db::cql_type_parser::raw_builder ut_builder(*ks);
 
         auto get_list = [] (const query::result_set_row& row, const char* name) {
-            return boost::copy_range<std::vector<sstring>>(
-                    row.get_nonnull<const list_type_impl::native_type&>(name)
-                    | boost::adaptors::transformed([] (const data_value& v) { return value_cast<sstring>(v); }));
+            return row.get_nonnull<const list_type_impl::native_type&>(name)
+                    | std::views::transform([] (const data_value& v) { return value_cast<sstring>(v); })
+                    | std::ranges::to<std::vector<sstring>>();
         };
 
         for (const auto& row : result.rows()) {

@@ -348,6 +348,17 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
     }
 }
 
+std::optional<service_level_options> service_level_controller::find_cached_effective_service_level(const sstring& role_name) {
+    if (!_sl_data_accessor->is_v2()) {
+        return std::nullopt;
+    }
+
+    auto effective_sl_it = _effective_service_levels_db.find(role_name);
+    return effective_sl_it != _effective_service_levels_db.end() 
+        ? std::optional<service_level_options>(effective_sl_it->second)
+        : std::nullopt;
+}
+
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
     return seastar::async( [this, name, sl_data] {
         _subscribers.thread_for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
@@ -598,7 +609,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     }
     
 
-    auto col_names = boost::copy_range<std::vector<sstring>>(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {return col.name_as_cql_string(); }));
+    auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = boost::algorithm::join(col_names, ", ");
     sstring val_binders_str = "?";
     for (size_t i = 1; i < col_names.size(); ++i) {

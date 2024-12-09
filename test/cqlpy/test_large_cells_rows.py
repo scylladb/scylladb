@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-from util import new_test_table
+from .util import new_test_table
 
 import requests
-import nodetool
+from . import nodetool
 
 def test_create_large_static_cells_and_rows(cql, test_keyspace):
     '''Test that `large_data_handler` successfully reports large static cells

@@ -1170,11 +1170,11 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
         }
         writer.EndArray();
 
-        auto first_key = sstables::key_view(summary.first_key.value).to_partition_key(*schema);
+        auto first_key = dht::decorate_key(*schema, sstables::key_view(summary.first_key.value).to_partition_key(*schema));
         writer.Key("first_key");
         writer.DataKey(*schema, first_key);
 
-        auto last_key = sstables::key_view(summary.last_key.value).to_partition_key(*schema);
+        auto last_key = dht::decorate_key(*schema, sstables::key_view(summary.last_key.value).to_partition_key(*schema));
         writer.Key("last_key");
         writer.DataKey(*schema, last_key);
 
@@ -1627,20 +1627,26 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
         writer.Key(sst->get_filename());
         writer.StartObject();
         writer.Key("has_checksums");
-        switch (res) {
-        case validate_checksums_result::valid:
-            writer.Bool(true);
-            writer.Key("valid_checksums");
+        switch (res.status) {
+        case validate_checksums_status::valid:
+        case validate_checksums_status::invalid:
             writer.Bool(true);
             break;
-        case validate_checksums_result::invalid:
+        case validate_checksums_status::no_checksum:
+            writer.Bool(false);
+        }
+        writer.Key("has_digest");
+        writer.Bool(res.has_digest);
+        switch (res.status) {
+        case validate_checksums_status::valid:
+            writer.Key("valid");
             writer.Bool(true);
-            writer.Key("valid_checksums");
+            break;
+        case validate_checksums_status::invalid:
+            writer.Key("valid");
             writer.Bool(false);
             break;
-        case validate_checksums_result::no_checksum:
-            writer.Bool(false);
-            break;
+        case validate_checksums_status::no_checksum:
         }
         writer.EndObject();
     }
@@ -1837,7 +1843,7 @@ class json_mutation_stream_parser {
         }
 
         std::string stack_to_string() const {
-            return boost::algorithm::join(_state_stack | boost::adaptors::transformed([] (state s) { return std::string(to_string(s)); }), "|");
+            return fmt::to_string(fmt::join(_state_stack | std::views::transform([] (state s) { return to_string(s); }), "|"));
         }
 
         template<typename... Args>
@@ -3142,7 +3148,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = seastar::format(description_template, app_name, sst_log.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+            .description = seastar::format(description_template, app_name, sst_log.name(), fmt::join(operations | std::views::transform([] (const auto& op) {
                 return seastar::format("* {}: {}", op.name(), op.summary());
             }), "\n")),
             .logger_name = sst_log.name(),

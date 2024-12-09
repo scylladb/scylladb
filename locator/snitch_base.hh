@@ -11,13 +11,12 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <boost/signals2.hpp>
+#include <boost/signals2/signal_type.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 
 #include "gms/endpoint_state.hh"
 #include "locator/types.hh"
 #include "gms/inet_address.hh"
-#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
 #include "utils/log.hh"

@@ -11,7 +11,7 @@
 # timeuuid is a separate type and may
 #############################################################################
 
-from util import new_test_table, unique_key_int
+from .util import new_test_table, unique_key_int
 
 import pytest
 import uuid

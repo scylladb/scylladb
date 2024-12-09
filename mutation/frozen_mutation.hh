@@ -17,8 +17,6 @@
 #include "range_tombstone_change_generator.hh"
 #include "schema/schema.hh"
 
-#include <span>
-
 class mutation;
 class mutation_reader;
 

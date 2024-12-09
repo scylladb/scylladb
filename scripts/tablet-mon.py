@@ -435,8 +435,17 @@ def update_from_cql(initial=False):
             changed = True
 
     tablets_by_shard = set()
+    tablet_id_by_table = {}
+
+    def tablet_id_for_table(table_id):
+        if table_id not in tablet_id_by_table:
+            tablet_id_by_table[table_id] = 0
+        ret = tablet_id_by_table[table_id]
+        tablet_id_by_table[table_id] += 1
+        return ret
+
     for tablet in session.execute(tablets_query):
-        id = (tablet.table_id, tablet.last_token)
+        id = (tablet.table_id, tablet.last_token, tablet_id_for_table(tablet.table_id))
         replicas = set(tablet.replicas)
         new_replicas = set(tablet.new_replicas) if tablet.new_replicas else replicas
 
@@ -540,6 +549,7 @@ window_width = min(window_width, 3000)
 window_height = min(window_height, 2000)
 window = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
 pygame.display.set_caption('Tablets')
+number_font = pygame.font.SysFont(None, 20)
 
 def draw_tablet(tablet, x, y):
     tablet.x = x
@@ -566,6 +576,11 @@ def draw_tablet(tablet, x, y):
                                              table_tag_h),
                              border_top_left_radius=tablet_radius,
                              border_top_right_radius=tablet_radius)
+
+            number_text = str(tablet.id[2])
+            number_image = number_font.render(number_text, True, BLACK)
+            window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
+                                       y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,

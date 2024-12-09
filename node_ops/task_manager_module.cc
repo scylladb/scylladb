@@ -12,6 +12,7 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "tasks/task_handler.hh"
+#include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
 
 #include <boost/range/adaptor/filtered.hpp>
@@ -68,7 +69,7 @@ static future<db::system_keyspace::topology_requests_entries> get_entries(db::sy
     co_return entries;
 }
 
-future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_helper(tasks::task_id id) const {
+future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint) const {
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(id.uuid(), false);
     auto started = entry.id;
     service::topology& topology = _ss._topology_state_machine._topology;
@@ -81,7 +82,7 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_help
         .kind = tasks::task_kind::cluster,
         .scope = "cluster",
         .state = get_state(entry),
-        .is_abortable = co_await is_abortable(),
+        .is_abortable = co_await is_abortable(std::move(hint)),
         .start_time = entry.start_time,
         .end_time = entry.end_time,
         .error = entry.error,
@@ -101,50 +102,51 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
     return tasks::task_manager::task_group::topology_change_group;
 }
 
-future<bool> node_ops_virtual_task::contains(tasks::task_id task_id) const {
+future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(tasks::task_id task_id) const {
     if (!task_id.uuid().is_timestamp()) {
         // Task id of node ops operation is always a timestamp.
-        co_return false;
+        co_return std::nullopt;
     }
 
+    auto empty_hint = std::make_optional<tasks::virtual_task_hint>({});
     service::topology& topology = _ss._topology_state_machine._topology;
     for (auto& request : topology.requests) {
         if (topology.find(request.first)->second.request_id == task_id.uuid()) {
-            co_return true;
+            co_return empty_hint;
         }
     }
 
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(task_id.uuid(), false);
-    co_return bool(entry.id);
+    co_return bool(entry.id) ? empty_hint : std::nullopt;
 }
 
-future<tasks::is_abortable> node_ops_virtual_task::is_abortable() const {
+future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint) const {
     return make_ready_future<tasks::is_abortable>(tasks::is_abortable::no);
 }
 
-future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id) {
-    return get_status_helper(id);
+future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
+    return get_status_helper(id, std::move(hint));
 }
 
-future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::task_id id) {
-    auto entry = co_await get_status_helper(id);
+future<std::optional<tasks::task_status>> node_ops_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
+    auto entry = co_await get_status_helper(id, hint);
     if (!entry) {
         co_return std::nullopt;
     }
 
     co_await _ss.wait_for_topology_request_completion(id.uuid(), false);
-    co_return co_await get_status_helper(id);
+    co_return co_await get_status_helper(id, std::move(hint));
 }
 
-future<> node_ops_virtual_task::abort(tasks::task_id id) noexcept {
+future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint) noexcept {
     return make_ready_future();
 }
 
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     service::topology& topology = _ss._topology_state_machine._topology;
-    co_return boost::copy_range<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_user_task_ttl())
-            | boost::adaptors::transformed([] (const auto& e) {
+    co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, topology, get_task_manager().get_user_task_ttl())
+            | std::views::transform([] (const auto& e) {
         auto id = e.first;
         auto& entry = e.second;
         return tasks::task_stats {

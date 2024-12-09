@@ -55,9 +55,6 @@
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
 
-#include <boost/range/numeric.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-
 #include "checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 

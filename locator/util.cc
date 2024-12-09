@@ -8,6 +8,7 @@
 #include "locator/util.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 
 namespace locator {
 

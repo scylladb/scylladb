@@ -48,7 +48,6 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
-#include "service/raft/raft_address_map.hh"
 #include "db/batchlog_manager.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "readers/empty_v2.hh"
@@ -1327,8 +1326,9 @@ private:
             }
         }
         if (update_hash_set) {
-            _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
-                    boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
+            _peer_row_hash_sets[node_idx] = row_diff
+                   | std::views::transform([] (repair_row& r) { thread::maybe_yield(); return r.hash(); })
+                   | std::ranges::to<repair_hash_set>();
         }
         // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
         // so we skip calling do_apply_rows here.
@@ -1555,14 +1555,14 @@ public:
 
     // RPC handler
     static future<repair_row_level_start_response>
-    repair_row_level_start_handler(repair_service& repair, gms::inet_address from, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
+    repair_row_level_start_handler(repair_service& repair, gms::inet_address from, locator::host_id from_id, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
             gc_clock::time_point compaction_time, abort_source& as) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         try {
-            co_await repair.insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as);
+            co_await repair.insert_repair_meta(from, from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
@@ -2520,7 +2520,8 @@ future<> repair_service::init_ms_handlers() {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return container().invoke_on(shard, [from, src_cpu_id, repair_meta_id, ks_name, cf_name,
+        auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return container().invoke_on(shard, [from, from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
             if (!local_repair._view_builder.local_is_initialized()) {
                 return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
@@ -2528,7 +2529,7 @@ future<> repair_service::init_ms_handlers() {
             }
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
-            return repair_meta::repair_row_level_start_handler(local_repair, from, src_cpu_id, repair_meta_id, std::move(ks_name),
+            return repair_meta::repair_row_level_start_handler(local_repair, from, from_id, src_cpu_id, repair_meta_id, std::move(ks_name),
                     std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
                     shard_config{remote_shard, remote_shard_count, remote_ignore_msb},
                     schema_version, r, ct, _repair_module->abort_source());
@@ -3252,7 +3253,6 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         netw::messaging_service& ms,
         sharded<replica::database>& db,
         sharded<service::storage_proxy>& sp,
-        sharded<service::raft_address_map>& addr_map,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_keyspace>& sys_ks,
         sharded<db::view::view_builder>& vb,
@@ -3264,7 +3264,6 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _messaging(ms)
     , _db(db)
     , _sp(sp)
-    , _addr_map(addr_map)
     , _bm(bm)
     , _sys_ks(sys_ks)
     , _view_builder(vb)
@@ -3394,6 +3393,7 @@ repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t
 future<>
 repair_service::insert_repair_meta(
         const gms::inet_address& from,
+        locator::host_id from_id,
         uint32_t src_cpu_id,
         uint32_t repair_meta_id,
         dht::token_range range,
@@ -3405,7 +3405,7 @@ repair_service::insert_repair_meta(
         streaming::stream_reason reason,
         gc_clock::time_point compaction_time,
         abort_source& as) {
-    schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, get_messaging(), as);
+    schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, from_id, src_cpu_id, get_messaging(), as);
     auto& db = get_db();
     reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
     node_repair_meta_id id{from, repair_meta_id};

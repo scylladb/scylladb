@@ -360,7 +360,8 @@ void heavy_origin_test() {
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); },
+     locator::token_metadata::config{locator::topology::config{ .local_dc_rack = locator::endpoint_dc_rack::default_location }});
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -559,7 +560,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     }
 
     testlog.debug("num_dcs={} num_racks={} nodes_per_rack={} shards_per_node={} ring_points=[{}]", num_dcs, num_racks, nodes_per_rack, shard_count,
-            fmt::join(ring_points | boost::adaptors::transformed([] (const ring_point& rp) {
+            fmt::join(ring_points | std::views::transform([] (const ring_point& rp) {
                 return fmt::format("({}, {})", rp.id, rp.host);
             }), ", "));
 
@@ -815,12 +816,12 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     };
 
     my_network_topology_strategy nts(replication_strategy_params(
-                    boost::copy_range<std::map<sstring, sstring>>(
-                                    datacenters
-                                                    | boost::adaptors::transformed(
+                                    datacenters | std::views::transform(
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })), std::nullopt));
+                                                                    })
+                                                | std::ranges::to<std::map<sstring, sstring>>(),
+                                    std::nullopt));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
@@ -865,15 +866,13 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_node(node, inet_address((127u << 24) | ++i), {dc, to_sstring(r)}, locator::node::state::normal);
+        topo.add_or_update_endpoint(node, inet_address((127u << 24) | ++i), endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     locator::token_metadata::config tm_cfg;
     auto my_address = gms::inet_address("localhost");
-    tm_cfg.topo_cfg.this_endpoint = my_address;
-    tm_cfg.topo_cfg.this_cql_address = my_address;
 
     constexpr size_t NODES = 100;
     constexpr size_t VNODES = 64;
@@ -891,6 +890,11 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
         return host_id{utils::UUID(0, ++i)};
     });
+
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = nodes[0];
+    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
 
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
@@ -1000,6 +1004,11 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         return host_id{utils::UUID(0, i)};
     };
 
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = nodes[0];
+    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
+
     std::generate_n(std::back_inserter(nodes), NODES, [&, i = 0u]() mutable {
         return make_address(++i);
     });
@@ -1046,6 +1055,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
         topology::config{
             .this_endpoint = ip1,
+            .this_host_id = host1,
             .local_dc_rack = ip1_dc_rack,
         }
     });
@@ -1057,10 +1067,15 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_host_id(host2, ip2);
         tm.update_host_id(host1, ip1); // this_node added last on purpose
+        // Need to move to non left or none state in order to be indexed by ip
+        tm.update_topology(host1, {}, locator::node::state::normal);
+        tm.update_topology(host2, {}, locator::node::state::normal);
         return make_ready_future<>();
     }).get();
 
     const node* n1 = stm.get()->get_topology().find_node(host1);
+    BOOST_REQUIRE(n1);
+    n1 = stm.get()->get_topology().find_node(ip1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
@@ -1070,12 +1085,14 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     const node* n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(n2);
+    n2 = stm.get()->get_topology().find_node(ip2);
+    BOOST_REQUIRE(n2);
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
     BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
     BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
 
-    // Removing local node
+    // Local node cannot be removed
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.remove_endpoint(host1);
@@ -1084,9 +1101,9 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     }).get();
 
     n1 = stm.get()->get_topology().find_node(host1);
-    BOOST_REQUIRE(!n1);
+    BOOST_REQUIRE(n1);
     n1 = stm.get()->get_topology().find_node(ip1);
-    BOOST_REQUIRE(!n1);
+    BOOST_REQUIRE(n1);
 
     // Removing node with no local node
 

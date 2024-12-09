@@ -13,11 +13,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/join.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-
 #include <seastar/core/coroutine.hh>
 #include "cql3/column_identifier.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -166,7 +161,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     }
 
     // Gather all included columns, as specified by the select clause
-    auto included = boost::copy_range<std::unordered_set<const column_definition*>>(_select_clause | boost::adaptors::transformed([&](auto&& selector) {
+    auto included = _select_clause | std::views::transform([&](auto&& selector) {
         if (selector->alias) {
             throw exceptions::invalid_request_exception(format("Cannot use alias when defining a materialized view"));
         }
@@ -183,7 +178,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
             throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
         }
         return def;
-    }));
+    }) | std::ranges::to<std::unordered_set<const column_definition*>>();
 
     auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
     raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, std::nullopt, std::nullopt, {}, std::make_unique<cql3::attributes::raw>());
@@ -251,7 +246,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         throw exceptions::invalid_request_exception(seastar::format(
 "Cannot create Materialized View {} without primary key columns from base {} ({})",
                         column_family(), _base_name.get_column_family(),
-                        fmt::join(missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ")));
+                        fmt::join(missing_pk_columns | std::views::transform(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
 
     if (_partition_keys.empty()) {

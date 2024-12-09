@@ -6,11 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <chrono>
 #include <fmt/ranges.h>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
@@ -25,11 +27,13 @@
 #include "dht/boot_strapper.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
 #include "locator/network_topology_strategy.hh"
 #include "message/messaging_service.hh"
 #include "mutation/async_utils.hh"
+#include "raft/raft.hh"
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
@@ -37,7 +41,6 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
-#include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/tablet_allocator.hh"
@@ -61,13 +64,17 @@ namespace service {
 
 logging::logger rtlogger("raft_topology");
 
-future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am, abort_source& as) {
+locator::host_id to_host_id(raft::server_id id) {
+    return locator::host_id{id.uuid()};
+}
+
+future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_source& as) {
     const auto timeout = std::chrono::seconds{30};
     const auto deadline = lowres_clock::now() + timeout;
     while (true) {
-        const auto ip = am.find(id);
-        if (ip) {
-            co_return *ip;
+        auto hids = g.get_nodes_with_host_id(to_host_id(id));
+        if (!hids.empty()) {
+            co_return;
         }
         if (lowres_clock::now() > deadline) {
             co_await coroutine::exception(std::make_exception_ptr(
@@ -79,6 +86,18 @@ future<inet_address> wait_for_ip(raft::server_id id, const raft_address_map& am,
     }
 }
 
+namespace {
+// Doesn't throw error on absence of values.
+sstring get_application_state_gently(const gms::application_state_map& epmap, gms::application_state app_state) {
+    const auto it = epmap.find(app_state);
+    if (it == epmap.end()) {
+        return sstring{};
+    }
+    // it's versioned_value::value(), not std::optional::value() - it does not throw
+    return it->second.value();
+}
+} // namespace
+
 class topology_coordinator : public endpoint_lifecycle_subscriber {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     gms::gossiper& _gossiper;
@@ -87,7 +106,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     db::system_keyspace& _sys_ks;
     replica::database& _db;
     service::raft_group0& _group0;
-    const service::raft_address_map& _address_map;
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
@@ -187,7 +205,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto& n : _topo_sm._topology.normal_nodes) {
             bool alive = false;
             try {
-                alive = _gossiper.is_alive(id2ip(locator::host_id(n.first.uuid())));
+                alive = _gossiper.is_alive(locator::host_id(n.first.uuid()));
             } catch (...) {}
 
             if (!alive) {
@@ -205,7 +223,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto& n : _topo_sm._topology.normal_nodes) {
             bool alive = false;
             try {
-                alive = _gossiper.is_alive(id2ip(locator::host_id(n.first.uuid())));
+                alive = _gossiper.is_alive(locator::host_id(n.first.uuid()));
             } catch (...) {}
 
             if (!alive) {
@@ -356,32 +374,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    inet_address id2ip(locator::host_id id) const {
-        auto ip = _address_map.find(raft::server_id(id.uuid()));
-        if (!ip) {
-            throw std::runtime_error(::format("no ip address mapping for {}", id));
-        }
-        return *ip;
-    }
-
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
-        auto ip = _address_map.find(id);
-        if (!ip) {
-            rtlogger.warn("cannot send command {} with term {} and index {} "
-                         "to {} because mapping to ip is not available",
-                         cmd.cmd, _term, cmd_index, id);
-            co_await coroutine::exception(std::make_exception_ptr(
-                    std::runtime_error(::format("no ip address mapping for {}", id))));
-        }
-        rtlogger.debug("send {} command with term {} and index {} to {}/{}",
-            cmd.cmd, _term, cmd_index, id, *ip);
-        auto result = _db.get_token_metadata().get_topology().is_me(*ip) ?
+        rtlogger.debug("send {} command with term {} and index {} to {}",
+            cmd.cmd, _term, cmd_index, id);
+        auto result = _db.get_token_metadata().get_topology().is_me(to_host_id(id)) ?
                     co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
-                            &_messaging, netw::msg_addr{*ip}, id, _term, cmd_index, cmd);
+                            &_messaging, to_host_id(id), id, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
             co_await coroutine::exception(std::make_exception_ptr(
-                    std::runtime_error(::format("failed status returned from {}/{}", id, *ip))));
+                    std::runtime_error(::format("failed status returned from {}", id))));
         }
     };
 
@@ -735,6 +737,78 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (...) {
                     rtlogger.debug("CDC generation publisher: sleep failed: {}", std::current_exception());
                 }
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    // If a node crashes after initiating gossip and before joining group0, it becomes orphan and
+    // remains in gossip. This background fiber periodically checks for such nodes and purges those
+    // entries from gossiper by committing the node as left in raft.
+    future<> gossiper_orphan_remover_fiber() {
+        rtlogger.debug("start gossiper orphan remover fiber");
+        bool do_speedup_fiber = false;
+        co_await utils::get_local_injector().inject("fast_orphan_removal_fiber", [&](auto& handler) -> future<> {
+            do_speedup_fiber = true;
+            // While testing, orphan ip is introduced, and its presence is captured. Wait is added before remover thread so that the presence of orphan ip is
+            // confirmed and the difference of gossiper ips before and after this thread application can be easily asserted.
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+        });
+        while (!_as.abort_requested()) {
+            try {
+                auto guard = co_await start_operation();
+                std::vector<canonical_mutation> updates;
+                int32_t timeout = 60;
+                co_await utils::get_local_injector().inject("speedup_orphan_removal", [&](auto& handler) -> future<> {
+                    // Removes all unjoined nodes. Just for testing purposes.
+                    timeout = 0;
+                    co_return;
+                });
+                std::string reason = ::format("Ban the orphan nodes in group0. Orphan nodes HostId/IP:");
+                _gossiper.for_each_endpoint_state([&](const gms::inet_address& addr, const gms::endpoint_state& eps) -> void {
+                    // Since generation is in seconds unit, converting current time to seconds eases comparison computations.
+                    auto current_timestamp =
+                            std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+                    auto generation = eps.get_heart_beat_state().get_generation().value();
+                    auto host_id = eps.get_host_id();
+                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(addr)) {
+                        topology_mutation_builder builder(guard.write_timestamp());
+                        // This topology mutation moves a node to left state and bans it. Hence, the value of below fields are not useful.
+                        // The dummy_value used for few fields indicates the trivialness of this row entry, and is used to detect this special case.
+                        static constexpr uint32_t dummy_value = 0;
+                        builder.with_node(raft::server_id{host_id.id})
+                                .set("datacenter", get_application_state_gently(eps.get_application_state_map(), gms::application_state::DC))
+                                .set("rack", get_application_state_gently(eps.get_application_state_map(), gms::application_state::RACK))
+                                .set("release_version", get_application_state_gently(eps.get_application_state_map(), gms::application_state::RELEASE_VERSION))
+                                .set("num_tokens", dummy_value)
+                                .set("tokens_string", sstring{})
+                                .set("shard_count", dummy_value)
+                                .set("ignore_msb", dummy_value)
+                                .set("request_id", dummy_value)
+                                .set("cleanup_status", cleanup_status::clean)
+                                .set("node_state", node_state::left);
+                        reason.append(::format(" {}/{},", host_id, addr));
+                        updates.push_back({builder.build()});
+                    }
+                });
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), reason);
+                }
+
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("gossiper orphan remover fiber aborted");
+            } catch (seastar::abort_requested_exception) {
+                rtlogger.debug("gossiper orphan remover fiber aborted");
+            } catch (group0_concurrent_modification&) {
+            } catch (term_changed_error&) {
+                rtlogger.debug("gossiper orphan remover fiber notices term change {} -> {}", _term, _raft.get_current_term());
+            } catch (...) {
+                rtlogger.error("gossiper orphan remover fiber got error {}", std::current_exception());
+            }
+            try {
+                co_await seastar::sleep_abortable(do_speedup_fiber ? std::chrono::milliseconds(1) : std::chrono::seconds(10), _as);
+            } catch (...) {
+                rtlogger.debug("gossiper orphan remover: sleep failed: {}", std::current_exception());
             }
             co_await coroutine::maybe_yield();
         }
@@ -1224,7 +1298,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
                         auto dst = trinfo.pending_replica->host;
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                   netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
+                                   dst, _as, raft::server_id(dst.uuid()), gid);
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                         updates.emplace_back(get_mutation_builder()
@@ -1284,7 +1358,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);
+                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
@@ -1302,7 +1376,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   netw::msg_addr(id2ip(dst.host)), _as, raft::server_id(dst.host.uuid()), gid);
+                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
                     })) {
                         transition_to(locator::tablet_transition_stage::revert_migration);
                     }
@@ -1351,7 +1425,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto tablet = gid;
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                netw::msg_addr(id2ip(dst)), _as, raft::server_id(dst.uuid()), gid);
+                                dst, _as, raft::server_id(dst.uuid()), gid);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={}", dst, tablet, duration);
                     })) {
@@ -1463,7 +1537,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
-    future<> handle_tablet_split_finalization(group0_guard g) {
+    future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
@@ -1476,7 +1550,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.split_tablets(tm, table_id);
+            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             updates.emplace_back(co_await replica::tablet_map_to_mutation(
                 new_tablet_map,
                 table_id,
@@ -1567,7 +1641,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node_builder.set("node_state", node_state::left);
                     reject_join.emplace_back(id);
                     try {
-                        co_await wait_for_ip(id, _address_map, _as);
+                        co_await wait_for_gossiper(id, _gossiper, _as);
                     } catch (...) {
                         rtlogger.warn("wait_for_ip failed during cancellation: {}", std::current_exception());
                     }
@@ -2094,8 +2168,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard), false);
                 break;
-            case topology::transition_state::tablet_split_finalization:
-                co_await handle_tablet_split_finalization(std::move(guard));
+            case topology::transition_state::tablet_resize_finalization:
+                co_await handle_tablet_resize_finalization(std::move(guard));
                 break;
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
@@ -2238,7 +2312,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto validation_result = validate_joining_node(node);
 
                     if (utils::get_local_injector().enter("handle_node_transition_drop_expiring")) {
-                        _group0.modifiable_address_map().force_drop_expiring_entries();
+                        _gossiper.get_mutable_address_map().force_drop_expiring_entries();
                     }
 
                     // When the validation succeeded, it's important that all nodes in the
@@ -2257,7 +2331,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         try {
                             if (holds_alternative<join_node_response_params::rejected>(validation_result)) {
                                 release_guard(std::move(node.guard));
-                                co_await wait_for_ip(node.id, _address_map, _as);
+                                co_await wait_for_gossiper(node.id, _gossiper, _as);
                                 node.guard = co_await start_operation();
                             } else {
                                 auto exclude_nodes = get_excluded_nodes(node);
@@ -2483,9 +2557,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> respond_to_joining_node(raft::server_id id, join_node_response_params&& params) {
-        auto ip = id2ip(locator::host_id(id.uuid()));
         co_await ser::join_node_rpc_verbs::send_join_node_response(
-            &_messaging, netw::msg_addr(ip), id,
+            &_messaging, to_host_id(id), id,
             std::move(params)
         );
     }
@@ -2543,8 +2616,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet split finalization path.
-    future<bool> maybe_start_tablet_split_finalization(group0_guard, const table_resize_plan& plan);
+    // Returns true if the state machine was transitioned into tablet resize finalization path.
+    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
 
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
@@ -2576,7 +2649,7 @@ public:
             gms::feature_service& feature_service)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
-        , _group0(group0), _address_map(_group0.address_map()), _topo_sm(topo_sm), _as(as)
+        , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
@@ -2592,7 +2665,7 @@ public:
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) {}
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
-    virtual void on_up(const gms::inet_address& endpoint) {};
+    virtual void on_up(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
     virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };
 
@@ -2602,12 +2675,19 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // we upgrade to v2.
     const auto view_builder_version = co_await _sys_ks.get_view_builder_version();
     if (view_builder_version == db::system_keyspace::view_builder_version_t::v1 && _feature_service.view_build_status_on_group0) {
+        rtlogger.info("Migrating view_builder to v1_5");
         auto tmptr = get_token_metadata_ptr();
         co_await db::view::view_builder::migrate_to_v1_5(tmptr, _sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
         co_return std::nullopt;
     }
 
     if (view_builder_version == db::system_keyspace::view_builder_version_t::v1_5) {
+        if (!get_dead_nodes().empty()) {
+            rtlogger.debug("Not all nodes are alive. Skipping system table migration until there are any dead nodes.");
+            co_return std::move(guard);
+        }
+
+        rtlogger.info("Migrating view_builder to v2");
         // do a barrier to ensure all nodes applied the migration to v1_5 before we continue to v2
         guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
 
@@ -2637,10 +2717,10 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await generate_migration_updates(updates, guard, plan);
 
-    // We only want to consider transitioning into tablet split finalization path, if there's no other work
+    // We only want to consider transitioning into tablet resize finalization path, if there's no other work
     // to be done (e.g. start migration or/and emit split decision).
     if (updates.empty()) {
-        co_return co_await maybe_start_tablet_split_finalization(std::move(guard), plan.resize_plan());
+        co_return co_await maybe_start_tablet_resize_finalization(std::move(guard), plan.resize_plan());
     }
 
     updates.emplace_back(
@@ -2653,7 +2733,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     co_return true;
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_guard guard, const table_resize_plan& plan) {
+future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
     if (plan.finalize_resize.empty()) {
         co_return false;
     }
@@ -2665,11 +2745,11 @@ future<bool> topology_coordinator::maybe_start_tablet_split_finalization(group0_
 
     updates.emplace_back(
         topology_mutation_builder(guard.write_timestamp())
-            .set_transition_state(topology::transition_state::tablet_split_finalization)
+            .set_transition_state(topology::transition_state::tablet_resize_finalization)
             .set_version(_topo_sm._topology.version + 1)
             .build());
 
-    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet split finalization");
+    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
     co_return true;
 }
 
@@ -2703,7 +2783,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
             auto sub = _as.subscribe(request_abort);
 
             auto node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                             netw::msg_addr(id2ip(dst)),
+                                                                                             dst,
                                                                                              as,
                                                                                              raft::server_id(dst.uuid()));
 
@@ -3075,6 +3155,7 @@ future<> topology_coordinator::run() {
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
+    auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3113,6 +3194,7 @@ future<> topology_coordinator::run() {
     co_await _async_gate.close();
     co_await std::move(tablet_load_stats_refresher);
     co_await std::move(cdc_generation_publisher);
+    co_await std::move(gossiper_orphan_remover);
 }
 
 future<> topology_coordinator::stop() {

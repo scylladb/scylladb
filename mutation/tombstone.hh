@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <functional>
 #include <compare>
 
 #include "timestamp.hh"

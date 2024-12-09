@@ -11,7 +11,6 @@ import glob
 import itertools
 import functools
 import json
-import nodetool
 import os
 import pathlib
 import pytest
@@ -20,7 +19,8 @@ import tempfile
 import random
 import re
 import shutil
-import util
+from . import nodetool
+from . import util
 from typing import Iterable, Type, Union
 
 

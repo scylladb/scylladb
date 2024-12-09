@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from cassandra_tests.porting import *
+from ...porting import *
 import re
 
 def testTypeCasts(cql, test_keyspace):
