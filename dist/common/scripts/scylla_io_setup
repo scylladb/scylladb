@@ -38,7 +38,7 @@ class scylla_cpuinfo:
 
     def __parse_cpuset(self):
         f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
-        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
+        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + r"\s*\"")
         grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
         if not grp:
             d = {"cpuset": None, "smp": None}
