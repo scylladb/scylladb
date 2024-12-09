@@ -1748,7 +1748,7 @@ public:
     // replication constraints (no increase in replica co-location on nodes, racks).
     // Returns std::nullopt if it does not and the movement is allowed.
     //
-    // The contraints might not be the same for two sibling tablets that have co-located
+    // The constraints might not be the same for two sibling tablets that have co-located
     // replicas.
     // Example:
     //  nodes   = {A, B, C, D}
