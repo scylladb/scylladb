@@ -80,7 +80,7 @@ future<> set_server_init(http_context& ctx) {
     });
 }
 
-future<> set_server_config(http_context& ctx, const db::config& cfg) {
+future<> set_server_config(http_context& ctx, db::config& cfg) {
     auto rb02 = std::make_shared < api_registry_builder20 > (ctx.api_doc, "/v2");
     return ctx.http_server.set_routes([&ctx, &cfg, rb02](routes& r) {
         set_config(rb02, ctx, r, cfg, false);

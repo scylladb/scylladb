@@ -88,7 +88,7 @@ struct http_context {
 };
 
 future<> set_server_init(http_context& ctx);
-future<> set_server_config(http_context& ctx, const db::config& cfg);
+future<> set_server_config(http_context& ctx, db::config& cfg);
 future<> unset_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch);
 future<> unset_server_snitch(http_context& ctx);

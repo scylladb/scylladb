@@ -13,6 +13,6 @@
 
 namespace api {
 
-void set_config(std::shared_ptr<httpd::api_registry_builder20> rb, http_context& ctx, httpd::routes& r, const db::config& cfg, bool first = false);
+void set_config(std::shared_ptr<httpd::api_registry_builder20> rb, http_context& ctx, httpd::routes& r, db::config& cfg, bool first = false);
 void unset_config(http_context& ctx, httpd::routes& r);
 }
