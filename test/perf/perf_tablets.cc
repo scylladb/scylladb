@@ -182,7 +182,7 @@ static future<> test_basic_operations(app_template& app) {
         const auto full_reload_duration = std::chrono::duration<double, std::milli>(end_full_reload - start_full_reload);
 
         const auto start_partial_reload = clk::now();
-        update_tablet_metadata(e.local_qp(), tm, hint).get();
+        update_tablet_metadata(e.local_db(), e.local_qp(), tm, hint).get();
         const auto end_partial_reload = clk::now();
         const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
 

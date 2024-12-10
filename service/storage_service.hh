@@ -47,6 +47,7 @@
 #include "raft/server.hh"
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
+#include "service/tablet_operation.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
 
@@ -151,7 +152,7 @@ private:
 
     struct tablet_operation {
         sstring name;
-        shared_future<> done;
+        shared_future<service::tablet_operation_result> done;
     };
 
     using tablet_op_registry = std::unordered_map<locator::global_tablet_id, tablet_operation>;
@@ -198,10 +199,10 @@ private:
     future<> node_ops_abort(node_ops_id ops_uuid);
     void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
     future<> node_ops_abort_thread();
-    future<> do_tablet_operation(locator::global_tablet_id tablet,
+    future<service::tablet_operation_result> do_tablet_operation(locator::global_tablet_id tablet,
                                  sstring op_name,
-                                 std::function<future<>(locator::tablet_metadata_guard&)> op);
-    future<> repair_tablet(locator::global_tablet_id);
+                                 std::function<future<service::tablet_operation_result>(locator::tablet_metadata_guard&)> op);
+    future<service::tablet_operation_repair_result> repair_tablet(locator::global_tablet_id);
     future<> stream_tablet(locator::global_tablet_id);
     // Clones storage of leaving tablet into pending one. Done in the context of intra-node migration,
     // when both of which sit on the same node. So all the movement is local.

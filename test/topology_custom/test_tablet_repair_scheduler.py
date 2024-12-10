@@ -7,7 +7,7 @@
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, get_tablet_task_id
-from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.rest_client import inject_error_one_shot, read_barrier
 
 import pytest
 import asyncio
@@ -59,6 +59,37 @@ async def test_tablet_manual_repair(manager: ManagerClient):
     logging.info(f't1={t1} t2={t2}')
 
     assert t2 > t1
+
+@pytest.mark.asyncio
+async def test_tombstone_gc_insert_flush(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    token = "all"
+    logs = []
+    for s in servers:
+        await manager.api.set_logger_level(s.ip_addr, "database", "debug")
+        await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
+        logs.append(await manager.server_open_log(s.server_id))
+
+    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+
+    timeout = 600
+    deadline = time.time() + timeout
+    while True:
+        done = True
+        for s in servers:
+                await read_barrier(manager.api, s.ip_addr)
+        for log in logs:
+            inserts = await log.grep(rf'.*Insert pending repair time for tombstone gc: table={table_id}.*')
+            flushes = await log.grep(rf'.*Flush pending repair time for tombstone gc: table={table_id}.*')
+            logging.info(f'{inserts=} {flushes=}');
+            logging.info(f'{len(inserts)=} {len(flushes)=}');
+            ok = len(inserts) == len(flushes) and len(inserts) > 0
+            if not ok:
+                done = False
+        if done:
+            break
+        else:
+            assert time.time() < deadline
 
 @pytest.mark.asyncio
 async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
