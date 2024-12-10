@@ -2054,6 +2054,10 @@ stop_iteration query::result_memory_accounter::check_local_limit() const {
     return stop_iteration::no;
 }
 
+stop_iteration reconcilable_result_builder::bump_and_check_tombstone_limit() {
+    return stop_iteration(++_tombstones >= _tombstone_limit);
+}
+
 void reconcilable_result_builder::consume_new_partition(const dht::decorated_key& dk) {
     _rt_assembler.reset();
     _return_static_content_on_partition_with_no_rows =
@@ -2083,6 +2087,9 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
     }
     _live_rows += is_alive;
     auto stop = _memory_accounter.update_and_check(cr.memory_usage(*_query_schema));
+    if (!is_alive) {
+        stop = stop_iteration(stop || bump_and_check_tombstone_limit());
+    }
     if (is_alive || _slice.options.contains<query::partition_slice::option::allow_mutation_read_page_without_live_row>()) {
         // We are considering finishing current read only after consuming a
         // live clustering row. While sending a single live row is enough to
