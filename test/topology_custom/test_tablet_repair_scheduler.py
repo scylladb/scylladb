@@ -61,6 +61,26 @@ async def test_tablet_manual_repair(manager: ManagerClient):
     assert t2 > t1
 
 @pytest.mark.asyncio
+async def test_tombstone_gc_insert_flush(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    token = "all"
+    logs = []
+    for s in servers:
+        await manager.api.set_logger_level(s.ip_addr, "database", "debug")
+        await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
+        logs.append(await manager.server_open_log(s.server_id))
+
+    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+
+    for log in logs:
+        inserts = await log.grep(rf'.*Insert pending repair time for tombstone gc: table={table_id}.*')
+        flushes = await log.grep(rf'.*Flush pending repair time for tombstone gc: table={table_id}.*')
+        logging.info(f'{inserts=} {flushes=}');
+        logging.info(f'{len(inserts)=} {len(flushes)=}');
+        assert len(inserts) == len(flushes)
+        assert len(inserts) > 0
+
+@pytest.mark.asyncio
 async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
     servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
