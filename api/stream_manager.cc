@@ -11,6 +11,7 @@
 #include "streaming/stream_result_future.hh"
 #include "api/api.hh"
 #include "api/api-doc/stream_manager.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include <vector>
 #include <rapidjson/document.h>
 #include "gms/gossiper.hh"
@@ -18,6 +19,7 @@
 namespace api {
 using namespace seastar::httpd;
 
+namespace ss = httpd::storage_service_json;
 namespace hs = httpd::stream_manager_json;
 
 static void set_summaries(const std::vector<streaming::stream_summary>& from,
@@ -148,6 +150,12 @@ void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_
             return make_ready_future<json::json_return_type>(res);
         });
     });
+
+    ss::get_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
+        //TBD
+        unimplemented();
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 
 void unset_stream_manager(http_context& ctx, routes& r) {
@@ -157,6 +165,7 @@ void unset_stream_manager(http_context& ctx, routes& r) {
     hs::get_all_total_incoming_bytes.unset(r);
     hs::get_total_outgoing_bytes.unset(r);
     hs::get_all_total_outgoing_bytes.unset(r);
+    ss::get_stream_throughput_mb_per_sec.unset(r);
 }
 
 }
