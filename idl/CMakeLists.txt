@@ -18,7 +18,8 @@ function(compile_idl input)
     OUTPUT ${output}
     COMMAND ${Python3_EXECUTABLE} ${idl_compiler} --ns ser -f ${input} -o ${output}
     DEPENDS ${idl_compiler} ${input})
-  set(${parsed_args_SOURCES} ${output} PARENT_SCOPE)
+  set(${parsed_args_SOURCES} ${output})
+  return(PROPAGATE ${parsed_args_SOURCES})
 endfunction(compile_idl)
 
 set(idl_headers
