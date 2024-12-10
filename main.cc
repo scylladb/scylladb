@@ -688,8 +688,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     {
         const auto candidates = app_cfg.reactor_opts.reactor_backend.get_candidate_names();
 
-        // We don't wan't ScyllaDB to run with the io_uring backend.
-        // So select the default reactor backend explicitely here.
+        // We don't want ScyllaDB to run with the io_uring backend.
+        // So select the default reactor backend explicitly here.
         if (std::ranges::contains(candidates, "linux-aio")) {
             app_cfg.reactor_opts.reactor_backend.select_default_candidate("linux-aio");
         } else {
