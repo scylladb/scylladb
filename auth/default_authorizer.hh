@@ -26,7 +26,6 @@ namespace auth {
 
 class default_authorizer : public authorizer {
     cql3::query_processor& _qp;
-    ::service::raft_group0_client& _group0_client;
 
     ::service::migration_manager& _migration_manager;
 
