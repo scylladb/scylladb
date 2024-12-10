@@ -23,7 +23,7 @@ everywhere_replication_strategy::everywhere_replication_strategy(replication_str
 
 future<host_id_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
     if (tm.sorted_tokens().empty()) {
-        host_id_set result{host_id_vector_replica_set({host_id{}})};
+        host_id_set result{host_id_vector_replica_set({tm.get_topology().my_host_id()})};
         return make_ready_future<host_id_set>(std::move(result));
     }
     const auto& all_endpoints = tm.get_normal_token_owners();
