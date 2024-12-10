@@ -65,7 +65,7 @@ class clustering_parser {
     bool no_more_ck_blocks() const { return ck_range.empty(); }
 
     void move_to_next_ck_block() {
-        ck_range = std::ranges::subrange(ck_range.begin() + 1, ck_range.end());
+        ck_range.advance(1);
         ++ck_blocks_header_offset;
         if (ck_blocks_header_offset == 32u) {
             ck_blocks_header_offset = 0u;
