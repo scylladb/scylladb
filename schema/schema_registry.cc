@@ -392,17 +392,7 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
 
     schema_ptr s = ensure_registry_entry(ptr);
     if (s->is_view()) {
-        if (s->view_info()->base_info()) {
-            _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
-        } else if (ptr->view_info()->base_info()) {
-            _base_schema = ensure_registry_entry(ptr->view_info()->base_info()->base_schema());
-        } else {
-            on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
-        }
-
-        if (!s->view_info()->base_info() || !s->view_info()->base_info()->base_schema()->registry_entry()) {
-            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*_base_schema));
-        }
+        _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
     }
     _ptr = s;
 }
