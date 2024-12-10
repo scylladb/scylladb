@@ -189,6 +189,10 @@ private:
 
 public:
     void update_finished_percentage(streaming::stream_reason reason, float percentage);
+
+    uint32_t throughput_mbs() const noexcept {
+        return _io_throughput_mbs.get();
+    }
 };
 
 } // namespace streaming

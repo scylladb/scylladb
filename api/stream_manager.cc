@@ -151,10 +151,9 @@ void set_stream_manager(http_context& ctx, routes& r, sharded<streaming::stream_
         });
     });
 
-    ss::get_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    ss::get_stream_throughput_mb_per_sec.set(r, [&sm](std::unique_ptr<http::request> req) {
+        auto value = sm.local().throughput_mbs();
+        return make_ready_future<json::json_return_type>(value);
     });
 }
 
