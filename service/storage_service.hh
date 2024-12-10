@@ -428,8 +428,6 @@ private:
 
 public:
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm,
-            const std::vector<token>& sorted_tokens) const;
 
     /**
      * The same as {@code describeRing(String)} but converts TokenRange to the String for JMX compatibility
@@ -466,15 +464,6 @@ public:
      */
     future<std::map<token, inet_address>> get_tablet_to_endpoint_map(table_id table);
 
-    /**
-     * Construct the range to endpoint mapping based on the true view
-     * of the world.
-     * @param ranges
-     * @return mapping of ranges to the replicas responsible for them.
-    */
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> construct_range_to_endpoint_map(
-            locator::effective_replication_map_ptr erm,
-            const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
     /*

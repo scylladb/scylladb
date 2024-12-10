@@ -2303,14 +2303,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
-    return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
-}
-
-// Caller is responsible to hold token_metadata valid until the returned future is resolved
-future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
-        const std::vector<token>& sorted_tokens) const {
-    co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
+    return locator::get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
 future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::permit_id pid) {
@@ -5281,21 +5274,6 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
     });
     co_return ranges;
 }
-
-future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::construct_range_to_endpoint_map(
-        locator::effective_replication_map_ptr erm,
-        const dht::token_range_vector& ranges) const {
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
-    res.reserve(ranges.size());
-    for (auto r : ranges) {
-        res[r] = erm->get_natural_endpoints(
-                r.end() ? r.end()->value() : dht::maximum_token());
-        co_await coroutine::maybe_yield();
-    }
-    co_return res;
-}
-
 
 std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
     const auto& tm = get_token_metadata();

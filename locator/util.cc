@@ -47,7 +47,7 @@ get_all_ranges(const std::vector<token>& sorted_tokens) {
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
-static future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
+future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 get_range_to_address_map(locator::effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) {
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
