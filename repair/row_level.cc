@@ -2992,6 +2992,15 @@ private:
         if (!_shard_task.hints_batchlog_flushed()) {
             co_return;
         }
+
+        // The tablet repair time for tombstone gc will be updated when the
+        // system.tablet.repair_time is updated.
+        if (_is_tablet && _shard_task.sched_by_scheduler) {
+            rlogger.debug("repair[{}]: Skipped to update system.repair_history for tablet repair scheduled by scheduler total_rf={} repaired_replicas={} local={} peers={}",
+                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
+            co_return;
+        }
+
         repair_service& rs = _shard_task.rs;
         std::optional<gc_clock::time_point> repair_time_opt = co_await rs.update_history(_shard_task.global_repair_id.uuid(), _table_id, _range, _start_time, _is_tablet);
         if (!repair_time_opt) {
