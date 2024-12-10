@@ -45,6 +45,7 @@
 #include "serializer.hh"
 #include "db/per_partition_rate_limit_info.hh"
 #include "service/topology_state_machine.hh"
+#include "service/topology_guard.hh"
 #include "service/raft/join_node.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
@@ -643,6 +644,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::READ_DIGEST:
     case messaging_verb::DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
+    case messaging_verb::TRUNCATE_WITH_TABLETS:
     case messaging_verb::MIGRATION_REQUEST:
     case messaging_verb::SCHEMA_CHECK:
     case messaging_verb::COUNTER_MUTATION:
