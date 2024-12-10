@@ -28,11 +28,13 @@ async def load_tablet_repair_time(cql, hosts, table_id):
 
     return repair_time_map
 
-async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fast_stats_refresh = True, nr_keys = 256):
+async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fast_stats_refresh = True, nr_keys = 256, disable_flush_cache_time = False):
     if fast_stats_refresh:
         config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
     else:
         config = {}
+    if disable_flush_cache_time:
+        config.update({'repair_hints_batchlog_flush_cache_time_in_ms': 0})
     servers = [await manager.server_add(config=config), await manager.server_add(config=config), await manager.server_add(config=config)]
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', "

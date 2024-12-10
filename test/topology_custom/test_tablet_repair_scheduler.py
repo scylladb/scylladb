@@ -37,7 +37,7 @@ async def guarantee_repair_time_next_second():
 
 @pytest.mark.asyncio
 async def test_tablet_manual_repair(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = -1
 
     start = time.time()
@@ -62,7 +62,7 @@ async def test_tablet_manual_repair(manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
     now = datetime.datetime.utcnow()
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
