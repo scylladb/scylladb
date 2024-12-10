@@ -268,6 +268,10 @@ std::optional<frozen_schema> schema_registry_entry::frozen_base() const {
     return _frozen_base_schema;
 }
 
+void schema_registry_entry::update_base_schema(schema_ptr s) {
+    _frozen_base_schema = frozen_schema(s);
+}
+
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
     switch (_sync_state) {
         case schema_registry_entry::sync_state::SYNCED:
