@@ -162,54 +162,27 @@ Download and install the new release
 
    .. group-tab:: EC2/GCP/Azure Ubuntu Image
 
-        Before upgrading, check what version you are running now using ``scylla --version``. You should use the same version as this version in case you want to |ROLLBACK|_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
+      Before upgrading, check what version you are running now using ``scylla --version``. You should use the same version as this version in case you want to |ROLLBACK|_ the upgrade. If you are not running a |SRC_VERSION|.x version, stop right here! This guide only covers |SRC_VERSION|.x to |NEW_VERSION|.y upgrades.
 
-        There are two alternative upgrade procedures: upgrading ScyllaDB and simultaneously updating 3rd party and OS packages - recommended if you 
-        are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04, and upgrading ScyllaDB without updating 
-        any external packages.
+      If you’re using the ScyllaDB official image (recommended), see
+      the **Debian/Ubuntu** tab for upgrade instructions. If you’re using your
+      own image and have installed ScyllaDB packages for Ubuntu or Debian,
+      you need to apply an extended upgrade procedure:
+      
+      #. Update the ScyllaDB deb repo (see above).
+      #. Configure Java 1.8 (see above).
+      #. Install the new ScyllaDB version with the additional 
+         ``scylla-enterprise-machine-image`` package:
 
-        **To upgrade ScyllaDB and update 3rd party and OS packages (RECOMMENDED):**
+          .. code::
+         
+           sudo apt-get clean all
+           sudo apt-get update
+           sudo apt-get dist-upgrade scylla-enterprise
+           sudo apt-get dist-upgrade scylla-enterprise-machine-image
 
-        Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command.
-
-        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
-
-        #. Load the new repo:
-
-            .. code:: sh
-
-               sudo apt-get update
-
-        #. Run the following command to update the manifest file:
-
-            .. code:: sh
-
-               cat scylla-enterprise-packages-<version>-<arch>.txt | sudo xargs -n1 apt-get install -y
-
-            Where:
-
-              * ``<version>`` - The ScyllaDB Enterprise version to which you are upgrading ( |NEW_VERSION| ).
-              * ``<arch>`` - Architecture type: ``x86_64`` or ``aarch64``.
-
-            The file is included in the ScyllaDB Enterprise packages downloaded in the previous step. The file location is ``http://downloads.scylladb.com/downloads/scylla/aws/manifest/scylla-packages-<version>-<arch>.txt``
-
-            Example:
-
-                .. code:: sh
-
-                   cat scylla-enterprise-packages-2022.2.0-x86_64.txt | sudo xargs -n1 apt-get install -y
-
-
-                .. note::
-
-                   Alternatively, you can update the manifest file with the following command:
-
-                   ``sudo apt-get install $(awk '{print $1'} scylla-enterprise-packages-<version>-<arch>.txt) -y``
-
-
-
-        To upgrade ScyllaDB without updating any external packages, follow the :ref:`download and installation instructions for Debian/Ubuntu <upgrade-debian-ubuntu-5.2-to-enterprise-2023.1>`.
-
+      #. Run ``scylla_setup`` without running ``io_setup``.
+      #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
 
 Start the node
 --------------
