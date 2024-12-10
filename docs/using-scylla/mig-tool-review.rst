@@ -13,4 +13,4 @@ such as Apache Cassandra, or from other ScyllaDB clusters (ScyllaDB Open Source 
     - `Spark Migrator <https://https://migrator.docs.scylladb.com>`_.  The Spark migrator allows you to easily transform the data before pushing it to the destination DB.
 
 * From DynamoDB to ScyllaDB Alternator
-    - `Spark Migrator <https://https://migrator.docs.scylladb.com>`_.  The Spark migrator allows you to easily transform the data before pushing it to the destination DB.
+    - `Spark Migrator <https://migrator.docs.scylladb.com>`_.  The Spark migrator allows you to easily transform the data before pushing it to the destination DB.
