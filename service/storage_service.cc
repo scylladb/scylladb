@@ -4689,22 +4689,7 @@ future<> storage_service::do_cluster_cleanup() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
-    rtlogger.debug("Start waiting for topology request completion (request id {})", id);
-    while (true) {
-        auto c = _topology_state_machine.reload_count;
-        auto [done, error] = co_await  _sys_ks.local().get_topology_request_state(id, require_entry);
-        if (done) {
-            rtlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
-            co_return error;
-        }
-        if (c == _topology_state_machine.reload_count) {
-            // wait only if the state was not reloaded while we were preempted
-            rtlogger.debug("Waiting for a topology event while waiting for topology request completion (request id {})", id);
-            co_await _topology_state_machine.event.when();
-        }
-    }
-
-    co_return sstring();
+    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
 future<> storage_service::wait_for_topology_not_busy() {
@@ -6055,6 +6040,10 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Cannot stream within the same node using regular migration, tablet: {}, shard {} -> {}",
                                                      tablet, leaving_replica->shard, trinfo->pending_replica->shard));
             }
+            co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
+                rtlogger.info("migration_streaming_wait: start");
+                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+            });
             auto& table = _db.local().find_column_family(tablet.table);
             std::vector<sstring> tables = {table.schema()->cf_name()};
             auto my_id = tm->get_my_id();

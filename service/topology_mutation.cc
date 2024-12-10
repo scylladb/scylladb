@@ -313,6 +313,11 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return set("done", true);
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_truncate_table_data(const table_id& table_id) {
+    apply_atomic("truncate_table_id", table_id.uuid());
+    return *this;
+}
+
 template class topology_mutation_builder_base<topology_mutation_builder>;
 template class topology_mutation_builder_base<topology_node_mutation_builder>;
 template class topology_mutation_builder_base<topology_request_tracking_mutation_builder>;
