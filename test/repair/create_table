@@ -1,0 +1,17 @@
+CREATE KEYSPACE repair_test WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '2'} AND durable_writes = 'true';
+
+CREATE TABLE IF NOT EXISTS repair_test.repair_test (
+    pk TEXT,
+    sk TEXT,
+	":attrs" map<text, blob>,
+    PRIMARY KEY (pk, sk)
+) WITH gc_grace_seconds = 10;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS repair_test.repair_test_mv AS
+SELECT * FROM repair_test.repair_test
+WHERE sk IS NOT NULL AND pk IS NOT NULL
+PRIMARY KEY (sk, pk);
+
+DELETE FROM repair_test.repair_test WHERE pk = 'example_pk' AND sk = 'example_sk';
+
+INSERT INTO repair_test.repair_test (pk, sk, ":attrs") VALUES ('example_pk', 'example_sk', {'attr1': 0x48656C6C6F});
