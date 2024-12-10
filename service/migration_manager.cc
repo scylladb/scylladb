@@ -1053,13 +1053,18 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
             // with TTL (refresh TTL in case column mapping already existed prior to that).
             auto us = s.unfreeze(db::schema_ctxt(proxy));
             // if this is a view - sanity check that its schema doesn't need fixing.
+            schema_ptr base_schema;
             if (us->is_view()) {
                 auto& db = proxy.local().local_db();
-                schema_ptr base_schema = db.find_schema(us->view_info()->base_id());
+                base_schema = db.find_schema(us->view_info()->base_id());
                 db::schema_tables::check_no_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema);
             }
-            return db::schema_tables::store_column_mapping(proxy, us, true).then([us] {
-                return frozen_schema{us};
+            return db::schema_tables::store_column_mapping(proxy, us, true).then([us, base_schema] -> base_and_view_schemas {
+                if (us->is_view()) {
+                    return {frozen_schema(us), base_schema};
+                } else {
+                    return {frozen_schema(us)};
+                }
             });
         });
     }).then([&storage_proxy] (schema_ptr s) {
