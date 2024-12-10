@@ -105,6 +105,8 @@ add_scylla_test(database_test
   KIND SEASTAR)
 add_scylla_test(dirty_memory_manager_test
   KIND SEASTAR)
+add_scylla_test(disk_space_monitor_test
+  KIND SEASTAR)
 add_scylla_test(double_decker_test
   KIND SEASTAR)
 add_scylla_test(duration_test
