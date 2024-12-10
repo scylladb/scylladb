@@ -3929,7 +3929,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                             auto local_token_nodes  = _ermp->get_token_metadata().get_datacenter_racks_token_owners_nodes().at(local_dc);
                             for (const auto& e : local_token_nodes) {
                                 local_token_owners.emplace(e.first, e.second |
-                                    std::views::transform([] (const locator::node* n) { return n->host_id(); }) |
+                                    std::views::transform([] (const locator::node& n) { return n.host_id(); }) |
                                     std::ranges::to<std::unordered_set<locator::host_id>>());
                             }
                             auto local_rack = topology.get_rack();

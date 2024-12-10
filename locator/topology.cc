@@ -160,7 +160,7 @@ void topology::set_host_id_cfg(host_id this_host_id) {
         on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes has non null id {}",  fmt::ptr(this), _this_node->host_id()));
     }
 
-    remove_node(_this_node);
+    remove_node(*_this_node);
 
     tlogger.trace("topology[{}]: set host id to {}", fmt::ptr(this), this_host_id);
 
@@ -181,7 +181,7 @@ future<topology> topology::clone_gently() const {
     co_return ret;
 }
 
-const node* topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
+const node& topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
     if (dr.dc.empty() || dr.rack.empty()) {
         on_internal_error(tlogger, "Node must have valid dc and rack");
     }
@@ -198,7 +198,7 @@ bool topology::is_configured_this_node(const node& n) const {
     return false; // No selection;
 }
 
-const node* topology::add_node(node_holder nptr) {
+const node& topology::add_node(node_holder nptr) {
     const node* node = nptr.get();
 
     if (nptr->topology() != this) {
@@ -230,16 +230,16 @@ const node* topology::add_node(node_holder nptr) {
 
         tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), node_printer(nptr.get()), lazy_backtrace());
 
-        index_node(node);
+        index_node(*node);
     } catch (...) {
-        pop_node(make_mutable(node));
+        pop_node(*node);
         throw;
     }
-    return node;
+    return *node;
 }
 
-const node* topology::update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
-    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(node),
+void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
+    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(&node),
         opt_id ? format("{}", *opt_id) : "unchanged",
         opt_ep ? format("{}", *opt_ep) : "unchanged",
         opt_dr ? format("{}", opt_dr->dc) : "unchanged",
@@ -250,15 +250,15 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
 
     bool changed = false;
     if (opt_id) {
-        if (*opt_id != node->host_id()) {
+        if (*opt_id != node.host_id()) {
             if (!*opt_id) {
-                on_internal_error(tlogger, seastar::format("Updating node host_id to null is disallowed: {}: new host_id={}", node_printer(node), *opt_id));
+                on_internal_error(tlogger, seastar::format("Updating node host_id to null is disallowed: {}: new host_id={}", node_printer(&node), *opt_id));
             }
-            if (node->is_this_node() && node->host_id()) {
-                on_internal_error(tlogger, seastar::format("This node host_id is already set: {}: new host_id={}", node_printer(node), *opt_id));
+            if (node.is_this_node() && node.host_id()) {
+                on_internal_error(tlogger, seastar::format("This node host_id is already set: {}: new host_id={}", node_printer(&node), *opt_id));
             }
             if (_nodes_by_host_id.contains(*opt_id)) {
-                on_internal_error(tlogger, seastar::format("Cannot update node host_id: {}: new host_id already exists: {}", node_printer(node), node_printer(_nodes_by_host_id[*opt_id])));
+                on_internal_error(tlogger, seastar::format("Cannot update node host_id: {}: new host_id already exists: {}", node_printer(&node), node_printer(find_node(*opt_id))));
             }
             changed = true;
         } else {
@@ -266,9 +266,9 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         }
     }
     if (opt_ep) {
-        if (*opt_ep != node->endpoint()) {
+        if (*opt_ep != node.endpoint()) {
             if (*opt_ep == inet_address{}) {
-                on_internal_error(tlogger, seastar::format("Updating node endpoint to null is disallowed: {}: new endpoint={}", node_printer(node), *opt_ep));
+                on_internal_error(tlogger, seastar::format("Updating node endpoint to null is disallowed: {}: new endpoint={}", node_printer(&node), *opt_ep));
             }
             changed = true;
         } else {
@@ -277,108 +277,106 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
     }
     if (opt_dr) {
         if (opt_dr->dc.empty() || opt_dr->dc == production_snitch_base::default_dc) {
-            opt_dr->dc = node->dc_rack().dc;
+            opt_dr->dc = node.dc_rack().dc;
         }
         if (opt_dr->rack.empty() || opt_dr->rack == production_snitch_base::default_rack) {
-            opt_dr->rack = node->dc_rack().rack;
+            opt_dr->rack = node.dc_rack().rack;
         }
-        if (*opt_dr != node->dc_rack()) {
+        if (*opt_dr != node.dc_rack()) {
             changed = true;
         } else {
             opt_dr.reset();
         }
     }
     if (opt_st) {
-        changed |= node->get_state() != *opt_st;
+        changed |= node.get_state() != *opt_st;
     }
     if (opt_shard_count) {
-        changed |= node->get_shard_count() != *opt_shard_count;
+        changed |= node.get_shard_count() != *opt_shard_count;
     }
 
     if (!changed) {
-        return node;
+        return;
     }
 
     unindex_node(node);
     // The following block must not throw
     try {
-        auto mutable_node = make_mutable(node);
         if (opt_id) {
-            mutable_node->_host_id = *opt_id;
+            node._host_id = *opt_id;
         }
         if (opt_ep) {
-            mutable_node->_endpoint = *opt_ep;
+            node._endpoint = *opt_ep;
         }
         if (opt_dr) {
-            mutable_node->_dc_rack = std::move(*opt_dr);
+            node._dc_rack = std::move(*opt_dr);
         }
         if (opt_st) {
-            mutable_node->set_state(*opt_st);
+            node.set_state(*opt_st);
         }
         if (opt_shard_count) {
-            mutable_node->set_shard_count(*opt_shard_count);
+            node.set_shard_count(*opt_shard_count);
         }
     } catch (...) {
         std::terminate();
     }
     index_node(node);
-    return node;
 }
 
 bool topology::remove_node(host_id id) {
     auto node = find_node(id);
     tlogger.debug("topology[{}]: remove_node: host_id={}: {}", fmt::ptr(this), id, node_printer(node));
     if (node) {
-        remove_node(node);
+        remove_node(*node);
         return true;
     }
     return false;
 }
 
-void topology::remove_node(const node* node) {
+void topology::remove_node(const node& node) {
     pop_node(node);
 }
 
-void topology::index_node(const node* node) {
-    tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+void topology::index_node(const node& node) {
+    tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), node_printer(&node), lazy_backtrace());
 
-    if (node->idx() < 0) {
-        on_internal_error(tlogger, seastar::format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), node_printer(node)));
+    if (node.idx() < 0) {
+        on_internal_error(tlogger, seastar::format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), node_printer(&node)));
     }
 
     // When a node is initialized before host id is known the topology is constructed with a single
     // node with zero id
-    if (!node->host_id() && _nodes.size() != 1) {
+    if (!node.host_id() && _nodes.size() != 1) {
         on_internal_error(tlogger, fmt::format("topology[{}] try to index node with zero id while this is not a single node in the topology", fmt::ptr(this)));
     }
-    auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node->host_id(), node);
+    auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node.host_id(), std::cref(node));
     if (!inserted_host_id) {
-        on_internal_error(tlogger, seastar::format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(node)));
+        on_internal_error(tlogger, seastar::format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(&node)));
     }
-    if (node->endpoint() != inet_address{}) {
-        auto eit = _nodes_by_endpoint.find(node->endpoint());
+    if (node.endpoint() != inet_address{}) {
+        auto eit = _nodes_by_endpoint.find(node.endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->get_state() == node::state::none && eit->second->is_this_node()) {
+            if (eit->second.get().get_state() == node::state::none && eit->second.get().is_this_node()) {
                 // eit->second is default entry created for local node and it is replaced by existing node with the same ip
                 // it means this node is going to replace the existing node with the same ip, but it does not know it yet
                 // map ip to the old node
-                _nodes_by_endpoint.erase(node->endpoint());
-            } else if (eit->second->get_state() == node::state::replacing && node->get_state() == node::state::being_replaced) {
+                _nodes_by_endpoint.erase(node.endpoint());
+            } else if (eit->second.get().get_state() == node::state::replacing && node.get_state() == node::state::being_replaced) {
                 // replace-with-same-ip, map ip to the old node
-                _nodes_by_endpoint.erase(node->endpoint());
-            } else if (eit->second->get_state() == node::state::being_replaced && node->get_state() == node::state::replacing) {
+                _nodes_by_endpoint.erase(node.endpoint());
+            } else if (eit->second.get().get_state() == node::state::being_replaced && node.get_state() == node::state::replacing) {
                 // replace-with-same-ip, map ip to the old node, do nothing if it's already the case
-            } else if (eit->second->is_leaving() || eit->second->left()) {
-                _nodes_by_endpoint.erase(node->endpoint());
-            } else if (!node->is_leaving() && !node->left()) {
-                if (node->host_id()) {
-                    _nodes_by_host_id.erase(node->host_id());
+            } else if (eit->second.get().is_leaving() || eit->second.get().left()) {
+                _nodes_by_endpoint.erase(node.endpoint());
+            } else if (!node.is_leaving() && !node.left()) {
+                if (node.host_id()) {
+                    _nodes_by_host_id.erase(node.host_id());
                 }
-                on_internal_error(tlogger, seastar::format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(eit->second)));
+                on_internal_error(tlogger, seastar::format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(&node), node_printer(&eit->second.get())));
             }
         }
-        if (!node->left() && !node->is_none()) {
-            _nodes_by_endpoint.try_emplace(node->endpoint(), node);
+        if (!node.left() && !node.is_none()) {
+            _nodes_by_endpoint.try_emplace(node.endpoint(), std::cref(node));
         }
     }
 
@@ -386,32 +384,32 @@ void topology::index_node(const node* node) {
     // and algorithms expect to know which dc they belonged to. View replica pairing needs stable
     // replica indexes.
     // But we don't consider those nodes as members of the cluster so don't update dc registry.
-    if (!node->left() && !node->is_none()) {
-        const auto& dc = node->dc_rack().dc;
-        const auto& rack = node->dc_rack().rack;
-        const auto& endpoint = node->endpoint();
-        _dc_nodes[dc].emplace(node);
-        _dc_rack_nodes[dc][rack].emplace(node);
+    if (!node.left() && !node.is_none()) {
+        const auto& dc = node.dc_rack().dc;
+        const auto& rack = node.dc_rack().rack;
+        const auto& endpoint = node.endpoint();
+        _dc_nodes[dc].emplace(std::cref(node));
+        _dc_rack_nodes[dc][rack].emplace(std::cref(node));
         _dc_endpoints[dc].insert(endpoint);
         _dc_racks[dc][rack].insert(endpoint);
         _datacenters.insert(dc);
     }
 
-    if (node->is_this_node()) {
-        _this_node = node;
+    if (node.is_this_node()) {
+        _this_node = &node;
     }
 }
 
-void topology::unindex_node(const node* node) {
-    tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+void topology::unindex_node(const node& node) {
+    tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), node_printer(&node), lazy_backtrace());
 
-    const auto& dc = node->dc_rack().dc;
-    const auto& rack = node->dc_rack().rack;
+    const auto& dc = node.dc_rack().dc;
+    const auto& rack = node.dc_rack().rack;
     if (_dc_nodes.contains(dc)) {
-        bool found = _dc_nodes.at(dc).erase(node);
+        bool found = _dc_nodes.at(dc).erase(std::cref(node));
         if (found) {
             if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
-                const auto& ep = node->endpoint();
+                const auto& ep = node.endpoint();
                 auto& eps = dit->second;
                 eps.erase(ep);
                 if (eps.empty()) {
@@ -420,7 +418,7 @@ void topology::unindex_node(const node* node) {
                     _dc_endpoints.erase(dit);
                     _datacenters.erase(dc);
                 } else {
-                    _dc_rack_nodes[dc][rack].erase(node);
+                    _dc_rack_nodes[dc][rack].erase(std::cref(node));
                     auto& racks = _dc_racks[dc];
                     if (auto rit = racks.find(rack); rit != racks.end()) {
                         auto& rack_eps = rit->second;
@@ -433,30 +431,30 @@ void topology::unindex_node(const node* node) {
             }
         }
     }
-    auto host_it = _nodes_by_host_id.find(node->host_id());
+    auto host_it = _nodes_by_host_id.find(node.host_id());
     if (host_it != _nodes_by_host_id.end() && host_it->second == node) {
         _nodes_by_host_id.erase(host_it);
     }
-    auto ep_it = _nodes_by_endpoint.find(node->endpoint());
-    if (ep_it != _nodes_by_endpoint.end() && ep_it->second == node) {
+    auto ep_it = _nodes_by_endpoint.find(node.endpoint());
+    if (ep_it != _nodes_by_endpoint.end() && ep_it->second.get() == node) {
         _nodes_by_endpoint.erase(ep_it);
     }
-    if (_this_node == node) {
+    if (_this_node == &node) {
         _this_node = nullptr;
     }
 }
 
-node_holder topology::pop_node(const node* node) {
-    tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
+node_holder topology::pop_node(const node& node) {
+    tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), node_printer(&node), lazy_backtrace());
 
     unindex_node(node);
 
-    auto nh = std::exchange(_nodes[node->idx()], {});
+    auto nh = std::exchange(_nodes[node.idx()], {});
 
     // shrink _nodes if the last node is popped
     // like when failing to index a newly added node
-    if (std::cmp_equal(node->idx(), _nodes.size() - 1)) {
-        _nodes.resize(node->idx());
+    if (std::cmp_equal(node.idx(), _nodes.size() - 1)) {
+        _nodes.resize(node.idx());
     }
 
     return nh;
@@ -467,7 +465,7 @@ node_holder topology::pop_node(const node* node) {
 const node* topology::find_node(host_id id) const noexcept {
     auto it = _nodes_by_host_id.find(id);
     if (it != _nodes_by_host_id.end()) {
-        return it->second;
+        return &it->second.get();
     }
     tlogger.trace("topology[{}]: find_node did not find {}", fmt::ptr(this), id);
     return nullptr;
@@ -484,7 +482,7 @@ node* topology::find_node(host_id id) noexcept {
 const node* topology::find_node(const inet_address& ep) const noexcept {
     auto it = _nodes_by_endpoint.find(ep);
     if (it != _nodes_by_endpoint.end()) {
-        return it->second;
+        return &it->second.get();
     }
     return nullptr;
 }
@@ -498,17 +496,19 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
     return _nodes.at(idx).get();
 }
 
-const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
+const node& topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
 {
     tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
         id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
         lazy_backtrace());
 
-    const auto* n = find_node(id);
+    auto* n = find_node(id);
     if (n) {
-        return update_node(make_mutable(n), std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-    } else if (opt_ep && (n = find_node(*opt_ep))) {
-        return update_node(make_mutable(n), id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+        update_node(*n, std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+        return *n;
+    } else if (opt_ep && (n = make_mutable(find_node(*opt_ep)))) {
+        update_node(*n, id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+        return *n;
     }
 
     return add_node(id,
@@ -525,7 +525,7 @@ bool topology::remove_endpoint(locator::host_id host_id)
     // Do not allow removing yourself from the topology
     // The entry is needed for local writes
     if (node && node != _this_node) {
-        remove_node(node);
+        remove_node(*node);
         return true;
     }
     return false;
@@ -605,19 +605,19 @@ std::weak_ordering topology::compare_endpoints(const T& address, const T& a1, co
     return d1 <=> d2;
 }
 
-void topology::for_each_node(std::function<void(const node*)> func) const {
+void topology::for_each_node(std::function<void(const node&)> func) const {
     for (const auto& np : _nodes) {
         if (np && !np->left() && !np->is_none()) {
-            func(np.get());
+            func(*np);
         }
     }
 }
 
-std::unordered_set<const node*> topology::get_nodes() const {
-    std::unordered_set<const node*> nodes;
+std::unordered_set<std::reference_wrapper<const node>> topology::get_nodes() const {
+    std::unordered_set<std::reference_wrapper<const node>> nodes;
     for (const auto& np : _nodes) {
         if (np && !np->left() && !np->is_none()) {
-            nodes.insert(np.get());
+            nodes.insert(std::cref(*np.get()));
         }
     }
     return nodes;
