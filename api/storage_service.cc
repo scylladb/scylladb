@@ -878,6 +878,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::set_flush_throughput_mb_per_sec.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        api::req_param<uint32_t> mbs(*req, "mibs", 0);
+        apilog.info("Set flush IO throughput to {}", mbs.value);
+        uint64_t bps = ((uint64_t)(mbs.value != 0 ? mbs.value : std::numeric_limits<uint32_t>::max())) << 20;
+        co_await ctx.db.local().get_memtable_flush_sg().update_io_bandwidth(bps);
+        co_return json_void();
+    });
 
     ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) {
         apilog.info("decommission");
@@ -1592,6 +1599,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
+    ss::set_flush_throughput_mb_per_sec.unset(r);
     ss::decommission.unset(r);
     ss::move.unset(r);
     ss::remove_node.unset(r);

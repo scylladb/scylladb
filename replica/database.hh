@@ -1907,6 +1907,8 @@ public:
     }
 
     future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
+
+    seastar::scheduling_group& get_memtable_flush_sg() noexcept { return _flush_sg; }
 };
 
 // A helper function to parse the directory name back
