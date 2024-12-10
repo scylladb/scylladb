@@ -75,13 +75,3 @@ future<> run_topology_coordinator(
         gms::feature_service& feature_service);
 
 }
-
-#if FMT_VERSION < 100000
-// fmt v10 introduced formatter for std::exception
-template <>
-struct fmt::formatter<service::wait_for_ip_timeout> : fmt::formatter<string_view> {
-    auto format(const service::wait_for_ip_timeout& e, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", e.what());
-    }
-};
-#endif

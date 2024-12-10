@@ -366,12 +366,3 @@ struct fmt::formatter<cql3::cql3_type>: fmt::formatter<string_view> {
         return formatter<string_view>::format(format_as(t), ctx);
     }
 };
-
-#if FMT_VERSION < 100000
-template <std::derived_from<cql3::cql3_type::raw> T>
-struct fmt::formatter<T>: fmt::formatter<std::string_view> {
-    auto format(const T& t, fmt::format_context& ctx) const {
-        return formatter<std::string_view>::format(format_as(t), ctx);
-    }
-};
-#endif

@@ -14,7 +14,6 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/scattered_message.hh>
 #include "redis/exceptions.hh"
-#include "utils/fmt-compat.hh"
 
 namespace redis {
 

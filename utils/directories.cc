@@ -16,7 +16,6 @@
 #include "sstables/exceptions.hh"
 #include "sstables/open_info.hh"
 #include "utils/disk-error-handler.hh"
-#include "utils/fmt-compat.hh"
 #include "utils/lister.hh"
 
 namespace utils {
