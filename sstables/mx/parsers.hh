@@ -32,7 +32,7 @@ class clustering_parser {
     const schema& _s;
     column_values_fixed_lengths _clustering_values_fixed_lengths;
     bool _parsing_start_key;
-    boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
+    std::ranges::subrange<column_values_fixed_lengths::const_iterator> ck_range;
 
     std::vector<FragmentedBuffer> clustering_key_values;
     bound_kind_m kind{};
@@ -65,7 +65,7 @@ class clustering_parser {
     bool no_more_ck_blocks() const { return ck_range.empty(); }
 
     void move_to_next_ck_block() {
-        ck_range.advance_begin(1);
+        ck_range = std::ranges::subrange(ck_range.begin() + 1, ck_range.end());
         ++ck_blocks_header_offset;
         if (ck_blocks_header_offset == 32u) {
             ck_blocks_header_offset = 0u;
@@ -120,7 +120,7 @@ public:
         case state::CLUSTERING_START:
             clustering_key_values.clear();
             clustering_key_values.reserve(_clustering_values_fixed_lengths.size());
-            ck_range = boost::make_iterator_range(_clustering_values_fixed_lengths);
+            ck_range = std::ranges::subrange(_clustering_values_fixed_lengths);
             ck_blocks_header_offset = 0u;
             if (_primitive.read_8(data) != read_status::ready) {
                 _state = state::CK_KIND;
@@ -140,7 +140,9 @@ public:
             [[fallthrough]];
         case state::CK_SIZE:
             if (_primitive._u16 < _s.clustering_key_size()) {
-                ck_range.drop_back(_s.clustering_key_size() - _primitive._u16);
+                auto num_to_drop = _s.clustering_key_size() - _primitive._u16;
+                ck_range = std::ranges::subrange(ck_range.begin(),
+                                                 ck_range.end() - num_to_drop);
             }
             [[fallthrough]];
         case state::CK_BLOCK:

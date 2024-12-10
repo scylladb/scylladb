@@ -3405,7 +3405,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                     actual = std::move(actual).compacted();
 
                     auto n_to_consider = last_generation - oldest_generation + 1;
-                    auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
+                    auto possible_versions = std::ranges::subrange(versions.end() - n_to_consider, versions.end());
                     if (!std::ranges::any_of(possible_versions, [&] (const mutation& m) {
                         auto m2 = m.sliced(fwd_ranges);
                         if (reversed) {

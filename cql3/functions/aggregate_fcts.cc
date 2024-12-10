@@ -501,7 +501,7 @@ aggregate_fcts::make_first_function(data_type io_type) {
             .aggregation_function = ::make_shared<internal_scalar_function>("first_agg", state_type, std::vector({state_type, io_type}), [] (std::span<const bytes_opt> args) -> bytes_opt {
                 if (!args[0]) {
                     // First call: create a tuple with the input
-                    return tuple_type_impl::build_value(boost::make_iterator_range_n(&args[1], 1));
+                    return tuple_type_impl::build_value(args.subspan(1, 1));
                 } else {
                     // Second or later call: return result of first call
                     return args[0];

@@ -672,49 +672,49 @@ private:
 
     template<typename Range, IntervalLessComparatorFor<T> LessComparator,
              typename = decltype(std::declval<Range>().lower_bound(std::declval<T>(), std::declval<LessComparator>()))>
-    typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
+    typename std::ranges::const_iterator_t<Range> do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.lower_bound(value, std::forward<LessComparator>(cmp));
     }
 
     template<typename Range, IntervalLessComparatorFor<T> LessComparator,
              typename = decltype(std::declval<Range>().upper_bound(std::declval<T>(), std::declval<LessComparator>()))>
-    typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
+    typename std::ranges::const_iterator_t<Range> do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.upper_bound(value, std::forward<LessComparator>(cmp));
     }
 
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
-    typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
+    typename std::ranges::const_iterator_t<Range> do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
         return std::lower_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
     }
 
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
-    typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
+    typename std::ranges::const_iterator_t<Range> do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
         return std::upper_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
     }
 public:
     // Return the lower bound of the specified sequence according to these bounds.
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
-    typename std::remove_reference<Range>::type::const_iterator lower_bound(Range&& r, LessComparator&& cmp) const {
+    typename std::ranges::const_iterator_t<Range> lower_bound(Range&& r, LessComparator&& cmp) const {
         return start()
             ? (start()->is_inclusive()
                 ? do_lower_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
                 : do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
-            : std::cbegin(r);
+            : std::ranges::begin(r);
     }
     // Return the upper bound of the specified sequence according to these bounds.
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
-    typename std::remove_reference<Range>::type::const_iterator upper_bound(Range&& r, LessComparator&& cmp) const {
+    typename std::ranges::const_iterator_t<Range> upper_bound(Range&& r, LessComparator&& cmp) const {
         return end()
              ? (end()->is_inclusive()
                 ? do_upper_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
                 : do_lower_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
              : (is_singular()
                 ? do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
-                : std::cend(r));
+                : std::ranges::end(r));
     }
     // Returns a subset of the range that is within these bounds.
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
-    std::ranges::subrange<typename std::remove_reference<Range>::type::const_iterator>
+    std::ranges::subrange<std::ranges::const_iterator_t<Range>>
     slice(Range&& range, LessComparator&& cmp) const {
         return std::ranges::subrange(lower_bound(range, cmp), upper_bound(range, cmp));
     }

@@ -320,28 +320,28 @@ struct pos_order_by_start {
 range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, const query::clustering_range& r) const {
     auto bv_range = bound_view::from_range(r);
-    return boost::make_iterator_range(
+    return std::ranges::subrange(
         _tombstones.lower_bound(bv_range.first, bv_order_by_end{s}),
         _tombstones.upper_bound(bv_range.second, bv_order_by_start{s}));
 }
 
 range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
-    return boost::make_iterator_range(
+    return std::ranges::subrange(
         _tombstones.upper_bound(start, pos_order_by_end{s}), // end_position() is exclusive, hence upper_bound()
         _tombstones.lower_bound(end, pos_order_by_start{s}));
 }
 
 range_tombstone_list::iterator_range
 range_tombstone_list::lower_slice(const schema& s, bound_view start, position_in_partition_view before) const {
-    return boost::make_iterator_range(
+    return std::ranges::subrange(
         _tombstones.lower_bound(start, bv_order_by_end{s}),
         _tombstones.lower_bound(before, pos_order_by_end{s}));
 }
 
 range_tombstone_list::iterator_range
 range_tombstone_list::upper_slice(const schema& s, position_in_partition_view after, bound_view end) const {
-    return boost::make_iterator_range(
+    return std::ranges::subrange(
         _tombstones.upper_bound(after, pos_order_by_start{s}),
         _tombstones.upper_bound(end, bv_order_by_start{s}));
 }
