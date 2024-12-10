@@ -170,9 +170,13 @@ void schema_registry::clear() {
     _entries.clear();
 }
 
-schema_ptr schema_registry_entry::load(frozen_schema fs) {
-    _frozen_schema = std::move(fs);
+schema_ptr schema_registry_entry::load(frozen_base_and_view_schemas fs) {
+    _frozen_schema = std::move(fs.schema);
     auto s = get_schema();
+    if (s->is_view()) {
+        SCYLLA_ASSERT(fs.base_schema);
+        _frozen_base_schema = std::move(fs.base_schema);
+    }
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
         _schema_promise = {};
@@ -184,6 +188,9 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
 
 schema_ptr schema_registry_entry::load(schema_ptr s) {
     _frozen_schema = frozen_schema(s);
+    if (s->is_view()) {
+        _frozen_base_schema = frozen_schema(s->view_info()->base_info()->base_schema());
+    }
     _schema = &*s;
     _schema->_registry_entry = this;
     _erase_timer.cancel();
@@ -203,7 +210,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
     // Move to background.
-    (void)f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    (void)f.then_wrapped([self = shared_from_this(), this] (future<frozen_base_and_view_schemas>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -232,6 +239,10 @@ schema_ptr schema_registry_entry::get_schema() {
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
+        if (s->is_view()) {
+            // We may encounter a no_such_column_family here, which means that the base table was deleted and we should fail the request
+            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*_frozen_base_schema->unfreeze(*_registry._ctxt)));
+        }
         _erase_timer.cancel();
         s->_registry_entry = this;
         _schema = &*s;
@@ -250,6 +261,11 @@ void schema_registry_entry::detach_schema() noexcept {
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
     return *_frozen_schema;
+}
+
+std::optional<frozen_schema> schema_registry_entry::frozen_base() const {
+    SCYLLA_ASSERT(_state >= state::LOADED);
+    return _frozen_base_schema;
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
@@ -328,8 +344,8 @@ schema_ptr global_schema_ptr::get() const {
         auto registered_schema = [](const schema_registry_entry& e) {
             schema_ptr ret = local_schema_registry().get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
-                    return e.frozen();
+                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) -> frozen_base_and_view_schemas {
+                    return {e.frozen(), e.frozen_base()};
                 });
             }
             return ret;
@@ -370,8 +386,15 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         if (e) {
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) {
-                return frozen_schema(s);
+            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> frozen_base_and_view_schemas {
+                if (s->is_view()) {
+                    if (!s->view_info()->base_info()) {
+                        on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
+                    }
+                    return {frozen_schema(s), frozen_schema(s->view_info()->base_info()->base_schema())};
+                } else {
+                    return {frozen_schema(s)};
+                }
             });
         }
     };
