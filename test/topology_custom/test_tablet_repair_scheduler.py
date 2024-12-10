@@ -30,6 +30,11 @@ async def inject_error_off(manager, error_name, servers):
     errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
 
+async def guarantee_repair_time_next_second():
+    # The repair time granularity is seconds. This ensures the repair time is
+    # different than the previous one.
+    await asyncio.sleep(1)
+
 @pytest.mark.asyncio
 async def test_tablet_manual_repair(manager: ManagerClient):
     servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
@@ -41,9 +46,7 @@ async def test_tablet_manual_repair(manager: ManagerClient):
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     logging.info(f'map1={map1} duration={duration}')
 
-    # The repair time granularity is seconds. This makes sure the second repair time
-    # is different than the previous one.
-    await asyncio.sleep(1)
+    await guarantee_repair_time_next_second()
 
     start = time.time()
     await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
@@ -63,6 +66,9 @@ async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
     token = "all"
     now = datetime.datetime.utcnow()
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+
+    await guarantee_repair_time_next_second()
+
     await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
     map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     logging.info(f'{map1=} {map2=}')
