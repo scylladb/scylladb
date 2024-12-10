@@ -3265,6 +3265,26 @@ void setcompactionthroughput_operation(scylla_rest_client& client, const bpo::va
     client.post("/storage_service/compaction_throughput", std::move(params));
 }
 
+void getstreamthroughput_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    auto res = client.get("/storage_service/stream_throughput");
+    uint32_t throughput_mb_per_sec = res.GetInt();
+    if (vm.contains("mib")) {
+        fmt::print("{}\n", throughput_mb_per_sec);
+    } else {
+        fmt::print("{}\n", (((uint64_t)throughput_mb_per_sec) << 23) / 1'000'000);
+    }
+}
+
+void setstreamthroughput_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+    if (vm.contains("mbs")) {
+        params["value"] = fmt::to_string(vm["mbs"].as<uint32_t>());
+    } else {
+        throw std::invalid_argument(fmt::format("The throughput value must be specified"));
+    }
+    client.post("/storage_service/stream_throughput", std::move(params));
+}
+
 const std::vector<operation_option> global_options{
     typed_option<sstring>("host,h", "localhost", "the hostname or ip address of the ScyllaDB node"),
     typed_option<uint16_t>("port,p", 10000, "the port of the REST API of the ScyllaDB node"),
@@ -4493,6 +4513,38 @@ Set the MiB/s throughput for compaction, or 0 to disable throttling
             },
             {
                 setcompactionthroughput_operation
+            }
+        },
+        {
+            {
+                "getstreamthroughput",
+                "Get streaming throughput",
+R"(
+Print throughput cap for streaming in the system in megabits
+)",
+                {
+                        typed_option<>("mib", "Print the throughput cap for streaming in MiB/s"),
+                },
+                {},
+            },
+            {
+                getstreamthroughput_operation
+            },
+        },
+        {
+            {
+                "setstreamthroughput",
+                "Set compaction IO throughput",
+R"(
+Set the MiB/s throughput for streaming, or 0 to disable throttling
+)",
+                {},
+                {
+                    typed_option<uint32_t>("mbs", "Value in MiB, 0 to disable throttling ", 1),
+                },
+            },
+            {
+                setstreamthroughput_operation
             }
         },
     };
