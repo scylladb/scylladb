@@ -36,6 +36,10 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
             auto guard = service::topology_guard(frozen_guard);
             auto use_view_update_path = co_await db::view::check_needs_view_update_path(vb.local(), db.local().get_token_metadata_ptr(), *cf, reason);
+            // Disable data propagation to GSI when repairing the base table.
+            if (reason == streaming::stream_reason::repair && origin == sstables::repair_origin) {
+                use_view_update_path = false;
+            }
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};
             auto& cs = cf->get_compaction_strategy();
