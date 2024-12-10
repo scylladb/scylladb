@@ -2396,7 +2396,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
-future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid) {
+future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid) {
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
@@ -2405,7 +2405,7 @@ future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locato
 
     auto t = db.get_tables_metadata().get_table_if_exists(table_id);
     if (!t) {
-        co_return;
+        co_return gc_clock::now();
     }
     auto& tmap = guard.get_tablet_map();
     auto s = t->schema();
@@ -2434,16 +2434,20 @@ future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locato
     auto ranges_parallelism = std::nullopt;
     auto start = std::chrono::steady_clock::now();
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
+    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
+    auto task = co_await _repair_module->make_task(task_impl_ptr, {});
+    task->start();
     co_await task->done();
+    auto flush_time = task_impl_ptr->get_flush_time();
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
         rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
         co_await seastar::sleep(std::chrono::milliseconds(*delay));
     }
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
-    rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={}",
-            id.uuid(), keyspace_name, table_name, range, duration, replicas, gid);
+    rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
+            id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
+    co_return flush_time;
 }
 
 tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
@@ -2519,7 +2523,8 @@ future<> repair::tablet_repair_task_impl::run() {
         });
 
         auto parent_shard = this_shard_id();
-        rs.container().invoke_on_all([&idx, id, metas = _metas, parent_data, reason = _reason, tables = _tables, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
+        std::vector<gc_clock::time_point> flush_times(smp::count);
+        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
             std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
@@ -2555,7 +2560,7 @@ future<> repair::tablet_repair_task_impl::run() {
                         m.keyspace_name, rs, erm, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
                         std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time);
                 task_impl_ptr->neighbors = std::move(neighbors);
-                auto task = co_await rs._repair_module->make_task(std::move(task_impl_ptr), parent_data);
+                auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
                 task->start();
                 auto res = co_await coroutine::as_future(task->done());
                 if (res.failed()) {
@@ -2573,11 +2578,19 @@ future<> repair::tablet_repair_task_impl::run() {
                         error = std::move(ep);
                     }
                 }
+                auto current = flush_times[this_shard_id()];
+                auto time = task_impl_ptr->get_flush_time();
+                flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
             }
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));
             }
         }).get();
+        for (auto& time : flush_times) {
+            if (time != gc_clock::time_point()) {
+                _flush_time = _flush_time == gc_clock::time_point() ? time : std::min(_flush_time, time);
+            }
+        }
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
