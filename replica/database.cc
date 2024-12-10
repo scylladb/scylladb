@@ -2512,7 +2512,18 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // smaller than low_mark.
     SCYLLA_ASSERT(!st.did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
     if (rp == db::replay_position()) {
-        rp = st.low_mark;
+        // If this shard had no mutations, st.low_mark will be an empty, default constructed
+        // replay_position. This is a problem because an empty replay_position has the shard_id
+        // part of segment_id set to 0, even though we may be running on a shard other than
+        // shard 0. In that case, we will save the empty low_mark as a replay position into
+        // system.truncated with an incorrect shard number, which could overwrite the replay
+        // position of the actual shard 0. So, we fix the problem by creating a replay position
+        // with the correct shard_id and 0 for base_id and position
+        if (st.low_mark == db::replay_position()) {
+            rp = db::replay_position(this_shard_id(), 0, 0);
+        } else {
+            rp = st.low_mark;
+        }
     }
     co_await coroutine::parallel_for_each(cf.views(), [this, &sys_ks, truncated_at] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
