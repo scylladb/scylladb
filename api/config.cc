@@ -193,17 +193,15 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return cfg.saved_caches_directory();
     });
 
-    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto value = req->get_query_param("value");
+    ss::set_compaction_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
+        api::req_param<uint32_t> value(*req, "value", 0);
+        cfg.compaction_throughput_mb_per_sec(value.value, utils::config_file::config_source::API);
         return make_ready_future<json::json_return_type>(json::json_void());
     });
 
-    ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto value = req->get_query_param("value");
+    ss::set_stream_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
+        api::req_param<uint32_t> value(*req, "value", 0);
+        cfg.stream_io_throughput_mb_per_sec(value.value, utils::config_file::config_source::API);
         return make_ready_future<json::json_return_type>(json::json_void());
     });
 }
