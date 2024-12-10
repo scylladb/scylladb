@@ -159,6 +159,30 @@
           "parameters": []
         }
       ]
+    },
+    {
+       "path":"/commitlog/throughput",
+       "operations":[
+          {
+             "method":"POST",
+             "summary":"Set IO throughput mb per sec",
+             "type":"void",
+             "nickname":"set_commitlog_throughput_mb_per_sec",
+             "produces":[
+                "application/json"
+             ],
+             "parameters":[
+                {
+                   "name":"mibs",
+                   "description":"flush throughput",
+                   "required":true,
+                   "allowMultiple":false,
+                   "type": "long",
+                   "paramType":"query"
+                }
+             ]
+          }
+       ]
     }
    ]
 }

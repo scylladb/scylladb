@@ -7,12 +7,15 @@
  */
 
 #include "commitlog.hh"
+#include "api/api.hh"
 #include "db/commitlog/commitlog.hh"
 #include "api/api-doc/commitlog.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api_init.hh"
 #include "replica/database.hh"
 #include <vector>
+
+extern logging::logger apilog;
 
 namespace api {
 using namespace seastar::httpd;
@@ -73,6 +76,13 @@ void set_commitlog(http_context& ctx, routes& r, sharded<replica::database>& db)
         return db.local().commitlog()->active_config().commit_log_location;
     });
 
+    httpd::commitlog_json::set_commitlog_throughput_mb_per_sec.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        api::req_param<uint32_t> mbs(*req, "mibs", 0);
+        apilog.info("Set commitlog IO throughput to {}", mbs.value);
+        uint64_t bps = ((uint64_t)(mbs.value != 0 ? mbs.value : std::numeric_limits<uint32_t>::max())) << 20;
+        co_await db.local().commitlog()->active_config().sched_group.update_io_bandwidth(bps);
+        co_return json::json_void();
+    });
 }
 
 void unset_commitlog(http_context& ctx, routes& r) {
@@ -83,6 +93,7 @@ void unset_commitlog(http_context& ctx, routes& r) {
     httpd::commitlog_json::get_total_commit_log_size.unset(r);
     httpd::commitlog_json::get_max_disk_size.unset(r);
     ss::get_commitlog.unset(r);
+    httpd::commitlog_json::set_commitlog_throughput_mb_per_sec.unset(r);
 }
 
 }
