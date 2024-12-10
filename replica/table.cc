@@ -1171,13 +1171,17 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
                                           sst->get_filename(), first_id, last_id));
     }
 
-    auto& sg = storage_group_for_id(first_id);
+    try {
+        auto& sg = storage_group_for_id(first_id);
 
-    if (first_range_side != last_range_side) {
-        return *sg.main_compaction_group();
+        if (first_range_side != last_range_side) {
+            return *sg.main_compaction_group();
+        }
+
+        return *sg.select_compaction_group(first_range_side);
+    } catch (std::out_of_range& e) {
+        on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
     }
-
-    return *sg.select_compaction_group(first_range_side);
 }
 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
