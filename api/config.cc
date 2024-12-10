@@ -199,6 +199,13 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json::json_void());
     });
+
+    ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
+        //TBD
+        unimplemented();
+        auto value = req->get_query_param("value");
+        return make_ready_future<json::json_return_type>(json::json_void());
+    });
 }
 
 void unset_config(http_context& ctx, routes& r) {
@@ -220,6 +227,7 @@ void unset_config(http_context& ctx, routes& r) {
     ss::get_all_data_file_locations.unset(r);
     ss::get_saved_caches_location.unset(r);
     ss::set_compaction_throughput_mb_per_sec.unset(r);
+    ss::set_stream_throughput_mb_per_sec.unset(r);
 }
 
 }
