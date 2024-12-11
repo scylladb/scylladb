@@ -35,6 +35,7 @@ class view_builder;
 // system. Built on top of the distributed_loader functionality.
 class sstables_loader : public seastar::peering_sharded_service<sstables_loader> {
 public:
+    enum class stream_scope { all, dc, rack, node };
     class task_manager_module : public tasks::task_manager::module {
         public:
             task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "sstables_loader") {}
@@ -58,7 +59,7 @@ private:
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
-            bool primary_replica_only, bool unlink_sstables,
+            bool primary_replica_only, bool unlink_sstables, stream_scope scope,
             std::function<void(unsigned)> on_streamed);
 
 public:
@@ -84,14 +85,14 @@ public:
      * @return a future<> when the operation finishes.
      */
     future<> load_new_sstables(sstring ks_name, sstring cf_name,
-            bool load_and_stream, bool primary_replica_only);
+            bool load_and_stream, bool primary_replica_only, stream_scope scope);
 
     /**
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
             sstring prefix, std::vector<sstring> sstables,
-            sstring endpoint, sstring bucket);
+            sstring endpoint, sstring bucket, stream_scope scope);
 
     class download_task_impl;
 };
