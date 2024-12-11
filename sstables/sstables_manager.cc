@@ -196,6 +196,15 @@ future<> sstables_manager::components_reloader_fiber() {
         while (!_reclaimed.empty() && memory_available > 0) {
             auto sstable_to_reload = _reclaimed.begin();
             const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
+
+            if (sstable_to_reload->is_unlinked()) {
+                // This sstable has been unlinked already,
+                // remove it from reclaimed and try the next sstable.
+                _reclaimed.erase(sstable_to_reload);
+                _total_memory_reclaimed -= reclaimed_memory;
+                continue;
+            }
+
             if (reclaimed_memory > memory_available) {
                 // cannot reload anymore sstables
                 break;
