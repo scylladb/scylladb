@@ -511,6 +511,13 @@ private:
     // have to get.  It will be closed by stop().
     seastar::gate _async_gate;
 
+    // gate for view building operations on this table, when the table is a view.
+    // it is closed before the table is removed from the database and detaches from
+    // the base table, because then the view table state may become inconsistent with the base
+    // table, for example on schema changes, so we don't want to allow view building
+    // after that.
+    seastar::gate _view_build_gate;
+
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
@@ -710,6 +717,8 @@ public:
     future<> destroy_storage();
 
     seastar::gate& async_gate() { return _async_gate; }
+
+    seastar::gate& view_build_gate() { return _view_build_gate; }
 
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
@@ -1140,6 +1149,10 @@ public:
 
     future<> await_pending_ops() noexcept {
         return when_all(await_pending_reads(), await_pending_writes(), await_pending_streams(), await_pending_flushes()).discard_result();
+    }
+
+    future<> await_view_building() noexcept {
+        return view_build_gate().close();
     }
 
     void add_or_update_view(view_ptr v);

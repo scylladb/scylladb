@@ -336,7 +336,7 @@ future<> view_update_generator::populate_views(const replica::table& table,
         gc_clock::time_point now) {
     auto schema = reader.schema();
     view_update_builder builder = make_view_update_builder(
-            get_db().as_data_dictionary(),
+            get_db(),
             table,
             schema,
             std::move(views),
@@ -412,7 +412,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
     auto base_token = m.token();
     auto m_schema = m.schema();
     view_update_builder builder = make_view_update_builder(
-            get_db().as_data_dictionary(),
+            get_db(),
             table,
             base,
             std::move(views),
