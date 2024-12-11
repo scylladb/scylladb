@@ -2106,9 +2106,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
                         return make_ready_future();
                     });
 
-                    auto requested_test_groups = boost::copy_range<std::unordered_set<std::string>>(
-                            app.configuration()["run-tests"].as<std::vector<std::string>>()
-                    );
+                    auto requested_test_groups = app.configuration()["run-tests"].as<std::vector<std::string>>() | std::ranges::to<std::unordered_set>();
                     auto enabled_test_groups = test_groups | std::views::filter([&] (auto&& tc) {
                         return requested_test_groups.contains(tc.name);
                     });

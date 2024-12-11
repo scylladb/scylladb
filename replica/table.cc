@@ -2898,7 +2898,7 @@ future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
 
     auto sstable_deletion_guard = co_await get_units(_sstable_deletion_sem, 1);
 
-    auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+    auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
 
     co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
