@@ -5,6 +5,7 @@
 #
 
 import asyncio
+import random
 from typing import Optional
 import pytest
 
@@ -310,3 +311,74 @@ async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerC
         await check_none()
 
     await asyncio.gather(repair_task(), wait_and_check_none())
+
+async def prepare_split(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
+    await manager.api.disable_tablet_balancing(server.ip_addr)
+
+    cql = manager.get_cql()
+    insert = cql.prepare(f"INSERT INTO {keyspace}.{table}(pk, c) VALUES(?, ?)")
+    for pk in keys:
+        value = random.randbytes(1000)
+        cql.execute(insert, [pk, value])
+
+    await manager.api.flush_keyspace(server.ip_addr, keyspace)
+
+async def prepare_merge(manager: ManagerClient, server: ServerInfo, keyspace: str, table: str, keys: list[int]):
+    await manager.api.disable_tablet_balancing(server.ip_addr)
+
+    cql = manager.get_cql()
+    await asyncio.gather(*[cql.run_async(f"DELETE FROM {keyspace}.{table} WHERE pk={k};") for k in keys])
+
+    await manager.api.flush_keyspace(server.ip_addr, keyspace)
+
+async def enable_tablet_balancing_and_wait(manager: ManagerClient, server: ServerInfo, message: str):
+    s1_log = await manager.server_open_log(server.server_id)
+    s1_mark = await s1_log.mark()
+
+    await manager.api.enable_tablet_balancing(server.ip_addr)
+
+    await s1_log.wait_for(message, from_mark=s1_mark)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_resize_task(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    cmdline = [
+        '--target-tablet-size-in-bytes', '30000',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    })]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    keyspace = "test"
+    table1 = "test1"
+    table2 = "test2"
+    await cql.run_async(f"CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
+    await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+    await cql.run_async(f"CREATE TABLE {keyspace}.{table2} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+
+    total_keys = 60
+    keys = range(total_keys)
+    await prepare_split(manager, servers[0], keyspace, table1, keys)
+    await enable_tablet_balancing_and_wait(manager, servers[0], "Detected tablet split for table")
+    await wait_tasks_created(tm, servers[0], module_name, 0, "split", table1)
+
+    await prepare_split(manager, servers[0], keyspace, table2, keys)
+    await prepare_merge(manager, servers[0], keyspace, table1, keys[:-1])
+    await manager.api.keyspace_compaction(servers[0].ip_addr, "test")
+
+    injection = "tablet_split_finalization_postpone"
+    await enable_injection(manager, servers, injection)
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    async def wait_and_check_status(server, type, keyspace, table):
+        task = (await wait_tasks_created(tm, server, module_name, 1, type, table))[0]
+        status = await tm.get_task_status(server.ip_addr, task.task_id)
+        check_task_status(status, ["running"], type, "table", False, keyspace, table, [0, 1, 2])
+
+    await wait_and_check_status(servers[0], "split", keyspace, table2)
+    await wait_and_check_status(servers[0], "merge", keyspace, table1)
