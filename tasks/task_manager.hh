@@ -31,6 +31,10 @@ namespace repair {
 class task_manager_module;
 }
 
+namespace service {
+class storage_service;
+}
+
 namespace netw {
 class messaging_service;
 }
@@ -321,6 +325,7 @@ public:
 
         uint64_t new_sequence_number() noexcept;
         task_manager& get_task_manager() noexcept;
+        const task_manager& get_task_manager() const noexcept;
         seastar::abort_source& abort_source() noexcept;
         gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
@@ -383,6 +388,8 @@ public:
     tasks_collection& get_tasks_collection() noexcept;
     const tasks_collection& get_tasks_collection() const noexcept;
     future<std::vector<task_id>> get_virtual_task_children(task_id parent_id);
+
+    std::set<gms::inet_address> get_nodes(service::storage_service& ss) const noexcept;
 
     module_ptr make_module(std::string name);
     void register_module(std::string name, module_ptr module);
