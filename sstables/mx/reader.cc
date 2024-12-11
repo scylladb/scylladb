@@ -774,8 +774,7 @@ private:
         if (pos == boost::dynamic_bitset<uint64_t>::npos) {
             pos = _row->_columns.size();
         }
-        _row->_columns = std::ranges::subrange(_row->_columns.begin() + pos,
-                                               _row->_columns.end());
+        _row->_columns.advance(pos);
     }
     bool no_more_columns() const { return _row->_columns.empty(); }
     void move_to_next_column() {
@@ -783,8 +782,7 @@ private:
         size_t next_pos = _row->_columns_selector.find_next(current_pos);
         size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _row->_columns.size()
                                                                                   : next_pos - current_pos;
-        _row->_columns = std::ranges::subrange(_row->_columns.begin() + jump_to_next,
-                                               _row->_columns.end());
+        _row->_columns.advance(jump_to_next);
     }
     bool is_column_simple() const { return !_row->_columns.front().is_collection; }
     bool is_column_counter() const { return _row->_columns.front().is_counter; }
@@ -807,8 +805,7 @@ private:
     }
     bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
     void move_to_next_ck_block() {
-        _ck_column_value_fix_lengths = std::ranges::subrange(_ck_column_value_fix_lengths.begin() + 1,
-                                                             _ck_column_value_fix_lengths.end());
+        _ck_column_value_fix_lengths.advance(1);
         ++_ck_blocks_header_offset;
         if (_ck_blocks_header_offset == 32u) {
             _ck_blocks_header_offset = 0u;

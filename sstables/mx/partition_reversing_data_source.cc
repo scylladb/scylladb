@@ -166,8 +166,7 @@ private:
     }
     bool no_more_ck_blocks() const { return _ck_column_value_fix_lengths.empty(); }
     void move_to_next_ck_block() {
-        _ck_column_value_fix_lengths = std::ranges::subrange(_ck_column_value_fix_lengths.begin() + 1,
-                                                             _ck_column_value_fix_lengths.end());
+        _ck_column_value_fix_lengths.advance(1);
         ++_ck_blocks_header_offset;
         if (_ck_blocks_header_offset == 32u) {
             _ck_blocks_header_offset = 0u;
