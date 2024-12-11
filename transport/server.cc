@@ -21,6 +21,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "types/vector.hh"
 #include "dht/token-sharding.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
@@ -1950,6 +1951,11 @@ public:
             for (auto&& t : ttype->all_types()) {
                 encode(r, t);
             }
+            return;
+        }
+        if (type->is_vector()) {
+            r.write_short(uint16_t(type_id::CUSTOM));
+            r.write_string(type->name());
             return;
         }
         if (type->is_collection()) {
