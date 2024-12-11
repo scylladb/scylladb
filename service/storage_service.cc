@@ -5977,7 +5977,16 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
 // Streams data to the pending tablet replica of a given tablet on this node.
 // The source tablet replica is determined from the current transition info of the tablet.
 future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
-    return do_tablet_operation(tablet, "Streaming", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+    co_await utils::get_local_injector().inject("block_tablet_streaming", [this, &tablet] (auto& handler) -> future<> {
+        const auto delayed_replica = handler.get("delayed_replica");
+        SCYLLA_ASSERT(delayed_replica);
+        bool is_view = _db.local().find_column_family(tablet.table).schema()->is_view();
+        bool should_block = delayed_replica == "view" ? is_view : !is_view;
+        while (should_block && !handler.poll_for_message() && !_async_gate.is_closed()) {
+            co_await sleep(std::chrono::milliseconds(100));
+        }
+    });
+    co_return co_await do_tablet_operation(tablet, "Streaming", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
         auto tm = guard.get_token_metadata();
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
