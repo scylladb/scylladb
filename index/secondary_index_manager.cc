@@ -61,6 +61,8 @@ index::supports_expression_v index::supports_expression(const column_definition&
                 return collection_yes;
             }
             return supports_expression_v::from_bool(false);
+        case cql3::expr::oper_t::IN:
+            return supports_expression_v::from_bool(_target_type == target_type::regular_values); 
         default:
             return supports_expression_v::from_bool(false);
     }
