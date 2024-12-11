@@ -104,7 +104,8 @@ public:
         created,
         running,
         done,
-        failed
+        failed,
+        suspended
     };
 
     enum class task_group {
