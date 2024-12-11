@@ -141,7 +141,7 @@ future<> node_ops_ctl::abort_on_error(node_ops_cmd cmd, std::exception_ptr ex) n
 
 future<> node_ops_ctl::send_to_all(node_ops_cmd cmd) {
     req.cmd = cmd;
-    req.ignore_nodes = boost::copy_range<std::list<gms::inet_address>>(ignore_nodes);
+    req.ignore_nodes = ignore_nodes | std::ranges::to<std::list<gms::inet_address>>();
     sstring op_desc = ::format("{}", cmd);
     nlogger.info("{}[{}]: Started {}", desc, uuid(), req);
     auto cmd_category = categorize_node_ops_cmd(cmd);

@@ -28,9 +28,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/range/algorithm.hpp>
 #include <boost/range/algorithm_ext.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
@@ -321,7 +319,7 @@ static std::vector<gms::inet_address> get_neighbors(
         ret.erase(it, ret.end());
     }
 
-    return boost::copy_range<std::vector<gms::inet_address>>(std::move(ret));
+    return std::ranges::owning_view(std::move(ret)) | std::ranges::to<std::vector>();
 
 #if 0
     // Origin's ActiveRepairService.getNeighbors() also verifies that the
@@ -1931,7 +1929,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // Choose the decommission node n3 to run repair to
                         // sync with one of the replica nodes, e.g., n1, in the
                         // local DC.
-                        neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
+                        neighbors_set = get_neighbors_set(new_eps | std::ranges::to<std::vector<inet_address>>());
                     }
                 } else {
                     throw std::runtime_error(fmt::format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong number of new owner node={}",

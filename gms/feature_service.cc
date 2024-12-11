@@ -14,7 +14,6 @@
 #include "db/system_keyspace.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "utils/assert.hh"
@@ -308,7 +307,7 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     }
 
     co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
-        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
+        auto feat = features_to_enable | std::ranges::to<std::set<std::string_view>>();
         co_await srv.enable(std::move(feat));
     });
 }
@@ -380,7 +379,7 @@ future<> persistent_feature_enabler::enable_features() {
     co_await _sys_ks.save_local_enabled_features(std::move(feats_set), true);
 
     co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
-        std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
+        auto features_v = features | std::ranges::to<std::set<std::string_view>>();
         co_await fs.enable(std::move(features_v));
     });
 }
