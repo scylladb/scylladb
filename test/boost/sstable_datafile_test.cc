@@ -2055,7 +2055,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
         auto assert_sstable_owners = [&] (std::unordered_set<unsigned> expected_owners, unsigned ignore_msb, unsigned smp_count) {
             SCYLLA_ASSERT(expected_owners.size() <= smp_count);
             auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
-            auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
+            auto owners = sst->get_shards_for_this_sstable() | std::ranges::to<std::unordered_set<unsigned>>();
             BOOST_REQUIRE(std::ranges::all_of(expected_owners, [&] (unsigned expected_owner) {
                 return owners.contains(expected_owner);
             }));
