@@ -1603,7 +1603,7 @@ future<stop_iteration> view_update_builder::on_results() {
 }
 
 view_update_builder make_view_update_builder(
-        data_dictionary::database db,
+        replica::database& db,
         const replica::table& base_table,
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
@@ -1611,14 +1611,15 @@ view_update_builder make_view_update_builder(
         mutation_reader_opt&& existings,
         gc_clock::time_point now) {
     auto vs = views_to_update | std::views::transform([&] (view_and_base v) {
+        auto holder = db.find_column_family(v.view).view_build_gate().hold();
         if (base->version() != v.base->base_schema()->version()) {
             on_internal_error(vlogger, format("Schema version used for view updates ({}) does not match the current"
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
                 base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
-        return view_updates(std::move(v));
+        return view_updates(std::move(v), std::move(holder));
     }) | std::ranges::to<std::vector<view_updates>>();
-    return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
+    return view_update_builder(db.as_data_dictionary(), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_dictionary::database db,
@@ -2973,6 +2974,9 @@ public:
 
     stop_iteration consume_end_of_partition() {
         inject_failure("view_builder_consume_end_of_partition");
+        if (utils::get_local_injector().enter("view_builder_consume_end_of_partition_delay_3s")) {
+            seastar::sleep(std::chrono::seconds(3)).get();
+        }
         flush_fragments();
         return stop_iteration(_step.build_status.empty());
     }

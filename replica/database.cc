@@ -982,6 +982,7 @@ future<> database::remove(table& cf) noexcept {
 
 future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
+    co_await cf.await_view_building();
     co_await remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
