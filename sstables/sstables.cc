@@ -1496,9 +1496,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     index_consume_entry_context<bloom_filter_builder> consumer_ctx(
             *this, sem.make_tracking_only_permit(_schema, "rebuild_filter_from_index", db::no_timeout, {}), bfb_consumer, trust_promoted_index::no,
             make_file_input_stream(index_file, 0, index_file_size, {.buffer_size = sstable_buffer_size}), 0, index_file_size,
-            (_version >= sstable_version_types::mc
-                ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                : std::optional<column_values_fixed_lengths>{}), _manager._abort);
+            get_column_translation(*_schema), _manager._abort);
     auto consumer_ctx_closer = deferred_close(consumer_ctx);
     try {
         consumer_ctx.consume_input().get();
@@ -2092,9 +2090,7 @@ future<> sstable::generate_summary() {
             auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                     *this, sem.make_tracking_only_permit(_schema, "generate-summary", db::no_timeout, {}), s, trust_promoted_index::yes,
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,
-                    (_version >= sstable_version_types::mc
-                        ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
-                        : std::optional<column_values_fixed_lengths>{}), _manager._abort);
+                    get_column_translation(*_schema), _manager._abort);
 
         try {
             co_await ctx->consume_input();
