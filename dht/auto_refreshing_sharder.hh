@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "dht/sharder.hh"
+#include "dht/token-sharding.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 #include <seastar/core/abort_source.hh>
