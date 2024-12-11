@@ -382,3 +382,63 @@ async def test_tablet_resize_task(manager: ManagerClient):
 
     await wait_and_check_status(servers[0], "split", keyspace, table2)
     await wait_and_check_status(servers[0], "merge", keyspace, table1)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_resize_list(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    cmdline = [
+        '--target-tablet-size-in-bytes', '30000',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    })]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    keyspace = "test"
+    table1 = "test1"
+    await cql.run_async(f"CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
+    await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+
+    total_keys = 60
+    keys = range(total_keys)
+    await prepare_split(manager, servers[0], keyspace, table1, keys)
+
+    servers.append(await manager.server_add(cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }))
+
+    s1_log = await manager.server_open_log(servers[0].server_id)
+    s1_mark = await s1_log.mark()
+
+    injection = "tablet_split_finalization_postpone"
+    compaction_injection = "split_sstable_rewrite"
+    await enable_injection(manager, servers, injection)
+    await manager.api.enable_injection(servers[0].ip_addr, compaction_injection, one_shot=True)
+
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+    task0 = (await wait_tasks_created(tm, servers[0], module_name, 1, "split", table1))[0]
+    task1 = (await wait_tasks_created(tm, servers[1], module_name, 1, "split", table1))[0]
+
+    assert task0.task_id == task1.task_id
+
+    for task in [task0, task1]:
+        assert task.state == "running"
+        assert task.type == "split"
+        assert task.kind == "cluster"
+        assert task.scope == "table"
+        assert task.table == table1
+        assert task.keyspace == keyspace
+
+    await s1_log.wait_for("split_sstable_rewrite: waiting", from_mark=s1_mark)
+    await manager.api.message_injection(servers[0].ip_addr, "split_sstable_rewrite")
+
+    status1 = await tm.get_task_status(servers[1].ip_addr, task0.task_id)
+    status0 = await tm.get_task_status(servers[0].ip_addr, task0.task_id)
+    assert len(status0.children_ids) == 2
+    assert status0.children_ids == status1.children_ids
+
+    await disable_injection(manager, servers, injection)
