@@ -8,15 +8,12 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <concepts>
 #include <vector>
 #include <unordered_set>
 #include <functional>
 #include <boost/container/deque.hpp>
-#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
 #include <seastar/util/log.hh>
-#include <seastar/util/source_location-compat.hh>
 #include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "internal.hh"
