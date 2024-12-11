@@ -147,6 +147,10 @@ enum class tablet_task_type {
     none,
     user_repair,
     auto_repair,
+    migration,
+    intranode_migration,
+    split,
+    merge
 };
 
 sstring tablet_task_type_to_string(tablet_task_type);
@@ -160,9 +164,13 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
-    bool is_user_request() const;
-    static tablet_task_info make_user_request();
-    static tablet_task_info make_auto_request();
+    bool is_user_repair_request() const;
+    static tablet_task_info make_user_repair_request();
+    static tablet_task_info make_auto_repair_request();
+    static tablet_task_info make_migration_request();
+    static tablet_task_info make_intranode_migration_request();
+    static tablet_task_info make_split_request();
+    static tablet_task_info make_merge_request();
 };
 
 /// Stores information about a single tablet.
@@ -170,9 +178,10 @@ struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
     locator::tablet_task_info repair_task_info;
+    locator::tablet_task_info migration_task_info;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info);
+    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
@@ -391,6 +400,7 @@ private:
     size_t _log2_tablets; // log_2(_tablets.size())
     std::unordered_map<tablet_id, tablet_transition_info> _transitions;
     resize_decision _resize_decision;
+    tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
@@ -513,11 +523,13 @@ public:
     dht::token_range get_token_range_after_split(const token& t) const noexcept;
 
     const locator::resize_decision& resize_decision() const;
+    const tablet_task_info& resize_task_info() const;
     const locator::repair_scheduler_config& repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
+    void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();

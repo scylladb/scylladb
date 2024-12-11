@@ -126,7 +126,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
-                    }
+                    },
+                    {},
+                    {},
+                    locator::tablet_task_info::make_intranode_migration_request()
                 });
                 tm.set_tablet_map(table1, std::move(tmap));
             }
@@ -140,7 +143,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h1, 0},
-                    }
+                    },
+                    {},
+                    {},
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
@@ -152,7 +158,10 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tmap.set_tablet(tb, tablet_info {
                     tablet_replica_set {
                         tablet_replica {h2, 2},
-                    }
+                    },
+                    {},
+                    {},
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
@@ -970,7 +979,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3},
             });
             b.del_transition(last_token);
-            b.set_resize_decision(resize_decision);
+            b.set_resize_decision(resize_decision, nullptr);
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -2698,7 +2707,7 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
         e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             testlog.info("sstable count: {}", table.sstables_count());
-            return table.split_all_storage_groups();
+            return table.split_all_storage_groups(tasks::task_info{});
         }).get();
 
         testlog.info("Verifying sstables are split...");

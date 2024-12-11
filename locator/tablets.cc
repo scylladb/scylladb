@@ -160,14 +160,15 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info)
+tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info)
     : replicas(std::move(replicas))
     , repair_time(repair_time)
     , repair_task_info(std::move(repair_task_info))
+    , migration_task_info(std::move(migration_task_info))
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{})
+    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{})
 {}
 
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
@@ -184,7 +185,7 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     }
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
-    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info);
+    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info);
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
@@ -424,6 +425,10 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
+void tablet_map::set_resize_task_info(tablet_task_info task_info) {
+    _resize_task_info = std::move(task_info);
+}
+
 void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
     _repair_scheduler_config = std::move(config);
 }
@@ -555,6 +560,10 @@ static const std::unordered_map<tablet_task_type, sstring> tablet_task_type_to_n
     {locator::tablet_task_type::none, "none"},
     {locator::tablet_task_type::user_repair, "user_repair"},
     {locator::tablet_task_type::auto_repair, "auto_repair"},
+    {locator::tablet_task_type::migration, "migration"},
+    {locator::tablet_task_type::intranode_migration, "intranode_migration"},
+    {locator::tablet_task_type::split, "split"},
+    {locator::tablet_task_type::merge, "merge"},
 };
 
 static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from_name = std::invoke([] {
@@ -568,7 +577,7 @@ static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from
 sstring tablet_task_type_to_string(tablet_task_type kind) {
     auto i = tablet_task_type_to_name.find(kind);
     if (i == tablet_task_type_to_name.end()) {
-        on_internal_error(tablet_logger, format("Invalid repair task type: {}", static_cast<int>(kind)));
+        on_internal_error(tablet_logger, format("Invalid tablet task type: {}", static_cast<int>(kind)));
     }
     return i->second;
 }
@@ -599,6 +608,10 @@ bool tablet_map::needs_merge() const {
 
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
+}
+
+const tablet_task_info& tablet_map::resize_task_info() const {
+    return _resize_task_info;
 }
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
@@ -1171,18 +1184,42 @@ bool locator::tablet_task_info::is_valid() const {
     return request_type != locator::tablet_task_type::none;
 }
 
-bool locator::tablet_task_info::is_user_request() const {
+bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_auto_request() {
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_request() {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_migration_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_intranode_migration_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::intranode_migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_split_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::split, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }

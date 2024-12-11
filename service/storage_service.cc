@@ -188,7 +188,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _group0(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
-        , _tablets_module(make_shared<service::task_manager_module>(tm))
+        , _tablets_module(make_shared<service::task_manager_module>(tm, *this))
         , _address_map(address_map)
         , _shared_token_metadata(stm)
         , _erm_factory(erm_factory)
@@ -5355,6 +5355,8 @@ future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_ch
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
+    tasks::task_info parent_info;
+
     auto all_compaction_groups_split = [&] () mutable {
         return _db.map_reduce0([table_ = table] (replica::database& db) {
             auto all_split = db.find_column_family(table_).all_storage_groups_split();
@@ -5363,8 +5365,8 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
     };
 
     auto split_all_compaction_groups = [&] () -> future<> {
-        return _db.invoke_on_all([table] (replica::database& db) -> future<> {
-            return db.find_column_family(table).split_all_storage_groups();
+        return _db.invoke_on_all([table, parent_info] (replica::database& db) -> future<> {
+            return db.find_column_family(table).split_all_storage_groups(parent_info);
         });
     };
 
@@ -5380,6 +5382,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
                 release_guard(std::move(guard));
                 break;
             }
+            parent_info.id = tasks::task_id{tmap.resize_task_info().tablet_task_id.uuid()};
 
             if (co_await all_compaction_groups_split()) {
                 slogger.debug("All compaction groups of table {} are split ready.", table);
@@ -6188,7 +6191,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
-    auto repair_task_info = locator::tablet_task_info::make_user_request();
+    auto repair_task_info = locator::tablet_task_info::make_user_repair_request();
     auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
 
     auto start = std::chrono::steady_clock::now();
@@ -6345,11 +6348,16 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             }
         }
 
+        auto migration_task_info = src.host == dst.host ? locator::tablet_task_info::make_intranode_migration_request()
+            : locator::tablet_task_info::make_migration_request();
+        migration_task_info.sched_nr++;
+        migration_task_info.sched_time = db_clock::now();
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
                                                              : locator::tablet_transition_kind::migration)
+            .set_migration_task_info(last_token, std::move(migration_task_info), _db.local().features())
             .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
