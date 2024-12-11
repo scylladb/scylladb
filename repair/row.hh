@@ -10,7 +10,6 @@
 #include <optional>
 #include "mutation/frozen_mutation.hh"
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/coroutine.hh>
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
