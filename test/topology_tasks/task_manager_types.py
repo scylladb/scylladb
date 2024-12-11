@@ -23,6 +23,7 @@ class State(StrEnum):
     running = "running"
     done = "done"
     failed = "failed"
+    suspended = "suspended"
 
 
 class TaskStats(NamedTuple):
