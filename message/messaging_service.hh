@@ -252,9 +252,10 @@ public:
     static constexpr int32_t current_version = 0;
 
     struct shard_info {
-        shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topology_ignored);
+        shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topology_ignored, inet_address ip);
         shared_ptr<rpc_protocol_client_wrapper> rpc_client;
         const bool topology_ignored;
+        const inet_address endpoint;
         rpc::stats get_stats() const;
     };
 

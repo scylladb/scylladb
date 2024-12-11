@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include "gms/inet_address.hh"
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
@@ -183,9 +184,9 @@ size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     return std::hash<bytes_view>()(id.addr.bytes());
 }
 
-messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored)
+messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored, inet_address ip)
     : rpc_client(std::move(client))
-    , topology_ignored(topo_ignored)
+    , topology_ignored(topo_ignored), endpoint(ip)
 {
 }
 
@@ -720,7 +721,7 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) const {
                 break;
             } else {
                 // If the tenant is disable, immediately return current index to
-                // use $system tenant. 
+                // use $system tenant.
                 return idx;
             }
         }
@@ -984,12 +985,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // the topology (so we always set `topology_ignored` to `false` in that case).
     bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
     if (host_id) {
-        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored));
+        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored, id.addr));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
     } else {
-        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
+        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored, id.addr));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
@@ -1017,18 +1018,21 @@ void messaging_service::find_and_remove_client(Map& clients, typename Map::key_t
         return;
     }
 
-    gms::inet_address addr;
-    std::optional<locator::host_id> hid;
-    if constexpr (std::is_same_v<typename Map::key_type, msg_addr>) {
-        addr = id.addr;
-    } else {
-        addr = _address_map.find(id).value();
-        hid = id;
-    }
     auto it = clients.find(id);
     if (it != clients.end() && filter(it->second)) {
         auto client = std::move(it->second.rpc_client);
+
+        gms::inet_address addr;
+        std::optional<locator::host_id> hid;
+        if constexpr (std::is_same_v<typename Map::key_type, msg_addr>) {
+            addr = id.addr;
+        } else {
+            addr = it->second.endpoint;
+            hid = id;
+        }
+
         clients.erase(it);
+
         //
         // Explicitly call rpc_protocol_client_wrapper::stop() for the erased
         // item and hold the messaging_service shared pointer till it's over.
@@ -1058,8 +1062,8 @@ void messaging_service::remove_rpc_client(msg_addr id) {
     }
     for (auto& c : _clients_with_host_id) {
         for (auto it = c.begin(); it != c.end();) {
-            auto& [hid, _] = *it++;
-            if (id.addr == _address_map.find(hid).value()) {
+            auto& [hid, si] = *it++;
+            if (id.addr == si.endpoint) {
                 find_and_remove_client(c, hid, [] (const auto&) { return true; });
             }
         }
