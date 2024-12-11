@@ -5,6 +5,7 @@
 #
 
 import asyncio
+from typing import Optional
 import pytest
 
 from test.pylib.internal_types import ServerInfo
@@ -24,23 +25,24 @@ async def disable_injection(manager: ManagerClient, servers: list[ServerInfo], i
     for server in servers:
         await manager.api.disable_injection(server.ip_addr, injection)
 
-async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int, type: str):
+async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int, type: str, table: Optional[str] = None):
     async def get_tasks():
-        return [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == type and task.keyspace == "test"]
+        tasks = [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == type and task.keyspace == "test"]
+        return [task for task in tasks if not table or table == task.table]
 
     tasks = await get_tasks()
     while len(tasks) != expected_number:
         tasks = await get_tasks()
     return tasks
 
-def check_task_status(status: TaskStatus, states: list[str], type: str, scope: str, abortable: bool):
+def check_task_status(status: TaskStatus, states: list[str], type: str, scope: str, abortable: bool, keyspace: str = "test", table: str = "test", possible_child_num: list[int] = [0]):
     assert status.scope == scope
     assert status.kind == "cluster"
     assert status.type == type
-    assert status.keyspace == "test"
-    assert status.table == "test"
+    assert status.keyspace == keyspace
+    assert status.table == table
     assert status.is_abortable == abortable
-    assert not status.children_ids
+    assert len(status.children_ids) in possible_child_num
     assert status.state in states
 
 async def check_and_abort_repair_task(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str):
