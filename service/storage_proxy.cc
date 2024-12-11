@@ -4951,7 +4951,7 @@ public:
             for (const version& ver : v) {
                 if (ver.par) {
                     mutation_application_stats app_stats;
-                    m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);
+                    co_await apply_gently(m.partition(), *schema, ver.par->mut().partition(), *schema, app_stats);
                     co_await coroutine::maybe_yield();
                 }
             }
