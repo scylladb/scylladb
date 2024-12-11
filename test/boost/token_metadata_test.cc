@@ -8,12 +8,16 @@
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
 #include "locator/everywhere_replication_strategy.hh"
 #include "utils/to_string.hh"
+
+BOOST_AUTO_TEST_SUITE(token_metadata_test)
 
 using namespace locator;
 
@@ -307,3 +311,5 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
         inet_address_vector_replica_set{});
     BOOST_REQUIRE_EQUAL(token_metadata->get_endpoint(t1), e1_id1);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

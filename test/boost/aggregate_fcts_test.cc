@@ -12,13 +12,16 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include "types/set.hh"
 
+
+BOOST_AUTO_TEST_SUITE(aggregate_fcts_test)
 
 namespace {
 
@@ -267,3 +270,5 @@ SEASTAR_TEST_CASE(test_minmax_on_set) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

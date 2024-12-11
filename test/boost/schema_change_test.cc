@@ -10,7 +10,8 @@
 #include <iostream>
 #include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/util/defer.hh>
 
 #include <boost/range/algorithm/copy.hpp>
@@ -31,6 +32,8 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
 #include "cdc/cdc_extension.hh"
+
+BOOST_AUTO_TEST_SUITE(schema_change_test)
 
 static cql_test_config run_with_raft_recovery_config() {
     cql_test_config c;
@@ -1158,3 +1161,5 @@ SEASTAR_TEST_CASE(test_system_schema_version_is_stable) {
         BOOST_REQUIRE_EQUAL(s->version(), table_schema_version(utils::UUID("9621f170-f101-3459-a8d3-f342c83ad86e")));
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

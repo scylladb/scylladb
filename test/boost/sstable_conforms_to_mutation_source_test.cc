@@ -9,7 +9,8 @@
 
 #include "utils/assert.hh"
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
@@ -21,6 +22,8 @@
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_conforms_to_mutation_source_test)
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -297,3 +300,5 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
         }
     }).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

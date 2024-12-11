@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "utils/input_stream.hh"
 #include "bytes_ostream.hh"
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/random_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(input_stream_test)
 
 BOOST_AUTO_TEST_CASE(test_empty_fragmented_stream) {
     bytes_ostream b;
@@ -69,3 +69,5 @@ BOOST_AUTO_TEST_CASE(test_fragmented_stream) {
     in2.read(reinterpret_cast<char*>(buf2.data()), buf2.size());
     BOOST_REQUIRE(std::equal(buf2.begin(), buf2.end(), big_buffer.begin(), big_buffer.end()));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

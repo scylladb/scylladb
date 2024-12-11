@@ -6,13 +6,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "utils/crc.hh"
 #include "utils/clmul.hh"
 #include "utils/gz/barrett.hh"
 #include <seastar/core/format.hh>
+
+BOOST_AUTO_TEST_SUITE(crc_test)
 
 constexpr uint32_t input_32_1_c = 0x12345678;
 uint32_t input_32_1 = input_32_1_c; // NOT constexpr
@@ -100,3 +100,5 @@ BOOST_AUTO_TEST_CASE(crc_process) {
         BOOST_REQUIRE_EQUAL(c1.get(), c2.get());
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

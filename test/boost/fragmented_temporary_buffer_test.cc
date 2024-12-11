@@ -7,12 +7,16 @@
  */
 
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "utils/assert.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 #include "test/lib/random_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(fragmented_temporary_buffer_test)
 
 struct {
     [[noreturn]]
@@ -503,3 +507,5 @@ SEASTAR_THREAD_TEST_CASE(test_read_exactly_eof) {
     do_test_read_exactly_eof(0);
     do_test_read_exactly_eof(1);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

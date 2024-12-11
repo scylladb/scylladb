@@ -9,7 +9,8 @@
 #include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
 #include <seastar/core/manual_clock.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
@@ -18,6 +19,8 @@
 #include "types/list.hh"
 #include "utils/log.hh"
 #include <chrono>
+
+BOOST_AUTO_TEST_SUITE(error_injection_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -500,3 +503,5 @@ SEASTAR_TEST_CASE(test_inject_cql) {
         });
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

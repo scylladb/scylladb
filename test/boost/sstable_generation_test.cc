@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE sstable-generation
-
 #include <string>
 #include <boost/test/unit_test.hpp>
 
@@ -21,6 +19,8 @@ std::ostream& boost_test_print_type(std::ostream& os, const generation_type& gen
     return os;
 }
 }
+
+BOOST_AUTO_TEST_SUITE(sstable_generation_test)
 
 BOOST_AUTO_TEST_CASE(from_string_uuid_good) {
     // the id comes from https://cassandra.apache.org/_/blog/Apache-Cassandra-4.1-New-SSTable-Identifiers.html
@@ -112,3 +112,5 @@ BOOST_AUTO_TEST_CASE(compare) {
     BOOST_CHECK_NE(sstables::generation_type{},
                    sstables::generation_type::from_string(uuid));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

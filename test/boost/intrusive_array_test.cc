@@ -7,10 +7,14 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <fmt/core.h>
 
 #include "utils/intrusive-array.hh"
+
+BOOST_AUTO_TEST_SUITE(intrusive_array_test)
 
 class element {
     bool _head = false;
@@ -227,3 +231,5 @@ SEASTAR_THREAD_TEST_CASE(test_from_element) {
     current_allocator().destroy(a3);
     current_allocator().destroy(a2);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

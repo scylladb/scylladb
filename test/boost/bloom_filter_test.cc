@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 
 #include "test/lib/eventually.hh"
@@ -16,6 +17,8 @@
 #include "readers/from_mutations_v2.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
+
+BOOST_AUTO_TEST_SUITE(bloom_filter_test)
 
 SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
@@ -283,3 +286,5 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         .available_memory = 0
     });
 };
+
+BOOST_AUTO_TEST_SUITE_END()

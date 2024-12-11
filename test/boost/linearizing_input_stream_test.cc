@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <random>
 
 #include <boost/test/unit_test.hpp>
@@ -17,6 +15,8 @@
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
+
+BOOST_AUTO_TEST_SUITE(linearizing_input_stream_test)
 
 namespace {
 
@@ -230,3 +230,5 @@ BOOST_AUTO_TEST_CASE(test_linearizing_input_stream) {
         BOOST_REQUIRE(in.empty());
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

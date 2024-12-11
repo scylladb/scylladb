@@ -8,10 +8,14 @@
 
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 
 #include "test/lib/simple_schema.hh"
 #include "clustering_ranges_walker.hh"
+
+BOOST_AUTO_TEST_SUITE(clustering_ranges_walker_test)
 
 using namespace std::chrono_literals;
 
@@ -302,3 +306,5 @@ SEASTAR_TEST_CASE(verify_static_row_can_be_contiguous_with_a_clustering_range_ne
     BOOST_REQUIRE_NE(cc, walker.lower_bound_change_counter());
     return make_ready_future<>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

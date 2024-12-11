@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 
 #include "test/lib/simple_schema.hh"
@@ -14,6 +15,8 @@
 #include "test/lib/make_random_string.hh"
 
 #include "readers/from_mutations_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(index_reader_test)
 
 using namespace sstables;
 
@@ -251,3 +254,5 @@ SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_i
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

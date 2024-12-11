@@ -15,32 +15,28 @@ target_link_libraries(test-raft
   test-lib
   Seastar::seastar_testing)
 
-add_scylla_test(discovery_test
+add_scylla_test(raft_boost_combined_tests
   KIND BOOST
-  LIBRARIES test-raft)
-add_scylla_test(etcd_test
-  KIND BOOST
-  LIBRARIES test-raft)
-add_scylla_test(failure_detector_test
+  LIBRARIES test-raft
+  SOURCES
+    raft_boost_combined_tests.cc
+    discovery_test.cc
+    etcd_test.cc
+    fsm_test.cc)
+add_scylla_test(raft_seastar_combined_tests
   KIND SEASTAR
-  LIBRARIES test-raft)
-add_scylla_test(fsm_test
-  KIND BOOST
-  LIBRARIES test-raft)
-add_scylla_test(many_test
-  KIND SEASTAR
-  LIBRARIES test-raft)
-add_scylla_test(raft_server_test
-  KIND SEASTAR
-  LIBRARIES test-raft)
-add_scylla_test(raft_sys_table_storage_test
-  KIND SEASTAR)
-add_scylla_test(randomized_nemesis_test
-  KIND SEASTAR
-  LIBRARIES test-raft-helper)
-add_scylla_test(replication_test
-  KIND SEASTAR
-  LIBRARIES test-raft)
+  LIBRARIES
+    test-raft
+    test-raft-helper
+  SOURCES
+    raft_seastar_combined_tests.cc
+    failure_detector_test.cc
+    many_test.cc
+    raft_server_test.cc
+    raft_sys_table_storage_test.cc
+    randomized_nemesis_test.cc
+    replication_test.cc)
+
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/suite.yaml")
   set(scylla_tests "${scylla_tests}" PARENT_SCOPE)

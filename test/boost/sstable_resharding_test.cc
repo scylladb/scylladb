@@ -8,7 +8,8 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
 #include "sstables/sstables.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "compaction/compaction_manager.hh"
@@ -19,6 +20,8 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_resharding_test)
 
 using namespace sstables;
 
@@ -208,3 +211,5 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
       }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

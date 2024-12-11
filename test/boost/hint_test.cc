@@ -7,7 +7,8 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/smp.hh>
 #include <fmt/ranges.h>
 #include <unordered_set>
@@ -131,6 +132,8 @@ sstring encode_v1_or_v2(const sync_point& sp, encode_version v) {
 
 }
 
+BOOST_AUTO_TEST_SUITE(hint_test)
+
 SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization) {
     const unsigned encoded_shard_count = 2;
 
@@ -247,3 +250,5 @@ SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization_v2) {
 SEASTAR_TEST_CASE(test_hint_sync_point_faithful_reserialization_v1) {
     return test_decode_v1_or_v2(encode_version::v1);
 };
+
+BOOST_AUTO_TEST_SUITE_END()

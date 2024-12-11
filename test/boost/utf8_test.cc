@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <cstdint>
 #include <vector>
 #include <boost/test/unit_test.hpp>
@@ -15,6 +13,8 @@
 
 #include "utils/utf8.hh"
 #include "utils/fragmented_temporary_buffer.hh"
+
+BOOST_AUTO_TEST_SUITE(utf8_test)
 
 struct test_str {
    const void *data;
@@ -223,3 +223,5 @@ BOOST_AUTO_TEST_CASE(test_utf8_fragmented) {
         BOOST_REQUIRE(result == bad_pos);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -6,14 +6,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include <vector>
 #include <random>
 #include <ranges>
 
 #include "utils/dynamic_bitset.hh"
+
+BOOST_AUTO_TEST_SUITE(dynamic_bitset_test)
 
 BOOST_AUTO_TEST_CASE(test_set_clear_test) {
     utils::dynamic_bitset bits(178);
@@ -206,3 +206,5 @@ BOOST_AUTO_TEST_CASE(test_random_operations) {
         BOOST_CHECK_NO_THROW(test_random_ops(size, re));
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

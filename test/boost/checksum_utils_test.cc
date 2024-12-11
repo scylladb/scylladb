@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "sstables/checksum_utils.hh"
 #include "test/lib/make_random_string.hh"
 #include <seastar/core/format.hh>
+
+BOOST_AUTO_TEST_SUITE(checksum_utils_test)
 
 template<typename ReferenceImpl, typename Impl>
 static
@@ -81,3 +81,5 @@ BOOST_AUTO_TEST_CASE(test_libdeflate_matches_zlib) {
 BOOST_AUTO_TEST_CASE(test_default_matches_zlib) {
     test<zlib_crc32_checksummer, crc32_utils>();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

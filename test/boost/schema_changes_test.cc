@@ -8,13 +8,16 @@
 
 
 #include <boost/test/unit_test.hpp>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(schema_changes_test)
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -79,3 +82,5 @@ SEASTAR_TEST_CASE(test_schema_changes_md) {
 SEASTAR_TEST_CASE(test_schema_changes_me) {
     return test_schema_changes_int(sstable_version_types::me);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

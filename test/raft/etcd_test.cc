@@ -22,9 +22,9 @@
 
 // Port of etcd Raft implementation unit tests
 
-#define BOOST_TEST_MODULE raft
-
 #include "test/raft/helpers.hh"
+
+BOOST_AUTO_TEST_SUITE(etcd_test)
 
 using namespace raft;
 
@@ -940,3 +940,5 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_one_voter) {
     BOOST_REQUIRE_THROW(A.transfer_leadership(raft::logical_clock::duration(5)), raft::no_other_voting_member);
     BOOST_CHECK(!A.leadership_transfer_active());
 }
+
+BOOST_AUTO_TEST_SUITE_END()

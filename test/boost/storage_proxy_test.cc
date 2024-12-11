@@ -9,12 +9,16 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "schema/schema_builder.hh"
+
+BOOST_AUTO_TEST_SUITE(storage_proxy_test)
 
 // Returns random keys sorted in ring order.
 // The schema must have a single bytes_type partition key column.
@@ -131,3 +135,5 @@ SEASTAR_THREAD_TEST_CASE(test_split_stats) {
     stats1->register_metrics_for("DC1", ep1);
     stats2->register_metrics_for("DC1", ep1);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

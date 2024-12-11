@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE big_decimal
-
 #include <boost/test/unit_test.hpp>
 #include "utils/big_decimal.hh"
 #include "marshal_exception.hh"
+
+BOOST_AUTO_TEST_SUITE(big_decimal_test)
 
 namespace {
 
@@ -318,3 +318,4 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_cmp) {
     // instead of log2, as an earlier version of the code did by mistake).
     test_cmp(big_decimal("1"), big_decimal("2582249878086908589655919172003011874329705792829223512830659356540647622016841194629645353280137831435903171972747493376E-123"), std::strong_ordering::greater);
 }
+BOOST_AUTO_TEST_SUITE_END()

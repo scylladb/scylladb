@@ -11,7 +11,8 @@
 #include <boost/test/unit_test.hpp>
 #include <seastar/net/inet_address.hh>
 #include "sstables/generation_type.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -36,6 +37,8 @@
 #include "test/lib/log.hh"
 
 #include "readers/from_fragments_v2.hh"
+
+BOOST_AUTO_TEST_SUITE(sstable_mutation_test)
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -1528,3 +1531,4 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     });
 }
 
+BOOST_AUTO_TEST_SUITE_END()

@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include "utils/managed_bytes.hh"
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
@@ -49,6 +47,8 @@ const std::vector<size_t> sizes = {
 };
 
 using mbv = managed_bytes_view;
+
+BOOST_AUTO_TEST_SUITE(managed_bytes_test)
 
 BOOST_AUTO_TEST_CASE(test_uses_current_allocator) {
     fragmenting_allocation_strategy fragmenting_allocator(alloc_size);
@@ -387,3 +387,4 @@ BOOST_AUTO_TEST_CASE(test_to_hex) {
     });
 }
 
+BOOST_AUTO_TEST_SUITE_END()

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
 
@@ -73,6 +74,8 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
             .data = raft::log_entry::dummy()})
     };
 }
+
+BOOST_AUTO_TEST_SUITE(raft_sys_table_storage_test)
 
 SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
@@ -188,3 +191,5 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

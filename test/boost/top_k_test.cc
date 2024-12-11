@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 #include "utils/top_k.hh"
 #include "test/lib/test_utils.hh"
@@ -41,7 +39,34 @@ std::vector<unsigned> count(const utils::space_saving_top_k<unsigned>::results& 
     return v;
 }
 
+struct bad_boy {
+    unsigned n;
+    bad_boy(unsigned n) : n(n) {}
+
+    bad_boy(const bad_boy& bb) noexcept = default;
+
+    bool operator==(const bad_boy& x) const {
+        static unsigned zz = 0;
+        if (++zz == 100) {
+            throw "explode";
+        }
+        return n == x.n;
+    }
+
+    operator unsigned() const { return n; }
+};
+
+namespace std {
+template<>
+struct hash<bad_boy>
+{
+    size_t operator()(const bad_boy& x) const { return hash<unsigned>()(x.n); }
+};
+}
+
 //---------------------------------------------------------------------------------------------
+
+BOOST_AUTO_TEST_SUITE(top_k_test)
 
 // items are inserted by their index as key, with frequencies given in freq
 BOOST_AUTO_TEST_CASE(test_top_k_straight_insertion) {
@@ -109,31 +134,6 @@ BOOST_AUTO_TEST_CASE(test_top_k_single_value) {
 
 //---------------------------------------------------------------------------------------------
 
-struct bad_boy {
-    unsigned n;
-    bad_boy(unsigned n) : n(n) {}
-
-    bad_boy(const bad_boy& bb) noexcept = default;
-
-    bool operator==(const bad_boy& x) const {
-        static unsigned zz = 0;
-        if (++zz == 100) {
-            throw "explode";
-        }
-        return n == x.n;
-    }
-
-    operator unsigned() const { return n; }
-};
-
-namespace std {
-template<>
-struct hash<bad_boy>
-{
-    size_t operator()(const bad_boy& x) const { return hash<unsigned>()(x.n); }
-};
-}
-
 BOOST_AUTO_TEST_CASE(test_top_k_fail) {
     utils::space_saving_top_k<bad_boy> top(32);
 
@@ -150,4 +150,5 @@ BOOST_AUTO_TEST_CASE(test_top_k_fail) {
     BOOST_CHECK_THROW(top.size(), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_SUITE_END()
 //---------------------------------------------------------------------------------------------

@@ -9,7 +9,8 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/testing/on_internal_error.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -32,6 +33,8 @@
 #include "readers/from_mutations_v2.hh"
 
 #include <boost/range/join.hpp>
+
+BOOST_AUTO_TEST_SUITE(mutation_fragment_test)
 
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
@@ -703,3 +706,5 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_validation_leve
         BOOST_REQUIRE(validation_level < vl::token || !validator(dk0));
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -6,8 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#undef SEASTAR_TESTING_MAIN
 #include "replication.hh"
 #include "utils/to_string.hh"
+
+BOOST_AUTO_TEST_SUITE(replication_test)
 
 // Test Raft library with declarative test definitions
 
@@ -16,13 +19,13 @@ lowres_clock::duration tick_delta = 10ms; // minimum granularity of lowres_clock
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
     SEASTAR_THREAD_TEST_CASE(test_name) { \
-        replication_test<lowres_clock>(test_body, false, tick_delta); }  \
+        run_replication_test<lowres_clock>(test_body, false, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
-        replication_test<lowres_clock>(test_body, false, tick_delta, {.drops = true}); } \
+        run_replication_test<lowres_clock>(test_body, false, tick_delta, {.drops = true}); } \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
-        replication_test<lowres_clock>(test_body, true, tick_delta); }  \
+        run_replication_test<lowres_clock>(test_body, true, tick_delta); }  \
     SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
-        replication_test<lowres_clock>(test_body, true, tick_delta, {.drops = true}); }
+        run_replication_test<lowres_clock>(test_body, true, tick_delta, {.drops = true}); }
 
 // 1 nodes, simple replication, empty, no updates
 RAFT_TEST_CASE(simple_replication, (test_case{
@@ -218,7 +221,7 @@ RAFT_TEST_CASE(drops_04_dueling_repro, (test_case{
 
 // TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
 SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
-    replication_test<lowres_clock>(
+    run_replication_test<lowres_clock>(
         // Snapshot automatic take and load
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
@@ -240,7 +243,7 @@ RAFT_TEST_CASE(conf_changes_2, (test_case{
 
 // Check removing a node from configuration, adding entries; cycle for all combinations
 SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
-    replication_test<lowres_clock>(
+    run_replication_test<lowres_clock>(
         {.nodes = 4,
          .updates = {set_config{0,1,2}, entries{2}, new_leader{1},
                      set_config{1,2,3}, entries{2}, new_leader{2},
@@ -252,7 +255,7 @@ SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
-    replication_test<lowres_clock>(
+    run_replication_test<lowres_clock>(
         {.nodes = 3,
          .initial_snapshots  = {{.snap = {.idx = raft::index_t(10),
                                          .term = raft::term_t(1),
@@ -583,3 +586,5 @@ RAFT_TEST_CASE(simple_follower_read, (test_case{
 RAFT_TEST_CASE(follower_read_after_partition, (test_case{
          .nodes = 4,
          .updates = {entries{4}, partition{0, 1, 2}, entries{4}, partition{0, 1, 2, 3}, read_value{3, 8}}}));
+
+BOOST_AUTO_TEST_SUITE_END()

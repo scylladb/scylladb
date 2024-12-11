@@ -15,7 +15,8 @@
 #include "utils/sequenced_set.hh"
 #include "utils/to_string.hh"
 #include "locator/network_topology_strategy.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "utils/log.hh"
@@ -420,6 +421,52 @@ void heavy_origin_test() {
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
 
+namespace locator {
+
+void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+    std::optional<std::partial_ordering> expected;
+    const auto& loc = get_location(address);
+    const auto& loc1 = get_location(a1);
+    const auto& loc2 = get_location(a2);
+    if (a1 == a2) {
+        expected = std::partial_ordering::equivalent;
+    } else {
+        if (a1 == address) {
+            expected = std::partial_ordering::less;
+        } else if (a2 == address) {
+            expected = std::partial_ordering::greater;
+        } else {
+            if (loc1.dc == loc.dc) {
+                if (loc2.dc != loc.dc) {
+                    expected = std::partial_ordering::less;
+                } else {
+                    if (loc1.rack == loc.rack) {
+                        if (loc2.rack != loc.rack) {
+                            expected = std::partial_ordering::less;
+                        }
+                    } else if (loc2.rack == loc.rack) {
+                        expected = std::partial_ordering::greater;
+                    }
+                }
+            } else if (loc2.dc == loc.dc) {
+                expected = std::partial_ordering::greater;
+            }
+        }
+    }
+    auto res = compare_endpoints(address, a1, a2);
+    testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
+            address, loc.dc, loc.rack,
+            a1, loc1.dc, loc1.rack,
+            a2, loc2.dc, loc2.rack,
+            res, bool(expected), expected.value_or(std::partial_ordering::unordered));
+    if (expected) {
+        BOOST_REQUIRE_EQUAL(res, *expected);
+    }
+}
+
+} // namespace locator
+
+BOOST_AUTO_TEST_SUITE(network_topology_strategy_test)
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_simple) {
     return simple_test();
@@ -939,51 +986,6 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
     });
 }
 
-namespace locator {
-
-void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
-    std::optional<std::partial_ordering> expected;
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
-    if (a1 == a2) {
-        expected = std::partial_ordering::equivalent;
-    } else {
-        if (a1 == address) {
-            expected = std::partial_ordering::less;
-        } else if (a2 == address) {
-            expected = std::partial_ordering::greater;
-        } else {
-            if (loc1.dc == loc.dc) {
-                if (loc2.dc != loc.dc) {
-                    expected = std::partial_ordering::less;
-                } else {
-                    if (loc1.rack == loc.rack) {
-                        if (loc2.rack != loc.rack) {
-                            expected = std::partial_ordering::less;
-                        }
-                    } else if (loc2.rack == loc.rack) {
-                        expected = std::partial_ordering::greater;
-                    }
-                }
-            } else if (loc2.dc == loc.dc) {
-                expected = std::partial_ordering::greater;
-            }
-        }
-    }
-    auto res = compare_endpoints(address, a1, a2);
-    testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
-            address, loc.dc, loc.rack,
-            a1, loc1.dc, loc1.rack,
-            a2, loc2.dc, loc2.rack,
-            res, bool(expected), expected.value_or(std::partial_ordering::unordered));
-    if (expected) {
-        BOOST_REQUIRE_EQUAL(res, *expected);
-    }
-}
-
-} // namespace locator
-
 SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     locator::token_metadata::config tm_cfg;
     auto my_address = gms::inet_address("localhost");
@@ -1155,3 +1157,5 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack_v2);
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack_v2);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

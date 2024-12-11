@@ -1522,7 +1522,7 @@ struct run_test {
 };
 
 template <typename Clock>
-void replication_test(struct test_case test, bool prevote,
+void run_replication_test(struct test_case test, bool prevote,
         typename Clock::duration tick_delta,
         rpc_config rpc_config = {}) {
     run_test<Clock>{}(std::move(test), prevote, tick_delta, rpc_config).get();

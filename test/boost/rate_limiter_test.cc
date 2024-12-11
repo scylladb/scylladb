@@ -12,9 +12,12 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/later.hh>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 
 #include "db/rate_limiter.hh"
+
+BOOST_AUTO_TEST_SUITE(rate_limiter_test)
 
 using namespace seastar;
 using test_rate_limiter = db::generic_rate_limiter<seastar::manual_clock>;
@@ -127,3 +130,5 @@ SEASTAR_TEST_CASE(test_rate_limiter_account_operation) {
     }
     BOOST_REQUIRE(encountered_rejection);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

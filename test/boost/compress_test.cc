@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#define BOOST_TEST_MODULE core
-
 #include <boost/test/unit_test.hpp>
 
 #include "sstables/compress.hh"
+
+BOOST_AUTO_TEST_SUITE(compress_test)
 
 BOOST_AUTO_TEST_CASE(segmented_offsets_basic_functionality) {
     sstables::compression::segmented_offsets offsets;
@@ -143,3 +143,5 @@ BOOST_AUTO_TEST_CASE(segmented_offsets_corner_cases) {
     BOOST_REQUIRE(accessor.at(4079) == 4079);
     BOOST_REQUIRE(accessor.at(4080) == 4080);
 }
+
+BOOST_AUTO_TEST_SUITE_END()
