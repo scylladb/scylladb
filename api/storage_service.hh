@@ -43,17 +43,6 @@ sstring validate_keyspace(const http_context& ctx, sstring ks_name);
 // containing the description of the respective keyspace error.
 sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::request>& req);
 
-// verify that the table parameter is found, otherwise a bad_param_exception exception is thrown
-// containing the description of the respective table error.
-void validate_table(const http_context& ctx, sstring ks_name, sstring table_name);
-
-// splits a request parameter assumed to hold a comma-separated list of table names
-// verify that the tables are found, otherwise a bad_param_exception exception is thrown
-// containing the description of the respective no_such_column_family error.
-// Returns an empty vector if no parameter was found.
-// If the parameter is found and empty, returns a list of all table names in the keyspace.
-std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
-
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
