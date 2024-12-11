@@ -46,7 +46,11 @@ private:
 };
 
 class task_manager_module : public tasks::task_manager::module {
+private:
+    service::storage_service& _ss;
 public:
-    task_manager_module(tasks::task_manager& tm) noexcept;
+    task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept;
+
+    std::set<gms::inet_address> get_nodes() const override;
 };
 }

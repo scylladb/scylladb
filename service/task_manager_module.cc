@@ -215,8 +215,13 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
     co_return std::nullopt;
 }
 
-task_manager_module::task_manager_module(tasks::task_manager& tm) noexcept
+task_manager_module::task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept
     : tasks::task_manager::module(tm, "tablets")
+    , _ss(ss)
 {}
+
+std::set<gms::inet_address> task_manager_module::get_nodes() const {
+    return get_task_manager().get_nodes(_ss);
+}
 
 }
