@@ -863,7 +863,7 @@ public:
     void set_schema(schema_ptr);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
-    future<> update_effective_replication_map(locator::effective_replication_map_ptr);
+    void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
 private:
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
