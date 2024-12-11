@@ -48,7 +48,8 @@ public:
                  locator::replication_strategy_config_options options,
                  std::optional<unsigned> initial_tablets,
                  bool durables_writes = true,
-                 storage_options storage_opts = {});
+                 storage_options storage_opts = {},
+                 std::vector<schema_ptr> cf_defs = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(const keyspace_metadata& ksm);
     void validate(const gms::feature_service&, const locator::topology&) const;

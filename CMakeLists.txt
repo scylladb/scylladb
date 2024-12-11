@@ -258,6 +258,7 @@ option(Scylla_DIST
 add_custom_target(compiler-training)
 
 add_subdirectory(api)
+add_subdirectory(audit)
 add_subdirectory(alternator)
 add_subdirectory(db)
 add_subdirectory(auth)
