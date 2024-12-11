@@ -350,6 +350,17 @@ size_t memory_usage_of(const frozen_mutation_and_schema& mut);
  */
 std::vector<view_and_base> with_base_info_snapshot(std::vector<view_ptr>);
 
+std::optional<locator::host_id> get_view_natural_endpoint(
+    locator::host_id node,
+    const locator::effective_replication_map_ptr& base_erm,
+    const locator::effective_replication_map_ptr& view_erm,
+    const locator::abstract_replication_strategy& replication_strategy,
+    const dht::token& base_token,
+    const dht::token& view_token,
+    bool use_legacy_self_pairing,
+    bool use_tablets_basic_rack_aware_view_pairing,
+    replica::cf_stats& cf_stats);
+
 }
 
 }
