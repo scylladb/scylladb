@@ -504,6 +504,13 @@ public:
 
     named_value<uint32_t> service_levels_interval;
 
+    named_value<sstring> audit;
+    named_value<sstring> audit_categories;
+    named_value<sstring> audit_tables;
+    named_value<sstring> audit_keyspaces;
+    named_value<sstring> audit_unix_socket_path;
+    named_value<size_t> audit_syslog_write_buffer_size;
+
     named_value<sstring> ldap_url_template;
     named_value<sstring> ldap_attr_role;
     named_value<sstring> ldap_bind_dn;
