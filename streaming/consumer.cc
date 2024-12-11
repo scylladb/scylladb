@@ -24,8 +24,9 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy,
-        service::frozen_topology_guard frozen_guard) {
-    return [&db, &vb, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
+        service::frozen_topology_guard frozen_guard,
+        std::vector<sstables::shared_sstable>* staged_sstables) {
+    return [&db, &vb, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, staged_sstables] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
@@ -43,7 +44,7 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             reader_consumer_v2 consumer =
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin), offstrategy] (mutation_reader reader) {
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin), offstrategy, staged_sstables] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -65,9 +66,12 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
                         cf->enable_off_strategy_trigger();
                     }
                     return cf->add_sstable_and_update_cache(sst, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb]() mutable -> future<> {
+                }).then([cf, s, sst, use_view_update_path, &vb, staged_sstables] () mutable -> future<> {
                     if (!use_view_update_path) {
                         return make_ready_future<>();
+                    }
+                    if (staged_sstables) {
+                        staged_sstables->push_back(sst);
                     }
                     return vb.local().register_staging_sstable(sst, std::move(cf));
                 });

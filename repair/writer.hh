@@ -92,6 +92,7 @@ public:
     public:
         virtual mutation_fragment_queue& queue() = 0;
         virtual future<> wait_for_writer_done() = 0;
+        virtual future<> wait_for_view_update_done() = 0;
         virtual void create_writer(lw_shared_ptr<repair_writer> writer) = 0;
         virtual ~impl() = default;
     };
@@ -126,6 +127,8 @@ public:
     future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf);
 
     future<> wait_for_writer_done();
+
+    future<> wait_for_view_update_done();
 
     named_semaphore& sem() {
         return _sem;
