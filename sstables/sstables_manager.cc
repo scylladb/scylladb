@@ -342,8 +342,7 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 }
 
 void sstables_manager::on_unlink(sstable* sst) {
-    // Remove the sst from manager's reclaimed list to prevent any attempts to reload its components.
-    _reclaimed.erase(*sst);
+    reclaim_memory_and_stop_tracking_sstable(sst);
 }
 
 sstables_registry::~sstables_registry() = default;
