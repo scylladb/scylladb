@@ -165,7 +165,7 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
 }
 
 std::vector<table_id> tablet_virtual_task::get_table_ids() const {
-    return boost::copy_range<std::vector<table_id>>(_ss.get_token_metadata().tablets().all_tables() | boost::adaptors::transformed([] (const auto& table_to_tablets) { return table_to_tablets.first; }));
+    return _ss.get_token_metadata().tablets().all_tables() | std::views::transform([] (const auto& table_to_tablets) { return table_to_tablets.first; }) | std::ranges::to<std::vector<table_id>>();
 }
 
 static void update_status(const locator::tablet_task_info& task_info, tasks::task_status& status, size_t& sched_nr) {

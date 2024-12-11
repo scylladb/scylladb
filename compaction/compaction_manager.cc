@@ -28,7 +28,6 @@
 #include "db/system_keyspace.hh"
 #include "tombstone_gc-internals.hh"
 #include <cmath>
-#include <boost/range/algorithm/remove_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -362,7 +361,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
 
 future<> compaction_manager::on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) {
     auto& cs = get_compaction_state(&t);
-    auto new_sstables = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.new_sstables);
+    auto new_sstables = desc.new_sstables | std::ranges::to<std::unordered_set>();
     for (const auto& sst : desc.old_sstables) {
         if (!new_sstables.contains(sst)) {
             cs.sstables_requiring_cleanup.erase(sst);
@@ -1805,7 +1804,7 @@ private:
 }
 
 static std::vector<sstables::shared_sstable> get_all_sstables(table_state& t) {
-    auto s = boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all());
+    auto s = *t.main_sstable_set().all() | std::ranges::to<std::vector>();
     auto maintenance_set = t.maintenance_sstable_set().all();
     s.insert(s.end(), maintenance_set->begin(), maintenance_set->end());
     return s;
@@ -1894,7 +1893,7 @@ private:
                 : update_registration{registration}
                 , _desc{desc} {}
             void on_removal(const std::vector<sstables::shared_sstable>& sstables) override {
-                auto exhausted = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(sstables);
+                auto exhausted = sstables | std::ranges::to<std::unordered_set>();
                 std::erase_if(_desc.sstables, [&] (const sstables::shared_sstable& sst) {
                     return exhausted.contains(sst);
                 });

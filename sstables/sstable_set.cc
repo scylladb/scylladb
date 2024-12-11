@@ -113,7 +113,7 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
         os << format("  Identifier: {}\n", (*run.all().begin())->run_identifier());
     }
 
-    auto frags = boost::copy_range<std::vector<shared_sstable>>(run.all());
+    auto frags = run.all() | std::ranges::to<std::vector<shared_sstable>>();
     std::ranges::sort(frags, std::ranges::less(), [] (const shared_sstable& x) {
         return x->get_first_decorated_key().token();
     });

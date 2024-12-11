@@ -7,9 +7,6 @@
  */
 
 #include <set>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/sliced.hpp>
-#include <boost/range/numeric.hpp>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include "partition_slice_builder.hh"
@@ -323,9 +320,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
     for (auto prange_size = 1u; prange_size < mutations.size(); prange_size += 2) {
         for (auto pstart = 0u; pstart + prange_size <= mutations.size(); pstart++) {
-            auto ms = boost::copy_range<std::vector<mutation>>(
-                mutations | boost::adaptors::sliced(pstart, pstart + prange_size)
-            );
+            auto ms = mutations | std::views::drop(pstart) | std::views::take(prange_size) | std::ranges::to<std::vector>();
             if (prange_size == 1) {
                 test_ckey({dht::partition_range::make_singular(mutations[pstart].decorated_key())}, ms, mutation_reader::forwarding::yes);
                 test_ckey({dht::partition_range::make_singular(mutations[pstart].decorated_key())}, ms, mutation_reader::forwarding::no);

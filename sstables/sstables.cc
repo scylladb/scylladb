@@ -3020,7 +3020,7 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
         shards.insert(rpras->shard);
         rpras = sharder.next(*_schema);
     }
-    return boost::copy_range<std::vector<unsigned>>(shards);
+    return shards | std::ranges::to<std::vector>();
 }
 
 future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk) {
