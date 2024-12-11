@@ -203,8 +203,7 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, s3_serve
     await do_test_backup_abort(manager, s3_server, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-@pytest.mark.asyncio
-async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
+async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, do_abort = False):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     cfg = {'enable_user_defined_functions': False,
@@ -252,7 +251,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     #    - {suffix}/2-TOC.txt
     #    - ...
     suffix = 'suffix'
-    toc_names = [f'{suffix}/{entry.name}' for entry in list_sstables() if entry.name.endswith('TOC.txt')]
+    old_files = list_sstables();
+    toc_names = [f'{suffix}/{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, f'{prefix}/{suffix}')
@@ -270,21 +270,50 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
 
     print('Try to restore')
     tid = await manager.api.restore(server.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names)
+
+    if do_abort:
+        await manager.api.abort_task(server.ip_addr, tid)
+
     status = await manager.api.wait_task(server.ip_addr, tid)
-    assert status is not None
-    assert status['state'] == 'done'
-    assert status['progress_units'] == "sstables"
-    assert status['progress_completed'] == len(toc_names)
-    assert status['progress_total'] == len(toc_names)
+    if not do_abort:
+        assert status is not None
+        assert status['state'] == 'done'
+        assert status['progress_units'] == "sstables"
+        assert status['progress_completed'] == len(toc_names)
+        assert status['progress_total'] == len(toc_names)
 
     print('Check that sstables came back')
     files = list_sstables()
-    assert len(files) > 0
-    print('Check that data came back too')
-    res = cql.execute(f"SELECT * FROM {ks}.{cf};")
-    rows = {x.name: x.value for x in res}
-    assert rows == orig_rows, "Unexpected table contents after restore"
+
+    sstable_names = [f'{entry.name}' for entry in files if entry.name.endswith('.db')]
+    db_objects = [object for object in objects if object.endswith('.db')]
+
+    if do_abort:
+        assert len(files) >= 0
+        # These checks can be viewed as dubious. We restore (atm) on a mutation basis mostly.
+        # There is no guarantee we'll generate the same amount of sstables as was in the original
+        # backup (?). But, since we are not stressing the server here (not provoking memtable flushes), 
+        # we should in principle never generate _more_ sstables than originated the backup.
+        assert len(old_files) >= len(files)
+        assert len(sstable_names) <= len(db_objects)
+    else:
+        assert len(files) > 0
+        assert (status is not None) and (status['state'] == 'done')
+        print(f'Check that data came back too')
+        res = cql.execute(f"SELECT * FROM {ks}.{cf};")
+        rows = { x.name: x.value for x in res }
+        assert rows == orig_rows, "Unexpected table contents after restore"
 
     print('Check that backup files are still there')  # regression test for #20938
     post_objects = set(o.key for o in get_s3_resource(s3_server).Bucket(s3_server.bucket_name).objects.filter(Prefix=prefix))
     assert objects == post_objects
+
+@pytest.mark.asyncio
+async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
+    '''check that restoring from backed up snapshot for a keyspace:table works'''
+    await do_test_simple_backup_and_restore(manager, s3_server, False)
+
+@pytest.mark.asyncio
+async def test_abort_simple_backup_and_restore(manager: ManagerClient, s3_server):
+    '''check that restoring from backed up snapshot for a keyspace:table works'''
+    await do_test_simple_backup_and_restore(manager, s3_server, True)
