@@ -6467,7 +6467,9 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
         {
             topology_mutation_builder builder(guard.write_timestamp());
 
-            if (!topology_busy) {
+            if (topology_busy) {
+                rtlogger.debug("transit_tablet({}): topology busy, keeping transition state", locator::global_tablet_id{table, tid});
+            } else {
                 builder.set_transition_state(topology::transition_state::tablet_migration);
             }
             builder.set_version(_topology_state_machine._topology.version + 1);
