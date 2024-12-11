@@ -741,8 +741,8 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     co_return res;
 }
 
-future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
-    return qos::get_service_levels(_qp, NAME, SERVICE_LEVELS, db::consistency_level::ONE);
+future<qos::service_levels_info> system_distributed_keyspace::get_service_levels(qos::query_context ctx) const {
+    return qos::get_service_levels(_qp, NAME, SERVICE_LEVELS, db::consistency_level::ONE, ctx);
 }
 
 future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {

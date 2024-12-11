@@ -25,7 +25,7 @@ private:
     db::system_distributed_keyspace& _sys_dist_ks;
 public:
     standard_service_level_distributed_data_accessor(db::system_distributed_keyspace &sys_dist_ks);
-    virtual future<qos::service_levels_info> get_service_levels() const override;
+    virtual future<qos::service_levels_info> get_service_levels(qos::query_context ctx) const override;
     virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const override;
     virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch&) const override;
     virtual future<> drop_service_level(sstring service_level_name, service::group0_batch&) const override;

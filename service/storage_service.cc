@@ -704,7 +704,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
         sl_controller.upgrade_to_v2(_qp, _group0->client());
     });
-    co_await update_service_levels_cache(qos::update_both_cache_levels::yes);
+    co_await update_service_levels_cache(qos::update_both_cache_levels::yes, qos::query_context::group0);
 
     // the view_builder is migrated to v2 in view_builder::migrate_to_v2.
     // it writes a v2 version mutation as topology_change, then we get here
@@ -924,9 +924,9 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
     co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
-future<> storage_service::update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache) {
+future<> storage_service::update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache, qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await _sl_controller.local().update_cache(update_only_effective_cache);
+    co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
 }
 
 // Moves the coroutine lambda onto the heap and extends its

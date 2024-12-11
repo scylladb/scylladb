@@ -898,7 +898,7 @@ public:
     //    
     // update_both_cache_levels::yes - updates both levels of the cache
     // update_both_cache_levels::no  - update only effective service levels cache
-    future<> update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache = qos::update_both_cache_levels::yes);
+    future<> update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache = qos::update_both_cache_levels::yes, qos::query_context ctx = qos::query_context::unspecified);
 
     future<> do_cluster_cleanup();
 
