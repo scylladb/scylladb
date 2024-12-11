@@ -20,6 +20,7 @@
 #include "message/messaging_service.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
+#include "service/storage_service.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
 #include "tasks/virtual_task_hint.hh"
@@ -491,6 +492,10 @@ task_manager& task_manager::module::get_task_manager() noexcept {
     return _tm;
 }
 
+const task_manager& task_manager::module::get_task_manager() const noexcept {
+    return _tm;
+}
+
 abort_source& task_manager::module::abort_source() noexcept {
     return _as;
 }
@@ -679,6 +684,17 @@ task_manager::tasks_collection& task_manager::get_tasks_collection() noexcept {
 
 const task_manager::tasks_collection& task_manager::get_tasks_collection() const noexcept {
     return _tasks;
+}
+
+std::set<gms::inet_address> task_manager::get_nodes(service::storage_service& ss) const {
+    return std::ranges::join_view(std::to_array({
+            std::views::all(ss._topology_state_machine._topology.normal_nodes),
+            std::views::all(ss._topology_state_machine._topology.transition_nodes)})
+        ) | std::views::transform([&ss] (auto& node) {
+            return ss.host2ip(locator::host_id{node.first.uuid()});
+        }) | std::views::filter([&ss] (gms::inet_address ip) {
+            return ss._gossiper.is_alive(ip);
+        }) | std::ranges::to<std::set<gms::inet_address>>();
 }
 
 future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {

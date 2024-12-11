@@ -1006,7 +1006,7 @@ private:
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;
-    friend class node_ops::task_manager_module;
+    friend class tasks::task_manager;
     friend class tablet_virtual_task;
 };
 
