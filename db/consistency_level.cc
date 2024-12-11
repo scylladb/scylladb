@@ -11,8 +11,6 @@
 #include "db/consistency_level.hh"
 #include "db/consistency_level_validations.hh"
 
-#include <boost/range/algorithm/find.hpp>
-#include <boost/range/algorithm/transform.hpp>
 #include "exceptions/exceptions.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/sstring.hh>
@@ -336,7 +334,7 @@ filter_for_query(consistency_level cl,
         if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_endpoints_for_reading)
             unsigned local_idx = erm.get_topology().is_me(epi[0].first) ? 0 : epi.size() + 1;
-            auto weighted = boost::copy_range<host_id_vector_replica_set>(miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra)));
+            auto weighted = miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra)) | std::ranges::to<host_id_vector_replica_set>();
             // Workaround for https://github.com/scylladb/scylladb/issues/9285
             auto last = std::adjacent_find(weighted.begin(), weighted.end());
             if (last == weighted.end()) {

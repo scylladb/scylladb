@@ -140,8 +140,8 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
     if (left_inf != right_inf
             && left_inf != ranges.end()
             && right_inf != ranges.end()
-            && (boost::copy_range<set>(left_inf->_endpoints)
-                 == boost::copy_range<set>(right_inf->_endpoints))) {
+            && ((left_inf->_endpoints | std::ranges::to<set>()) ==
+                (right_inf->_endpoints | std::ranges::to<set>()))) {
         left_inf->_start_token = std::move(right_inf->_start_token);
         ranges.erase(right_inf);
     }

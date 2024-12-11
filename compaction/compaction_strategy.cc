@@ -21,8 +21,6 @@
 #include "compaction_strategy_state.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "schema/schema.hh"
-#include <boost/range/algorithm/find.hpp>
-#include <boost/range/numeric.hpp>
 #include "size_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
@@ -303,7 +301,7 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
             }
         }
     }
-    auto tmp_contrib = calculate_sstables_backlog_contribution(boost::copy_range<std::vector<shared_sstable>>(tmp_all), _stcs_options);
+    auto tmp_contrib = calculate_sstables_backlog_contribution(tmp_all | std::ranges::to<std::vector>(), _stcs_options);
 
     std::invoke([&] () noexcept {
         _all = std::move(tmp_all);

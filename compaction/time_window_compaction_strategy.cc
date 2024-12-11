@@ -16,7 +16,6 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/min_element.hpp>
-#include <boost/range/numeric.hpp>
 
 #include <ranges>
 
@@ -525,7 +524,7 @@ int64_t time_window_compaction_strategy::estimated_pending_compactions(table_sta
     auto& state = get_state(table_s);
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
-    auto candidate_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*table_s.main_sstable_set().all());
+    auto candidate_sstables = *table_s.main_sstable_set().all() | std::ranges::to<std::vector>();
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
 
     int64_t n = 0;

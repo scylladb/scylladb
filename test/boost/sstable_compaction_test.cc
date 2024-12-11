@@ -123,7 +123,7 @@ public:
     }
 
     std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
-        return _candidates_opt.value_or(boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all()));
+        return _candidates_opt.value_or(*t.main_sstable_set().all() | std::ranges::to<std::vector>());
     }
 
     std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {

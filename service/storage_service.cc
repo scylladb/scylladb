@@ -717,7 +717,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     }
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
-        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
+        return fs.enable(_topology_state_machine._topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
 
     // Update the legacy `enabled_features` key in `system.scylla_local`.
@@ -807,7 +807,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         if (!_gossiper.get_endpoint_state_ptr(ep)) {
             gms::loaded_endpoint_state st;
             st.endpoint = ep;
-            st.tokens = boost::copy_range<std::unordered_set<dht::token>>(tmptr->get_tokens(host_id));
+            st.tokens = tmptr->get_tokens(host_id) | std::ranges::to<std::unordered_set<dht::token>>();
             st.opt_dc_rack = node.get().dc_rack();
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
@@ -1237,7 +1237,7 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
         .set("shard_count", params.shard_count)
         .set("ignore_msb", params.ignore_msb)
         .set("cleanup_status", cleanup_status::clean)
-        .set("supported_features", boost::copy_range<std::set<sstring>>(params.supported_features));
+        .set("supported_features", params.supported_features | std::ranges::to<std::set<sstring>>());
 
     if (params.replaced_id) {
         node_builder
@@ -1342,7 +1342,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
         // We are the first node and we define the cluster.
         // Set the enabled_features field to our features.
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.add_enabled_features(boost::copy_range<std::set<sstring>>(params.supported_features))
+        builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
                 .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
         auto enable_features_mutation = builder.build();
 
@@ -1375,7 +1375,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
     auto local_release_version = version::release();
-    auto local_supported_features = boost::copy_range<std::set<sstring>>(_feature_service.supported_feature_set());
+    auto local_supported_features = _feature_service.supported_feature_set() | std::ranges::to<std::set<sstring>>();
 
     auto synchronized = [&] () {
         auto it = _topology_state_machine._topology.find(raft_server.id());
@@ -1786,7 +1786,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         .tokens_string = _db.local().get_config().join_ring() ? _db.local().get_config().initial_token() : sstring(),
         .shard_count = smp::count,
         .ignore_msb =  _db.local().get_config().murmur3_partitioner_ignore_msb_bits(),
-        .supported_features = boost::copy_range<std::vector<sstring>>(_feature_service.supported_feature_set()),
+        .supported_features = _feature_service.supported_feature_set() | std::ranges::to<std::vector<sstring>>(),
         .request_id = utils::UUID_gen::get_time_UUID(),
     };
 

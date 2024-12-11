@@ -35,11 +35,7 @@
 #include <chrono>
 #include "locator/host_id.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
-#include <boost/range/algorithm/count_if.hpp>
 #include <boost/range/algorithm/partition.hpp>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/algorithm/string/split.hpp>
-#include <boost/algorithm/string/classification.hpp>
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
@@ -998,7 +994,7 @@ future<> gossiper::failure_detector_loop() {
                 co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
                 continue;
             }
-            auto nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
+            auto nodes = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(std::views::iota(0u, nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
@@ -1089,7 +1085,7 @@ void gossiper::run() {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
 
                 if (_endpoints_to_talk_with.empty()) {
-                    auto live_endpoints = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
+                    auto live_endpoints = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
                     std::shuffle(live_endpoints.begin(), live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
                     // in live_endpoints at least once within nr_rounds gossip rounds.
