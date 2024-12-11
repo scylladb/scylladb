@@ -93,6 +93,30 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 query_components[key] = ['']
         return query_components
 
+    def do_GET(self):
+        content_length = self.headers['Content-Length']
+        if content_length:
+            data = self.rfile.read(int(content_length))
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Connection', 'keep-alive')
+        if urlparse(self.path).path == '/latest/meta-data/iam/security-credentials/':
+            response = "scylla_test_role".encode('utf-8')
+        elif urlparse(self.path).path == '/latest/meta-data/iam/security-credentials/scylla_test_role' and self.headers[
+            'x-aws-ec2-metadata-token'] == "VERYLONGSECURITYTOKEN":
+            response = """{
+  "Code" : "Success",
+  "LastUpdated" : "2012-04-26T16:39:16Z",
+  "Type" : "AWS-HMAC",
+  "AccessKeyId" : "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID",
+  "SecretAccessKey" : "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY",
+  "Token" : "BBBBBBBBBBBBBBBBBBBBBINSTANCE_FROFILE_SESSIONTOKENBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==",
+  "Expiration" : "2017-05-17T15:09:54Z"
+}""".encode('utf-8')
+        self.send_header('Content-Length', str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
     # Processes POST method, see `build_POST_reponse` for details
     def do_POST(self):
         content_length = self.headers['Content-Length']
@@ -120,6 +144,13 @@ class InjectingHandler(BaseHTTPRequestHandler):
             self.policies.put(query_components['Key'][0], Policy(int(query_components['Policy'][0])))
         elif 'uploadId' in query_components and 'partNumber' in query_components:
             self.send_header('ETag', "SomeTag_" + query_components.get("partNumber")[0])
+        elif urlparse(self.path).path == '/latest/api/token':
+            assert self.headers["x-aws-ec2-metadata-token-ttl-seconds"] is not None
+            response_body = "VERYLONGSECURITYTOKEN".encode('utf-8')
+            self.send_header('Content-Length', str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+            return
         else:
             self.send_header('ETag', "SomeTag")
 
@@ -154,6 +185,32 @@ class InjectingHandler(BaseHTTPRequestHandler):
     # transmit the erroneous response for the first time and then switch the policy to `SUCCESS`. One can extend this
     # mechanism by adding additional policies or rewriting the response body logic
     def build_POST_reponse(self, query, path):
+        if 'RoleArn' in query:
+            return """<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+    <AssumeRoleResult>
+        <SourceIdentity>Alice</SourceIdentity>
+        <AssumedRoleUser>
+            <Arn>arn:aws:sts::123456789012:assumed-role/demo/TestAR</Arn>
+            <AssumedRoleId>ARO123EXAMPLE123:TestAR</AssumedRoleId>
+        </AssumedRoleUser>
+        <Credentials>
+            <AccessKeyId>STS_EXAMPLE_ACCESS_KEY_ID</AccessKeyId>
+            <SecretAccessKey>STS_EXAMPLE_SECRET_ACCESS_KEY</SecretAccessKey>
+            <SessionToken>
+                AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                BBBBBBBBBBBBBBBBBBBBBSTS_SESSIONTOKENBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+                DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+                EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE==
+            </SessionToken>
+            <Expiration>2019-11-09T13:34:41Z</Expiration>
+        </Credentials>
+        <PackedPolicySize>6</PackedPolicySize>
+    </AssumeRoleResult>
+    <ResponseMetadata>
+        <RequestId>c6104cbe-af31-11e0-8154-cbc7ccf896c7</RequestId>
+    </ResponseMetadata>
+</AssumeRoleResponse>"""
         if 'uploads' in query:
             req_uuid = str(uuid.uuid4())
             return f"""<InitiateMultipartUploadResult>
