@@ -13,6 +13,8 @@
 
 namespace locator {
 class tablet_id;
+enum class tablet_task_type;
+class tablet_replica;
 }
 
 namespace service {
@@ -40,8 +42,7 @@ public:
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
     std::vector<table_id> get_table_ids() const;
-    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint);
-    table_id get_table_id(const tasks::virtual_task_hint& hint) const;
+    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica);
 };
 
 class task_manager_module : public tasks::task_manager::module {
