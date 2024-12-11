@@ -142,6 +142,10 @@ inline std::string_view state_to_dir(sstable_state state) {
         return quarantine_dir;
     case sstable_state::upload:
         return upload_dir;
+    case sstable_state::unlinked:
+        // this should never be called and is here for completeness
+        SCYLLA_ASSERT(false);
+        return "";
     }
 }
 
@@ -999,6 +1003,10 @@ public:
     // Clones this sstable with a new generation, under the same location as the original one.
     // Implementation is underlying storage specific.
     future<entry_descriptor> clone(generation_type new_generation) const;
+
+    bool is_unlinked() const {
+        return _state == sstable_state::unlinked;
+    }
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager

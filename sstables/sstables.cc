@@ -3064,6 +3064,7 @@ sstable::unlink(storage::sync_dir sync) noexcept {
     }
 
     co_await std::move(remove_fut);
+    _state = sstable_state::unlinked;
     _stats.on_delete();
     _manager.on_unlink(this);
 }

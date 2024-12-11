@@ -26,6 +26,7 @@ enum class sstable_state {
     staging,
     quarantine,
     upload,
+    unlinked,
 };
 
 struct entry_descriptor {

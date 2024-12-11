@@ -283,3 +283,64 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         .available_memory = 0
     });
 };
+
+SEASTAR_TEST_CASE(test_bloom_filter_reclaim_and_reload_after_unlink) {
+    return test_env::do_with_async([] (test_env& env) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        simple_schema ss;
+        auto schema = ss.schema();
+
+        std::vector<mutation> mutations;
+        for (int i = 0; i < 10; i++) {
+            auto mut = mutation(schema, ss.make_pkey(i));
+            mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
+            mutations.push_back(std::move(mut));
+        }
+
+        // create one sst; there is sufficient memory for the bloom filter, so it won't be reclaimed
+        auto sst1 = make_sstable_containing(env.make_sstable(schema), mutations);
+        auto& sst_mgr = env.manager();
+        BOOST_REQUIRE(sst1->filter_memory_size() != 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+
+        // hold a copy of shared sst object in async thread to test reclaim/reload after unlink
+        utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
+        auto async_sst_holder = seastar::async([sst1] {
+            // do nothing just hold a copy of sst and wait for message signalling test completion
+            utils::get_local_injector().inject("test_bloom_filter_reload_after_unlink", [] (auto& handler) {
+                auto ret = handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{5});
+                return ret;
+            }).get();
+        });
+
+        // unlink sst1 and release the object
+        sst1->unlink().get();
+        sst1.release();
+
+        // create another sst forcing reclaim of the bloom filter of sst1 as it is still in memory
+        auto mut = mutation(schema, ss.make_pkey(1000));
+        mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());
+        auto sst2 = make_sstable_containing(env.make_sstable(schema), {mut});
+        // sst2's bloom filter should still be in memory
+        BOOST_REQUIRE(sst2->filter_memory_size() != 0);
+        // but the manager will report reclaimed memory from sst1, which is okay as it is not deactivated yet
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 20);
+
+        // unlink sst2 to trigger reload of sst1's bloom filter, this will attempt to reload sst1's filter
+        // to memory again but as it is unlinked, it will just be dropped from the reclaimable tracking.
+        sst2->unlink().get();
+        sst2.release();
+
+        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+
+        // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
+        utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
+        async_sst_holder.get();
+    }, {
+        // set available memory = 0 to force reclaim the bloom filter
+        .available_memory = 100
+    });
+};
