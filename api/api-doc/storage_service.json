@@ -1176,6 +1176,30 @@
          ]
       },
       {
+         "path":"/storage_service/flush_throughput",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set memtable flush throughput mb per sec",
+               "type":"void",
+               "nickname":"set_flush_throughput_mb_per_sec",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"mibs",
+                     "description":"flush throughput",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/active_repair/",
          "operations":[
             {
