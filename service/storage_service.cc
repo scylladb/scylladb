@@ -3107,18 +3107,19 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             }
         });
         // Prepare per-table erms.
-        co_await container().invoke_on_all([&] (storage_service& ss) {
+        co_await container().invoke_on_all([&](storage_service& ss) -> future<> {
             auto& db = ss._db.local();
             auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-            db.get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> table) {
+            co_await db.get_tables_metadata().for_each_table_gently([&](table_id id, lw_shared_ptr<replica::table> table) -> future<> {
                 auto rs = db.find_keyspace(table->schema()->ks_name()).get_replication_strategy_ptr();
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {
-                    erm = pt_rs->make_replication_map(id, tmptr);
+                    erm = co_await pt_rs->make_replication_map(id, tmptr);
                 } else {
                     erm = pending_effective_replication_maps[this_shard_id()][table->schema()->ks_name()];
                 }
                 pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
+                co_return;
             });
         });
     } catch (...) {
