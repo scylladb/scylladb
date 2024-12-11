@@ -161,7 +161,11 @@ private:
     type _t;
     double _v;
 public:
-    speculative_retry(type t, double v) : _t(t), _v(v) {}
+    speculative_retry(type t, double v) : _t(t), _v(v) {
+        if (t == type::PERCENTILE && (v < 0 || v > 1.0)) {
+            throw std::invalid_argument(format("invalid percentile value: {:f}. Value must be between 0 and 1 inclusive\n", v));
+        }
+    }
 
     sstring to_sstring() const {
         if (_t == type::NONE) {
@@ -202,6 +206,9 @@ public:
         } else if (str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
             t = type::PERCENTILE;
             v = convert(percentile) / 100;
+            if (v < 0 || v > 1.0) {
+                throw std::invalid_argument(format("invalid percentile value: {}. Value must be between 0 and 100 inclusive\n", str));
+            }
         } else {
             throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
         }
