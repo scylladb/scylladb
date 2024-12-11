@@ -169,3 +169,304 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     sls_list = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in sls_list]
     assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl])
+<<<<<<< HEAD
+||||||| parent of 373855b493 (service/qos/service_level_controller: update cache on startup)
+
+def default_timeout(mode):
+    if mode == "dev":
+        return "30s"
+    elif mode == "debug":
+        return "3m"
+    else:
+        # this branch shouldn't be reached
+        assert False
+
+def create_roles_stmts():
+    return [
+        "CREATE ROLE r1 WITH password='r1' AND login=true",
+        "CREATE ROLE r2 WITH password='r2' AND login=true",
+        "CREATE ROLE r3 WITH password='r3' AND login=true",
+    ]
+
+def create_service_levels_stmts():
+    return [
+        "CREATE SERVICE LEVEL sl1 WITH timeout=30m AND workload_type='interactive'",
+        "CREATE SERVICE LEVEL sl2 WITH timeout=1h AND workload_type='batch'",
+        "CREATE SERVICE LEVEL sl3 WITH timeout=30s",
+    ]
+
+def attach_service_levels_stms():
+    return [
+        "ATTACH SERVICE LEVEL sl1 TO r1",
+        "ATTACH SERVICE LEVEL sl2 TO r2",
+        "ATTACH SERVICE LEVEL sl3 TO r3",
+    ]
+
+def grant_roles_stmts():
+    return [
+        "GRANT r2 TO r1",
+        "GRANT r3 TO r2",
+    ]
+
+async def get_roles_connections(manager: ManagerClient, servers):
+    roles = ["r1", "r2", "r3"]
+    cluster_connections = []
+    sessions = []
+
+    for role in roles:
+        cluster = manager.con_gen([s.ip_addr for s in servers], 
+            manager.port, manager.use_ssl, PlainTextAuthProvider(username=role, password=role))
+        connection = cluster.connect()
+        cluster_connections.append(cluster)
+        sessions.append(connection)
+    
+    return cluster_connections, sessions
+
+async def assert_connections_params(manager: ManagerClient, hosts, expect):
+    for host in hosts:
+        params = await manager.api.client.get_json("/cql_server_test/connections_params", host=host.address)
+        for param in params:
+            role = param["role_name"]
+            if not role in expect:
+                continue
+            assert param["workload_type"] == expect[role]["workload_type"]
+            assert param["timeout"] == expect[role]["timeout"]
+
+@pytest.mark.asyncio
+@skip_mode('release', 'cql server testing REST API is not supported in release mode')
+async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
+    servers = await manager.servers_add(3)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Creating user roles and their connections")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in create_roles_stmts()))
+    cluster_connections, sessions = await get_roles_connections(manager, servers)
+
+    logging.info("Asserting all connections have default parameters")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+        "r2": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+    })
+
+    logging.info("Creating service levels and attaching them to corresponding roles")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in create_service_levels_stmts()))
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in attach_service_levels_stms()))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
+    
+    logging.info("Asserting all connections have parameters from their service levels")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "interactive",
+            "timeout": "30m",
+        },
+        "r2": {
+            "workload_type": "batch",
+            "timeout": "1h",
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": "30s",
+        },
+    })
+
+    logging.info("Granting roles and creating roles hierarchy")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in grant_roles_stmts()))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
+
+    logging.info("Asserting all connections have correct parameters based on roles hierarchy")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "batch",
+            "timeout": "30s",
+        },
+        "r2": {
+            "workload_type": "batch",
+            "timeout": "30s",
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": "30s",
+        },
+    })
+
+    for cluster_conn in cluster_connections:
+        cluster_conn.shutdown()
+=======
+
+def default_timeout(mode):
+    if mode == "dev":
+        return "30s"
+    elif mode == "debug":
+        return "3m"
+    else:
+        # this branch shouldn't be reached
+        assert False
+
+def create_roles_stmts():
+    return [
+        "CREATE ROLE r1 WITH password='r1' AND login=true",
+        "CREATE ROLE r2 WITH password='r2' AND login=true",
+        "CREATE ROLE r3 WITH password='r3' AND login=true",
+    ]
+
+def create_service_levels_stmts():
+    return [
+        "CREATE SERVICE LEVEL sl1 WITH timeout=30m AND workload_type='interactive'",
+        "CREATE SERVICE LEVEL sl2 WITH timeout=1h AND workload_type='batch'",
+        "CREATE SERVICE LEVEL sl3 WITH timeout=30s",
+    ]
+
+def attach_service_levels_stms():
+    return [
+        "ATTACH SERVICE LEVEL sl1 TO r1",
+        "ATTACH SERVICE LEVEL sl2 TO r2",
+        "ATTACH SERVICE LEVEL sl3 TO r3",
+    ]
+
+def grant_roles_stmts():
+    return [
+        "GRANT r2 TO r1",
+        "GRANT r3 TO r2",
+    ]
+
+async def get_roles_connections(manager: ManagerClient, servers):
+    roles = ["r1", "r2", "r3"]
+    cluster_connections = []
+    sessions = []
+
+    for role in roles:
+        cluster = manager.con_gen([s.ip_addr for s in servers], 
+            manager.port, manager.use_ssl, PlainTextAuthProvider(username=role, password=role))
+        connection = cluster.connect()
+        cluster_connections.append(cluster)
+        sessions.append(connection)
+    
+    return cluster_connections, sessions
+
+async def assert_connections_params(manager: ManagerClient, hosts, expect):
+    for host in hosts:
+        params = await manager.api.client.get_json("/cql_server_test/connections_params", host=host.address)
+        for param in params:
+            role = param["role_name"]
+            if not role in expect:
+                continue
+            assert param["workload_type"] == expect[role]["workload_type"]
+            assert param["timeout"] == expect[role]["timeout"]
+
+@pytest.mark.asyncio
+@skip_mode('release', 'cql server testing REST API is not supported in release mode')
+async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
+    servers = await manager.servers_add(3)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logging.info("Creating user roles and their connections")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in create_roles_stmts()))
+    cluster_connections, sessions = await get_roles_connections(manager, servers)
+
+    logging.info("Asserting all connections have default parameters")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+        "r2": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": default_timeout(build_mode),
+        },
+    })
+
+    logging.info("Creating service levels and attaching them to corresponding roles")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in create_service_levels_stmts()))
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in attach_service_levels_stms()))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
+    
+    logging.info("Asserting all connections have parameters from their service levels")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "interactive",
+            "timeout": "30m",
+        },
+        "r2": {
+            "workload_type": "batch",
+            "timeout": "1h",
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": "30s",
+        },
+    })
+
+    logging.info("Granting roles and creating roles hierarchy")
+    await asyncio.gather(*(
+        cql.run_async(stmt) for stmt in grant_roles_stmts()))
+    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
+
+    logging.info("Asserting all connections have correct parameters based on roles hierarchy")
+    await assert_connections_params(manager, hosts, {
+        "r1": {
+            "workload_type": "batch",
+            "timeout": "30s",
+        },
+        "r2": {
+            "workload_type": "batch",
+            "timeout": "30s",
+        },
+        "r3": {
+            "workload_type": "unspecified",
+            "timeout": "30s",
+        },
+    })
+
+    for cluster_conn in cluster_connections:
+        cluster_conn.shutdown()
+
+@pytest.mark.asyncio
+async def test_service_level_cache_after_restart(manager: ManagerClient):
+    servers = await manager.servers_add(1)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
+
+    sls_list_before = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(sls_list_before) == 1
+
+    await manager.rolling_restart(servers)
+    cql = await reconnect_driver(manager)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    # after restart the service level cache is repopulated.
+    # we want to verify it's populated, and that operations that use
+    # the cache behave as expected.
+
+    sls_list_after = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert sls_list_after == sls_list_before
+
+    await cql.run_async(f"ALTER SERVICE LEVEL sl1 WITH timeout = 400ms")
+
+    result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
+    assert len(result) == 1 and result[0].workload_type == 'batch'
+>>>>>>> 373855b493 (service/qos/service_level_controller: update cache on startup)
