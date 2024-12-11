@@ -764,6 +764,7 @@ extern thread_local const shared_ptr<const abstract_type> varint_type;
 extern thread_local const shared_ptr<const abstract_type> decimal_type;
 extern thread_local const shared_ptr<const abstract_type> counter_type;
 extern thread_local const shared_ptr<const abstract_type> duration_type;
+extern thread_local const shared_ptr<const user_type_impl> sstableinfo_type;
 extern thread_local const data_type empty_type;
 
 template <> inline thread_local const data_type& data_type_for_v<int8_t> = byte_type;
