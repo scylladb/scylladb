@@ -926,13 +926,6 @@ private:
                 _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
-            group0_service.start().get();
-            auto stop_group0_service = defer([&group0_service] {
-                group0_service.abort().get();
-            });
-
-            _ss.local().set_group0(group0_service);
-
             _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([this] {
@@ -981,6 +974,13 @@ private:
             auto stop_cdc_service = defer([this] {
                 _cdc.stop().get();
             });
+
+            group0_service.start().get();
+            auto stop_group0_service = defer([&group0_service] {
+                group0_service.abort().get();
+            });
+
+            _ss.local().set_group0(group0_service);
 
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
             _ss.local().init_address_map(_gossip_address_map.local()).get();

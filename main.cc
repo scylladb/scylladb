@@ -1787,18 +1787,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
             });
 
-            group0_service.start().get();
-            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
-                sl_controller.local().abort_group0_operations();
-                group0_service.abort().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_group0_service",
-                [] { std::raise(SIGSTOP); });
-
-            // Set up group0 service earlier since it is needed by group0 setup just below
-            ss.local().set_group0(group0_service);
-
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
@@ -2069,6 +2057,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              * the system keyspace started and nobody seemed to have any troubles.
              */
             db.local().enable_autocompaction_toggle();
+
+            group0_service.start().get();
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+                sl_controller.local().abort_group0_operations();
+                group0_service.abort().get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_group0_service",
+                [] { std::raise(SIGSTOP); });
+
+            // Set up group0 service earlier since it is needed by group0 setup just below
+            ss.local().set_group0(group0_service);
 
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
             ss.local().init_address_map(gossip_address_map.local()).get();
