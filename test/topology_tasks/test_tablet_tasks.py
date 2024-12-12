@@ -423,7 +423,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     cmdline = [
-        '--target-tablet-size-in-bytes', '30000',
+        '--target-tablet-size-in-bytes', '15000',
     ]
     servers = [await manager.server_add(cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
@@ -437,7 +437,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
     await cql.run_async(f"CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
     await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
-    total_keys = 60
+    total_keys = 30
     keys = range(total_keys)
     await prepare_split(manager, servers[0], keyspace, table1, keys)
 
