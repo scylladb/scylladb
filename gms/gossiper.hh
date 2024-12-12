@@ -314,7 +314,7 @@ public:
     /**
      * @return a list of unreachable nodes
      */
-    std::set<inet_address> get_unreachable_nodes() const;
+    std::set<locator::host_id> get_unreachable_nodes() const;
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 

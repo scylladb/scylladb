@@ -1208,9 +1208,9 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() const {
     return token_owners;
 }
 
-std::set<inet_address> gossiper::get_unreachable_nodes() const {
-    std::set<inet_address> unreachable_nodes;
-    auto nodes = get_token_metadata_ptr()->get_topology().get_all_ips();
+std::set<locator::host_id> gossiper::get_unreachable_nodes() const {
+    std::set<locator::host_id> unreachable_nodes;
+    auto nodes = get_token_metadata_ptr()->get_topology().get_all_host_ids();
     for (auto& node: nodes) {
         if (!is_alive(node)) {
             unreachable_nodes.insert(node);
