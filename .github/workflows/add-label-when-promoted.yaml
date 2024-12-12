@@ -65,7 +65,7 @@ jobs:
             echo "backport_label=false" >> $GITHUB_OUTPUT
           fi
       - name: Run auto-backport.py when label was added
-        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.merged == true }}
+        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed' }}
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }}
