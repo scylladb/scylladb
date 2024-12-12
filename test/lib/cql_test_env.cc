@@ -1045,6 +1045,9 @@ private:
             _view_builder.invoke_on_all([this] (db::view::view_builder& vb) {
                 return vb.start(_mm.local());
             }).get();
+            auto drain_view_builder = defer([this] {
+                _view_builder.invoke_on_all(&db::view::view_builder::drain).get();
+            });
 
             // Create the testing user.
             try {
