@@ -11,6 +11,8 @@
 #include "cql3/query_processor.hh"
 #include "cql3/result_set.hh"
 #include "cql3/untyped_result_set.hh"
+#include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <string_view>
 
 namespace qos {
@@ -144,8 +146,15 @@ static service_level_options::timeout_type get_duration(const cql3::untyped_resu
     return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(dur_opt->nanoseconds));
 };
 
+static sstring get_columns(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name) {
+    auto schema = qp.db().find_schema(ks_name, cf_name);
+    return boost::algorithm::join(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {
+        return col.name_as_cql_string();
+    }), " ,");
+}
+
 future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl, qos::query_context ctx) {
-    sstring prepared_query = seastar::format("SELECT * FROM {}.{};", ks_name, cf_name);
+    sstring prepared_query = seastar::format("SELECT {} FROM {}.{};", get_columns(qp, ks_name, cf_name), ks_name, cf_name);
     auto result_set = co_await qp.execute_internal(prepared_query, cl, qos_query_state(ctx), cql3::query_processor::cache_internal::yes);
  
     qos::service_levels_info service_levels;
@@ -167,7 +176,7 @@ future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, s
 }
 
 future<service_levels_info> get_service_level(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, sstring service_level_name, db::consistency_level cl) {
-    sstring prepared_query = seastar::format("SELECT * FROM {}.{} WHERE service_level = ?;", ks_name, cf_name);
+    sstring prepared_query = seastar::format("SELECT {} FROM {}.{} WHERE service_level = ?;", get_columns(qp, ks_name, cf_name), ks_name, cf_name);
     auto result_set = co_await  qp.execute_internal(prepared_query, cl, qos_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes);
 
     qos::service_levels_info service_levels;
