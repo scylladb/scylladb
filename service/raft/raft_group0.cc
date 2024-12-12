@@ -26,6 +26,7 @@
 #include "direct_failure_detector/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
 #include "service/topology_mutation.hh"
@@ -533,7 +534,11 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 initial_configuration.current.emplace(my_addr, true);
 
                 // Initializes system tables for the first group 0 member. Nodes joining group 0 henceforth would apply them via snapshots.
-                if (topology_change_enabled) {
+                // We should not change system tables on the recovery leader (the discovery leader of the new group 0
+                // created in the Raft-based recovery procedure). The persistent topology state is present on that node
+                // when it creates the new group 0. Also, it joins the new group 0 using legacy_handshaker, so there is
+                // no need to create a join request.
+                if (topology_change_enabled && qp.db().get_config().recovery_leader().empty()) {
                     co_await ss.raft_initialize_discovery_leader(params);
                 }
 
@@ -708,8 +713,9 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         } else {
             // We'll disable them once we complete the upgrade procedure.
         }
-    } else {
-        // Scylla has bootstrapped earlier but group 0 ID not present. This means we're upgrading.
+    } else if (qp.db().get_config().recovery_leader().empty()) {
+        // Scylla has bootstrapped earlier but group 0 ID is not present and we are not recovering from majority loss
+        // using the Raft-based procedure. This means we're upgrading.
         // Upgrade will start through a feature listener created after we enter NORMAL state.
         //
         // See `raft_group0::finish_setup_after_join`.
@@ -725,13 +731,25 @@ future<> raft_group0::setup_group0(
         std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
         const join_node_request_params& params) {
     if (!co_await use_raft()) {
+        // The node is in the RECOVERY mode. We are in Maintenence Mode or the gossip-based recovery procedure.
         co_return;
     }
 
-    if (sys_ks.bootstrap_complete()) {
-        // If the node is bootstrapped the group0 server should be setup already
+    if (_sys_ks.bootstrap_complete() && !ss.raft_topology_change_enabled()) {
+        // The node is restarting in the gossip-based topology. There are two possible cases:
+        // - the node is performing a normal restart and group 0 has already been set up,
+        // - the node has just left the RECOVERY mode (a part of the gossip-based recovery procedure) and the internal
+        // upgrade-to-raft procedure will set up group 0 in finish_setup_after_join.
         co_return;
     }
+
+    if (joined_group0()) {
+        // Group 0 is already set up, there is nothing to do.
+        co_return;
+    }
+    // Reaching this point is possible only in two cases:
+    // - the node is bootstrapping,
+    // - the node is restarting in the Raft-based recovery procedure and has not joined the new group 0 yet.
 
     std::vector<gms::inet_address> seeds(initial_contact_nodes.begin(), initial_contact_nodes.end());
 
