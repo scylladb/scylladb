@@ -71,7 +71,6 @@ async def test_mv_topology_change(manager: ManagerClient):
     await asyncio.gather(*tasks)
 
     [await manager.api.disable_injection(s.ip_addr, "delay_before_get_view_natural_endpoint") for s in servers]
-    [await manager.api.enable_injection(s.ip_addr, "delay_after_erm_update", False, parameters={'ks_name': 'ks', 'cf_name': 't'}) for s in servers]
 
     # to hit the issue #17786 we need to run multiple batches of writes, so that some write is processed while the 
     # effective replication maps for base and view are different
