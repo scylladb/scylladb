@@ -1288,7 +1288,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/streaming.idl.hh',
         'idl/paging_state.idl.hh',
         'idl/frozen_schema.idl.hh',
-        'idl/partition_checksum.idl.hh',
+        'idl/repair.idl.hh',
         'idl/replay_position.idl.hh',
         'idl/mutation.idl.hh',
         'idl/query.idl.hh',
@@ -1316,6 +1316,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/utils.idl.hh',
         'idl/gossip.idl.hh',
         'idl/migration_manager.idl.hh',
+        "idl/node_ops.idl.hh",
 
         ]
 

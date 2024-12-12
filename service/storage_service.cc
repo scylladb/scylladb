@@ -99,6 +99,7 @@
 #include "service/raft/join_node.hh"
 #include "idl/join_node.dist.hh"
 #include "idl/migration_manager.dist.hh"
+#include "idl/node_ops.dist.hh"
 #include "protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "node_ops/task_manager_module.hh"
@@ -3871,7 +3872,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
         std::unordered_map<gms::inet_address, std::list<node_ops_id>> pending_ops;
         auto req = node_ops_cmd_request(node_ops_cmd::query_pending_ops, uuid);
         parallel_for_each(ctl.sync_nodes, [this, req, uuid, &pending_ops] (const gms::inet_address& node) {
-            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
+            return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging.local(), netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
                 if (!resp.pending_ops.empty()) {
                     pending_ops.emplace(node, resp.pending_ops);
@@ -6941,7 +6942,7 @@ node_state storage_service::get_node_state(locator::host_id id) {
 }
 
 void storage_service::init_messaging_service() {
-    _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
+    ser::node_ops_rpc_verbs::register_node_ops_cmd(&_messaging.local(), [this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         std::optional<locator::host_id> coordinator_host_id;
         if (const auto* id = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id")) {
@@ -7091,7 +7092,7 @@ void storage_service::init_messaging_service() {
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
-        _messaging.local().unregister_node_ops_cmd(),
+        ser::node_ops_rpc_verbs::unregister(&_messaging.local()),
         ser::storage_service_rpc_verbs::unregister(&_messaging.local()),
         ser::join_node_rpc_verbs::unregister(&_messaging.local())
     ).discard_result();

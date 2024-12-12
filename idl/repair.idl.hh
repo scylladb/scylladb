@@ -73,58 +73,6 @@ struct repair_row_level_start_response {
     repair_row_level_start_status status;
 };
 
-enum class node_ops_cmd : uint32_t {
-     removenode_prepare,
-     removenode_heartbeat,
-     removenode_sync_data,
-     removenode_abort,
-     removenode_done,
-     replace_prepare,
-     replace_prepare_mark_alive,
-     replace_prepare_pending_ranges,
-     replace_heartbeat,
-     replace_abort,
-     replace_done,
-     decommission_prepare,
-     decommission_heartbeat,
-     decommission_abort,
-     decommission_done,
-     bootstrap_prepare,
-     bootstrap_heartbeat,
-     bootstrap_abort,
-     bootstrap_done,
-     query_pending_ops,
-     repair_updater,
-};
-
-class node_ops_id final {
-    utils::UUID uuid();
-};
-
-struct node_ops_cmd_request {
-    // Mandatory field, set by all cmds
-    node_ops_cmd cmd;
-    // Mandatory field, set by all cmds
-    node_ops_id ops_uuid;
-    // Optional field, list nodes to ignore, set by all cmds
-    std::list<gms::inet_address> ignore_nodes;
-    // Optional field, list leaving nodes, set by decommission and removenode cmd
-    std::list<gms::inet_address> leaving_nodes;
-    // Optional field, map existing nodes to replacing nodes, set by replace cmd
-    std::unordered_map<gms::inet_address, gms::inet_address> replace_nodes;
-    // Optional field, map bootstrapping nodes to bootstrap tokens, set by bootstrap cmd
-    std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
-    // Optional field, list uuids of tables being repaired, set by repair cmd
-    std::list<table_id> repair_tables;
-};
-
-struct node_ops_cmd_response {
-    // Mandatory field, set by all cmds
-    bool ok;
-    // Optional field, set by query_pending_ops cmd
-    std::list<node_ops_id> pending_ops;
-};
-
 struct repair_update_system_table_request {
     tasks::task_id repair_uuid;
     table_id table_uuid;
@@ -139,7 +87,7 @@ struct repair_update_system_table_response {
 
 struct repair_flush_hints_batchlog_request {
     tasks::task_id repair_uuid;
-    std::list<gms::inet_address> target_nodes;
+    std::list<gms::inet_address> unused;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;
 };
@@ -150,3 +98,13 @@ struct repair_flush_hints_batchlog_response {
 
 verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request req [[ref]]) -> repair_update_system_table_response;
 verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
+verb [[with_client_info]] repair_get_full_row_hashes (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> repair_hash_set;
+verb [[with_client_info]] repair_get_combined_row_hash (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_combined_row_hash_response;
+verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_sync_boundary_response;
+verb [[with_client_info]] repair_get_row_diff (uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows, shard_id dst_shard_id [[version 5.2]]) -> repair_rows_on_wire;
+verb [[with_client_info]] repair_put_row_diff (uint32_t repair_meta_id, repair_rows_on_wire row_diff, shard_id dst_shard_id [[version 5.2]]);
+verb [[with_client_info]] repair_row_level_start (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason [[version 4.1.0]], gc_clock::time_point compaction_time [[version 5.2]], shard_id dst_shard_id [[version 5.2]]) -> repair_row_level_start_response [[version 4.2.0]];
+verb [[with_client_info]] repair_row_level_stop (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, shard_id dst_shard_id [[version 5.2]]);
+verb [[with_client_info]] repair_get_estimated_partitions (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> uint64_t;
+verb [[with_client_info]] repair_set_estimated_partitions (uint32_t repair_meta_id, uint64_t estimated_partitions, shard_id dst_shard_id [[version 5.2]]);
+verb [[with_client_info]] repair_get_diff_algorithms () -> std::vector<row_level_diff_detect_algorithm>;

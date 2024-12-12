@@ -124,7 +124,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     gc_clock::time_point _flush_hints_batchlog_time;
     future<std::tuple<bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<gms::inet_address> ignore_nodes, std::list<gms::inet_address> participants);
+            std::unordered_set<gms::inet_address> ignore_nodes);
 
 public:
     repair_service(sharded<service::topology_state_machine>& tsm,

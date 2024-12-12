@@ -34,6 +34,7 @@
 #include "repair/table_check.hh"
 #include "gms/feature_service.hh"
 #include "utils/error_injection.hh"
+#include "idl/streaming.dist.hh"
 
 namespace streaming {
 
@@ -233,7 +234,7 @@ future<> stream_transfer_task::execute() {
             });
         }).then([this, plan_id, cf_id, id, &sm] {
             sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-            return sm.ms().send_stream_mutation_done(id, plan_id, _ranges,
+            return ser::streaming_rpc_verbs::send_stream_mutation_done(&sm.ms(), id, plan_id, _ranges,
                     cf_id, session->dst_cpu_id).handle_exception([plan_id, id] (auto ep) {
                 sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
                 std::rethrow_exception(ep);
@@ -256,7 +257,7 @@ future<> stream_transfer_task::execute() {
     if (table_dropped) {
         sslog.warn("[Stream #{}] Ignore the table with table_id {} which is dropped during streaming", plan_id, cf_id);
         if (!_mutation_done_sent) {
-            co_await session->manager().ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
+            co_await ser::streaming_rpc_verbs::send_stream_mutation_done(&session->manager().ms(), id, plan_id, _ranges, cf_id, session->dst_cpu_id);
         }
     }
 }

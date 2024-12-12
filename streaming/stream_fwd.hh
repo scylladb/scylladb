@@ -21,3 +21,9 @@ class stream_state;
 using plan_id = utils::tagged_uuid<struct plan_id_tag>;
 
 } // namespace streaming
+
+namespace service {
+
+using session_id = utils::tagged_uuid<struct session_id_tag>;
+
+}
