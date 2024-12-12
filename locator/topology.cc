@@ -623,16 +623,6 @@ std::unordered_set<std::reference_wrapper<const node>> topology::get_nodes() con
     return nodes;
 }
 
-std::unordered_set<gms::inet_address> topology::get_all_ips() const {
-    std::unordered_set<gms::inet_address> ips;
-    for (const auto& np : _nodes) {
-        if (np && !np->left() && !np->is_none()) {
-            ips.insert(np->endpoint());
-        }
-    }
-    return ips;
-}
-
 std::unordered_set<locator::host_id> topology::get_all_host_ids() const {
     std::unordered_set<locator::host_id> ids;
     for (const auto& np : _nodes) {
