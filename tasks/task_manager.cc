@@ -156,7 +156,7 @@ is_abortable task_manager::task::impl::is_abortable() const noexcept {
 }
 
 is_internal task_manager::task::impl::is_internal() const noexcept {
-    return tasks::is_internal(bool(_parent_id));
+    return tasks::is_internal(_parent_id && _parent_kind != task_kind::cluster);
 }
 
 tasks::is_user_task task_manager::task::impl::is_user_task() const noexcept {
