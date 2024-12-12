@@ -442,3 +442,50 @@ async def test_tablet_resize_list(manager: ManagerClient):
     assert status0.children_ids == status1.children_ids
 
     await disable_injection(manager, servers, injection)
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@skip_mode('debug', 'debug mode is too time-sensitive')
+async def test_tablet_resize_revoked(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    cmdline = [
+        '--target-tablet-size-in-bytes', '30000',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    })]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    keyspace = "test"
+    table1 = "test1"
+    await cql.run_async(f"CREATE KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}};")
+    await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+
+    total_keys = 60
+    keys = range(total_keys)
+    await prepare_split(manager, servers[0], keyspace, table1, keys)
+
+    injection = "tablet_split_finalization_postpone"
+    await enable_injection(manager, servers, injection)
+
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+    task0 = (await wait_tasks_created(tm, servers[0], module_name, 1, "split", table1))[0]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    async def revoke_resize(log, mark):
+        await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
+        await asyncio.gather(*[cql.run_async(f"DELETE FROM {keyspace}.{table1} WHERE pk={k};") for k in keys])
+
+        await manager.api.flush_keyspace(servers[0].ip_addr, keyspace)
+
+    async def wait_for_task(task_id):
+        status = await tm.wait_for_task(servers[0].ip_addr, task_id)
+        check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2])
+
+    await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
