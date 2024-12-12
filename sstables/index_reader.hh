@@ -156,11 +156,13 @@ private:
     std::optional<deletion_time> _deletion_time;
 
     trust_promoted_index _trust_pi;
-    std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
+    column_translation _ctr;
     tracing::trace_state_ptr _trace_state;
     const abort_source& _abort;
 
-    inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
+    inline bool is_mc_format() const {
+        return !_ctr.empty();
+    }
 
 public:
     void verify_end_state() const {
@@ -312,11 +314,12 @@ public:
 
     index_consume_entry_context(const sstable& sst, reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi,
             input_stream<char>&& input, uint64_t start, uint64_t maxlen,
-            std::optional<column_values_fixed_lengths> ck_values_fixed_lengths,
-            const abort_source& abort, tracing::trace_state_ptr trace_state = {})
+            column_translation ctr,
+            const abort_source& abort,
+            tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), std::move(input), start, maxlen)
         , _sst(sst), _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
-        , _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
+        , _ctr(std::move(ctr))
         , _trace_state(std::move(trace_state))
         , _abort(abort)
     {}
@@ -339,13 +342,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
     file_input_stream_options options,
     use_caching caching)
 {
-    std::optional<column_values_fixed_lengths> ck_values_fixed_lengths;
-    if (sst->get_version() >= sstable_version_types::mc) {
-        ck_values_fixed_lengths = std::make_optional(
-            get_clustering_values_fixed_lengths(sst->get_serialization_header()));
-    }
-
-    if (sst->get_version() >= sstable_version_types::mc) {
+    if (sst->get_version() >= sstable_version_types::mc) [[likely]] {
         seastar::shared_ptr<cached_file> cached_file_ptr = caching
                 ? sst->_cached_index_file
                 : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
@@ -356,13 +353,13 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, cached_file_ptr, _num_blocks, trace_state, sst->features());
+            sst->get_column_translation(), cached_file_ptr, _num_blocks, trace_state, sst->features());
     }
 
     auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
     auto promoted_index_stream = make_file_input_stream(std::move(file), _promoted_index_start, _promoted_index_size,options);
     return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
-        std::move(promoted_index_stream), _promoted_index_size, _num_blocks, ck_values_fixed_lengths);
+        std::move(promoted_index_stream), _promoted_index_size, _num_blocks, std::nullopt);
 }
 
 // Less-comparator for lookups in the partition index.
@@ -462,11 +459,8 @@ class index_reader {
         auto input = make_file_input_stream(index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin,
                         get_file_input_stream_options());
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
-        auto ck_values_fixed_lengths = _sstable->get_version() >= sstable_version_types::mc
-                            ? std::make_optional(get_clustering_values_fixed_lengths(_sstable->get_serialization_header()))
-                            : std::optional<column_values_fixed_lengths>{};
         return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
-                            begin, end - begin, ck_values_fixed_lengths, _abort, _trace_state);
+                            begin, end - begin, _sstable->get_column_translation(), _abort, _trace_state);
     }
 
     future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {
