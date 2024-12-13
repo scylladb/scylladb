@@ -151,7 +151,9 @@ public:
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm, consider_only_existing_data)
         , _db(db)
         , _local_tables(std::move(local_tables))
-    {}
+    {
+        _child_count = _local_tables.size();
+    }
 protected:
     virtual future<> run() override;
 };
@@ -262,7 +264,9 @@ public:
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
-    {}
+    {
+        _child_count = _local_tables.size();
+    }
 protected:
     virtual future<> run() override;
 };
@@ -352,7 +356,9 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
-    {}
+    {
+        _child_count = _table_infos.size();
+    }
 protected:
     virtual future<> run() override;
 };
@@ -449,7 +455,9 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
-    {}
+    {
+        _child_count = _table_infos.size();
+    }
 
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
@@ -538,7 +546,9 @@ public:
         , _column_families(std::move(column_families))
         , _opts(opts)
         , _stats(stats)
-    {}
+    {
+        _child_count = _column_families.size();
+    }
 
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
