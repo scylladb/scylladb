@@ -1028,8 +1028,7 @@ public:
                 }
 
                 // Emits migration for replica of t2 to co-habit same shard as replica of t1.
-                auto src = ret->second;
-                auto dst = ret->first;
+                auto [dst, src] = *ret;
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
                 if (is_constraint_violated(src, dst)) {
