@@ -103,6 +103,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class major_keyspace_compaction_task_impl : public major_compaction_task_impl {

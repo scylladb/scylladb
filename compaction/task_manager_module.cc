@@ -380,19 +380,24 @@ tasks::is_user_task global_major_compaction_task_impl::is_user_task() const noex
     return tasks::is_user_task::yes;
 }
 
+std::unordered_map<sstring, std::vector<table_info>> get_tables_by_keyspace(replica::database& db) {
+    std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
+    auto tables_meta = db.get_tables_metadata().get_column_families_copy();
+    for (const auto& [table_id, t] : tables_meta) {
+        const auto& ks_name = t->schema()->ks_name();
+        const auto& table_name = t->schema()->cf_name();
+        tables_by_keyspace[ks_name].emplace_back(table_name, table_id);
+    }
+    return tables_by_keyspace;
+}
+
 future<> global_major_compaction_task_impl::run() {
     bool flushed_all_tables = false;
     if (_flush_mode == flush_mode::all_tables) {
         flushed_all_tables = co_await maybe_flush_commitlog(_db, _consider_only_existing_data);
     }
 
-    std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
-    auto tables_meta = _db.local().get_tables_metadata().get_column_families_copy();
-    for (const auto& [table_id, t] : tables_meta) {
-        const auto& ks_name = t->schema()->ks_name();
-        const auto& table_name = t->schema()->cf_name();
-        tables_by_keyspace[ks_name].emplace_back(table_name, table_id);
-    }
+    auto tables_by_keyspace = get_tables_by_keyspace(_db.local());
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
@@ -404,6 +409,18 @@ future<> global_major_compaction_task_impl::run() {
         keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
     }
     co_await run_keyspace_tasks(_db.local(), keyspace_tasks, cv, current_task, false);
+}
+
+future<std::optional<double>> global_major_compaction_task_impl::expected_total_workload() const {
+    if (_expected_workload) {
+        co_return _expected_workload;
+    }
+    uint64_t bytes = 0;
+    auto tables_by_keyspace = get_tables_by_keyspace(_db.local());
+    for (const auto& [_, table_infos] : tables_by_keyspace) {
+        bytes += co_await get_keyspace_task_workload(_db, table_infos);
+    }
+    co_return _expected_workload = bytes;
 }
 
 tasks::is_user_task major_keyspace_compaction_task_impl::is_user_task() const noexcept {
