@@ -856,6 +856,7 @@ future<> table_resharding_compaction_task_impl::run() {
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
 
     uint64_t total_size = std::ranges::fold_left(destinations | std::views::transform(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0), std::plus{});
+    _expected_workload = total_size;
     if (total_size == 0) {
         co_return;
     }
@@ -879,12 +880,39 @@ future<> table_resharding_compaction_task_impl::run() {
     dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
 }
 
+future<std::optional<double>> table_resharding_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload ? std::make_optional<double>(_expected_workload) : std::nullopt;
+}
+
+shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
+        std::string keyspace,
+        std::string table,
+        tasks::task_id parent_id,
+        sharded<sstables::sstable_directory>& dir,
+        replica::database& db,
+        sstables::compaction_sstable_creator_fn creator,
+        compaction::owned_ranges_ptr local_owned_ranges_ptr,
+        std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
+    : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
+    , _dir(dir)
+    , _db(db)
+    , _creator(std::move(creator))
+    , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
+    , _destinations(destinations)
+{
+    _expected_workload = _destinations[this_shard_id()].size();
+}
+
 future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
     tasks::task_info info{_status.id, _status.shard};
     co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
     co_await _dir.local().move_foreign_sstables(_dir);
+}
+
+future<std::optional<double>> shard_resharding_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload;
 }
 
 }
