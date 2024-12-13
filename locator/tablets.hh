@@ -147,6 +147,8 @@ enum class tablet_task_type {
     none,
     user_repair,
     auto_repair,
+    migration,
+    intranode_migration
 };
 
 sstring tablet_task_type_to_string(tablet_task_type);
@@ -160,9 +162,11 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
-    bool is_user_request() const;
-    static tablet_task_info make_user_request();
-    static tablet_task_info make_auto_request();
+    bool is_user_repair_request() const;
+    static tablet_task_info make_user_repair_request();
+    static tablet_task_info make_auto_repair_request();
+    static tablet_task_info make_migration_request();
+    static tablet_task_info make_intranode_migration_request();
 };
 
 /// Stores information about a single tablet.
@@ -170,9 +174,10 @@ struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
     locator::tablet_task_info repair_task_info;
+    locator::tablet_task_info migration_task_info;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info);
+    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;

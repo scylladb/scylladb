@@ -17,6 +17,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/stats.hh"
+#include "gms/feature_service.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
 #include "replica/tablet_mutation_builder.hh"
@@ -73,6 +74,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
+            .with_column("migration_task_info", tablet_task_info_type)
             .with_hash_version()
             .build();
 }
@@ -131,6 +133,11 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
+        m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
+        m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+        if (tablet.repair_time != db_clock::time_point{}) {
+            m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+        }
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
             m.set_clustered_cell(ck, "transition", tablet_transition_kind_to_string(tr_info->transition), ts);
@@ -225,6 +232,23 @@ tablet_mutation_builder&
 tablet_mutation_builder::del_repair_task_info(dht::token last_token) {
     auto col = _s->get_column_definition("repair_task_info");
     _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_migration_task_info(dht::token last_token, locator::tablet_task_info migration_task_info, const gms::feature_service& features) {
+    if (features.tablet_migration_virtual_task) {
+        _m.set_clustered_cell(get_ck(last_token), "migration_task_info", tablet_task_info_to_data_value(migration_task_info), _ts);
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_migration_task_info(dht::token last_token, const gms::feature_service& features) {
+    if (features.tablet_migration_virtual_task) {
+        auto col = _s->get_column_definition("migration_task_info");
+        _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
     return *this;
 }
 
@@ -447,6 +471,11 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
         repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
     }
 
+    locator::tablet_task_info migration_task_info;
+    if (row.has("migration_task_info")) {
+        migration_task_info = deserialize_tablet_task_info(row.get_view("migration_task_info"));
+    }
+
     if (row.has("stage")) {
         auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
         auto transition = tablet_transition_kind_from_string(row.get_as<sstring>("transition"));
@@ -468,7 +497,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
                 std::move(new_tablet_replicas), pending_replica, session_id});
     }
 
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info});
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info});
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
     auto current_last_token = map.get_last_token(tid);

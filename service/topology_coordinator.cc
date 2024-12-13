@@ -1232,11 +1232,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
             return;
         }
+        auto migration_task_info = mig.kind == locator::tablet_transition_kind::migration ? locator::tablet_task_info::make_migration_request()
+            : locator::tablet_task_info::make_intranode_migration_request();
+        migration_task_info.sched_nr++;
+        migration_task_info.sched_time = db_clock::now();
         out.emplace_back(
             replica::tablet_mutation_builder(guard.write_timestamp(), mig.tablet.table)
                 .set_new_replicas(last_token, locator::get_new_replicas(tmap.get_tablet_info(mig.tablet.tablet), mig))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                 .set_transition(last_token, mig.kind)
+                .set_migration_task_info(last_token, std::move(migration_task_info), _db.features())
                 .build());
     }
 
@@ -1249,8 +1254,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         auto& info = tmap.get_tablet_info(gid.tablet);
         auto repair_task_info = info.repair_task_info;
-        if (!repair_task_info.is_user_request()) {
-            repair_task_info = locator::tablet_task_info::make_auto_request();
+        if (!repair_task_info.is_user_repair_request()) {
+            repair_task_info = locator::tablet_task_info::make_auto_repair_request();
         }
         repair_task_info.sched_nr++;
         repair_task_info.sched_time = db_clock::now();
@@ -1399,14 +1404,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
-                case locator::tablet_transition_stage::streaming:
+                case locator::tablet_transition_stage::streaming: {
                     if (drain) {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
 
                     if (action_failed(tablet_state.streaming)) {
-                        if (check_excluded_replicas()) {
+                        bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
+                        if (cleanup || check_excluded_replicas()) {
                             if (do_barrier()) {
                                 rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
                                 updates.emplace_back(get_mutation_builder()
@@ -1418,7 +1424,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
 
-                    if (advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
+                    bool wait = utils::get_local_injector().enter("stream_tablet_wait");
+                    if (!wait && advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
+                        utils::get_local_injector().inject("stream_tablet_move_to_cleanup",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
+
                         if (!trinfo.pending_replica) {
                             rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
                             return make_ready_future<>();
@@ -1434,6 +1444,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .del_session(last_token)
                             .build());
                     }
+                }
                     break;
                 case locator::tablet_transition_stage::write_both_read_new: {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
@@ -1516,19 +1527,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
+                                .del_migration_task_info(last_token, _db.features())
                                 .build());
                     }
                     break;
-                case locator::tablet_transition_stage::end_migration:
+                case locator::tablet_transition_stage::end_migration: {
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
-                    if (do_barrier()) {
+                    bool defer_transition = utils::get_local_injector().enter("handle_tablet_migration_end_migration");
+                    if (!defer_transition && do_barrier()) {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
+                                .del_migration_task_info(last_token, _db.features())
                                 .build());
                     }
+                }
                     break;
                 case locator::tablet_transition_stage::repair: {
                     if (action_failed(tablet_state.repair)) {
