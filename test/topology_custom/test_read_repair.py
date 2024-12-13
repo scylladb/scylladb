@@ -328,3 +328,32 @@ async def test_incremental_read_repair(data_class, workdir, manager):
     logger.info("Check rows with CL=ONE after read-repair")
     check_rows(cql, host1, all_rows)
     check_rows(cql, host2, all_rows)
+
+
+@pytest.mark.asyncio
+async def test_read_repair_with_trace_logging(request, manager):
+    logger.info("Creating a new cluster")
+    cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace"]
+
+    for i in range(2):
+        await manager.server_add(cmdline=cmdline)
+
+    cql = manager.get_cql()
+    srvs = await manager.running_servers()
+    await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
+
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};")
+    await cql.run_async("CREATE TABLE ks.t (pk bigint PRIMARY KEY, c int);")
+
+    await cql.run_async("INSERT INTO ks.t (pk, c) VALUES (0, 0)")
+
+    await manager.server_stop(srvs[0].server_id)
+    prepared = cql.prepare("INSERT INTO ks.t (pk, c) VALUES (0, 1)")
+    prepared.consistency_level = ConsistencyLevel.ONE
+    await cql.run_async(prepared)
+
+    await manager.server_start(srvs[0].server_id)
+
+    prepared = cql.prepare("SELECT * FROM ks.t WHERE pk = 0")
+    prepared.consistency_level = ConsistencyLevel.ALL
+    await cql.run_async(prepared)
