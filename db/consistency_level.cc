@@ -11,7 +11,6 @@
 #include "db/consistency_level.hh"
 #include "db/consistency_level_validations.hh"
 
-#include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include "exceptions/exceptions.hh"
@@ -252,10 +251,10 @@ filter_for_query(consistency_level cl,
 
     if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
         const auto& topo = erm.get_topology();
-        auto it = boost::range::stable_partition(live_endpoints, topo.get_local_dc_filter());
-        local_count = std::distance(live_endpoints.begin(), it);
+        auto non_local_endpoints = std::ranges::stable_partition(live_endpoints, topo.get_local_dc_filter());
+        local_count = std::distance(live_endpoints.begin(), non_local_endpoints.begin());
         if (is_datacenter_local(cl)) {
-            live_endpoints.erase(it, live_endpoints.end());
+            live_endpoints.erase(non_local_endpoints.begin(), non_local_endpoints.end());
         }
     }
 
@@ -275,19 +274,19 @@ filter_for_query(consistency_level cl,
     // selected this way aren't enough to satisfy CL requirements select the
     // remaining ones according to the load-balancing strategy as before.
     if (!preferred_endpoints.empty()) {
-        const auto it = boost::stable_partition(live_endpoints, [&preferred_endpoints] (const locator::host_id& a) {
+        const auto preferred = std::ranges::stable_partition(live_endpoints, [&preferred_endpoints] (const locator::host_id& a) {
             return std::find(preferred_endpoints.cbegin(), preferred_endpoints.cend(), a) == preferred_endpoints.end();
         });
-        const size_t selected = std::distance(it, live_endpoints.end());
+        const size_t selected = std::ranges::distance(preferred);
         if (selected >= bf) {
              if (extra) {
-                 *extra = selected == bf ? live_endpoints.front() : *(it + bf);
+                 *extra = selected == bf ? live_endpoints.front() : *(preferred.begin() + bf);
              }
-             return host_id_vector_replica_set(it, it + bf);
+             return host_id_vector_replica_set(preferred.begin(), preferred.begin() + bf);
         } else if (selected) {
              selected_endpoints.reserve(bf);
-             std::move(it, live_endpoints.end(), std::back_inserter(selected_endpoints));
-             live_endpoints.erase(it, live_endpoints.end());
+             std::ranges::move(preferred, std::back_inserter(selected_endpoints));
+             live_endpoints.erase(preferred.begin(), preferred.end());
         }
     }
 
