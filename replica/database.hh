@@ -136,6 +136,10 @@ namespace api {
 class autocompaction_toggle_guard;
 }
 
+namespace compaction {
+class compaction_task_impl;
+}
+
 namespace db {
 class commitlog;
 class config;
@@ -1339,6 +1343,7 @@ public:
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
 
     friend class compaction_group;
+    friend class compaction::compaction_task_impl;
 
     future<> update_repaired_at_for_merge();
 
