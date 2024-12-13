@@ -1008,7 +1008,7 @@ public:
                 const auto r2_hosts = r2
                     | std::views::transform(std::mem_fn(&locator::tablet_replica::host))
                     | std::ranges::to<std::unordered_set<host_id>>();
-                auto check_constraints = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
+                auto is_constraint_violated = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
                     // handles intra-node migration.
                     if (src.host == dst.host && src.shard != dst.shard) {
                         return false;
@@ -1031,8 +1031,7 @@ public:
                 auto dst = ret->first;
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
-                auto skip = check_constraints(src, dst);
-                if (skip) {
+                if (is_constraint_violated(src, dst)) {
                     lblogger.debug("Replication constraint check failed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
                     return make_ready_future<>();
