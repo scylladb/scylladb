@@ -129,7 +129,9 @@ public:
         , _table_infos(std::move(table_infos))
         , _cv(cv)
         , _current_task(current_task)
-    {}
+    {
+        _child_count = smp::count;
+    }
 
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
@@ -226,7 +228,9 @@ public:
         , _table_infos(std::move(table_infos))
         , _flush_mode(mode)
         , _is_user_task(is_user_task)
-    {}
+    {
+        _child_count = smp::count;
+    }
 
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
@@ -333,7 +337,9 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
-    {}
+    {
+        _child_count = smp::count;
+    }
 
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
@@ -428,7 +434,9 @@ public:
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
-    {}
+    {
+        _child_count = smp::count;
+    }
 
     virtual std::string type() const override {
         return "upgrade " + sstables_compaction_task_impl::type();
@@ -516,7 +524,9 @@ public:
         , _column_families(std::move(column_families))
         , _opts(opts)
         , _stats(stats)
-    {}
+    {
+        _child_count = smp::count;
+    }
 
     virtual std::string type() const override {
         return "scrub " + sstables_compaction_task_impl::type();
