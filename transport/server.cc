@@ -2115,7 +2115,7 @@ future<std::vector<connection_service_level_params>> cql_server::get_connections
                 ? (user->name ? *(user->name) : "ANONYMOUS") 
                 : "UNAUTHENTICATED";
 
-        sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type());
+        sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type(), cql_conn.get_scheduling_group().name());
     });
     co_return sl_params;
 }
