@@ -990,12 +990,13 @@ public:
                 if (r1 == r2) {
                     return make_ready_future<>();
                 }
-                auto t1_id = global_tablet_id{table, t1.tid};
-                auto t2_id = global_tablet_id{table, t2.tid};
 
                 if (migrating(t1) || migrating(t2)) {
                     return make_ready_future<>();
                 }
+
+                auto t1_id = global_tablet_id{table, t1.tid};
+                auto t2_id = global_tablet_id{table, t2.tid};
                 // During RF change, tablets may have incrementally replicas allocated / deallocated to them.
                 // Let's temporarily delay their co-location until their replica sets have the same size.
                 if (r1.size() != r2.size()) {
