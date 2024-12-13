@@ -82,6 +82,7 @@ public:
     system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&);
 
     future<> start();
+    future<> start_workload_prioritization();
     future<> stop();
 
     bool started() const { return _started; }
@@ -116,6 +117,10 @@ public:
     future<qos::service_levels_info> get_service_level(sstring service_level_name) const;
     future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const;
     future<> drop_service_level(sstring service_level_name) const;
+    bool workload_prioritization_tables_exists();
+
+private:
+    future<> create_tables(std::vector<schema_ptr> tables);
 };
 
 }
