@@ -701,6 +701,7 @@ private:
     sharded<replica::database>& _db;
     sstables::compaction_sstable_creator_fn _creator;
     compaction::owned_ranges_ptr _owned_ranges_ptr;
+    mutable uint64_t _expected_workload = 0;
 public:
     table_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -717,6 +718,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_resharding_compaction_task_impl : public resharding_compaction_task_impl {
@@ -726,6 +728,7 @@ private:
     sstables::compaction_sstable_creator_fn _creator;
     compaction::owned_ranges_ptr _local_owned_ranges_ptr;
     std::vector<replica::reshard_shard_descriptor>& _destinations;
+    mutable uint64_t _expected_workload = 0;
 public:
     shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -735,16 +738,10 @@ public:
             replica::database& db,
             sstables::compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr local_owned_ranges_ptr,
-            std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
-        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
-        , _dir(dir)
-        , _db(db)
-        , _creator(std::move(creator))
-        , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
-        , _destinations(destinations)
-    {}
+            std::vector<replica::reshard_shard_descriptor>& destinations) noexcept;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class task_manager_module : public tasks::task_manager::module {
