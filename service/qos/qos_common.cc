@@ -137,6 +137,14 @@ service_level_options service_level_options::merge_with(const service_level_opti
     return ret;
 }
 
+sstring service_level_options::to_string(timeout_type tt) {
+    return std::visit(make_visitor(
+        [] (unset_marker) -> sstring { return "null"; },
+        [] (delete_marker) -> sstring { return "<delete_marker>"; },
+        [] (lowres_clock::duration value) { return seastar::format("{}", value); }
+    ), tt);
+}
+
 std::string_view service_level_options::to_string(const workload_type& wt) {
     switch (wt) {
     case workload_type::unspecified: return "unspecified";
@@ -160,6 +168,14 @@ std::optional<service_level_options::workload_type> service_level_options::parse
         return workload_type::batch;
     }
     return std::nullopt;
+}
+
+sstring service_level_options::to_string(shares_type st) {
+    return std::visit(make_visitor(
+        [] (unset_marker) -> sstring { return "default"; },
+        [] (delete_marker) -> sstring { return "<delete_marker>"; },
+        [] (int32_t value) { return seastar::format("{}", value); }
+    ), st);
 }
 
 void service_level_options::init_effective_names(std::string_view service_level_name) {

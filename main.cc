@@ -1347,7 +1347,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //starting service level controller
             qos::service_level_options default_service_level_configuration;
             default_service_level_configuration.shares = 1000;
-            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration).get();
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, dbcfg.statement_scheduling_group).get();
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
             auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
                 sl_controller.stop().get();

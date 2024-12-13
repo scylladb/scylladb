@@ -50,12 +50,14 @@ namespace qos {
 struct service_level {
      service_level_options slo;
      bool is_static = false;
+     scheduling_group sg;
 
      service_level() = default;
 
-     service_level(service_level_options slo, bool is_static)
+     service_level(service_level_options slo, bool is_static, scheduling_group sg)
             : slo(std::move(slo))
             , is_static(is_static)
+            , sg(sg)
      {}
 };
 
@@ -68,7 +70,8 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
  *      1. Global controller which is responsible for all of the data and plumbing
  *      manipulation.
  *      2. Local controllers that act upon the data and facilitates execution in
- *      the service level context
+ *      the service level context: i.e functions in their service level's
+ *      scheduling group and io operations with their correct io priority.
  *
  *  Definitions:
  *  service level - User creates service level with some parameters (timeout/workload type).
@@ -118,8 +121,7 @@ public:
 private:
     struct global_controller_data {
         service_levels_info  static_configurations{};
-        int schedg_group_cnt = 0;
-        int io_priority_cnt = 0;
+        std::deque<scheduling_group> deleted_scheduling_groups{};
         service_level_options default_service_level_config;
         // The below future is used to serialize work so no reordering can occur.
         // This is needed so for example: delete(x), add(x) will not reverse yielding
@@ -129,6 +131,13 @@ private:
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
         abort_source group0_aborter;
+        scheduling_group default_sg;
+        bool destroy_default_sg;
+        // a counter for making unique temp scheduling groups names
+        int unique_group_counter;
+        // A flag that indicates that we exhausted all of our scheduling groups
+        // and we can't create new ones.
+        bool scheduling_groups_exhausted = false;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -139,6 +148,8 @@ private:
     std::map<sstring, service_level> _service_levels_db;
     // role name -> effective service_level_options 
     std::map<sstring, service_level_options> _effective_service_levels_db;
+    // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
+    std::set<sstring> _effectively_dropped_sls;
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
@@ -149,7 +160,8 @@ private:
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     void do_abort() noexcept;
 public:
-    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config);
+    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
+            scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
@@ -192,6 +204,11 @@ public:
     future<> stop();
 
     void abort_group0_operations();
+
+    /**
+     * @return the default service level scheduling group (see service_level_controller::initialize).
+     */
+    scheduling_group get_default_scheduling_group();
 
     /**
      * Start legacy update loop if RAFT_SERVICE_LEVELS_CHANGE feature is not enabled yet 
@@ -334,6 +351,10 @@ private:
         alter
     };
 
+    /** Validate that we can handle an addition of another service level
+     *  Must be called from on the global controller
+     */
+    future<bool> validate_before_service_level_add();
     future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc);
 
     future<std::vector<cql3::description>> describe_created_service_levels() const;

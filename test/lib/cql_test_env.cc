@@ -659,7 +659,7 @@ private:
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
-            _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}).get();
+            _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}, scheduling_groups.statement_scheduling_group).get();
             auto stop_sl_controller = defer([this] { _sl_controller.stop().get(); });
             _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 

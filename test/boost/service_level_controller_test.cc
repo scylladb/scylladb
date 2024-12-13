@@ -102,11 +102,14 @@ template <> struct fmt::formatter<service_level_op> : fmt::formatter<string_view
 SEASTAR_THREAD_TEST_CASE(subscriber_simple) {
     sharded<service_level_controller> sl_controller;
     sharded<auth::service> auth_service;
+    service_level_options sl_options;
+    sl_options.shares.emplace<int32_t>(1000);
+    scheduling_group default_scheduling_group = create_scheduling_group("sl_default_sg", 1.0).get();
     locator::shared_token_metadata tm({}, {locator::topology::config{ .local_dc_rack = locator::endpoint_dc_rack::default_location }});
     sharded<abort_source> as;
     as.start().get();
     auto stop_as = defer([&as] { as.stop().get(); });
-    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), service_level_options{}).get();
+    sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), sl_options, default_scheduling_group).get();
     qos_configuration_change_suscriber_simple ccss;
     sl_controller.local().register_subscriber(&ccss);
     sl_controller.local().add_service_level("sl1", service_level_options{}).get();
