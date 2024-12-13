@@ -42,6 +42,7 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override;
 protected:
     virtual future<> run() override = 0;
+    future<uint64_t> get_table_task_workload(replica::database& db, const table_info& ti) const;
 
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
@@ -178,6 +179,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 
@@ -287,6 +289,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    future<std::optional<double>> expected_total_workload() const override;
 };
 
 class offstrategy_compaction_task_impl : public compaction_task_impl {
@@ -380,6 +383,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class sstables_compaction_task_impl : public compaction_task_impl {
@@ -485,6 +489,7 @@ public:
     }
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -568,6 +573,7 @@ public:
     }
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class reshaping_compaction_task_impl : public compaction_task_impl {
