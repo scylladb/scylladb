@@ -4402,7 +4402,13 @@ future<result<>> storage_proxy::schedule_repair(locator::effective_replication_m
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
     }
-    return mutate_internal(diffs | std::views::values | std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }), cl, false, std::move(trace_state), std::move(permit));
+    return mutate_internal(
+            diffs |
+                    std::views::values |
+                    std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }) |
+                    // The transform above is destructive, materialize into a vector to make the range re-iterable.
+                    std::ranges::to<std::vector<read_repair_mutation>>()
+            , cl, false, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
