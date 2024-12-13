@@ -14,6 +14,7 @@ This document highlights ScyllaDB's key data modeling features.
    Counters </features/counters/>
    Change Data Capture </features/cdc/index>
    Workload Attributes </features/workload-attributes>
+   Workload Prioritization </features/workload-prioritization>
 
 .. panel-box::
   :title: ScyllaDB Features

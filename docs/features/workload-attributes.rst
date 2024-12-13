@@ -13,7 +13,7 @@ You can define a workload's attribute using the *service level* concept. The ser
 attributes to users and roles. When a user logs into the system, all of the attributes attached to that user and to the roles 
 granted to that user are combined and become a set of workload attributes.
 
-See `Service Level Management <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html#workload-prioritization-workflow>`_ for more information about service levels.
+See :ref:`Service Level Management <workload-priorization-service-level-management>` for more information about service levels.
 
 Prerequisites
 ---------------
@@ -126,7 +126,7 @@ Available Workload Types
    * - ``unspecified``
      - A generic workload without any specific characteristics (default).
    * - ``interactive``
-     - A workload sensitive to latency, expected to have high/unbounded concurrency, with dynamic characteristics. For example, a workload assigned to users clicking on a website and generating events with their clicks.
+     - A workload sensitive to latency, expected to have high/unbounded concurrency, with dynamic characteristics, :doc:`OLTP </features/workload-prioritization>`. For example, a workload assigned to users clicking on a website and generating events with their clicks.
    * -  ``batch``
-     - A workload for processing large amounts of data, not sensitive to latency, expected to have fixed concurrency. For example, a workload assigned to processing billions of historical sales records to generate statistics.
+     - A workload for processing large amounts of data, not sensitive to latency, expected to have fixed concurrency, :doc:`OLAP </features/workload-prioritization>`. For example, a workload assigned to processing billions of historical sales records to generate statistics.
 
