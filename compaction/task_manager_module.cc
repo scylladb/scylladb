@@ -314,6 +314,10 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
     }
 }
 
+std::optional<double> compaction_task_impl::expected_children_number() const {
+    return _child_count ? std::make_optional<double>(_child_count) : std::nullopt;
+}
+
 future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
     if (cdata.compaction_size == 0) {
         co_return get_binary_progress();
@@ -422,7 +426,8 @@ future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
     replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data] (replica::table& t) {
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data, &child_count = _child_count] (replica::table& t) {
+        child_count = t.compaction_group_count();
         return t.compact_all_sstables(info, do_flush, consider_only_existing_data);
     });
 }
@@ -500,6 +505,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     };
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
+        _child_count = t.compaction_group_count();
         // skip the flush, as cleanup_keyspace_compaction_task_impl::run should have done this.
         return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
     });
@@ -539,6 +545,7 @@ future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
+        _child_count = t.compaction_group_count();
         _needed |= co_await t.perform_offstrategy_compaction(info);
     });
 }
@@ -581,6 +588,7 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
+        _child_count = t.compaction_group_count();
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
             return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
@@ -620,6 +628,7 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
     tasks::task_info info{_status.id, _status.shard};
+    _child_count = cf.compaction_group_count();
     co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
         auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
