@@ -45,6 +45,7 @@ public:
 protected:
     virtual future<> run() override = 0;
     future<uint64_t> get_table_task_workload(replica::database& db, const table_info& ti) const;
+    future<uint64_t> get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const;
 
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
@@ -154,6 +155,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class table_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
@@ -266,6 +268,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class table_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
@@ -357,6 +360,7 @@ public:
     {}
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class table_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
@@ -459,6 +463,7 @@ public:
     }
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class table_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -549,6 +554,7 @@ public:
     }
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {

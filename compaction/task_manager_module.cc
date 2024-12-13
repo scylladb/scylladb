@@ -340,6 +340,14 @@ future<uint64_t> compaction_task_impl::get_table_task_workload(replica::database
     co_return bytes;
 }
 
+future<uint64_t> compaction_task_impl::get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const {
+    uint64_t bytes = 0;
+    for (const auto& ti : tables) {
+        bytes += co_await get_table_task_workload(db, ti);
+    }
+    co_return bytes;
+}
+
 static future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool force_flush) {
     // flush commitlog if
     // (a) force_flush == true (or)
@@ -429,6 +437,10 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
 }
 
+future<std::optional<double>> shard_major_keyspace_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _local_tables);
+}
+
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
@@ -502,6 +514,10 @@ future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
 }
 
+future<std::optional<double>> shard_cleanup_keyspace_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _local_tables);
+}
+
 future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     // Note that we do not hold an effective_replication_map_ptr throughout
@@ -554,6 +570,10 @@ future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
 }
 
+future<std::optional<double>> shard_offstrategy_keyspace_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _table_infos);
+}
+
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     tasks::task_info info{_status.id, _status.shard};
@@ -589,6 +609,10 @@ future<> shard_upgrade_sstables_compaction_task_impl::run() {
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
+}
+
+future<std::optional<double>> shard_upgrade_sstables_compaction_task_impl::expected_total_workload() const {
+    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _table_infos);
 }
 
 future<> table_upgrade_sstables_compaction_task_impl::run() {
@@ -642,6 +666,16 @@ future<> shard_scrub_sstables_compaction_task_impl::run() {
         co_await task->done();
         co_return stats;
     }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+}
+
+future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expected_total_workload() const {
+    auto table_infos = _column_families | std::views::transform([this] (const auto& cf) {
+        return table_info{
+            .name = cf,
+            .id = _db.find_uuid(_status.keyspace, cf)
+        };
+    }) | std::ranges::to<std::vector<table_info>>();
+    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, std::move(table_infos));
 }
 
 future<> table_scrub_sstables_compaction_task_impl::run() {
