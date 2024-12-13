@@ -37,7 +37,7 @@ public:
             tasks::task_id parent_id) noexcept
         : tasks::task_manager::task::impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
     {
-        // FIXME: add progress units
+        _status.progress_units = "bytes";
     }
 
     virtual std::string type() const override = 0;
@@ -72,9 +72,7 @@ public:
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
         , _flush_mode(fm)
         , _consider_only_existing_data(consider_only_existing_data)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "major compaction";
@@ -201,9 +199,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "cleanup compaction";
@@ -313,9 +309,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "offstrategy compaction";
@@ -409,9 +403,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "sstables compaction";
@@ -603,9 +595,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "reshaping compaction";
@@ -686,9 +676,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "resharding compaction";
@@ -759,9 +747,7 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, "compaction group", std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-    }
+    {}
 
     virtual std::string type() const override {
         return "regular compaction";
