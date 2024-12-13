@@ -130,7 +130,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, tasks::task_info parent_info)
+                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, tasks::task_info parent_info, size_t& child_count)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -155,6 +155,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
         }
         buckets.back().push_back(std::move(sst));
     });
+    child_count = buckets.size();
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
@@ -735,6 +736,7 @@ future<> table_resharding_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table);
 
+    _child_count = smp::count;
     co_await _db.invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
@@ -755,7 +757,7 @@ future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
     tasks::task_info info{_status.id, _status.shard};
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info, _child_count);
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 
