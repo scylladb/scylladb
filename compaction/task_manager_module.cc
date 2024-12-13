@@ -372,6 +372,7 @@ future<> global_major_compaction_task_impl::run() {
         const auto& table_name = t->schema()->cf_name();
         tables_by_keyspace[ks_name].emplace_back(table_name, table_id);
     }
+    _child_count = tables_by_keyspace.size();
     seastar::condition_variable cv;
     tasks::task_manager::task_ptr current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
