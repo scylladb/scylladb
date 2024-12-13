@@ -2286,6 +2286,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+
+            api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
+
             alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
             redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
 

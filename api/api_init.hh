@@ -73,6 +73,10 @@ namespace tasks {
 class task_manager;
 }
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace api {
 
 struct http_context {
@@ -141,6 +145,7 @@ future<> set_format_selector(http_context& ctx, db::sstables_format_selector& se
 future<> unset_format_selector(http_context& ctx);
 future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_server_cql_server_test(http_context& ctx);
+future<> set_server_service_levels(http_context& ctx, cql_transport::controller& ctl, sharded<cql3::query_processor>& qp);
 future<> set_server_commitlog(http_context& ctx, sharded<replica::database>&);
 future<> unset_server_commitlog(http_context& ctx);
 

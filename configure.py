@@ -1215,6 +1215,8 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/raft.json'),
        Json2Code('api/api-doc/cql_server_test.json'),
        'api/cql_server_test.cc',
+       'api/service_levels.cc',
+       Json2Code('api/api-doc/service_levels.json'),
        ]
 
 alternator = [
