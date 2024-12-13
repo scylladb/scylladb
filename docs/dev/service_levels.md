@@ -33,7 +33,8 @@ SELECT * FROM  system.role_attributes WHERE role='r' and attribute_name='service
     CREATE TABLE system_distributed.service_levels (
     service_level text PRIMARY KEY,
     timeout duration,
-    workload_type text)
+    workload_type text,
+    shares int);
 ```
 
 The table is used to store and distribute the service levels configuration.
@@ -41,6 +42,7 @@ The table column names meanings are:
 *service_level* - the name of the service level.
 *timeout* - timeout for operations performed by users under this service level
 *workload_type* - type of workload declared for this service level (NULL, interactive or batch)
+*shares* - a number that represents this service level priority in relation to other service levels.
 
 ```
 select * from system_distributed.service_levels ;
@@ -135,6 +137,35 @@ Otherwise, e.g. if a role has multiple workload types declared,
 the conflicts are resolved as follows:
  - `X` vs `NULL` -> `X`
  - `batch` vs `interactive` -> `batch` - under the assumption that `batch` is safer, because it would not trigger load shedding as eagerly as `interactive`
+
+ So for example to create a service level that is twice more important than the default service
+ level (which has shares of 1000) one can run:
+
+ ```
+ INSERT INTO system_distributed.service_level (service_level, shares) VALUES ('double_importance',2000);
+ ```
+
+## Service levels REST API
+
+In a current state, Service Levels/Workload Prioritization has its own flaws, one of which is a requirement to restart connections to apply changes of users' service levels change.
+
+Until we improve service levels controller to make the changes automatically, here is a REST API to ease to work of maintaining and managing service levels and connections.
+
+A `tenant` (used below) is equal to scheduling group under which a connection is working.
+
+### Switch tenants
+
+`/service_levels/switch_tenants` endpoint triggers a tenant switch on all opened CQL connections on a single node without any interruption or their restart.
+The response is returned immediately but the actual work might take up to tens of seconds.
+
+### Inspecting current scheduling group of connections
+
+`/service_levels/count_connections` endpoing is a tool to inspect status of all opened CQL connections. It returns a map with connections count per scheduling group, per user:
+```
+{'sl:default': {'cassandra': 3}, 'sl:sl1': {'test_user': 3}}
+```
+
+In fact, this endpoint is a wrapper which executes simple query on `system.clients` table and aggregates the result. The table has added `scheduling_group` column, so to inspect a particular connection, it can be directly looked up in `system.clients` table.
 
 ### Effective service level
 
