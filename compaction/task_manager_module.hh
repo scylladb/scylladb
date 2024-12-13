@@ -46,6 +46,7 @@ protected:
     virtual future<> run() override = 0;
     future<uint64_t> get_table_task_workload(replica::database& db, const table_info& ti) const;
     future<uint64_t> get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const;
+    future<uint64_t> get_keyspace_task_workload(sharded<replica::database>& db, const std::vector<table_info>& tables) const;
 
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
@@ -135,6 +136,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
@@ -232,6 +234,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class global_cleanup_compaction_task_impl : public compaction_task_impl {
@@ -339,6 +342,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
@@ -438,6 +442,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
@@ -526,6 +531,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
