@@ -959,10 +959,10 @@ public:
                 std::ranges::transform(r1, std::inserter(r1_map, r1_map.begin()), [] (tablet_replica r) {
                     return std::make_pair(r.host, r);
                 });
-                for (unsigned i = 0; i < r2.size(); i++) {
-                    auto r1_it = r1_map.find(r2[i].host);
+                for (auto& r2_replica : r2) {
+                    auto r1_it = r1_map.find(r2_replica.host);
                     if (r1_it != r1_map.end()) {
-                        return std::make_pair(r1_it->second, r2[i]);
+                        return std::make_pair(r1_it->second, r2_replica);
                     }
                 }
                 // Since sets had intersection subtracted, the remaining replicas are certainly not co-located.
