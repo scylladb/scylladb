@@ -24,7 +24,6 @@
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
 #include <boost/range/adaptor/indexed.hpp>
-#include <boost/range/algorithm/stable_partition.hpp>
 
 logging::logger slogger("mc_writer");
 
@@ -419,8 +418,8 @@ sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_st
     // For static and regular columns, we write all simple columns first followed by collections
     // These containers have columns partitioned by atomicity
     auto pred = [] (const std::reference_wrapper<const column_definition>& column) { return column.get().is_atomic(); };
-    boost::range::stable_partition(sst_sch.regular_columns, pred);
-    boost::range::stable_partition(sst_sch.static_columns, pred);
+    std::ranges::stable_partition(sst_sch.regular_columns, pred);
+    std::ranges::stable_partition(sst_sch.static_columns, pred);
 
     return sst_sch;
 }
