@@ -3015,6 +3015,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<sstables::generation_type::int_t> gen_values) {
     env.maybe_start_compaction_manager(false);
     auto cf = env.make_table_for_tests(s);
+    auto close_cf = deferred_stop(cf);
     auto generations = generations_from_values(gen_values);
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 

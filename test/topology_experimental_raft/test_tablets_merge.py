@@ -8,6 +8,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
+from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 
 import pytest
@@ -67,10 +68,12 @@ async def test_tablet_merge_simple(manager: ManagerClient):
     # Initial average table size of 400k (1 tablet), so triggers some splits.
     total_keys = 200
     keys = range(total_keys)
-    insert = cql.prepare(f"INSERT INTO test.test(pk, c) VALUES(?, ?)")
-    for pk in keys:
-        value = random.randbytes(2000)
-        cql.execute(insert, [pk, value])
+    def populate(keys):
+        insert = cql.prepare(f"INSERT INTO test.test(pk, c) VALUES(?, ?)")
+        for pk in keys:
+            value = random.randbytes(2000)
+            cql.execute(insert, [pk, value])
+    populate(keys)
 
     async def check():
         logger.info("Checking table")
@@ -87,6 +90,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
 
     logger.info("Adding new server")
     servers.append(await manager.server_add(cmdline=cmdline))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
 
     # Increases the chance of tablet migration concurrent with split
     await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
@@ -140,16 +144,44 @@ async def test_tablet_merge_simple(manager: ManagerClient):
     await shuffle()
 
     old_tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+    s1_mark = await s1_log.mark()
 
     await inject_error_on(manager, "replica_merge_completion_wait", servers)
     await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
 
     await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
-    await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
 
     tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
     assert tablet_count < old_tablet_count
     await check()
+
+    # Reproduces https://github.com/scylladb/scylladb/issues/21867 that could cause compaction group
+    # to be destroyed without being stopped first.
+    # That's done by:
+    #   1) Migrating a tablet to another node, and putting an artificial delay in cleanup stage when stopping groups
+    #   2) Force tablet split, causing new groups to be added in a tablet being cleaned up
+    # Without the fix, new groups are added to tablet being migrated away and never closed, potentially
+    # resulting in an use-after-free.
+    keys = range(total_keys)
+    populate(keys)
+    # Migrates a tablet to another node and put artificial delay on cleanup stage
+    await manager.api.enable_injection(servers[0].ip_addr, "delay_tablet_compaction_groups_cleanup", one_shot=True)
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablet_replicas) > 0
+    t = tablet_replicas[0]
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token))
+    # Trigger split
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, "test")
+    try:
+        await migration_task
+    except:
+        # move_tablet() fails if tablet is already in transit.
+        # forgive if balancer decided to migrate the target tablet post split.
+        pass
+
+    await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
 
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, "test")

@@ -227,6 +227,11 @@ public:
         return _async_gate;
     }
 
+    // Closes storage group without stopping its compaction groups that might be referenced elsewhere.
+    future<> close() noexcept {
+        return _async_gate.close();
+    }
+
     const dht::token_range& token_range() const noexcept;
 
     size_t memtable_count() const noexcept;
