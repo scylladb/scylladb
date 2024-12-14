@@ -936,6 +936,12 @@ bool storage_group::split_unready_groups_are_empty() const {
 }
 
 bool storage_group::set_split_mode() {
+    // A group being stopped (e.g. during migration cleanup) cannot satisfy split mode.
+    // Also, a race can happen if new groups are added while old ones are being stopped,
+    // so the new ones can be left unstopped, potentially resulting in use-after-free.
+    if (_async_gate.is_closed()) {
+        return false;
+    }
     if (!splitting_mode()) {
         auto create_cg = [this] () -> compaction_group_ptr {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
@@ -960,6 +966,9 @@ const std::vector<compaction_group_ptr>& storage_group::merging_groups() const {
 }
 
 future<> storage_group::remove_empty_merging_groups() {
+    if (_async_gate.is_closed()) {
+        co_return;
+    }
     for (auto& group : _merging_groups | std::views::filter(std::mem_fn(&compaction_group::empty))) {
         co_await group->stop("tablet merge");
     }
@@ -2375,7 +2384,13 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     _t._compaction_manager.add(as_table_state());
 }
 
-compaction_group::~compaction_group() = default;
+compaction_group::~compaction_group() {
+    // Unclosed group is not tolerated since it might result in an use-after-free.
+    if (!_t._compaction_manager.compaction_disabled(as_table_state())) {
+        on_fatal_internal_error(tlogger, format("Compaction group of id {} that belongs to {}.{} was not disabled.",
+                                                _group_id, _t.schema()->ks_name(), _t.schema()->cf_name()));
+    }
+}
 
 future<> compaction_group::stop(sstring reason) noexcept {
     if (_async_gate.is_closed()) {
@@ -2499,8 +2514,9 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
                                               "therefore groups cannot be remapped with the new tablet count.",
                                               id, table_id));
         }
-        // Remove old main groups, they're unused, but they need to be deregistered properly
-        auto cg_ptr = sg->main_compaction_group();
+        // Remove old empty groups, they're unused, but they need to be deregistered properly
+      // FIXME: indent.
+      for (auto cg_ptr : sg->split_unready_groups()) {
         auto f = cg_ptr->stop("tablet split");
         if (!f.available() || f.failed()) [[unlikely]] {
             stop_fut = stop_fut.then([f = std::move(f), cg_ptr = std::move(cg_ptr)] () mutable {
@@ -2509,6 +2525,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
                 });
             });
         }
+      }
         unsigned first_new_id = id << growth_factor;
         auto split_ready_groups = sg->split_ready_compaction_groups();
         if (split_ready_groups.size() != split_size) {
@@ -2592,6 +2609,13 @@ future<> tablet_storage_group_manager::handle_tablet_merge_completion(const loca
             sg->for_each_compaction_group([&new_sg, new_tid] (const compaction_group_ptr& cg) {
                 cg->update_id(new_tid);
                 new_sg->add_merging_group(cg);
+            });
+            // Cannot wait for group to be closed, since it can only return after some long-running operation
+            // is done with it, and old erm is still held at this point.
+            (void) with_gate(_t.async_gate(), [sg] {
+               return sg->close().handle_exception([sg] (std::exception_ptr ex) {
+                   tlogger.warn("Failed to close storage group: {}. Ignored", std::move(ex));
+               });
             });
         }
 
