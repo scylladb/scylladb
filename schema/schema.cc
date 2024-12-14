@@ -40,6 +40,54 @@ constexpr int32_t schema::NAME_LENGTH;
 
 extern logging::logger dblog;
 
+sstring
+speculative_retry::to_sstring() const {
+    if (_t == type::NONE) {
+        return "NONE";
+    } else if (_t == type::ALWAYS) {
+        return "ALWAYS";
+    } else if (_t == type::CUSTOM) {
+        return format("{:.2f}ms", _v);
+    } else if (_t == type::PERCENTILE) {
+        return format("{:.1f}PERCENTILE", 100 * _v);
+    } else {
+        throw std::invalid_argument(format("unknown type: {:d}\n", uint8_t(_t)));
+    }
+}
+
+speculative_retry
+speculative_retry::from_sstring(sstring str) {
+    std::transform(str.begin(), str.end(), str.begin(), ::toupper);
+
+    sstring ms("MS");
+    sstring percentile("PERCENTILE");
+
+    auto convert = [&str] (sstring& t) {
+        try {
+            return boost::lexical_cast<double>(str.substr(0, str.size() - t.size()));
+        } catch (boost::bad_lexical_cast& e) {
+            throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
+        }
+    };
+
+    type t;
+    double v = 0;
+    if (str == "NONE") {
+        t = type::NONE;
+    } else if (str == "ALWAYS") {
+        t = type::ALWAYS;
+    } else if (str.compare(str.size() - ms.size(), ms.size(), ms) == 0) {
+        t = type::CUSTOM;
+        v = convert(ms);
+    } else if (str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
+        t = type::PERCENTILE;
+        v = convert(percentile) / 100;
+    } else {
+        throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
+    }
+    return speculative_retry(t, v);
+}
+
 sstring to_sstring(column_kind k) {
     switch (k) {
     case column_kind::partition_key:  return "PARTITION_KEY";
