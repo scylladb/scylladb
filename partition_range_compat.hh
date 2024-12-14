@@ -12,6 +12,7 @@
 #include <vector>
 #include "interval.hh"
 #include "dht/ring_position.hh"
+#include <boost/range/iterator_range_core.hpp>
 
 namespace compat {
 
