@@ -252,10 +252,24 @@ def test_gsi_describe(test_table_gsi_1):
     assert gsi['IndexArn'] == desc['Table']['TableArn'] + '/index/hello'
     # TODO: check also ProvisionedThroughput
 
+# Test that an already-existing GSI should be listed by DescribeTable with
+# IndexStatus=ACTIVE. A GSI that was just created with UpdateTable and being
+# backfilled might be in other states, but that case is tested in different
+# tests in test_gsi_updatetable.py.
+# Reproduces #11471.
+@pytest.mark.xfail(reason="issue #11471")
+def test_gsi_describe_indexstatus(test_table_gsi_1):
+    desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
+    gsis = desc['Table']['GlobalSecondaryIndexes']
+    assert len(gsis) == 1
+    gsi = gsis[0]
+    assert 'IndexStatus' in gsi
+    assert gsi['IndexStatus'] == 'ACTIVE'
+
 # In addition to the basic listing of an GSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each GSI's
 # description.
-@pytest.mark.xfail(reason="issues #7550, #11466, #11471")
+@pytest.mark.xfail(reason="issues #7550, #11466")
 def test_gsi_describe_fields(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     gsis = desc['Table']['GlobalSecondaryIndexes']
@@ -263,7 +277,6 @@ def test_gsi_describe_fields(test_table_gsi_1):
     gsi = gsis[0]
     assert 'IndexSizeBytes' in gsi    # actual size depends on content
     assert 'ItemCount' in gsi
-    assert gsi['IndexStatus'] == 'ACTIVE'
 
 # When a GSI's key includes an attribute not in the base table's key, we
 # need to remember to add its type to AttributeDefinitions.
