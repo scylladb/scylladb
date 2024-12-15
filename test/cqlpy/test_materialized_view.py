@@ -1579,3 +1579,96 @@ def test_view_in_system_tables(cql, test_keyspace):
             assert view in res
             res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]
             assert view not in res
+
+# This test indirectly verifies that a shadowable tombstone goes beyond
+# hiding data older than its timestamp - it actually hides an *entire* row -
+# even cells newer than the tombstone - if the shadowable tombstone is newer
+# than just the row marker. We suspected (ssee #21769) we might have a bug
+# in this area if the newer call was a map element, but it turns out we
+# didn't have such a bug - and this test passes.
+def test_shadowable_tombstone_and_newer_collection_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, m map<int, int>, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3)] == list(cql.execute(f'select p,c,x from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but add
+            # an element to the map m. The view row will remain with its old
+            # timestamp, but will get a new cell - the new map element - with
+            # a *newer* timestamp.
+            cql.execute(f'update {table} set m = m + {{7: 8}} where p=1 and c=2')
+            assert [(1,2,3,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            # Even the map item that was added with a later timestamp, should
+            # be gone.
+            cql.execute(f'update {table} set x = 4 where p=1 and c=2')
+            assert [(1,2,4,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+
+# Same as the previous test checking shadowable tombstones and newer calls,
+# but here we use ordinary atomic (not collection) cells, and also use INSERT
+# instead of UPDATE.
+def test_shadowable_tombstone_and_newer_atomic_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3,None)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but set
+            # a value for column y. The new cell y will get a new timestamp,
+            # but because we use INSERT instead of UPDATE - the base row
+            # marker will also get a new row timestamp, but it doesn't
+            # affect the row marker of the view (which only depends on the
+            # timestamp of x).
+            cql.execute(f'insert into {table} (p,c,y) values (1,2,7)')
+            assert [(1,2,3,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,4)')
+            assert [(1,2,4,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+
+# Test that setting a TTL on a base-regular column which is a view key
+# column, correctly applies this TTL to the view row. In other words,
+# when the base value expires, the entire view row (the row marker and
+# the individual cells) expire.
+# This test reaches the same code paths as cassandra_tests/validation/entities/
+# secondary_index_test.py::testIndexOnRegularColumnInsertExpiringColumn
+# but uses a materialized view - not a secondary index.
+def test_view_update_with_ttl(cql, test_keyspace):
+    # To be able to set a TTL on a view key column x, obviously it needs to
+    # be a *regular* column in the base (key columns do not have TTLs).
+    with new_test_table(cql, test_keyspace, 'p int, x int, y int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p', 'x is not null and p is not null') as mv:
+            # Unfortunately, because we can't read the TTL of a row marker
+            # (issue #14019) we can't verify that the correct TTL was set
+            # on the view row marker - such that it would cause it to
+            # eventually expire. So we are forced to actually sleep waiting
+            # for the data to expire to verify the entire row is gone.
+            # A wrong TTL on the row marker would have left an empty row,
+            # and a wrong TTL on the cell y would have left that in the view.
+            # This means this test takes two seconds :-(
+            cql.execute(f'insert into {table} (p,x,y) values (1,2,3) using ttl 1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
+            # Updating x without a TTL will make this row appear again
+            # We assume that on a single node, view updates are synchronous
+            # so we don't need to loop the read.
+            cql.execute(f'update {table} set x=4, y=5 where p=1')
+            assert [(4,1,5)] == list(cql.execute(f'select * from {mv}'))
+            # Update x again with a TTL of 1 and sleep. The view row should
+            # disappear completely (including the row marker and y)
+            cql.execute(f'update {table} using ttl 1 set x=5 where p=1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
