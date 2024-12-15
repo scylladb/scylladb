@@ -30,6 +30,8 @@
 #include "utils/exceptions.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/credentials_providers/config_file_aws_credentials_provider.hh"
+#include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
+#include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "sstables/checksum_utils.hh"
 #include "gc_clock.hh"
 
@@ -631,6 +633,8 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
      * `aws::environment_aws_credentials_provider` to obtain credentials. As a result, if this functionality fails, all S3-related tests will fail immediately.
      */
 
+    auto host = tests::getenv_safe("MOCK_S3_SERVER_HOST");
+    auto port = std::stoul(tests::getenv_safe("MOCK_S3_SERVER_PORT"));
     tmpdir tmp;
     const auto file_path = tmp.path() / "test_s3_config_file.yaml";
     constexpr auto fmt_data = R"(endpoints:
@@ -664,17 +668,49 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     creds = cf_provider->get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "CF_AWS_ACCESS_KEY_ID_SIGNAL");
 
+    auto sts_provider = std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false);
+    creds = sts_provider->get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
+
+    auto md_provider = std::make_unique<aws::instance_profile_credentials_provider>(host, port);
+    creds = md_provider->get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
+
     aws::aws_credentials_provider_chain provider_chain;
     provider_chain
-        .add_credentials_provider(std::move(cf_provider));
+        .add_credentials_provider(std::move(cf_provider))
+        .add_credentials_provider(std::move(md_provider));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "CF_AWS_ACCESS_KEY_ID_SIGNAL");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "CF_AWS_SECRET_ACCESS_KEY");
     BOOST_REQUIRE_EQUAL(creds.session_token, "CF_AWS_SESSION_TOKEN");
 
     provider_chain = {};
-    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"));
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
 
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "");
