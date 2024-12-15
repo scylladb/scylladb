@@ -2577,7 +2577,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         });
 
         size_t total_tablet_count = 0;
-        stm.mutate_token_metadata([&](token_metadata& tm) {
+        stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             tablet_metadata tmeta;
 
             int i = 0;
@@ -2591,6 +2591,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                     // Leave the first host empty by making it invisible to allocation algorithm.
                     hosts_by_rack[rack.rack].push_back(h);
                 }
+                co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(double(i) / hosts.size()))}, h);
             }
 
             size_t tablet_count_bits = 8;
@@ -2616,7 +2617,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 tmeta.set_tablet_map(table, std::move(tmap));
             }
             tm.set_tablets(std::move(tmeta));
-            return make_ready_future<>();
+            co_return;
         }).get();
 
         testlog.debug("tablet metadata: {}", stm.get()->tablets());

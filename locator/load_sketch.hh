@@ -221,7 +221,7 @@ public:
     // Returns 1 when shards are imbalanced, but it's not possible to balance them.
     load_type get_shard_imbalance(host_id node) const {
         auto minmax = get_shard_minmax(node);
-        return minmax.max() - minmax.max();
+        return minmax.max() - minmax.min();
     }
 
     min_max_tracker<load_type> get_shard_minmax(host_id node) const {
