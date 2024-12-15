@@ -27,6 +27,7 @@ public:
                                    seastar::abort_source* = nullptr);
     seastar::future<> close();
     [[nodiscard]] const seastar::http::experimental::client& get_http_client() const { return http; };
+    static void ignore_exception(std::exception_ptr) {}
 
 private:
     seastar::future<>
