@@ -41,12 +41,12 @@ static s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
         .port = get_port(),
         .use_https = false,
-        .aws = {{
+        .aws_creds = {
             .access_key_id = "foo",
             .secret_access_key = "bar",
             .session_token = "baz",
-            .region = "us-east-1",
-        }},
+        },
+        .region = "us-east-1",
     };
     return make_lw_shared<s3::endpoint_config>(std::move(cfg));
 }
