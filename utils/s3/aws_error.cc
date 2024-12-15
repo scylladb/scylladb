@@ -126,6 +126,22 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
     return ret_val;
 }
 
+aws_error aws_error::from_system_error(const std::system_error& system_error) {
+    switch (static_cast<std::errc>(system_error.code().value())) {
+    case std::errc::interrupted:
+    case std::errc::resource_unavailable_try_again:
+    case std::errc::timed_out:
+    case std::errc::connection_aborted:
+    case std::errc::connection_reset:
+    case std::errc::broken_pipe:
+    case std::errc::network_unreachable:
+    case std::errc::host_unreachable:
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
+    default:
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::no};
+    }
+}
+
 const aws_errors& aws_error::get_errors() {
     static const std::unordered_map<std::string_view, const aws_error> aws_error_map{
         {"IncompleteSignature", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
