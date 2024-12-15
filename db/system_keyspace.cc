@@ -2621,6 +2621,43 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
     });
 }
 
+future<system_keyspace_vbc_tasks> system_keyspace::get_view_building_coordinator_tasks() {
+    static const sstring query = format("SELECT * FROM system.{}", VIEW_BUILDING_COORDINATOR_TASKS);
+
+    system_keyspace_vbc_tasks tasks;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto shard = unsigned(row.get_as<int32_t>("shard"));
+        auto start_token = row.get_as<int64_t>("start_token");
+        auto end_token = row.get_as<int64_t>("end_token");
+
+        system_keyspace_view_name key = {ks_name, view_name};
+        if (!tasks.contains(key)) {
+            tasks[key] = system_keyspace_vbc_tasks::mapped_type();
+        }
+
+        auto& view_tasks = tasks[key];
+        auto target_shard = std::make_pair(host_id, shard);
+        std::optional<dht::token> start, end;
+        if (start_token != std::numeric_limits<int64_t>::min()) {
+            start = dht::token(start_token);
+        }
+        if (end_token != std::numeric_limits<int64_t>::min()) {
+            end = dht::token(end_token);
+        }
+        auto range = dht::token_range(start, end);
+        if (!view_tasks.contains(target_shard)) {
+            view_tasks[target_shard] = dht::token_range_vector();
+        }
+        view_tasks[target_shard].push_back(range);
+        co_return stop_iteration::no;
+    });
+
+    co_return tasks;
+}
+
 
 template <typename... Args>
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql_with_timeout(sstring req,
