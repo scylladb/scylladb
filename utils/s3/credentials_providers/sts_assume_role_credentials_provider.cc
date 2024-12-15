@@ -57,6 +57,7 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
             creds = parse_creds(body);
         },
         http::reply::status_type::ok);
+    co_await http_client.close();
 }
 
 s3::aws_credentials sts_assume_role_credentials_provider::parse_creds(sstring& body) {
