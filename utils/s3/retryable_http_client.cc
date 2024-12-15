@@ -51,6 +51,12 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
         } catch (const aws::aws_exception& ex) {
             e = std::current_exception();
             request_ex = ex;
+        } catch (const std::system_error& ex) {
+            e = std::current_exception();
+            request_ex = aws_exception(aws_error::from_system_error(ex));
+        } catch (...) {
+            e = std::current_exception();
+            request_ex = aws_exception(aws_error{aws_error_type::UNKNOWN, format("{}", e), retryable::no});
         }
 
         if (!_retry_strategy.should_retry(request_ex.error(), retries)) {

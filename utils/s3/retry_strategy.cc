@@ -26,9 +26,9 @@ bool default_retry_strategy::should_retry(const aws_error& error, unsigned attem
     }
     bool should_retry = error.is_retryable() == retryable::yes;
     if (should_retry) {
-        rs_logger.debug("S3 client request failed. Reason: {}. Retry# {}", error.get_error_message(), attempted_retries);
+        rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", error.get_error_message(), attempted_retries);
     } else {
-        rs_logger.error("S3 client encountered non-retryable error. Reason: {}. Code: {}. Retry# {}",
+        rs_logger.error("AWS HTTP client encountered non-retryable error. Reason: {}. Code: {}. Retry# {}",
                         error.get_error_message(),
                         std::to_underlying(error.get_error_type()),
                         attempted_retries);
