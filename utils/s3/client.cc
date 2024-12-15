@@ -87,6 +87,13 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
+retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental::connection_factory>&& factory,
+                                             unsigned max_conn,
+                                             http::experimental::client::retry_requests should_retry,
+                                             const aws::retry_strategy& retry_strategy)
+    : http(std::move(factory), max_conn, should_retry), _retry_strategy(retry_strategy) {
+}
+
 client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
@@ -196,8 +203,8 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn)
-        : http(std::move(f), max_conn, http::experimental::client::retry_requests::yes)
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
+        : retryable_client(std::move(f), max_conn, http::experimental::client::retry_requests::yes, retry_strategy)
 {
 }
 
@@ -206,11 +213,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     auto ep_label = sm::label("endpoint")(host);
     auto sg_label = sm::label("class")(class_name);
     metrics.add_group("s3", {
-        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
+        sm::make_gauge("nr_connections", [this] { return retryable_client.get_http_client().connections_nr(); },
                 sm::description("Total number of connections"), {ep_label, sg_label}),
-        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
+        sm::make_gauge("nr_active_connections", [this] { return retryable_client.get_http_client().connections_nr() - retryable_client.get_http_client().idle_connections_nr(); },
                 sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
-        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
+        sm::make_counter("total_new_connections", [this] { return retryable_client.get_http_client().total_new_connections_nr(); },
                 sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
         sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
                 sm::description("Total number of object read requests"), {ep_label, sg_label}),
@@ -238,7 +245,7 @@ client::group_client& client::find_or_create_client() {
         unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections)
+            std::forward_as_tuple(std::move(factory), max_connections, *_retry_strategy)
         ).first;
 
         it->second.register_metrics(sg.name(), _host);
@@ -292,7 +299,7 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
     }
 }
 
-future<> client::do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) const {
+future<> retryable_http_client::do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
     // TODO: the http client does not check abort status on entry, and if
     // we're already aborted when we get here we will paradoxally not be
     // interrupted, because no registration etc will be done. So do a quick
@@ -312,16 +319,16 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
             }
 
             e = {};
-            co_return co_await (as ? gc.http.make_request(req, handler, *as, std::nullopt) : gc.http.make_request(req, handler, std::nullopt));
+            co_return co_await (as ? http.make_request(req, handler, *as, std::nullopt) : http.make_request(req, handler, std::nullopt));
         } catch (const aws::aws_exception& ex) {
             e = std::current_exception();
             request_ex = ex;
         }
 
-        if (!_retry_strategy->should_retry(request_ex.error(), retries)) {
+        if (!_retry_strategy.should_retry(request_ex.error(), retries)) {
             break;
         }
-        co_await seastar::sleep(_retry_strategy->delay_before_retry(request_ex.error(), retries));
+        co_await seastar::sleep(_retry_strategy.delay_before_retry(request_ex.error(), retries));
         ++retries;
     }
 
@@ -330,11 +337,12 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
     }
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    co_await authorize(req);
-    auto& gc = find_or_create_client();
-    co_return co_await do_retryable_request(
-        gc, std::move(req), [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
+future<> retryable_http_client::make_request(http::request req,
+                                             http::experimental::client::reply_handler handle,
+                                             std::optional<http::reply::status_type> expected,
+                                             seastar::abort_source* as) {
+    co_await do_retryable_request(
+        std::move(req), [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);
 
@@ -353,13 +361,23 @@ future<> client::make_request(http::request req, http::experimental::client::rep
         }, as);
 }
 
+future<> retryable_http_client::close() {
+    return http.close();
+}
+
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    co_await authorize(req);
+    auto& gc = find_or_create_client();
+    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+}
+
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_return co_await make_request(std::move(req), std::move(handle), expected, as);
+    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -1386,7 +1404,7 @@ future<> client::close() {
         _creds_update_timer.cancel();
     }
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.http.close();
+        co_await it.second.retryable_client.close();
     });
 }
 
