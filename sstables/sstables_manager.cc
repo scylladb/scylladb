@@ -73,13 +73,13 @@ future<> storage_manager::stop() {
     }
 }
 
-void storage_manager::update_config(const db::config& cfg) {
+future<> storage_manager::update_config(const db::config& cfg) {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
         auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(ecfg));
         auto [it, added] = _s3_endpoints.try_emplace(ep, std::move(s3_cfg));
         if (!added) {
             if (it->second.client != nullptr) {
-                it->second.client->update_config(s3_cfg);
+                co_await it->second.client->update_config(s3_cfg);
             }
             it->second.cfg = std::move(s3_cfg);
         }
@@ -107,8 +107,8 @@ bool storage_manager::is_known_endpoint(sstring endpoint) const {
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
-        return sstm.container().invoke_on_all([&cfg] (auto& sstm) {
-            sstm.update_config(cfg);
+        return sstm.container().invoke_on_all([&cfg](auto& sstm) -> future<> {
+            co_await sstm.update_config(cfg);
         });
     })
     , observer(cfg.object_storage_config.observe(action.make_observer()))

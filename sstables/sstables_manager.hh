@@ -61,7 +61,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     std::unordered_map<sstring, s3_endpoint> _s3_endpoints;
     std::unique_ptr<config_updater> _config_updater;
 
-    void update_config(const db::config&);
+    future<> update_config(const db::config&);
 
 public:
     struct config {

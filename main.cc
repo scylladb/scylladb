@@ -188,32 +188,11 @@ struct convert<::object_storage_endpoint_param> {
         ep.endpoint = node["name"].as<std::string>();
         ep.config.port = node["port"].as<unsigned>();
         ep.config.use_https = node["https"].as<bool>(false);
-        if (node["aws_region"] || std::getenv("AWS_DEFAULT_REGION")) {
-            // https://github.com/scylladb/scylla-pkg/issues/3845
-            // Allow picking up aws values via standard env vars as well.
-            // Value in config has prio, but fall back to env.
-            // This has the added benefit of potentially reducing the amount of
-            // sensitive data in config files (i.e. credentials)
-            auto get_node_value_or_env = [&](const char* key, const char* var) {
-                auto child = node[key];
-                if (child) {
-                    return child.as<std::string>();
-                }
-                auto val = std::getenv(var);
-                if (val) {
-                    return std::string(val);
-                }
-                return std::string{};
-            };
-            ep.config.region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
-            ep.config.aws_creds.access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
-            ep.config.aws_creds.secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
-            ep.config.aws_creds.session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
-        }
+        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
         return true;
     }
 };
-}
+} // namespace YAML
 
 static future<> read_object_storage_config(db::config& db_cfg) {
     sstring cfg_name;

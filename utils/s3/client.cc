@@ -33,9 +33,12 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
+#include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/credentials_providers/environment_aws_credentials_provider.hh"
+#include "utils/s3/credentials_providers/config_file_aws_credentials_provider.hh"
 #include "utils/div_ceil.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
@@ -45,6 +48,7 @@
 #include "db_clock.hh"
 #include "utils/log.hh"
 
+using namespace std::chrono_literals;
 template <>
 struct fmt::formatter<s3::tag> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
@@ -85,34 +89,72 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
 client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
+        , _creds_sem(1)
+        , _creds_invalidation_timer([this] {
+            std::ignore = [this]() -> future<> {
+                auto units = co_await get_units(_creds_sem, 1);
+                s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+                         " attempts for future requests.");
+                _credentials = {};
+            }();
+        })
+        , _creds_update_timer([this] {
+            std::ignore = [this]() -> future<> {
+                auto units = co_await get_units(_creds_sem, 1);
+                s3l.info("Update creds in the background");
+                try {
+                    co_await update_credentials_and_rearm();
+                } catch (...) {
+                    _credentials = {};
+                }
+            }();
+        })
         , _gf(std::move(gf))
         , _memory(mem)
-        , _retry_strategy(std::move(rs))
-{
+        , _retry_strategy(std::move(rs)) {
+    _creds_provider_chain
+        .add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>(db::config::get_conf_sub("object_storage.yaml").native()))
+        .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>());
+
+    _creds_update_timer.arm(lowres_clock::now());
 }
 
-void client::update_config(endpoint_config_ptr cfg) {
+future<> client::update_config(endpoint_config_ptr cfg) {
     if (_cfg->port != cfg->port || _cfg->use_https != cfg->use_https) {
         throw std::runtime_error("Updating port and/or https usage is not possible");
     }
     _cfg = std::move(cfg);
+    auto units = co_await get_units(_creds_sem, 1);
+    _creds_provider_chain.invalidate_credentials();
+    _credentials = {};
+    _creds_update_timer.rearm(lowres_clock::now());
 }
 
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
-void client::authorize(http::request& req) {
-    if (!_cfg->aws_creds) {
-        return;
+future<> client::update_credentials_and_rearm() {
+    _credentials = co_await _creds_provider_chain.get_aws_credentials();
+    _creds_invalidation_timer.rearm(_credentials.expires_at);
+    _creds_update_timer.rearm(_credentials.expires_at - 1h);
+}
+
+future<> client::authorize(http::request& req) {
+    if (!_credentials) [[unlikely]] {
+        auto units = co_await get_units(_creds_sem, 1);
+        if (!_credentials) {
+            s3l.info("Update creds synchronously");
+            co_await update_credentials_and_rearm();
+        }
     }
 
     auto time_point_str = utils::aws::format_time_point(db_clock::now());
     auto time_point_st = time_point_str.substr(0, 8);
     req._headers["x-amz-date"] = time_point_str;
     req._headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
-    if (!_cfg->aws_creds.session_token.empty()) {
-        req._headers["x-amz-security-token"] = _cfg->aws_creds.session_token;
+    if (!_credentials.session_token.empty()) {
+        req._headers["x-amz-security-token"] = _credentials.session_token;
     }
     std::map<std::string_view, std::string_view> signed_headers;
     sstring signed_headers_list = "";
@@ -139,13 +181,13 @@ void client::authorize(http::request& req) {
         query_nr--;
     }
     auto sig = utils::aws::get_signature(
-        _cfg->aws_creds.access_key_id, _cfg->aws_creds.secret_access_key,
+        _credentials.access_key_id, _credentials.secret_access_key,
         _host, req._url, req._method,
         utils::aws::omit_datestamp_expiration_check,
         signed_headers_list, signed_headers,
         utils::aws::unsigned_content,
         _cfg->region, "s3", query_string);
-    req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws_creds.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
+    req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _credentials.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
 }
 
 future<semaphore_units<>> client::claim_memory(size_t size) {
@@ -281,9 +323,9 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
 }
 
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    authorize(req);
+    co_await authorize(req);
     auto& gc = find_or_create_client();
-    return do_retryable_request(
+    co_return co_await do_retryable_request(
         gc, std::move(req), [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);
@@ -304,12 +346,12 @@ future<> client::make_request(http::request req, http::experimental::client::rep
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    authorize(req);
+    co_await authorize(req);
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return make_request(std::move(req), std::move(handle), expected, as);
+    co_return co_await make_request(std::move(req), std::move(handle), expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -1325,6 +1367,11 @@ file client::make_readable_file(sstring object_name, seastar::abort_source* as) 
 }
 
 future<> client::close() {
+    {
+        auto units = co_await get_units(_creds_sem, 1);
+        _creds_invalidation_timer.cancel();
+        _creds_update_timer.cancel();
+    }
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
