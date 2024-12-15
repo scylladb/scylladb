@@ -30,6 +30,8 @@ struct endpoint_config {
     unsigned port;
     bool use_https;
     std::string region;
+    // Amazon Resource Names (ARNs) to access AWS resources
+    std::string role_arn;
     std::strong_ordering operator<=>(const endpoint_config& o) const = default;
 };
 
