@@ -69,7 +69,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
             creds = parse_creds(creds_response);
         },
         http::reply::status_type::ok);
-    ec2_md_logger.info("Retrieved temporary credentials for IAM role: {}", role);
+    co_await http_client.close();
 }
 
 s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sstring& creds_response) {
