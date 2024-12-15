@@ -103,7 +103,7 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
 }
 
 void client::authorize(http::request& req) {
-    if (!_cfg->aws) {
+    if (!_cfg->aws_creds) {
         return;
     }
 
@@ -111,8 +111,8 @@ void client::authorize(http::request& req) {
     auto time_point_st = time_point_str.substr(0, 8);
     req._headers["x-amz-date"] = time_point_str;
     req._headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
-    if (!_cfg->aws->session_token.empty()) {
-        req._headers["x-amz-security-token"] = _cfg->aws->session_token;
+    if (!_cfg->aws_creds.session_token.empty()) {
+        req._headers["x-amz-security-token"] = _cfg->aws_creds.session_token;
     }
     std::map<std::string_view, std::string_view> signed_headers;
     sstring signed_headers_list = "";
@@ -139,13 +139,13 @@ void client::authorize(http::request& req) {
         query_nr--;
     }
     auto sig = utils::aws::get_signature(
-        _cfg->aws->access_key_id, _cfg->aws->secret_access_key,
+        _cfg->aws_creds.access_key_id, _cfg->aws_creds.secret_access_key,
         _host, req._url, req._method,
         utils::aws::omit_datestamp_expiration_check,
         signed_headers_list, signed_headers,
         utils::aws::unsigned_content,
-        _cfg->aws->region, "s3", query_string);
-    req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->access_key_id, time_point_st, _cfg->aws->region, signed_headers_list, sig);
+        _cfg->region, "s3", query_string);
+    req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws_creds.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
 }
 
 future<semaphore_units<>> client::claim_memory(size_t size) {

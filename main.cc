@@ -189,8 +189,6 @@ struct convert<::object_storage_endpoint_param> {
         ep.config.port = node["port"].as<unsigned>();
         ep.config.use_https = node["https"].as<bool>(false);
         if (node["aws_region"] || std::getenv("AWS_DEFAULT_REGION")) {
-            ep.config.aws.emplace();
-
             // https://github.com/scylladb/scylla-pkg/issues/3845
             // Allow picking up aws values via standard env vars as well.
             // Value in config has prio, but fall back to env.
@@ -207,10 +205,10 @@ struct convert<::object_storage_endpoint_param> {
                 }
                 return std::string{};
             };
-            ep.config.aws->region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
-            ep.config.aws->access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
-            ep.config.aws->secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
-            ep.config.aws->session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
+            ep.config.region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
+            ep.config.aws_creds.access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
+            ep.config.aws_creds.secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
+            ep.config.aws_creds.session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
         }
         return true;
     }
