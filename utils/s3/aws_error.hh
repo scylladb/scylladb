@@ -105,6 +105,7 @@ public:
     [[nodiscard]] retryable is_retryable() const { return _is_retryable; }
     static std::optional<aws_error> parse(seastar::sstring&& body);
     static aws_error from_http_code(seastar::http::reply::status_type http_code);
+    static aws_error from_system_error(const std::system_error& system_error);
     static const aws_errors& get_errors();
 };
 
