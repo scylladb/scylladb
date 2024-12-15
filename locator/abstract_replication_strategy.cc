@@ -56,19 +56,6 @@ auto& ring_mapping::operator*() const {
     return std::as_const(_impl->map);
 }
 
-template <typename ResultSet, typename SourceSet>
-static ResultSet resolve_endpoints(const SourceSet& host_ids, const token_metadata& tm) {
-    ResultSet result{};
-    result.reserve(host_ids.size());
-    for (const auto& host_id: host_ids) {
-        // Empty host_id is used as a marker for local address.
-        // The reason for this hack is that we need local_strategy to
-        // work before the local host_id is loaded from the system.local table.
-        result.push_back(host_id ? tm.get_endpoint_for_host_id(host_id) : tm.get_topology().my_address());
-    }
-    return result;
-}
-
 logging::logger rslogger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
@@ -507,18 +494,8 @@ host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(cons
     return it->second;
 }
 
-inet_address_vector_replica_set vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,
-    bool is_vnode) const
-{
-    return resolve_endpoints<inet_address_vector_replica_set>(do_get_replicas(tok, is_vnode), *_tmptr);
-}
-
 host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const token& tok) const {
     return do_get_replicas(tok, false);
-}
-
-inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
-    return do_get_natural_endpoints(search_token, false);
 }
 
 host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas(const token& search_token) const {

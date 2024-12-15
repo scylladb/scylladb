@@ -879,10 +879,6 @@ public:
         return to_host_set(get_replicas_for_write(search_token));
     }
 
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
-        return to_replica_set(get_replicas_for_write(search_token));
-    }
-
     virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const override {
         return to_host_set(get_replicas_for_write(search_token));
     }
