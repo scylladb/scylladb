@@ -32,11 +32,6 @@ class tester {
         s3::endpoint_config cfg;
         cfg.port = 443;
         cfg.use_https = true;
-        cfg.aws_creds.access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID");
-        cfg.aws_creds.secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY");
-        if (auto token = ::getenv("AWS_SESSION_TOKEN"); token) {
-            cfg.aws_creds.session_token = token;
-        }
         cfg.region = tests::getenv_safe("AWS_DEFAULT_REGION");
 
         return make_lw_shared<s3::endpoint_config>(std::move(cfg));
