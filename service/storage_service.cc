@@ -2370,10 +2370,25 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     if (tmptr->is_normal_token_owner(host_id)) {
         slogger.info("handle_state_normal: node {}/{} was already a normal token owner", endpoint, host_id);
     }
-    auto existing = tmptr->get_endpoint_for_host_id_if_known(host_id);
 
     // Old node in replace-with-same-IP scenario.
     std::optional<locator::host_id> replaced_id;
+
+    auto ips = _gossiper.get_nodes_with_host_id(host_id);
+
+    std::optional<inet_address> existing;
+
+    if (tmptr->get_topology().find_node(host_id)) {
+        // If node is not in the topology there is no existsing address
+        // If there are two addresses for the same id the "other" one is existing
+        // If there is only one it is existing
+        if (ips.size() == 2) {
+            if (ips.erase(endpoint) == 0) {
+                on_internal_error(slogger, fmt::format("Gossiper has two ips {} for host id {} but none of them is {}", ips, endpoint, host_id));
+            }
+        }
+        existing = *ips.begin();
+    }
 
     if (existing && *existing != endpoint) {
         // This branch in taken when a node changes its IP address.
@@ -2420,11 +2435,12 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         // We do this after update_normal_tokens, allowing for tokens to be properly
         // migrated to the new host_id.
 
-        slogger.info("Host ID {} continues to be owned by {}", host_id, endpoint);
-        if (const auto old_host_id = tmptr->get_host_id_if_known(endpoint); old_host_id && *old_host_id != host_id) {
-            // Replace with same IP scenario
-            slogger.info("The IP {} previously owned host ID {}", endpoint, *old_host_id);
-            replaced_id = *old_host_id;
+        auto peers = co_await _sys_ks.local().load_host_ids();
+        if (peers.contains(endpoint) && peers[endpoint] != host_id) {
+            replaced_id = peers[endpoint];
+            slogger.info("The IP {} previously owned host ID {}", endpoint, *replaced_id);
+        } else {
+            slogger.info("Host ID {} continues to be owned by {}", host_id, endpoint);
         }
     } else {
         // This branch is taken if this node wasn't involved in node_ops
