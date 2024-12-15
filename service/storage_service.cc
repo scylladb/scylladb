@@ -7342,10 +7342,13 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
     partition_key pk = partition_key::from_nodetool_style_string(schema, key);
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
     const auto& ks = _db.local().find_keyspace(keyspace);
+    host_id_vector_replica_set replicas;
     if (ks.uses_tablets()) {
-        return table.get_effective_replication_map()->get_natural_endpoints(token);
+        replicas = table.get_effective_replication_map()->get_natural_replicas(token);
+    } else {
+        replicas = ks.get_vnode_effective_replication_map()->get_natural_replicas(token);
     }
-    return ks.get_vnode_effective_replication_map()->get_natural_endpoints(token);
+    return replicas | std::views::transform([&] (locator::host_id id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>();
 }
 
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint) {
