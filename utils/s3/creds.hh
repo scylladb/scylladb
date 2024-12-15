@@ -30,7 +30,6 @@ struct aws_credentials {
 struct endpoint_config {
     unsigned port;
     bool use_https;
-    aws_credentials aws_creds;
     // Amazon Resource Names (ARNs) to access AWS resources
     std::optional<std::string> role_arn;
     std::string region;
