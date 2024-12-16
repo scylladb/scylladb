@@ -2397,6 +2397,48 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_plan_fails_when_removing_last_replica) {
+    do_with_cql_env_thread([] (auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+
+        auto host1 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        unsigned shard_count = 1;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+            locator::topology::config{
+                .this_endpoint = ip1,
+                .this_host_id = host1,
+                .local_dc_rack = locator::endpoint_dc_rack::default_location
+            }
+        });
+
+        stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
+            tm.update_host_id(host1, ip1);
+            tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
+
+            tablet_map tmap(1);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set{tablet_replica{host1, 0}}
+                });
+            }
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            co_return;
+        }).get();
+
+        std::unordered_set<host_id> skiplist = {host1};
+        BOOST_REQUIRE_THROW(rebalance_tablets(e.get_tablet_allocator().local(), stm, {}, skiplist), std::runtime_error);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
     // When doing normal load balancing, we can ignore DOWN nodes in the node set
     // and just balance the UP nodes among themselves because it's ok to equalize

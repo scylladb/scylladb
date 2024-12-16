@@ -416,3 +416,670 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     await cql.run_async(f"CREATE KEYSPACE test_n WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} AND TABLETS = {{'enabled': false}};")
     res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test_n'").one()
     assert res is None
+<<<<<<< HEAD
+||||||| parent of e732ff7cd8 (tablets: load_balancer: Fail when draining with no candidate nodes)
+
+@pytest.mark.asyncio
+async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
+    cfg = {"enable_tablets": True, "force_gossip_topology_changes": True}
+    with pytest.raises(Exception, match="Failed to add server"):
+        await manager.server_add(config=cfg)
+
+@pytest.mark.asyncio
+async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
+    cfg = {"enable_tablets": False, "force_gossip_topology_changes": True}
+    await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}};")
+    res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks_name}'").one()
+    logger.info(res)
+    await cql.run_async(f"DROP KEYSPACE {ks_name}")
+
+    for enabled in ["false", "true"]:
+        expected = r"Error from server: code=2000 \[Syntax error in CQL query\] message=\"line 1:126 no viable alternative at input 'tablets'\""
+        with pytest.raises(SyntaxException, match=expected):
+            ks_name = unique_name()
+            await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21564")
+async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/21564
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator from processing it using error injection
+        3) Start migration of the tablet from node 1 to 2
+        4) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create table, populate it and flush the table to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    num_of_rows = 64
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(num_of_rows)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to make view generator pause before processing the sstable")
+    injection_name = "view_builder_pause_add_new_view"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == num_of_rows
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/19149")
+async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/19149
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator
+        3) Inject error to prevent processing of new sstables in view generator
+        4) Create an sstable, move it into upload directory of test table and start upload
+        5) Start migration of the tablet from node 1 to 2
+        6) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Generate an sstable and move it to upload directory of test table")
+    # create an sstable using a dummy table
+    await cql.run_async("CREATE TABLE test.dummy (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.dummy (pk, c) VALUES ({k}, {k%3});") for k in range(64, 128)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "dummy")
+    node_workdir = await manager.server_get_workdir(servers[0].server_id)
+    dummy_table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "dummy-*"))[0]
+    test_table_upload_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*", "upload"))[0]
+    for src_path in glob.glob(os.path.join(dummy_table_dir, "me-*")):
+        dst_path = os.path.join(test_table_upload_dir, os.path.basename(src_path))
+        os.rename(src_path, dst_path)
+    await cql.run_async("DROP TABLE test.dummy;")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to prevent view generator from processing staged sstables")
+    injection_name = "view_update_generator_consume_staging_sstable"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Load the sstables from upload directory")
+    await manager.api.load_new_sstables(servers[0].ip_addr, "test", "test")
+
+    # The table now has both staged and unstaged sstables.
+    # Verify that tablet migration handles them both without causing any base-view inconsistencies.
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    expected_num_of_rows = 128
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == expected_num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == expected_num_of_rows
+
+@pytest.mark.asyncio
+async def test_orphaned_sstables_on_startup(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/18038
+        1) Start a node (node1)
+        2) Create a table with 1 initial tablet and populate it
+        3) Start another node (node2)
+        4) Migrate the existing tablet from node1 to node2
+        5) Stop node1
+        6) Copy the sstables from node2 to node1
+        7) Attempting to start node1 should fail as it now has an 'orphaned' sstable
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(256)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+    node0_workdir = await manager.server_get_workdir(servers[0].server_id)
+    node0_table_dir = glob.glob(os.path.join(node0_workdir, "data", "test", "test-*"))[0]
+
+    logger.info("Start Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    await manager.api.disable_tablet_balancing(servers[1].ip_addr)
+    node1_workdir = await manager.server_get_workdir(servers[1].server_id)
+    node1_table_dir = glob.glob(os.path.join(node1_workdir, "data", "test", "test-*"))[0]
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Migrate the tablet from node1 to node2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    logger.info("Stop node1 and copy the sstables from node2")
+    await manager.server_stop(servers[0].server_id)
+    for src_path in glob.glob(os.path.join(node1_table_dir, "me-*")):
+        dst_path = os.path.join(node0_table_dir, os.path.basename(src_path))
+        shutil.copy(src_path, dst_path)
+
+    # try starting the server again
+    logger.info("Start node1 with the orphaned sstables and expect it to fail")
+    # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table test.test"
+    await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21826")
+async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Reproducer for #21826
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    node_to_replace = servers['dc1'][1]
+    replaced_host_id = await manager.get_host_id(node_to_replace.server_id)
+    initiator_node = servers['dc2'][0]
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+    await manager.server_stop_gracefully(node_to_replace.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_replace} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter.
+    And then verify that that node can be replaced successfully.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc2'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    initiator_node = servers['dc2'][0]
+
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_remove} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that nodes can be successfully replaced with tablets when
+    even when there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    with and without zero-token nodes in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners,
+    but other datacenters can be used to rebuild the data.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    stmt = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ALL
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+
+    nodes_to_replace = servers['dc1'][0:2]
+    replaced_host_id = await manager.get_host_id(nodes_to_replace[1].server_id)
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    for node in nodes_to_replace:
+        await manager.server_stop_gracefully(node.server_id)
+
+    logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+                                ignore_dead_nodes=[replaced_host_id])
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info("Verifying data")
+    for node in servers['dc2']:
+        await manager.server_stop_gracefully(node.server_id)
+    query = SimpleStatement("SELECT * FROM test.test;", consistency_level=ConsistencyLevel.ONE)
+    rows = await cql.run_async(query)
+    assert len(rows) == len(keys)
+    for r in rows:
+        assert r.c == r.pk
+=======
+
+@pytest.mark.asyncio
+async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
+    cfg = {"enable_tablets": True, "force_gossip_topology_changes": True}
+    with pytest.raises(Exception, match="Failed to add server"):
+        await manager.server_add(config=cfg)
+
+@pytest.mark.asyncio
+async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
+    cfg = {"enable_tablets": False, "force_gossip_topology_changes": True}
+    await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}};")
+    res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks_name}'").one()
+    logger.info(res)
+    await cql.run_async(f"DROP KEYSPACE {ks_name}")
+
+    for enabled in ["false", "true"]:
+        expected = r"Error from server: code=2000 \[Syntax error in CQL query\] message=\"line 1:126 no viable alternative at input 'tablets'\""
+        with pytest.raises(SyntaxException, match=expected):
+            ks_name = unique_name()
+            await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21564")
+async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/21564
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator from processing it using error injection
+        3) Start migration of the tablet from node 1 to 2
+        4) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create table, populate it and flush the table to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    num_of_rows = 64
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(num_of_rows)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to make view generator pause before processing the sstable")
+    injection_name = "view_builder_pause_add_new_view"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == num_of_rows
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/19149")
+async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/19149
+        1) Create a table with 1 initial tablet and populate it
+        2) Create a view on the table but prevent the generator
+        3) Inject error to prevent processing of new sstables in view generator
+        4) Create an sstable, move it into upload directory of test table and start upload
+        5) Start migration of the tablet from node 1 to 2
+        6) Once migration completes, the view should have the correct number of rows
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    logger.info("Create view")
+    await cql.run_async("CREATE MATERIALIZED VIEW test.mv1 AS \
+    SELECT * FROM test.test WHERE pk IS NOT NULL AND c IS NOT NULL \
+    PRIMARY KEY (c, pk);")
+
+    logger.info("Generate an sstable and move it to upload directory of test table")
+    # create an sstable using a dummy table
+    await cql.run_async("CREATE TABLE test.dummy (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.dummy (pk, c) VALUES ({k}, {k%3});") for k in range(64, 128)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "dummy")
+    node_workdir = await manager.server_get_workdir(servers[0].server_id)
+    dummy_table_dir = glob.glob(os.path.join(node_workdir, "data", "test", "dummy-*"))[0]
+    test_table_upload_dir = glob.glob(os.path.join(node_workdir, "data", "test", "test-*", "upload"))[0]
+    for src_path in glob.glob(os.path.join(dummy_table_dir, "me-*")):
+        dst_path = os.path.join(test_table_upload_dir, os.path.basename(src_path))
+        os.rename(src_path, dst_path)
+    await cql.run_async("DROP TABLE test.dummy;")
+
+    logger.info("Starting Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Inject error to prevent view generator from processing staged sstables")
+    injection_name = "view_update_generator_consume_staging_sstable"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
+
+    logger.info("Load the sstables from upload directory")
+    await manager.api.load_new_sstables(servers[0].ip_addr, "test", "test")
+
+    # The table now has both staged and unstaged sstables.
+    # Verify that tablet migration handles them both without causing any base-view inconsistencies.
+    logger.info("Migrate the tablet to node 2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    expected_num_of_rows = 128
+    # Verify the table has expected number of rows
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == expected_num_of_rows
+    # Verify that the view has the expected number of rows
+    rows = await cql.run_async("SELECT c from test.mv1")
+    assert len(list(rows)) == expected_num_of_rows
+
+@pytest.mark.asyncio
+async def test_orphaned_sstables_on_startup(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/18038
+        1) Start a node (node1)
+        2) Create a table with 1 initial tablet and populate it
+        3) Start another node (node2)
+        4) Migrate the existing tablet from node1 to node2
+        5) Stop node1
+        6) Copy the sstables from node2 to node1
+        7) Attempting to start node1 should fail as it now has an 'orphaned' sstable
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create the test table, populate few rows and flush to disk")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(256)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+    node0_workdir = await manager.server_get_workdir(servers[0].server_id)
+    node0_table_dir = glob.glob(os.path.join(node0_workdir, "data", "test", "test-*"))[0]
+
+    logger.info("Start Node 2")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+    await manager.api.disable_tablet_balancing(servers[1].ip_addr)
+    node1_workdir = await manager.server_get_workdir(servers[1].server_id)
+    node1_table_dir = glob.glob(os.path.join(node1_workdir, "data", "test", "test-*"))[0]
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    logger.info("Migrate the tablet from node1 to node2")
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
+    logger.info("Migration done")
+
+    logger.info("Stop node1 and copy the sstables from node2")
+    await manager.server_stop(servers[0].server_id)
+    for src_path in glob.glob(os.path.join(node1_table_dir, "me-*")):
+        dst_path = os.path.join(node0_table_dir, os.path.basename(src_path))
+        shutil.copy(src_path, dst_path)
+
+    # try starting the server again
+    logger.info("Start node1 with the orphaned sstables and expect it to fail")
+    # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table test.test"
+    await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Reproducer for #21826
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    node_to_replace = servers['dc1'][1]
+    replaced_host_id = await manager.get_host_id(node_to_replace.server_id)
+    initiator_node = servers['dc2'][0]
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+    await manager.server_stop_gracefully(node_to_replace.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (There are nodes with tablets to drain")
+
+    logger.info(f"Replacing {node_to_replace} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that a node cannot be removed with tablets when
+    there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    even when there is a zero-token node in the same datacenter and in another datacenter.
+    And then verify that that node can be replaced successfully.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc2'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    node_to_remove = servers['dc1'][0]
+    initiator_node = servers['dc2'][0]
+
+    await manager.server_stop_gracefully(node_to_remove.server_id)
+
+    logger.info("Attempting removenode - expected to fail")
+    await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
+                              expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+
+    logger.info(f"Replacing {node_to_remove} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_zero_token_node", [False, True])
+async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
+    """
+    Verify that nodes can be successfully replaced with tablets when
+    even when there are not enough nodes in a datacenter to satisfy the configured replication factor,
+    with and without zero-token nodes in the same datacenter and in another datacenter,
+    and when there is another down node in the datacenter, leaving no normal token owners,
+    but other datacenters can be used to rebuild the data.
+    """
+    servers: dict[str, list[ServerInfo]] = dict()
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
+    extra_node = 0 if with_zero_token_node else 1
+    servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    if with_zero_token_node:
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
+
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }} AND tablets = {{ 'initial': 1 }}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    stmt = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ALL
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+
+    nodes_to_replace = servers['dc1'][0:2]
+    replaced_host_id = await manager.get_host_id(nodes_to_replace[1].server_id)
+
+    # Stop both token owners in dc1 to leave no token owners in the datacenter
+    for node in nodes_to_replace:
+        await manager.server_stop_gracefully(node.server_id)
+
+    logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
+                                ignore_dead_nodes=[replaced_host_id])
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
+    replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
+    logger.info("Verifying data")
+    for node in servers['dc2']:
+        await manager.server_stop_gracefully(node.server_id)
+    query = SimpleStatement("SELECT * FROM test.test;", consistency_level=ConsistencyLevel.ONE)
+    rows = await cql.run_async(query)
+    assert len(rows) == len(keys)
+    for r in rows:
+        assert r.c == r.pk
+>>>>>>> e732ff7cd8 (tablets: load_balancer: Fail when draining with no candidate nodes)

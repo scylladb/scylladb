@@ -1861,6 +1861,10 @@ public:
         }
 
         if (!min_load_node) {
+            if (!nodes_to_drain.empty()) {
+                throw std::runtime_error(format("There are nodes with tablets to drain but no candidate nodes in DC {}."
+                                                " Consider adding new nodes or reducing replication factor.", dc));
+            }
             lblogger.debug("No candidate nodes");
             _stats.for_dc(dc).stop_no_candidates++;
             co_return plan;
