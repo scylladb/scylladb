@@ -380,6 +380,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(0.0f),
             reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
@@ -392,6 +393,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(0.0f),
             reader_concurrency_semaphore::register_metrics::yes)
     , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
@@ -400,6 +402,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
+            utils::updateable_value(0.5f),
             "view_update")
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
@@ -427,7 +430,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _reader_concurrency_semaphores_group(max_memory_concurrent_reads(), max_count_concurrent_reads, max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
         _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_cpu_concurrency)
+        _cfg.reader_concurrency_semaphore_cpu_concurrency,
+        utils::updateable_value(0.5f))
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
