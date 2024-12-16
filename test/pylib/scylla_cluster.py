@@ -714,8 +714,7 @@ class ScyllaServer:
         else:
             await self.cmd.wait()
         finally:
-            if self.cmd:
-                self.logger.info("stopped %s in %s", self, self.workdir.name)
+            self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
     @stop_event
