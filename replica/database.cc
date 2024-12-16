@@ -391,6 +391,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1)),
             reader_concurrency_semaphore::register_metrics::yes)
     , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
