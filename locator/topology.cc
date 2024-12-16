@@ -573,16 +573,20 @@ void topology::sort_by_proximity(locator::host_id address, host_id_vector_replic
 }
 
 void topology::do_sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
-    std::sort(addresses.begin(), addresses.end(), [this, &address](const locator::host_id& a1, const locator::host_id& a2) {
-        return compare_endpoints(address, a1, a2) < 0;
-    });
+    const auto& loc = get_location(address);
+    struct info {
+        locator::host_id id;
+        int distance;
+    };
+    auto host_infos = addresses | std::views::transform([&] (locator::host_id id) {
+        const auto& loc1 = get_location(id);
+        return info{ id, distance(address, loc, id, loc1) };
+    }) | std::ranges::to<utils::small_vector<info, host_id_vector_replica_set::internal_capacity()>>();
+    std::ranges::sort(host_infos, std::ranges::less{}, std::mem_fn(&info::distance));
+    std::ranges::copy(host_infos | std::ranges::views::transform(std::mem_fn(&info::id)), addresses.begin());
 }
 
-std::weak_ordering topology::compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
-    const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
-
+int topology::distance(const locator::host_id& address, const endpoint_dc_rack& loc, const locator::host_id& a1, const endpoint_dc_rack& loc1) noexcept {
     // The farthest nodes from a given node are:
     // 1. Nodes in other DCs then the reference node
     // 2. Nodes in the other RACKs in the same DC as the reference node
@@ -591,13 +595,7 @@ std::weak_ordering topology::compare_endpoints(const locator::host_id& address, 
     int same_rack1 = same_dc1 & (loc1.rack == loc.rack);
     int same_node1 = a1 == address;
     int d1 = ((same_dc1 << 2) | (same_rack1 << 1) | same_node1) ^ 7;
-
-    int same_dc2 = loc2.dc == loc.dc;
-    int same_rack2 = same_dc2 & (loc2.rack == loc.rack);
-    int same_node2 = a2 == address;
-    int d2 = ((same_dc2 << 2) | (same_rack2 << 1) | same_node2) ^ 7;
-
-    return d1 <=> d2;
+    return d1;
 }
 
 void topology::for_each_node(std::function<void(const node&)> func) const {

@@ -946,6 +946,14 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
 
 namespace locator {
 
+std::weak_ordering compare_endpoints(const locator::topology& topo, const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) {
+    const auto& loc = topo.get_location(address);
+    const auto& loc1 = topo.get_location(a1);
+    const auto& loc2 = topo.get_location(a2);
+
+    return topo.distance(address, loc, a1, loc1) <=> topo.distance(address, loc, a2, loc2);
+}
+
 void topology::test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
     std::optional<std::partial_ordering> expected;
     const auto& loc = get_location(address);
@@ -976,7 +984,7 @@ void topology::test_compare_endpoints(const locator::host_id& address, const loc
             }
         }
     }
-    auto res = compare_endpoints(address, a1, a2);
+    auto res = compare_endpoints(*this, address, a1, a2);
     testlog.debug("compare_endpoint: address={} [{}/{}] a1={} [{}/{}] a2={} [{}/{}]: res={} expected={} expected_value={}",
             address, loc.dc, loc.rack,
             a1, loc1.dc, loc1.rack,
@@ -1001,7 +1009,7 @@ void topology::test_sort_by_proximity(const locator::host_id& address, const hos
     }
     // Test sort monotonicity
     for (size_t i = 1; i < sorted_nodes.size(); ++i) {
-        BOOST_REQUIRE(compare_endpoints(address, sorted_nodes[i-1], sorted_nodes[i]) <= 0);
+        BOOST_REQUIRE(compare_endpoints(*this, address, sorted_nodes[i-1], sorted_nodes[i]) <= 0);
     }
 }
 
