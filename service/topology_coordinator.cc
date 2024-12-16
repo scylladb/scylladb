@@ -1615,8 +1615,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 on_internal_error(rtlogger, "should_preempt_balancing() retook the guard");
             }
         }
+
+        bool has_nodes_to_drain = false;
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
+            has_nodes_to_drain = plan.has_nodes_to_drain();
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
             }
@@ -1664,6 +1667,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         if (drain) {
+            if (has_nodes_to_drain) {
+                // Prevent jumping to write_both_read_old with un-drained tablets.
+                // This can happen when all candidate nodes are down.
+                rtlogger.warn("Tablet draining stalled: No tablets migrating but there are nodes to drain");
+                release_guard(std::move(guard));
+                co_await sleep(3s); // Throttle retries
+                co_return;
+            }
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_transition_state(topology::transition_state::write_both_read_old)
