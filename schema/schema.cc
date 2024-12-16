@@ -1008,15 +1008,20 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
             return std::move(os).str();
         } else {
             os << "MATERIALIZED VIEW " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " AS\n";
-            os << "    SELECT ";
-            for (auto& cdef : all_columns()) {
-                if (cdef.is_hidden_from_cql()) {
-                    continue;
+            if (view_info()->include_all_columns()) {
+                os << "    SELECT *";
+            }
+            else {
+                os << "    SELECT ";
+                for (auto& cdef : all_columns()) {
+                    if (cdef.is_hidden_from_cql()) {
+                        continue;
+                    }
+                    if (n++ != 0) {
+                        os << ", ";
+                    }
+                    os << cdef.name_as_cql_string();
                 }
-                if (n++ != 0) {
-                    os << ", ";
-                }
-                os << cdef.name_as_cql_string();
             }
             os << "\n    FROM " << cql3::util::maybe_quote(ks_name()) << "." <<  cql3::util::maybe_quote(view_info()->base_name());
             os << "\n    WHERE " << view_info()->where_clause();
