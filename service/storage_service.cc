@@ -48,6 +48,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_coordinator.hh"
 #include "utils/assert.hh"
 #include "utils/UUID.hh"
 #include "utils/to_string.hh"
@@ -1178,6 +1179,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service);
+            _view_building_coordinator = run_view_building_coordinator(*as, _db.local(), *_group0, _sys_ks.local(), _topology_state_machine);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1185,6 +1187,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
     if (as) {
         as->request_abort(); // abort current coordinator if running
         co_await std::move(_topology_change_coordinator);
+        co_await std::move(_view_building_coordinator);
     }
 }
 
