@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
 
         // A bijection between uint64_t and blobs of size pk_size.
         auto make_key = [pk_size] (uint64_t x) {
-            bytes b(bytes::initialized_later(), std::max(pk_size, sizeof(x)));
+            bytes b(std::max(pk_size, sizeof(x)), '\0');
             auto i = b.begin();
             write<uint64_t>(i, x);
             return b;
