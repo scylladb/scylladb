@@ -1739,7 +1739,7 @@ public:
     template<typename Func>
     void delay(tracing::trace_state_ptr trace, Func&& on_resume) {
         auto backlog = max_backlog();
-        auto delay = db::view::calculate_view_update_throttling_delay(backlog, _expire_timer.get_timeout());
+        auto delay = db::view::calculate_view_update_throttling_delay(backlog, _expire_timer.get_timeout(), _proxy->data_dictionary().get_config().view_flow_control_delay_limit_in_ms());
         stats().last_mv_flow_control_delay = delay;
         stats().mv_flow_control_delay += delay.count();
         if (delay.count() == 0) {
