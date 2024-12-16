@@ -1701,7 +1701,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 table_id,
                 s->ks_name(),
                 s->cf_name(),
-                guard.write_timestamp()));
+                guard.write_timestamp(),
+                _db.features()));
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});

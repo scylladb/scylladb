@@ -387,7 +387,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -422,7 +422,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table2, table2_schema->ks_name(), table2_schema->cf_name(), ++ts).get(),
+                    tablet_map_to_mutation(tmap, table2, table2_schema->ks_name(), table2_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -477,7 +477,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -495,7 +495,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts).get(),
+                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
