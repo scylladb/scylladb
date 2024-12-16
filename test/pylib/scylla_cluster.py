@@ -301,7 +301,7 @@ class ScyllaServer:
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
-        if property_file and not "endpoint_snitch" in config_options:
+        if property_file and "endpoint_snitch" not in config_options:
             config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
 
         # Sum of basic server configuration and the user-provided config options.
