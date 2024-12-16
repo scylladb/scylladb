@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/statements/function_statement.hh"
+#include "audit/audit.hh"
 #include "cql3/cql3_type.hh"
 
 namespace cql3 {
@@ -32,6 +33,9 @@ class create_function_statement final : public create_function_statement_base {
     shared_ptr<cql3_type::raw> _return_type;
     bool _called_on_null_input;
 
+protected:
+    virtual audit::statement_category category() const override;
+    virtual audit::audit_info_ptr audit_info() const override;
 public:
     create_function_statement(functions::function_name name, sstring language, sstring body,
             std::vector<shared_ptr<column_identifier>> arg_names, std::vector<shared_ptr<cql3_type::raw>> arg_types,

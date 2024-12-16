@@ -27,7 +27,7 @@ list_effective_service_level_statement::list_effective_service_level_statement(s
 
 std::unique_ptr<prepared_statement> 
 list_effective_service_level_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<list_effective_service_level_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_effective_service_level_statement>(*this));
 }
 
 static auto make_column(sstring name, const shared_ptr<const abstract_type> type) {

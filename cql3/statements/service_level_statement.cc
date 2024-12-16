@@ -28,5 +28,13 @@ bool service_level_statement::needs_guard(query_processor&, service::query_state
     return state.get_service_level_controller().is_v2();
 }
 
+audit::statement_category service_level_statement::category() const {
+    return audit::statement_category::ADMIN;
+}
+
+audit::audit_info_ptr service_level_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), sstring(), sstring());
+}
+
 }
 }

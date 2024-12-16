@@ -146,7 +146,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_type_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(make_shared<create_type_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_type_statement>(*this));
 }
 
 ::shared_ptr<schema_altering_statement::event_t> create_type_statement::created_event() const {

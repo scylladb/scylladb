@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "audit/audit.hh"
+
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
@@ -41,15 +43,15 @@ public:
     const std::vector<uint16_t> partition_key_bind_indices;
     std::vector<sstring> warnings;
 
-    prepared_statement(seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
+    prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
                        std::vector<uint16_t> partition_key_bind_indices, std::vector<sstring> warnings = {});
 
-    prepared_statement(seastar::shared_ptr<cql_statement> statement_, const prepare_context& ctx, const std::vector<uint16_t>& partition_key_bind_indices,
+    prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, const prepare_context& ctx, const std::vector<uint16_t>& partition_key_bind_indices,
                        std::vector<sstring> warnings = {});
 
-    prepared_statement(seastar::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices);
+    prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, prepare_context&& ctx, std::vector<uint16_t>&& partition_key_bind_indices);
 
-    prepared_statement(seastar::shared_ptr<cql_statement>&& statement_);
+    prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement>&& statement_);
 
     checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());

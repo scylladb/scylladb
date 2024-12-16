@@ -1881,6 +1881,10 @@ static void validate_attrs(const cql3::attributes::raw& attrs) {
     SCYLLA_ASSERT(!attrs.time_to_live.has_value());
 }
 
+audit::statement_category select_statement::category() const {
+    return audit::statement_category::QUERY;
+}
+
 select_statement::select_statement(cf_name cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
@@ -2167,8 +2171,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     auto partition_key_bind_indices = ctx.get_partition_key_bind_indexes(*schema);
+
     stmt->_may_use_token_aware_routing = partition_key_bind_indices.size() != 0;
-    return make_unique<prepared_statement>(std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
+    return make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::move(partition_key_bind_indices), std::move(warnings));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

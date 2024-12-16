@@ -30,6 +30,11 @@ public:
     use_statement(sstring keyspace);
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+protected:
+    virtual audit::statement_category category() const override;
+    virtual audit::audit_info_ptr audit_info() const override {
+        return audit::audit::create_audit_info(category(), _keyspace, sstring());
+    }
 };
 
 }
