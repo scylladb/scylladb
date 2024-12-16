@@ -4794,11 +4794,9 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
 
 static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
     std::map<sstring, sstring> options;
-    sstring rf_str = std::to_string(rf);
-    auto& topology = sp.get_token_metadata_ptr()->get_topology();
-    for (const gms::inet_address& addr : gossiper.get_live_members()) {
-        options.emplace(topology.get_datacenter(addr), rf_str);
-    };
+    for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
+        options.emplace(dc, std::to_string(rf));
+    }
     return options;
 }
 
