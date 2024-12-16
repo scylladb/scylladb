@@ -88,7 +88,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'seed_provider': [{
             'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
             'parameters': [{
-                'seeds': '{}'.format(','.join(seed_addrs))
+                'seeds': ','.join(seed_addrs)
                 }]
             }],
 
@@ -335,7 +335,7 @@ class ScyllaServer:
         if self.is_running:
             raise RuntimeError(f"Can't change seeds of a running server {self.ip_addr}.")
         self.seeds = seeds
-        self.config['seed_provider'][0]['parameters'][0]['seeds'] = '{}'.format(','.join(seeds))
+        self.config['seed_provider'][0]['parameters'][0]['seeds'] = ','.join(seeds)
         self._write_config_file()
 
     @property
