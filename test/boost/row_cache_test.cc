@@ -4696,8 +4696,8 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
 // of course doesn't necessarily help release pressure on the semaphore.
 SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
     simple_schema s;
-    reader_concurrency_semaphore semaphore(100, 1, get_name(), std::numeric_limits<size_t>::max(), utils::updateable_value<uint32_t>(1),
-            utils::updateable_value<uint32_t>(1), reader_concurrency_semaphore::register_metrics::no);
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 100, 1, std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t>(1), utils::updateable_value<uint32_t>(1));
     auto stop_semaphore = deferred_stop(semaphore);
 
     cache_tracker tracker;
