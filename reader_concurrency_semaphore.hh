@@ -299,9 +299,10 @@ public:
             size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
+            utils::updateable_value<uint32_t> cpu_concurrency,
             register_metrics metrics)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length,
-                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), utils::updateable_value<uint32_t>(1), metrics)
+                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), std::move(cpu_concurrency), metrics)
     { }
 
     /// Create a semaphore with practically unlimited count and memory.
