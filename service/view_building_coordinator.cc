@@ -18,6 +18,7 @@
 #include "schema/schema_fwd.hh"
 #include "seastar/core/loop.hh"
 #include "seastar/coroutine/maybe_yield.hh"
+#include "service/coordinator_event_subscriber.hh"
 #include "service/query_state.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0.hh"
@@ -53,7 +54,7 @@ query_state& vb_coordinator_query_state() {
     return qs;
 }
 
-class view_building_coordinator : public migration_listener::only_view_notifications {
+class view_building_coordinator : public migration_listener::only_view_notifications, public coordinator_event_subscriber {
     replica::database& _db;
     raft_group0& _group0;
     db::system_keyspace& _sys_ks;
@@ -78,6 +79,10 @@ public:
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
+
+    virtual void on_tablet_migration_start() override {}
+    virtual void on_tablet_migration_finish() override {}
+    virtual void on_tablet_migration_abort() override {}
 
 private:
     future<group0_guard> start_operation() {
@@ -291,8 +296,6 @@ future<> run_view_building_coordinator(abort_source& as, replica::database& db, 
     }
 
     co_await db.get_notifier().unregister_listener(&vb_coordinator);
-
-    co_return;
 }
 
 }

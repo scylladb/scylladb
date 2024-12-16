@@ -14,6 +14,7 @@
 #include "gc_clock.hh"
 #include "raft/raft.hh"
 #include <seastar/core/sleep.hh>
+#include "service/coordinator_event_subscriber.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -7686,6 +7687,50 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     if (start_instantly) {
         co_await server.start_server();
     }
+}
+
+void coordinator_event_notifier::register_subscriber(coordinator_event_subscriber* subscriber) {
+    _subscribers.add(subscriber);
+}
+
+future<> coordinator_event_notifier::unregister_subscriber(coordinator_event_subscriber* subscriber) noexcept {
+    return _subscribers.remove(subscriber);
+}
+
+future<> coordinator_event_notifier::notify_tablet_migration_start() {
+    return seastar::async([this] {
+        _subscribers.thread_for_each([] (coordinator_event_subscriber* sub) {
+            try {
+                sub->on_tablet_migration_start();
+            } catch (...) {
+                slogger.warn("on_tablet_migration_start() failed: {}", std::current_exception());
+            }
+        });
+    });
+}
+
+future<> coordinator_event_notifier::notify_tablet_migration_finish() {
+    return seastar::async([this] {
+        _subscribers.thread_for_each([] (coordinator_event_subscriber* sub) {
+            try {
+                sub->on_tablet_migration_finish();
+            } catch (...) {
+                slogger.warn("on_tablet_migration_finish() failed: {}", std::current_exception());
+            }
+        });
+    });
+}
+
+future<> coordinator_event_notifier::notify_tablet_migration_abort() {
+    return seastar::async([this] {
+        _subscribers.thread_for_each([] (coordinator_event_subscriber* sub) {
+            try {
+                sub->on_tablet_migration_abort();
+            } catch (...) {
+                slogger.warn("on_tablet_migration_abort() failed: {}", std::current_exception());
+            }
+        });
+    });
 }
 
 } // namespace service
