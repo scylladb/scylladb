@@ -19,6 +19,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/testing/test_runner.hh>
 #include "test/lib/random_utils.hh"
+#include "db/config.hh"
 
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
@@ -521,6 +522,15 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     out << results;
 }
 
+/// If app configuration contains the named parameter, store its value into \p store.
+static void set_from_cli(const char* name, app_template& app, utils::config_file::named_value<sstring>& store) {
+    const auto& cfg = app.configuration();
+    auto found = cfg.find(name);
+    if (found != cfg.end()) {
+        store(found->second.as<std::string>());
+    }
+}
+
 namespace perf {
 
 int scylla_simple_query_main(int argc, char** argv) {
@@ -546,6 +556,10 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
+        ("audit", bpo::value<std::string>(), "value for audit config entry")
+        ("audit-keyspaces", bpo::value<std::string>(), "value for audit_keyspaces config entry")
+        ("audit-tables", bpo::value<std::string>(), "value for audit_tables config entry")
+        ("audit-categories", bpo::value<std::string>(), "value for audit_categories config entry")
         ;
 
     set_abort_on_internal_error(true);
@@ -569,6 +583,10 @@ int scylla_simple_query_main(int argc, char** argv) {
                 cfg.db_config->enable_tablets.set(true);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
+            set_from_cli("audit", app, cfg.db_config->audit);
+            set_from_cli("audit-keyspaces", app, cfg.db_config->audit_keyspaces);
+            set_from_cli("audit-tables", app, cfg.db_config->audit_tables);
+            set_from_cli("audit-categories", app, cfg.db_config->audit_categories);
           return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
@@ -601,6 +619,13 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.stop_on_error = app.configuration()["stop-on-error"].as<bool>();
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
+            audit::audit::create_audit(env.local_db().get_config(), env.get_shared_token_metadata()).handle_exception([&] (auto&& e) {
+                fmt::print("audit creation failed: {}", e);
+            }).get();
+            audit::audit::start_audit(env.local_db().get_config(), env.qp(), env.migration_manager()).get();
+            auto audit_stop = defer([] {
+                audit::audit::stop_audit().get();
+            });
             auto results = cfg.frontend == test_config::frontend_type::cql
                     ? do_cql_test(env, cfg)
                     : do_alternator_test(app.configuration()["alternator"].as<std::string>(),
