@@ -632,6 +632,17 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     });
 }
 
+future<tasks::task_manager::task::progress> reshaping_compaction_task_impl::get_progress() const {
+    tasks::task_manager::task::progress progress{};
+    co_await _children.for_each_task([&progress] (const tasks::task_manager::foreign_task_ptr& child) -> future<> {
+        progress += co_await child->get_progress();
+    }, [&progress] (const tasks::task_manager::task::task_essentials& child) {
+        progress += child.task_progress;
+        return make_ready_future();
+    });
+    co_return progress;
+}
+
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
     auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {

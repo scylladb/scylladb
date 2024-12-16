@@ -596,14 +596,13 @@ public:
             std::string entity,
             tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {
-        // FIXME: add progress units
-        _status.progress_units = "";
-    }
+    {}
 
     virtual std::string type() const override {
         return "reshaping compaction";
     }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
 protected:
     virtual future<> run() override = 0;
 };
