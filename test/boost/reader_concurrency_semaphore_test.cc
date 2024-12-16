@@ -519,7 +519,10 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_abort) {
     return async([&] () {
-        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
+        const auto preemptive_abort_factor = 0.5f;
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost,
+                100, utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+                utils::updateable_value<uint32_t>(1), utils::updateable_value<float>(preemptive_abort_factor));
         auto stop_sem = deferred_stop(semaphore);
 
         {
@@ -1258,11 +1261,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
     auto serialize_multiplier = utils::updateable_value_source<uint32_t>(2);
     auto kill_multiplier = utils::updateable_value_source<uint32_t>(3);
     auto cpu_concurrency = utils::updateable_value_source<uint32_t>(1);
+    auto preemptive_abort_factor = utils::updateable_value_source<float>(0.0f);
 
     reader_concurrency_semaphore_group sem_group(initial_resources.memory, initial_resources.count, 1000,
             utils::updateable_value(serialize_multiplier),
             utils::updateable_value(kill_multiplier),
-            utils::updateable_value(cpu_concurrency));
+            utils::updateable_value(cpu_concurrency),
+            utils::updateable_value(preemptive_abort_factor));
+
     auto stop_sem = deferred_stop(sem_group);
 
     circular_buffer<scheduling_group> recycle_bin;
@@ -2207,6 +2213,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
     const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
     const auto cpu_concurrency = 1;
+    const auto preemptive_abort_factor = 0.0f;
 
     reader_concurrency_semaphore semaphore(
             utils::updateable_value(count),
@@ -2216,6 +2223,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
             utils::updateable_value<uint32_t>(serialize_multiplier),
             utils::updateable_value<uint32_t>(kill_multiplier),
             utils::updateable_value<uint32_t>(cpu_concurrency),
+            utils::updateable_value<float>(preemptive_abort_factor),
             reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
@@ -2235,6 +2243,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
     const uint32_t initial_memory = 4 * 1024;
     const auto serialize_multiplier = std::numeric_limits<uint32_t>::max();
     const auto kill_multiplier = std::numeric_limits<uint32_t>::max();
+    const auto preemptive_abort_factor = 1.0f;
 
     reader_concurrency_semaphore semaphore(
             utils::updateable_value<int>(initial_count),
@@ -2244,6 +2253,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
             utils::updateable_value<uint32_t>(serialize_multiplier),
             utils::updateable_value<uint32_t>(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
+            utils::updateable_value<float>(preemptive_abort_factor),
             reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
@@ -2296,6 +2306,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_wait_queue_overload_c
             utils::updateable_value<uint32_t>(2),
             utils::updateable_value<uint32_t>(4),
             utils::updateable_value<uint32_t>(1),
+            utils::updateable_value<float>(0.0f),
             reader_concurrency_semaphore::register_metrics::no);
     auto stop_sem = deferred_stop(semaphore);
 
