@@ -1063,6 +1063,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
         utils::updateable_value<uint32_t> serialize_limit_multiplier,
         utils::updateable_value<uint32_t> kill_limit_multiplier,
         utils::updateable_value<uint32_t> cpu_concurrency,
+        utils::updateable_value<float> preemptive_abort_factor,
         register_metrics metrics)
     : _initial_resources(count, memory)
     , _resources(count, memory)
@@ -1072,6 +1073,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
     , _cpu_concurrency(cpu_concurrency)
+    , _preemptive_abort_factor(preemptive_abort_factor)
 {
     if (metrics == register_metrics::yes) {
         _metrics.emplace();
@@ -1137,6 +1139,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(float(0.0)),
             metrics) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
@@ -1521,7 +1524,7 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         dequeue_permit(permit);
         try {
             // Abort the read if its remaining time is less than half of its timeout when arrived to the semaphore
-            if (permit.timeout() - db::timeout_clock::now() <= (permit.timeout() - permit.created())/2) {
+            if (permit.timeout() - db::timeout_clock::now() <= _preemptive_abort_factor() * (permit.timeout() - permit.created())) {
                 permit.on_reject();
                 continue;
             }
