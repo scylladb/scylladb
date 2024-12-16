@@ -455,18 +455,13 @@ tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const no
 future<> global_cleanup_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         co_await db.flush_all_tables();
-        const auto keyspaces = _db.local().get_non_local_strategy_keyspaces();
+        // Local keyspaces do not require cleanup.
+        // Keyspaces using tablets do not support cleanup.
+        const auto keyspaces = _db.local().get_non_local_vnode_based_strategy_keyspaces();
+        if (this_shard_id() == 0) {
+            _child_count = keyspaces.size() * smp::count;
+        }
         co_await coroutine::parallel_for_each(keyspaces, [&] (const sstring& ks) -> future<> {
-            const auto& keyspace = db.find_keyspace(ks);
-            const auto& replication_strategy = keyspace.get_replication_strategy();
-            if (replication_strategy.get_type() == locator::replication_strategy_type::local) {
-                // this keyspace does not require cleanup
-                co_return;
-            }
-            if (replication_strategy.uses_tablets()) {
-                // this keyspace does not support cleanup
-                co_return;
-            }
             std::vector<table_info> tables;
             const auto& cf_meta_data = db.find_keyspace(ks).metadata().get()->cf_meta_data();
             for (auto& [name, schema] : cf_meta_data) {
