@@ -2512,6 +2512,77 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
+    // When doing normal load balancing, we can ignore DOWN nodes in the node set
+    // and just balance the UP nodes among themselves because it's ok to equalize
+    // load in that set.
+    // It's dangerous to do that when draining because that can lead to overloading of the UP nodes.
+    // In the worst case, we can have only one non-drained node in the UP set, which would receive
+    // all the tablets of the drained node, doubling its load.
+    // It's safer to let the drain fail/stall.
+    do_with_cql_env_thread([] (auto& e) {
+        inet_address ip1("192.168.0.1");
+        inet_address ip2("192.168.0.2");
+        inet_address ip3("192.168.0.3");
+
+        auto host1 = host_id(next_uuid());
+        auto host2 = host_id(next_uuid());
+        auto host3 = host_id(next_uuid());
+
+        auto table1 = table_id(next_uuid());
+
+        unsigned shard_count = 1;
+
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+            locator::topology::config{
+                .this_endpoint = ip1,
+                .this_host_id = host1,
+                .local_dc_rack = locator::endpoint_dc_rack::default_location
+            }
+        });
+
+        stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
+            tm.update_host_id(host1, ip1);
+            tm.update_host_id(host2, ip2);
+            tm.update_host_id(host3, ip3);
+            tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
+            tm.update_topology(host2, locator::endpoint_dc_rack::default_location, locator::node::state::normal, shard_count);
+            tm.update_topology(host3, locator::endpoint_dc_rack::default_location, locator::node::state::normal, shard_count);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 3))}, host1);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(2. / 3))}, host2);
+            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(3. / 3))}, host3);
+
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set{tablet_replica{host1, 0}}
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set{tablet_replica{host1, 0}}
+            });
+            tablet_metadata tmeta;
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            tm.set_tablets(std::move(tmeta));
+            co_return;
+        }).get();
+
+        std::unordered_set<host_id> skiplist = {host2};
+        rebalance_tablets(e.get_tablet_allocator().local(), stm, {}, skiplist);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+
+            for (auto h : {host2, host3}) {
+                testlog.debug("Checking host {}", h);
+                BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 1);
+            }
+        }
+    }).get();
+}
+
 static
 void check_tablet_invariants(const tablet_metadata& tmeta) {
     for (auto&& [table, tmap] : tmeta.all_tables()) {
