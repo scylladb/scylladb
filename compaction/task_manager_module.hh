@@ -254,6 +254,7 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 private:
     future<> run() final;
+    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {

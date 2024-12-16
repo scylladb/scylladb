@@ -507,18 +507,10 @@ tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const no
 future<> global_cleanup_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         co_await db.flush_all_tables();
-        const auto keyspaces = _db.local().get_non_local_strategy_keyspaces();
+        // Local keyspaces do not require cleanup.
+        // Keyspaces using tablets do not support cleanup.
+        const auto keyspaces = _db.local().get_non_local_vnode_based_strategy_keyspaces();
         co_await coroutine::parallel_for_each(keyspaces, [&] (const sstring& ks) -> future<> {
-            const auto& keyspace = db.find_keyspace(ks);
-            const auto& replication_strategy = keyspace.get_replication_strategy();
-            if (replication_strategy.is_local()) {
-                // this keyspace does not require cleanup
-                co_return;
-            }
-            if (replication_strategy.uses_tablets()) {
-                // this keyspace does not support cleanup
-                co_return;
-            }
             std::vector<table_info> tables;
             const auto& cf_meta_data = db.find_keyspace(ks).metadata().get()->cf_meta_data();
             for (auto& [name, schema] : cf_meta_data) {
@@ -531,6 +523,23 @@ future<> global_cleanup_compaction_task_impl::run() {
             co_await task->done();
         });
     });
+}
+
+future<std::optional<double>> global_cleanup_compaction_task_impl::expected_total_workload() const {
+    if (_expected_workload) {
+        co_return _expected_workload;
+    }
+    uint64_t bytes = 0;
+    auto keyspaces = _db.local().get_non_local_vnode_based_strategy_keyspaces();
+    for (const auto& ks : keyspaces) {
+        std::vector<table_info> tables;
+        const auto& cf_meta_data = _db.local().find_keyspace(ks).metadata().get()->cf_meta_data();
+        for (auto& [name, schema] : cf_meta_data) {
+            tables.emplace_back(name, schema->id());
+        }
+        bytes += co_await get_keyspace_task_workload(_db, tables);
+    }
+    co_return _expected_workload = bytes;
 }
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
