@@ -1751,14 +1751,25 @@ public:
                     lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
                     nodes_to_drain.emplace(node.host_id());
                     nodes[node.host_id()].drained = true;
-                } else if (node.is_excluded() || _skiplist.contains(node.host_id())) {
+                } else if (node.is_excluded()) {
                     // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node.host_id(), node.get_state());
+                    lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
                 } else {
                     ensure_node(node.host_id());
                 }
             }
         });
+
+        // Apply skiplist only when not draining.
+        // It's unsafe to move tablets to non-skip nodes as this can lead to node overload.
+        if (nodes_to_drain.empty()) {
+            for (auto host_to_skip : _skiplist) {
+                if (auto handle = nodes.extract(host_to_skip)) {
+                    auto& node = handle.mapped();
+                    lblogger.debug("Ignoring dead node {}: state={}", node.id, node.node->get_state());
+                }
+            }
+        }
 
         // Compute tablet load on nodes.
 
