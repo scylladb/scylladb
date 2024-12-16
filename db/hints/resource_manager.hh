@@ -127,7 +127,6 @@ class resource_manager {
     space_watchdog::per_device_limits_map _per_device_limits_map;
     space_watchdog _space_watchdog;
 
-    service::storage_proxy& _proxy;
     shared_ptr<const gms::gossiper> _gossiper_ptr;
 
     enum class state {
@@ -175,7 +174,6 @@ public:
         , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
         , _operation_lock(1, named_semaphore_exception_factory{"operation lock"})
         , _space_watchdog(_shard_managers, _per_device_limits_map)
-        , _proxy(proxy)
     {}
 
     resource_manager(resource_manager&&) = delete;
