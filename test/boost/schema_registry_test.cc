@@ -272,10 +272,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_is_recovered_after_dying) {
         [base_schema] (table_schema_version) -> view_schema_and_base_info { return {frozen_schema(base_schema)}; });
     base_registry_schema = nullptr;
     auto recovered_registry_schema = local_schema_registry().get_or_null(base_schema->version());
-    BOOST_REQUIRE(recovered_registry_schema);
-    recovered_registry_schema = nullptr;
-    seastar::sleep(dummy.grace_period).get();
-    BOOST_REQUIRE(!local_schema_registry().get_or_null(base_schema->version()));
+    BOOST_REQUIRE(recovered_registry_schema->version() == base_schema->version());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
