@@ -50,7 +50,7 @@ struct ring_point {
     host_id id = host_id::create_random_id();
 };
 
-void print_natural_endpoints(double point, const inet_address_vector_replica_set v) {
+void print_natural_endpoints(double point, const host_id_vector_replica_set v) {
     testlog.debug("Natural endpoints for a token {}:", point);
     std::string str;
     std::ostringstream strm(str);
@@ -104,11 +104,11 @@ void strategy_sanity_check(
 void endpoints_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
-    const inet_address_vector_replica_set& endpoints,
+    const host_id_vector_replica_set& endpoints,
     const locator::topology& topo,
     bool strict_dc_rf = false) {
 
-    auto&& nodes_per_dc = tm->get_datacenter_token_owners_ips();
+    auto&& nodes_per_dc = tm->get_datacenter_token_owners();
     const network_topology_strategy* nts_ptr =
             dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
 
@@ -123,7 +123,7 @@ void endpoints_check(
     BOOST_CHECK_LE(total_rf, ars_ptr->get_replication_factor(*tm));
 
     // Check the uniqueness
-    std::unordered_set<inet_address> ep_set(endpoints.begin(), endpoints.end());
+    std::unordered_set<locator::host_id> ep_set(endpoints.begin(), endpoints.end());
     BOOST_CHECK_EQUAL(endpoints.size(), ep_set.size());
 
     // Check the per-DC RF
@@ -166,7 +166,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
         token t1(tests::d2t(cur_point1 / ring_points.size()));
-        auto endpoints1 = erm->get_natural_endpoints(t1);
+        auto endpoints1 = erm->get_natural_replicas(t1);
 
         endpoints_check(ars_ptr, tmptr, endpoints1, topo);
 
@@ -179,7 +179,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         //
         double cur_point2 = rp.point - 0.2;
         token t2(tests::d2t(cur_point2 / ring_points.size()));
-        auto endpoints2 = erm->get_natural_endpoints(t2);
+        auto endpoints2 = erm->get_natural_replicas(t2);
 
         endpoints_check(ars_ptr, tmptr, endpoints2, topo);
         check_ranges_are_sorted(erm, rp.id).get();
@@ -193,17 +193,17 @@ void full_ring_check(const tablet_map& tmap,
     auto& tm = *tmptr;
     const auto& topo = tm.get_topology();
 
-    auto to_endpoint_set = [&] (const tablet_replica_set& replicas) {
-        inet_address_vector_replica_set result;
+    auto to_replica_set = [&] (const tablet_replica_set& replicas) {
+        host_id_vector_replica_set result;
         result.reserve(replicas.size());
         for (auto&& replica : replicas) {
-            result.emplace_back(tm.get_endpoint_for_host_id(replica.host));
+            result.emplace_back(replica.host);
         }
         return result;
     };
 
     for (tablet_id tb : tmap.tablet_ids()) {
-        endpoints_check(rs_ptr, tmptr, to_endpoint_set(tmap.get_tablet_info(tb).replicas), topo, true);
+        endpoints_check(rs_ptr, tmptr, to_replica_set(tmap.get_tablet_info(tb).replicas), topo, true);
     }
 }
 
@@ -672,7 +672,7 @@ static size_t get_replication_factor(const sstring& dc,
 
 static bool has_sufficient_replicas(const sstring& dc,
                 const std::unordered_map<sstring, std::unordered_set<host_id>>& dc_replicas,
-                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, std::unordered_set<host_id>>& all_endpoints,
                 const std::unordered_map<sstring, size_t>& datacenters) noexcept {
     auto dc_replicas_it = dc_replicas.find(dc);
     if (dc_replicas_it == dc_replicas.end()) {
@@ -690,7 +690,7 @@ static bool has_sufficient_replicas(const sstring& dc,
 
 static bool has_sufficient_replicas(
                 const std::unordered_map<sstring, std::unordered_set<host_id>>& dc_replicas,
-                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, std::unordered_set<host_id>>& all_endpoints,
                 const std::unordered_map<sstring, size_t>& datacenters) noexcept {
 
     for (auto& dc : datacenters | std::views::keys) {
@@ -741,16 +741,16 @@ static locator::host_id_set calculate_natural_endpoints(
     // the token-owning members of a DC
     //
     const std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>
-        all_endpoints = tm.get_datacenter_token_owners_ips();
+                       std::unordered_set<locator::host_id>>
+        all_endpoints = tm.get_datacenter_token_owners();
     //
     // all racks (with non-token owners filtered out) in a DC so we can check
     // when we have exhausted all racks in a DC
     //
     const std::unordered_map<sstring,
                        std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>
-        racks = tm.get_datacenter_racks_token_owners_ips();
+                                          std::unordered_set<host_id>>>
+        racks = tm.get_datacenter_racks_token_owners();
 
     // not aware of any cluster members
     SCYLLA_ASSERT(!all_endpoints.empty() && !racks.empty());
