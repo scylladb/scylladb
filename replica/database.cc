@@ -402,7 +402,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
-            utils::updateable_value(0.5f),
+            _cfg.view_update_reader_concurrency_semaphore_preemptive_abort_factor,
             "view_update")
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
@@ -431,7 +431,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
         _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
         _cfg.reader_concurrency_semaphore_cpu_concurrency,
-        utils::updateable_value(0.5f))
+        _cfg.reader_concurrency_semaphore_preemptive_abort_factor)
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
