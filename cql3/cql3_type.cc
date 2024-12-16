@@ -305,6 +305,56 @@ public:
     }
 };
 
+class cql3_type::raw_vector : public raw {
+    shared_ptr<raw> _type;
+    size_t _dimension;
+
+    // This limitation is acquired from the maximum number of dimensions in OpenSearch. 
+    static constexpr size_t MAX_VECTOR_DIMENSION = 16000;
+
+    virtual sstring to_string() const override {
+        return seastar::format("vector<{}, {}>", _type, _dimension);
+    }
+
+public:
+    raw_vector(shared_ptr<raw> type, size_t dimension)
+            : _type(std::move(type)), _dimension(dimension) {
+    }
+
+    virtual bool supports_freezing() const override {
+        return true;
+    }
+
+    virtual bool is_collection() const override {
+        return false;
+    }
+
+    virtual void freeze() override {
+        _frozen = true;
+    }
+
+    virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
+        if (!is_frozen()) {
+            freeze();
+        }
+
+        if (_dimension == 0) {
+            throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
+        }
+
+        if (_dimension > MAX_VECTOR_DIMENSION) {
+            throw exceptions::invalid_request_exception(
+                    format("Vectors must have a dimension less than or equal to {}", MAX_VECTOR_DIMENSION));
+        }
+
+        return vector_type_impl::get_instance(_type->prepare_internal(keyspace, user_types).get_type(), _dimension)->as_cql3_type();
+    }
+
+    bool references_user_type(const sstring& name) const override {
+        return _type->references_user_type(name);
+    }
+};
+
 bool
 cql3_type::raw::is_collection() const {
     return false;
@@ -364,6 +414,11 @@ cql3_type::raw::set(shared_ptr<raw> t) {
 shared_ptr<cql3_type::raw>
 cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
     return ::make_shared<raw_tuple>(std::move(ts));
+}
+
+shared_ptr<cql3_type::raw>
+cql3_type::raw::vector(shared_ptr<raw> t, size_t dimension) {
+    return ::make_shared<raw_vector>(std::move(t), dimension);
 }
 
 shared_ptr<cql3_type::raw>
