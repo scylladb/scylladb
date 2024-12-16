@@ -1231,17 +1231,48 @@ public:
                               || node_ptr->get_state() == locator::node::state::being_removed;
             if (node_ptr->get_state() == locator::node::state::normal || is_drained) {
                 if (is_drained) {
+<<<<<<< HEAD
                     ensure_node(node_ptr->host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node_ptr->host_id(), node_ptr->get_state(), dc);
                     nodes_to_drain.emplace(node_ptr->host_id());
                 } else if (node_ptr->is_excluded() || _skiplist.contains(node_ptr->host_id())) {
+||||||| parent of 8718450172 (tablets: load_balancer: Ignore skip_list when draining)
+                    ensure_node(node.host_id());
+                    lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
+                    nodes_to_drain.emplace(node.host_id());
+                    nodes[node.host_id()].drained = true;
+                } else if (node.is_excluded() || _skiplist.contains(node.host_id())) {
+=======
+                    ensure_node(node.host_id());
+                    lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
+                    nodes_to_drain.emplace(node.host_id());
+                    nodes[node.host_id()].drained = true;
+                } else if (node.is_excluded()) {
+>>>>>>> 8718450172 (tablets: load_balancer: Ignore skip_list when draining)
                     // Excluded nodes should not be chosen as targets for migration.
+<<<<<<< HEAD
                     lblogger.debug("Ignoring excluded or dead node {}: state={}", node_ptr->host_id(), node_ptr->get_state());
+||||||| parent of 8718450172 (tablets: load_balancer: Ignore skip_list when draining)
+                    lblogger.debug("Ignoring excluded or dead node {}: state={}", node.host_id(), node.get_state());
+=======
+                    lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
+>>>>>>> 8718450172 (tablets: load_balancer: Ignore skip_list when draining)
                 } else {
                     ensure_node(node_ptr->host_id());
                 }
             }
         });
+
+        // Apply skiplist only when not draining.
+        // It's unsafe to move tablets to non-skip nodes as this can lead to node overload.
+        if (nodes_to_drain.empty()) {
+            for (auto host_to_skip : _skiplist) {
+                if (auto handle = nodes.extract(host_to_skip)) {
+                    auto& node = handle.mapped();
+                    lblogger.debug("Ignoring dead node {}: state={}", node.id, node.node->get_state());
+                }
+            }
+        }
 
         // Compute tablet load on nodes.
 
