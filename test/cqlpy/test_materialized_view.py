@@ -1539,6 +1539,15 @@ def test_alter_table_add_select_star(cql, test_keyspace):
             cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
+            
+# Test that if a view is created with "SELECT *", DESC MATERIALIZED VIEW operation shows it
+# as "SELECT *" instead of expanding it (explicitly showing each column).
+# Reproduces issue #21154
+def test_desc_mv_with_select_star(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+                mv_desc_result = cql.execute(f"DESC MATERIALIZED VIEW {mv};").one()
+                assert 'SELECT *' in mv_desc_result.create_statement
 
 # Test that tombstones with future timestamps work correctly
 # when a write with lower timestamp arrives - in such case,
