@@ -1687,3 +1687,14 @@ def test_view_in_API(cql, test_keyspace):
             wait_for_view_built(cql, view)
             res = rest_api.get_request(cql, f"column_family/built_indexes/{base.replace('.',':')}")
             assert view_name not in res
+
+# Test that we can perform reads from the view in reverse order without crashing.
+# Reproduces issue https://github.com/scylladb/scylladb/issues/21354
+def test_reverse_read_from_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int PRIMARY KEY, b int') as table:
+        with new_materialized_view(cql, table, '*', 'b, a', 'a is not null and b is not null') as mv:
+            cql.execute(f'insert into {table} (a, b) values (1, 1)')
+            cql.execute(f'insert into {table} (a, b) values (2, 1)')
+            assert {(1,),(2,)} == set(cql.execute(f'select a from {mv} where b=1'))
+            assert [(1,),(2,)] == list(cql.execute(f'select a from {mv} where b=1 order by a asc'))
+            assert [(2,),(1,)] == list(cql.execute(f'select a from {mv} where b=1 order by a desc'))
