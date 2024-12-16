@@ -1510,7 +1510,7 @@ protected:
     size_t _total_block_for = 0;
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
-    host_id_vector_replica_set _targets; // who we sent this mutation to
+    host_id_vector_replica_set _targets; // who we sent this mutation to and still pending response
     // added dead_endpoints as a member here as well. This to be able to carry the info across
     // calls in helper methods in a convenient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
@@ -1528,6 +1528,7 @@ protected:
     timer<storage_proxy::clock_type> _expire_timer;
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
+    db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
 
 protected:
     virtual bool waited_for(locator::host_id from) = 0;
@@ -1549,7 +1550,7 @@ public:
             , _effective_replication_map_ptr(std::move(erm))
             , _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _dead_endpoints(std::move(dead_endpoints)), _stats(stats), _expire_timer([this] { timeout_cb(); }), _permit(std::move(permit)),
-              _rate_limit_info(rate_limit_info) {
+              _rate_limit_info(rate_limit_info), _view_backlog(max_backlog()) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
@@ -1738,8 +1739,7 @@ public:
     // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
     template<typename Func>
     void delay(tracing::trace_state_ptr trace, Func&& on_resume) {
-        auto backlog = max_backlog();
-        auto delay = db::view::calculate_view_update_throttling_delay(backlog, _expire_timer.get_timeout(), _proxy->data_dictionary().get_config().view_flow_control_delay_limit_in_ms());
+        auto delay = db::view::calculate_view_update_throttling_delay(_view_backlog, _expire_timer.get_timeout(), _proxy->data_dictionary().get_config().view_flow_control_delay_limit_in_ms());
         stats().last_mv_flow_control_delay = delay;
         stats().mv_flow_control_delay += delay.count();
         if (delay.count() == 0) {
@@ -1749,7 +1749,7 @@ public:
             ++stats().throttled_base_writes;
             ++stats().total_throttled_base_writes;
             tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
-                          backlog.get_current_bytes(), backlog.get_max_bytes(), delay.count());
+                          _view_backlog.get_current_bytes(), _view_backlog.get_max_bytes(), delay.count());
             // Waited on indirectly.
             (void)sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
                 --self->stats().throttled_base_writes;
