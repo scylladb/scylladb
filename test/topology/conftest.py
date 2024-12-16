@@ -187,9 +187,9 @@ async def manager(request, manager_internal, record_property, build_mode):
     # this should be consistent with scylla_cluster.py handler name in _before_test method
     test_py_log_test = suite_testpy_log.parent / f"{test_case_name}.log"
 
-    manager_internal = manager_internal()  # set up client object in fixture with scope function
-    await manager_internal.before_test(test_case_name, test_log)
-    yield manager_internal
+    manager_client = manager_internal()  # set up client object in fixture with scope function
+    await manager_client.before_test(test_case_name, test_log)
+    yield manager_client
     # `request.node.stash` contains a report stored in `pytest_runtest_makereport` from where we can retrieve
     # test failure.
     report = request.node.stash[PHASE_REPORT_KEY]
@@ -200,7 +200,7 @@ async def manager(request, manager_internal, record_property, build_mode):
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
         failed_test_dir_path = tmp_dir / build_mode / "failed_test" / f"{test_case_name}"
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
-        await manager_internal.gather_related_logs(
+        await manager_client.gather_related_logs(
             failed_test_dir_path,
             {'pytest.log': test_log, 'test_py.log': test_py_log_test}
         )
@@ -212,8 +212,8 @@ async def manager(request, manager_internal, record_property, build_mode):
             full_url = f"<a href={request.config.getoption('artifacts_dir_url')}/{dir_path_relative}>failed_test_logs</a>"
             record_property("TEST_LOGS", full_url)
 
-    cluster_status = await manager_internal.after_test(test_case_name, not failed)
-    await manager_internal.stop()  # Stop client session and close driver after each test
+    cluster_status = await manager_client.after_test(test_case_name, not failed)
+    await manager_client.stop()  # Stop client session and close driver after each test
     if cluster_status["server_broken"]:
         pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken")
 
