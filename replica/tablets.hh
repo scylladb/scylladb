@@ -29,6 +29,12 @@ class query_processor;
 
 }
 
+namespace gms {
+
+class feature_service;
+
+}
+
 namespace replica {
 
 data_type get_replica_set_type();
@@ -50,7 +56,8 @@ future<mutation> tablet_map_to_mutation(const locator::tablet_map&,
                                         table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
-                                        api::timestamp_type);
+                                        api::timestamp_type,
+                                        const gms::feature_service& features);
 
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 

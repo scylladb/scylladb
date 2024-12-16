@@ -112,7 +112,7 @@ data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler
 
 future<mutation>
 tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
-                       api::timestamp_type ts) {
+                       api::timestamp_type ts, const gms::feature_service& features) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
@@ -126,17 +126,23 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
-    m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
+    if (features.tablet_repair_scheduler) {
+        m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
+    }
 
     tablet_id tid = tablets.first_tablet();
     for (auto&& tablet : tablets.tablets()) {
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
-        m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
-        m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
-        if (tablet.repair_time != db_clock::time_point{}) {
-            m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+        if (features.tablet_migration_virtual_task) {
+            m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
+        }
+        if (features.tablet_repair_scheduler) {
+            m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            if (tablet.repair_time != db_clock::time_point{}) {
+                m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+            }
         }
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
@@ -322,7 +328,7 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
-                co_await tablet_map_to_mutation(*tablets, id, s->ks_name(), s->cf_name(), ts));
+                co_await tablet_map_to_mutation(*tablets, id, s->ks_name(), s->cf_name(), ts, db.features()));
     }
     co_await db.apply(freeze(muts), db::no_timeout);
 }
