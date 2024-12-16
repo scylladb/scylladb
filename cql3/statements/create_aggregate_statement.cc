@@ -79,7 +79,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
 }
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(make_shared<create_aggregate_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
@@ -121,5 +121,16 @@ create_aggregate_statement::create_aggregate_statement(functions::function_name 
         , _ffunc(std::move(ffunc))
         , _ival(std::move(ival))
     {}
+
+audit::statement_category create_aggregate_statement::category() const {
+    return audit::statement_category::DDL;
 }
+
+audit::audit_info_ptr
+create_aggregate_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), sstring(), sstring());
+}
+
+}
+
 }

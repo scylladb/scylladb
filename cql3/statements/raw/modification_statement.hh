@@ -53,6 +53,8 @@ protected:
     // we need to know what kinds of conditions (static, regular) the statement has.
     void prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
             cql3::statements::modification_statement& stmt) const;
+
+    virtual audit::statement_category category() const override;
 };
 
 }

@@ -13,6 +13,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -595,11 +596,27 @@ query_processor::do_execute_direct(
         const query_options& options,
         std::optional<service::group0_guard> guard,
         cql3::cql_warnings_vec warnings) {
-    co_await statement->check_access(*this, query_state.get_client_state());
-    auto m = co_await process_authorized_statement(statement, query_state, options, std::move(guard));
-    for (const auto& w : warnings) {
-        m->add_warning(w);
+    auto access_future = co_await coroutine::as_future(statement->check_access(*this, query_state.get_client_state()));
+    if (access_future.failed()) {
+        co_await audit::inspect(statement, query_state, options, true);
+        std::rethrow_exception(access_future.get_exception());
     }
+    auto mfut = co_await coroutine::as_future(process_authorized_statement(statement, query_state, options, std::move(guard)));
+    ::shared_ptr<result_message> m;
+    if (!mfut.failed()) {
+        m = mfut.get();
+    } else {
+        co_await audit::inspect(statement, query_state, options, true);
+        std::rethrow_exception(mfut.get_exception());
+    }
+    bool is_error = true;
+    if (m.get()) {
+        is_error = m->is_exception();
+        for (const auto& w : warnings) {
+            m->add_warning(w);
+        }
+    }
+    co_await audit::inspect(statement, query_state, options, is_error);
     co_return std::move(m);
 }
 
@@ -631,6 +648,8 @@ query_processor::do_execute_prepared(
             log.error("failed to cache the entry: {}", std::current_exception());
         }
     }
+
+    co_await audit::inspect(statement, query_state, options, false);
     co_return co_await process_authorized_statement(std::move(statement), query_state, options, std::move(guard));
 }
 
@@ -694,6 +713,11 @@ query_processor::get_statement(const std::string_view& query, const service::cli
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats);
     p->statement->raw_cql_statement = sstring(query);
+    auto audit_info = p->statement->get_audit_info();
+    if (audit_info) {
+        audit_info->set_query_string(query);
+        p->statement->sanitize_audit_info();
+    }
     return p;
 }
 
@@ -964,7 +988,7 @@ query_processor::execute_batch_without_checking_exception_message(
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    co_await batch->check_access(*this, query_state.get_client_state());
+    auto access_future = co_await coroutine::as_future(batch->check_access(*this, query_state.get_client_state()));
     co_await coroutine::parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) -> future<> {
             try {
                 co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
@@ -972,6 +996,11 @@ query_processor::execute_batch_without_checking_exception_message(
                 log.error("failed to cache the entry: {}", std::current_exception());
             }
         });
+    bool failed = access_future.failed();
+    co_await audit::inspect(batch, query_state, options, failed);
+    if (access_future.failed()) {
+        std::rethrow_exception(access_future.get_exception());
+    }
     batch->validate();
     batch->validate(*this, query_state.get_client_state());
     _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();

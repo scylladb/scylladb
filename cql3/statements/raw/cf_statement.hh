@@ -43,6 +43,10 @@ public:
     virtual const sstring& keyspace() const;
 
     virtual const sstring& column_family() const;
+
+    virtual audit::audit_info_ptr audit_info() const override {
+        return audit::audit::create_audit_info(category(), keyspace(), column_family());
+    }
 };
 
 }

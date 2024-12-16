@@ -810,6 +810,16 @@ void describe_statement::with_internals_details(bool with_hashed_passwords) {
     }
 }
 
+audit::statement_category
+describe_statement::category() const {
+    return audit::statement_category::QUERY;
+}
+
+audit::audit_info_ptr
+describe_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), "system", "");
+}
+
 std::unique_ptr<prepared_statement> describe_statement::prepare(data_dictionary::database db, cql_stats &stats) {
     bool internals = bool(_with_internals);
     auto desc_stmt = std::visit(overloaded_functor{
@@ -832,7 +842,7 @@ std::unique_ptr<prepared_statement> describe_statement::prepare(data_dictionary:
             return ::make_shared<generic_describe_statement>(std::move(cfg.keyspace), std::move(cfg.name), internals);
         }
     }, _config);
-    return std::make_unique<prepared_statement>(desc_stmt);
+    return std::make_unique<prepared_statement>(audit_info(), desc_stmt);
 }
 
 std::unique_ptr<describe_statement> describe_statement::cluster() {

@@ -17,6 +17,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include <vector>
+#include "audit/audit.hh"
 
 namespace cql3 {
 
@@ -42,6 +43,10 @@ public:
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) = 0;
+
+protected:
+    virtual audit::statement_category category() const = 0;
+    virtual audit::audit_info_ptr audit_info() const = 0;
 };
 
 }

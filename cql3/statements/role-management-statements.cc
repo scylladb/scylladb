@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <regex>
 
 #include <seastar/core/when_all.hh>
 
@@ -30,6 +31,8 @@
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "service/raft/raft_group0_client.hh"
+
+#include <boost/algorithm/string.hpp>
 
 namespace cql3 {
 
@@ -65,7 +68,7 @@ static auth::authentication_options extract_authentication_options(const cql3::r
 
 std::unique_ptr<prepared_statement> create_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<create_role_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<create_role_statement>(*this));
 }
 
 future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs, ::service::group0_batch& mc) const {
@@ -131,13 +134,76 @@ create_role_statement::execute(query_processor&,
     co_return nullptr;
 }
 
+/// Prepends '\' to special characters in ECMAScript regex syntax.
+static sstring escape_for_regex(const sstring& text) {
+    static const std::regex escape_re(R"([.^$|()\[\]{}*+?\\])", std::regex_constants::ECMAScript);
+    return std::regex_replace(text.c_str(), escape_re, R"(\$&)");
+}
+
+static bool is_password_empty(const sstring& password) {
+    // Empty passwords are stored as single char(-1) (&nbsp), NOT as empty strings.
+    //
+    // see cql3/cql.g, and search "ugly hack". we use an ugly hack to return
+    // empty string literals using string with a single char(-1)
+    //
+    // please note, we can NOT compare password[0] with -1, as on aarch64
+    // platforms, `char` is unsigned by default. so, if password is "empty",
+    // the value of password[0] would be 255.
+    return password.size() == 1 && password[0] == static_cast<char>(-1);
+}
+
+/// Removes single-quoted plaintext passwords.
+static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& raw_password) {
+    sstring password;
+    if (!is_password_empty(raw_password)) {
+        // Password needs escaping to be searchable literally:
+        password = escape_for_regex(raw_password);
+    }
+    const std::regex re(R"(((WITH|AND)\s*PASSWORD\s*=?\s*)')" + std::string(password) + "'",
+            std::regex_constants::ECMAScript | std::regex_constants::icase);
+    const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
+    ai->set_query_string(static_cast<std::string_view>(replace_result));
+}
+
+/// A heuristic to mask the values of `OPTIONS' map when key is like "PASSWORD".
+static void sanitize_audit_info_options(audit::audit_info* ai, const std::map<sstring,sstring>& options) {
+    for (const auto& [k, v] : options) {
+        const auto key_trimmed = boost::trim_copy(k);
+        if (!boost::iequals(key_trimmed, "PASSWORD")) { // Case-insensitive comp.
+            continue;
+        }
+        sstring password;
+        if (!is_password_empty(v)) {
+            // Password needs escaping to be searchable literally:
+            password = escape_for_regex(v);
+        }
+        // Now find the pattern of map element, like: "' PassWord ' : '1234vcxz!@#$'",
+        //   capture "' PassWord ' : " and match "'1234vcxz!@#$'"
+        const std::regex re(R"(('\s*)" + std::string(key_trimmed) + R"(\s*'\s*:\s*)')"
+                + std::string(password) + "'", std::regex_constants::ECMAScript);
+        const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
+        ai->set_query_string(static_cast<std::string_view>(replace_result));
+    }
+}
+
+void create_role_statement::sanitize_audit_info() {
+    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
+        if (_options.password) {
+            sanitize_audit_info_password(ai, *_options.password);
+        }
+        if (_options.options) {
+            sanitize_audit_info_options(ai, *_options.options);
+        }
+    }
+}
+
 //
 // `alter_role_statement`
 //
 
 std::unique_ptr<prepared_statement> alter_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<alter_role_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_role_statement>(*this));
 }
 
 future<> alter_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -206,13 +272,24 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
     co_return nullptr;
 }
 
+void alter_role_statement::sanitize_audit_info() {
+    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
+        if (_options.password) {
+            sanitize_audit_info_password(ai, *_options.password);
+        }
+        if (_options.options) {
+            sanitize_audit_info_options(ai, *_options.options);
+        }
+    }
+}
+
 //
 // `drop_role_statement`
 //
 
 std::unique_ptr<prepared_statement> drop_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<drop_role_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<drop_role_statement>(*this));
 }
 
 void drop_role_statement::validate(query_processor& qp, const service::client_state& state) const {
@@ -267,7 +344,7 @@ drop_role_statement::execute(query_processor&, service::query_state& state, cons
 
 std::unique_ptr<prepared_statement> list_roles_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<list_roles_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_roles_statement>(*this));
 }
 
 future<> list_roles_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -402,7 +479,7 @@ list_roles_statement::execute(query_processor& qp, service::query_state& state, 
 
 std::unique_ptr<prepared_statement> grant_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<grant_role_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_role_statement>(*this));
 }
 
 future<> grant_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -432,7 +509,7 @@ grant_role_statement::execute(query_processor&, service::query_state& state, con
 
 std::unique_ptr<prepared_statement> revoke_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(::make_shared<revoke_role_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<revoke_role_statement>(*this));
 }
 
 future<> revoke_role_statement::check_access(query_processor& qp, const service::client_state& state) const {

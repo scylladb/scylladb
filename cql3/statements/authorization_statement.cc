@@ -76,3 +76,8 @@ bool cql3::statements::authorization_altering_statement::needs_guard(
                 query_processor& qp, service::query_state&) const {
     return !auth::legacy_mode(qp);
 };
+
+audit::statement_category cql3::statements::authorization_statement::category() const {
+    return audit::statement_category::DCL;
+}
+

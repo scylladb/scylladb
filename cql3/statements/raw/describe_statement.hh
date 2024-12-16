@@ -75,6 +75,8 @@ private:
     describe_config _config;
     internals _with_internals = internals(false);
 
+    virtual audit::audit_info_ptr audit_info() const override;
+    virtual audit::statement_category category() const override;
 public:
     explicit describe_statement(describe_config config);
     void with_internals_details(bool with_hashed_passwords);

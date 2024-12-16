@@ -21,9 +21,11 @@ namespace cql3 {
 
 namespace statements {
 
-delete_statement::delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats)
+delete_statement::delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats)
         : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats}
-{ }
+{
+    set_audit_info(std::move(audit_info));
+}
 
 bool delete_statement::require_full_clustering_key() const {
     return false;
@@ -59,7 +61,7 @@ namespace raw {
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
         std::unique_ptr<attributes> attrs, cql_stats& stats) const {
-    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column().prepare_column_identifier(*schema);
