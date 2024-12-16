@@ -193,6 +193,8 @@ private:
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
+    utils::updateable_value<float> _preemptive_abort_factor;
+
     stats _stats;
     std::optional<seastar::metrics::metric_groups> _metrics;
     bool _stopped = false;
@@ -290,6 +292,7 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
+            utils::updateable_value<float> preemptive_abort_factor,
             register_metrics metrics);
 
     reader_concurrency_semaphore(
@@ -300,9 +303,11 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
+            utils::updateable_value<float> preemptive_abort_factor,
             register_metrics metrics)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length,
-                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), std::move(cpu_concurrency), metrics)
+                std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier), std::move(cpu_concurrency),
+                std::move(preemptive_abort_factor), metrics)
     { }
 
     /// Create a semaphore with practically unlimited count and memory.
@@ -322,9 +327,10 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> kill_limit_multipler = utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t> cpu_concurrency = utils::updateable_value<uint32_t>(1),
+            utils::updateable_value<float> preemptive_abort_factor = utils::updateable_value<float>(0.0f),
             register_metrics metrics = register_metrics::no)
         : reader_concurrency_semaphore(utils::updateable_value(count), memory, std::move(name), max_queue_length, std::move(serialize_limit_multipler),
-                std::move(kill_limit_multipler), std::move(cpu_concurrency), metrics)
+                std::move(kill_limit_multipler), std::move(cpu_concurrency), std::move(preemptive_abort_factor), metrics)
     {}
 
     virtual ~reader_concurrency_semaphore();
