@@ -1523,6 +1523,7 @@ future<> repair::data_sync_repair_task_impl::run() {
             "system_traces"
         };
         if (_reason == streaming::stream_reason::bootstrap ||
+            _reason == streaming::stream_reason::rebuild ||
             _reason == streaming::stream_reason::decommission) {
             small_table_optimization = small_table_optimization_enabled_ks.contains(keyspace);
         }
