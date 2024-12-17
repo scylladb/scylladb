@@ -1709,6 +1709,11 @@ void gossiper::mark_alive(inet_address addr) {
     });
 
     auto id = get_host_id(addr);
+    if (id == my_host_id()) {
+        // We are here because this node changed address and now tries to
+        // ping an old gossip entry.
+        return;
+    }
     auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
