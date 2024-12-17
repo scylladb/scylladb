@@ -989,7 +989,7 @@ void topology::test_compare_endpoints(const locator::host_id& address, const loc
 
 void topology::test_sort_by_proximity(const locator::host_id& address, const host_id_vector_replica_set& nodes) const {
     auto sorted_nodes = nodes;
-    sort_by_proximity(address, sorted_nodes);
+    do_sort_by_proximity(address, sorted_nodes);
     std::unordered_set<locator::host_id> nodes_set(nodes.begin(), nodes.end());
     std::unordered_set<locator::host_id> sorted_nodes_set(sorted_nodes.begin(), sorted_nodes.end());
     // Test that no nodes were lost by sort_by_proximity

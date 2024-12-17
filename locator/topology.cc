@@ -567,11 +567,15 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 }
 
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
-    if (_sort_by_proximity) {
-        std::sort(addresses.begin(), addresses.end(), [this, &address](locator::host_id& a1, locator::host_id& a2) {
-            return compare_endpoints(address, a1, a2) < 0;
-        });
+    if (can_sort_by_proximity()) {
+        do_sort_by_proximity(address, addresses);
     }
+}
+
+void topology::do_sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
+    std::sort(addresses.begin(), addresses.end(), [this, &address](const locator::host_id& a1, const locator::host_id& a2) {
+        return compare_endpoints(address, a1, a2) < 0;
+    });
 }
 
 std::weak_ordering topology::compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
