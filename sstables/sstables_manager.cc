@@ -227,15 +227,25 @@ future<> sstables_manager::components_reloader_fiber() {
     }
 }
 
+void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
+    // remove the sstable from the memory tracking metrics
+    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
+    _total_memory_reclaimed -= sst->total_memory_reclaimed();
+    // reclaim any remaining memory from the sstable
+    sst->reclaim_memory_from_components();
+    // disable further reload of components
+    _reclaimed.erase(*sst);
+    sst->disable_component_memory_reload();
+}
+
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
 
 void sstables_manager::deactivate(sstable* sst) {
-    // Remove SSTable from the reclaimable memory tracking
-    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
-    _total_memory_reclaimed -= sst->total_memory_reclaimed();
-    _reclaimed.erase(*sst);
+    // Drop reclaimable components if they are still in memory
+    // and remove SSTable from the reclaimable memory tracking
+    reclaim_memory_and_stop_tracking_sstable(sst);
 
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
