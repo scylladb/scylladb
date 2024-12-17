@@ -248,13 +248,21 @@ def test_lsi_describe(test_table_lsi_4):
         assert lsi['IndexArn'] == desc['Table']['TableArn'] + '/index/' + lsi['IndexName']
         assert lsi['Projection'] == {'ProjectionType': 'ALL'}
 
+# Whereas GSIs have an IndexStatus when described by DescribeTable,
+# LSIs do not. IndexStatus is not needed because LSIs cannot be added
+# after the base table is created.
+def test_lsi_describe_indexstatus(test_table_lsi_1):
+    desc = test_table_lsi_1.meta.client.describe_table(TableName=test_table_lsi_1.name)
+    assert 'Table' in desc
+    assert 'LocalSecondaryIndexes' in desc['Table']
+    lsis = desc['Table']['LocalSecondaryIndexes']
+    assert len(lsis) == 1
+    lsi = lsis[0]
+    assert not 'IndexStatus' in lsi
+
 # In addition to the basic listing of an LSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each LSI's
 # description.
-# Note that whereas GSIs also have IndexStatus and ProvisionedThroughput
-# fields, LSIs do not. IndexStatus is not needed because LSIs cannot be
-# added after the base table is created, and ProvisionedThroughput isn't
-# needed because an LSI shares its provisioning with the base table.
 @pytest.mark.xfail(reason="issues #7550, #11466")
 def test_lsi_describe_fields(test_table_lsi_1):
     desc = test_table_lsi_1.meta.client.describe_table(TableName=test_table_lsi_1.name)
@@ -266,7 +274,8 @@ def test_lsi_describe_fields(test_table_lsi_1):
     assert lsi['IndexName'] == 'hello'
     assert 'IndexSizeBytes' in lsi     # actual size depends on content
     assert 'ItemCount' in lsi
-    assert not 'IndexStatus' in lsi
+    # Whereas GSIs has ProvisionedThroughput, LSIs do not. An LSI shares
+    # its provisioning with the base table.
     assert not 'ProvisionedThroughput' in lsi
     assert lsi['KeySchema'] == [{'KeyType': 'HASH', 'AttributeName': 'p'},
                                 {'KeyType': 'RANGE', 'AttributeName': 'b'}]
@@ -574,3 +583,31 @@ def test_lsi_name_rest_api(test_table_lsi_1, rest_api):
     encoded_lsi_rest_name = requests.utils.quote(lsi_rest_name)
     resp = requests.get(f'{rest_api}/column_family/compaction_strategy/{encoded_lsi_rest_name}')
     resp.raise_for_status()
+
+# Test that when a table has an LSI, then if the indexed attribute is
+# missing, the item is added to the base table but not the index.
+def test_lsi_missing_attribute(test_table_lsi_1):
+    p1 = random_string()
+    c1 = random_string()
+    b1 = random_string()
+    p2 = random_string()
+    c2 = random_string()
+    test_table_lsi_1.put_item(Item={'p':  p1, 'c': c1, 'b': b1})
+    test_table_lsi_1.put_item(Item={'p':  p2, 'c': c2})  # missing b
+
+    # Both items are now in the base table:
+    assert test_table_lsi_1.get_item(Key={'p': p1, 'c': c1}, ConsistentRead=True)['Item'] == {'p': p1, 'c': c1, 'b': b1}
+    assert test_table_lsi_1.get_item(Key={'p': p2, 'c': c2}, ConsistentRead=True)['Item'] == {'p': p2, 'c': c2}
+
+    # But only the first item is in the index: The first item can be found
+    # using a Query, and a scan of the index won't find the second item.
+    # Note: with eventually consistent read, we can't really be sure that
+    # the second item will "never" appear in the index. We do that read last,
+    # so if we had a bug and such item did appear, hopefully we had enough
+    # time for the bug to become visible. At least sometimes.
+    assert_index_query(test_table_lsi_1, 'hello', [{'p': p1, 'c': c1, 'b': b1}],
+        KeyConditions={
+            'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
+            'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'},
+        })
+    assert not any([i['p'] == p2 and i['c'] == c2 for i in full_scan(test_table_lsi_1, ConsistentRead=False, IndexName='hello')])
