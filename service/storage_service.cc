@@ -673,7 +673,7 @@ future<> storage_service::topology_state_load() {
     co_await _sl_controller.invoke_on_all([this] (qos::service_level_controller& sl_controller) {
         sl_controller.upgrade_to_v2(_qp, _group0->client());
     });
-    co_await update_service_levels_cache();
+    co_await update_service_levels_cache(qos::query_context::group0);
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
@@ -861,9 +861,9 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
     co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
-future<> storage_service::update_service_levels_cache() {
+future<> storage_service::update_service_levels_cache(qos::query_context ctx) {
     assert(this_shard_id() == 0);
-    co_await _sl_controller.local().update_service_levels_from_distributed_data();
+    co_await _sl_controller.local().update_service_levels_from_distributed_data(ctx);
 }
 
 // Moves the coroutine lambda onto the heap and extends its
