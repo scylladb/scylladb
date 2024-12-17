@@ -683,6 +683,10 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                 // If there is no host id in the new state there should be one locally
                 hid = get_host_id(ep);
             }
+            if (hid == my_host_id()) {
+                 logger.trace("Ignoring gossip for {} because it maps to local id, but is not local address", ep);
+                 return make_ready_future<>();
+            }
             if (_topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
                 logger.trace("Ignoring gossip for {} because it left", ep);
                 return make_ready_future<>();
