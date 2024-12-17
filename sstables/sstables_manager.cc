@@ -171,7 +171,9 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
     _total_memory_reclaimed += memory_reclaimed;
     _total_reclaimable_memory -= memory_reclaimed;
     _reclaimed.insert(*sst_with_max_memory);
-    smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
+    // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
+    smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
+            memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
 }
 
 size_t sstables_manager::get_memory_available_for_reclaimable_components() {
