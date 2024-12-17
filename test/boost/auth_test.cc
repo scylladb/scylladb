@@ -383,6 +383,40 @@ SEASTAR_TEST_CASE(test_try_create_role_with_hashed_password_as_anonymous_user) {
     }, auth_on(true));
 }
 
+SEASTAR_TEST_CASE(test_create_roles_with_hashed_password_and_log_in) {
+    // This test ensures that Scylla allows for creating roles with hashed passwords
+    // following the format of one of the supported algorithms, as well as logging in
+    // as that role is performed successfully.
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        // Pairs of form (password, hashed password).
+        constexpr std::pair<std::string_view, std::string_view> passwords[] = {
+            // bcrypt's.
+            {"myPassword", "$2a$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli"},
+            {"myPassword", "$2b$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli"},
+            {"myPassword", "$2x$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli"},
+            {"myPassword", "$2y$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli"},
+            // sha512.
+            {"myPassword", "$6$pffOF1SkGYpLPe7h$tsYwSqUvbzh2O79dtMNadUsYawCrHMfK06XWFh3vJIMwqaVsaiFsubB2a7uZshDVpJWhTCnGWGKsy3fAteFw9/"},
+            // sha256.
+            {"myPassword", "$5$AKS.nD1e18H.7gu9$IWy7QB0K.qoYkrWmFn6rZ4BO6Y.FWdCchrFg3beXfx8"},
+            // md5.
+            {"myPassword", "$1$rVcnG0Et$qAhrrNev1JVV9Zu5qhnry1"}
+        };
+        for (auto [pwd, hash] : passwords) {
+            env.execute_cql(seastar::format("CREATE ROLE r WITH HASHED PASSWORD = '{}' AND LOGIN = true", hash)).get();
+            // First, try to log in using an incorrect password.
+            BOOST_REQUIRE_EXCEPTION(authenticate(env, "r", "notThePassword").get(), exceptions::authentication_exception,
+                    exception_predicate::message_equals("Username and/or password are incorrect"));
+            // Now use the correct one.
+            authenticate(env, "r", pwd).get();
+
+            // We need to log in as a superuser to be able to drop the role.
+            authenticate(env, "cassandra", "cassandra").get();
+            env.execute_cql("DROP ROLE r").get();
+        }
+    }, auth_on(true));
+}
+
 SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_hashed_password) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         // Note: crypt(5) specifies:
