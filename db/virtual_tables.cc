@@ -736,6 +736,7 @@ class clients_table : public streaming_virtual_table {
             .with_column("ssl_enabled", boolean_type)
             .with_column("ssl_protocol", utf8_type)
             .with_column("username", utf8_type)
+            .with_column("scheduling_group", utf8_type)
             .with_hash_version()
             .build();
     }
@@ -842,6 +843,9 @@ class clients_table : public streaming_virtual_table {
                     set_cell(cr.cells(), "ssl_protocol", *cd.ssl_protocol);
                 }
                 set_cell(cr.cells(), "username", cd.username ? *cd.username : sstring("anonymous"));
+                if (cd.scheduling_group_name) {
+                    set_cell(cr.cells(), "scheduling_group", *cd.scheduling_group_name);
+                }
                 co_await result.emit_row(std::move(cr));
             }
             co_await result.emit_partition_end();
