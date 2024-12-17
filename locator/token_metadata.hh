@@ -30,6 +30,8 @@
 #include "locator/topology.hh"
 #include "locator/token_metadata_fwd.hh"
 
+struct sort_by_proximity_topology;
+
 // forward declaration since replica/database.hh includes this file
 namespace replica {
 class keyspace;
@@ -482,6 +484,12 @@ public:
     //
     // Must be called on shard 0.
     static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
+
+private:
+    // for testing only, unsafe to be called without awaiting get_lock() first
+    void mutate_token_metadata_for_test(seastar::noncopyable_function<void (token_metadata&)> func);
+
+    friend struct ::sort_by_proximity_topology;
 };
 
 }
