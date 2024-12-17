@@ -454,6 +454,11 @@ public:
         });
     }
 
+    static void do_with_noreentrant_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+        single_node_cql_env env;
+        env.run_in_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
+    }
+
 private:
     static auto defer_verbose_shutdown(const char* what, std::function<void()> func) {
         return defer([what, func = std::move(func)] {
@@ -1165,6 +1170,10 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
             return func(e);
         });
     }, std::move(cfg_in), std::move(init_configurables));
+}
+
+void do_with_cql_env_noreentrant_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+    single_node_cql_env::do_with_noreentrant_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
 }
 
 // this function should be called in seastar thread
