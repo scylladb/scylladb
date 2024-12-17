@@ -27,16 +27,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+N_SERVERS = 2
 
 @pytest.fixture
 async def two_nodes_cluster(manager: ManagerClient) -> list[ServerNum]:
     logger.info(f"Booting initial 2-nodes cluster")
-    servers = [srv.server_id for srv in await manager.servers_add(2)]
+    servers = [srv.server_id for srv in await manager.servers_add(N_SERVERS)]
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     return servers
 
 
 @pytest.mark.asyncio
+@pytest.mark.replication_factor(N_SERVERS)
 async def test_change_rpc_address(two_nodes_cluster: list[ServerNum],
                                   manager: ManagerClient,
                                   random_tables: RandomTables) -> None:
