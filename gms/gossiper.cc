@@ -1718,7 +1718,18 @@ void gossiper::mark_alive(inet_address addr) {
         _pending_mark_alive_endpoints.erase(addr);
     });
 
+<<<<<<< HEAD
     msg_addr id = get_msg_addr(addr);
+||||||| parent of 3368019982 (gossiper: do not send echo message to yourself)
+    auto id = get_host_id(addr);
+=======
+    auto id = get_host_id(addr);
+    if (id == my_host_id()) {
+        // We are here because this node changed address and now tries to
+        // ping an old gossip entry.
+        return;
+    }
+>>>>>>> 3368019982 (gossiper: do not send echo message to yourself)
     auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
