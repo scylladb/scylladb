@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #pragma once
-#include "seastar/core/semaphore.hh"
+#include <seastar/core/semaphore.hh>
 #include "service/paxos/proposal.hh"
 #include "utils/log.hh"
 #include "utils/digest_algorithm.hh"

@@ -10,7 +10,7 @@
 #pragma once
 
 #include "mutation/mutation.hh"
-#include "seastar/core/future.hh"
+#include <seastar/core/future.hh>
 #include "service/storage_proxy.hh"
 #include "query-result-set.hh"
 

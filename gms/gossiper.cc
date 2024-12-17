@@ -43,8 +43,8 @@
 #include <utility>
 #include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
-#include "seastar/core/shard_id.hh"
-#include "seastar/rpc/rpc_types.hh"
+#include <seastar/core/shard_id.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
