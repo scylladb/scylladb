@@ -3609,17 +3609,17 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
     std::unordered_map<sstring, std::vector<sstring>> results;
     netw::messaging_service& ms = _messaging.local();
     return map_reduce(std::move(live_hosts), [&ms, as = abort_source()] (auto host) mutable {
-        auto f0 = ser::migration_manager_rpc_verbs::send_schema_check(&ms, netw::msg_addr{ host, 0 }, as);
+        auto f0 = ser::migration_manager_rpc_verbs::send_schema_check(&ms, host, as);
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();
-                return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, std::nullopt);
+                return std::pair<locator::host_id, std::optional<table_schema_version>>(host, std::nullopt);
             }
-            return std::pair<gms::inet_address, std::optional<table_schema_version>>(host, f.get());
+            return std::pair<locator::host_id, std::optional<table_schema_version>>(host, f.get());
         });
-    }, std::move(results), [] (auto results, auto host_and_version) {
+    }, std::move(results), [this] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
-        results.try_emplace(version).first->second.emplace_back(fmt::to_string(host_and_version.first));
+        results.try_emplace(version).first->second.emplace_back(fmt::to_string(_address_map.get(host_and_version.first)));
         return results;
     }).then([this] (auto results) {
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:

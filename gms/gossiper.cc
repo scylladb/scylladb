@@ -924,7 +924,7 @@ future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_live_members();
+        co_return g.get_live_members_helper();
     });
 }
 
@@ -1175,7 +1175,7 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members() const {
+std::set<inet_address> gossiper::get_live_members_helper() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
@@ -1184,6 +1184,10 @@ std::set<inet_address> gossiper::get_live_members() const {
     }
     logger.debug("live_members after={}", live_members);
     return live_members;
+}
+
+std::set<locator::host_id> gossiper::get_live_members() const {
+    return get_live_members_helper() | std::views::transform([this] (inet_address ip) { return get_host_id(ip); }) | std::ranges::to<std::set>();
 }
 
 std::set<locator::host_id> gossiper::get_live_token_owners() const {

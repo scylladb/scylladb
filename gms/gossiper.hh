@@ -296,7 +296,7 @@ public:
      */
     future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
-    std::set<inet_address> get_live_members() const;
+    std::set<locator::host_id> get_live_members() const;
 
     std::set<locator::host_id> get_live_token_owners() const;
 
@@ -528,6 +528,7 @@ public:
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
+    std::set<inet_address> get_live_members_helper() const;
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);
