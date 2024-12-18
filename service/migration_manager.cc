@@ -934,9 +934,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
         auto all_live = _gossiper.get_live_members();
         auto live_members = all_live | std::views::filter([this, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint) {
             // only push schema to nodes with known and equal versions
-            return endpoint != my_address &&
-                _messaging.knows_version(endpoint) &&
-                _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+            return endpoint != my_address;
         });
         // FIXME: gossiper should return host id set
         auto live_host_ids = live_members | std::views::transform([&] (const gms::inet_address& ip) { return _gossiper.get_host_id(ip); });

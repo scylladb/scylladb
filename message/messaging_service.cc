@@ -257,16 +257,6 @@ const uint64_t* messaging_service::get_dropped_messages() const {
     return _dropped_messages;
 }
 
-int32_t messaging_service::get_raw_version(const gms::inet_address& endpoint) const {
-    // FIXME: messaging service versioning
-    return current_version;
-}
-
-bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
-    // FIXME: messaging service versioning
-    return true;
-}
-
 future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }

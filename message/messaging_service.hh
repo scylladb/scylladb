@@ -272,10 +272,6 @@ public:
 
     const uint64_t* get_dropped_messages() const;
 
-    int32_t get_raw_version(const gms::inet_address& endpoint) const;
-
-    bool knows_version(const gms::inet_address& endpoint) const;
-
     enum class encrypt_what {
         none,
         rack,
