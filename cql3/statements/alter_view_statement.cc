@@ -56,7 +56,7 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     _properties->validate(db, keyspace(), schema_extensions);
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
+    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), cf_prop_defs::is_create_statement::no);
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(
@@ -85,7 +85,12 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
             keyspace(),
             column_family());
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    cql3::cql_warnings_vec warnings;
+    if (_properties) {
+        _properties->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
+    }
+
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
