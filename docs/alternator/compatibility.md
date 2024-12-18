@@ -378,3 +378,14 @@ they should be easy to detect. Here is a list of these unimplemented features:
   that can be used to forbid table deletion. This table option was added to
   DynamoDB in March 2023.
   <https://github.com/scylladb/scylla/issues/14482>
+
+* Alternator does not support the table option WarmThroughput that can be
+  used to check or guarantee that the database has "warmed" to handle a
+  particular throughput. This table option was added to DynamoDB in
+  November 2024.
+  <https://github.com/scylladb/scylladb/issues/21853>
+
+* Alternator does not support the table option MultiRegionConsistency
+  that can be used to achieve consistent reads on global (multi-region) tables.
+  This table option was added as a preview to DynamoDB in December 2024.
+  <https://github.com/scylladb/scylladb/issues/21852>
