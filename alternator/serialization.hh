@@ -43,6 +43,7 @@ type_representation represent_type(alternator_type atype);
 
 bytes serialize_item(const rjson::value& item);
 rjson::value deserialize_item(bytes_view bv);
+std::optional<bytes> serialized_value_if_type(bytes_view bv, alternator_type expected_type);
 
 std::string type_to_string(data_type type);
 
