@@ -55,6 +55,7 @@
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
 #include "utils/rjson.hh"
+#include "db/system_keyspace.hh"
 
 using namespace std::chrono_literals;
 
@@ -469,7 +470,90 @@ static rjson::value generate_arn_for_index(const schema& schema, std::string_vie
         schema.ks_name(), schema.cf_name(), index_name));
 }
 
-static rjson::value fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy const& proxy)
+// The following function checks if a given view has finished building.
+// We need this for describe_table() to know if a view is still backfilling,
+// or active.
+//
+// Currently we don't have in view_ptr the knowledge whether a view finished
+// building long ago - so checking this involves a somewhat inefficient, but
+// still node-local, process:
+// We need a table that can accurately tell that all nodes have finished
+// building this view. system.built_views is not good enough because it only
+// knows the view building status in the current node. In recent versions,
+// after PR #19745, we have a local table system.view_build_status_v2 with
+// global information, replacing the old system_distributed.view_build_status.
+// In theory, there can be a period during upgrading an old cluster when this
+// table is not yet available. However, since the IndexStatus is a new feature
+// too, it is acceptable that it doesn't yet work in the middle of the update.
+static future<bool> is_view_built(
+        view_ptr view,
+        service::storage_proxy& proxy,
+        service::client_state& client_state,
+        tracing::trace_state_ptr trace_state,
+        service_permit permit) {
+    auto schema = proxy.data_dictionary().find_table(
+        "system", db::system_keyspace::VIEW_BUILD_STATUS_V2).schema();
+    // The table system.view_build_status_v2 has "keyspace_name" and
+    // "view_name" as the partition key, and each clustering row has
+    // "host_id" as clustering key and a string "status". We need to
+    // read a single partition:
+    partition_key pk = partition_key::from_exploded(*schema,
+        {utf8_type->decompose(view->ks_name()),
+         utf8_type->decompose(view->cf_name())});
+    dht::partition_range_vector partition_ranges{
+        dht::partition_range(dht::decorate_key(*schema, pk))};
+    auto selection = cql3::selection::selection::wildcard(schema); // only for get_query_options()!
+    auto partition_slice = query::partition_slice(
+        {query::clustering_range::make_open_ended_both_sides()},
+        {}, // static columns
+        {schema->get_column_definition("status")->id}, // regular columns
+        selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(
+        schema->id(), schema->version(), partition_slice,
+        proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
+    service::storage_proxy::coordinator_query_result qr =
+        co_await proxy.query(
+            schema, std::move(command), std::move(partition_ranges),
+            db::consistency_level::LOCAL_ONE,
+            service::storage_proxy::coordinator_query_options(
+                executor::default_timeout(), std::move(permit), client_state, trace_state));
+    query::result_set rs = query::result_set::from_raw_result(
+        schema, partition_slice, *qr.query_result);
+    std::unordered_map<locator::host_id, sstring> statuses;
+    for (auto&& r : rs.rows()) {
+        auto host_id = r.get<utils::UUID>("host_id");
+        auto status = r.get<sstring>("status");
+        if (host_id && status) {
+            statuses.emplace(locator::host_id(*host_id), *status);
+        }
+    }
+    // A view is considered "built" if all nodes reported SUCCESS in having
+    // built this view. Note that we need this "SUCCESS" for all nodes in the
+    // cluster - even those that are temporarily down (their success is known
+    // by this node, even if they are down). Conversely, we don't care what is
+    // the recorded status for any node which is no longer in the cluster - it
+    // is possible we forgot to erase the status of nodes that left the
+    // cluster, but here we just ignore them and look at the nodes actually
+    // in the topology.
+    bool all_built = true;
+    auto token_metadata = proxy.get_token_metadata_ptr();
+    token_metadata->get_topology().for_each_node(
+        [&] (const locator::node& node) {
+            // Note: we could skip nodes in DCs which have no replication of
+            // this view. However, in practice even those nodes would run
+            // the view building (and just see empty content) so we don't
+            // need to bother with this skipping.
+            auto it = statuses.find(node.host_id());
+            if (it == statuses.end() || it->second != "SUCCESS") {
+                all_built = false;
+            }
+        });
+    co_return all_built;
+
+}
+
+static future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
@@ -548,7 +632,22 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
                 // FIXME: we have to get ProjectionType from the schema when it is added
                 rjson::add(view_entry, "Projection", std::move(projection));
                 // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
-                rjson::value& index_array = (delim_it > 1 && cf_name[delim_it-1] == '!') ? lsi_array : gsi_array;
+                bool is_lsi = (delim_it > 1 && cf_name[delim_it-1] == '!');
+                // Add IndexStatus and Backfilling flags, but only for GSIs -
+                // LSIs can only be created with the table itself and do not
+                // have a status. Alternator schema operations are synchronous
+                // so only two combinations of these flags are possible: ACTIVE
+                // (for a built view) or CREATING+Backfilling (if view building
+                // is in progress).
+                if (!is_lsi) {
+                    if (co_await is_view_built(vptr, proxy, client_state, trace_state, permit)) {
+                        rjson::add(view_entry, "IndexStatus", "ACTIVE");
+                    } else {
+                        rjson::add(view_entry, "IndexStatus", "CREATING");
+                        rjson::add(view_entry, "Backfilling", rjson::value(true));
+                    }
+                }
+                rjson::value& index_array = is_lsi ? lsi_array : gsi_array;
                 rjson::push_back(index_array, std::move(view_entry));
             }
             if (!lsi_array.Empty()) {
@@ -572,7 +671,7 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     executor::supplement_table_stream_info(table_description, *schema, proxy);
 
     // FIXME: still missing some response fields (issue #5026)
-    return table_description;
+    co_return table_description;
 }
 
 bool is_alternator_keyspace(const sstring& ks_name) {
@@ -591,11 +690,11 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    rjson::value table_description = fill_table_description(schema, table_status::active, _proxy);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, client_state, trace_state, permit);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+    co_return make_jsonable(std::move(response));
 }
 
 // Check CQL's Role-Based Access Control (RBAC) permission_to_check (MODIFY,
@@ -656,7 +755,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
-    rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, _proxy, client_state, trace_state, permit);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::DROP);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         // FIXME: the following needs to be in a loop. If mm.announce() below

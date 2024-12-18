@@ -261,7 +261,6 @@ def test_gsi_describe(test_table_gsi_1):
 # backfilled might be in other states, but that case is tested in different
 # tests in test_gsi_updatetable.py.
 # Reproduces #11471.
-@pytest.mark.xfail(reason="issue #11471")
 def test_gsi_describe_indexstatus(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     gsis = desc['Table']['GlobalSecondaryIndexes']
