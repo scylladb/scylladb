@@ -1688,6 +1688,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
+    future<> generate_resize_finalization_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::token_metadata_ptr tm,
+            const std::unordered_set<table_id>& resized_table_ids) {
+        out.reserve(out.size() + resized_table_ids.size() * 2 + 1);
+
+        for (auto& table_id : resized_table_ids) {
+            auto s = _db.find_schema(table_id);
+            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+            out.emplace_back(co_await replica::tablet_map_to_mutation(
+                new_tablet_map,
+                table_id,
+                s->ks_name(),
+                s->cf_name(),
+                guard.write_timestamp(),
+                _db.features()));
+
+            // Clears the resize decision for a table.
+            generate_resize_update(out, guard, table_id, locator::resize_decision{});
+        }
+
+        rtlogger.debug("Finished generating tablet resize finalization updates");
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
