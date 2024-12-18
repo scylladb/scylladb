@@ -1719,22 +1719,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
 
         std::vector<canonical_mutation> updates;
-        updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
-
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
-            auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
-            updates.emplace_back(co_await replica::tablet_map_to_mutation(
-                new_tablet_map,
-                table_id,
-                s->ks_name(),
-                s->cf_name(),
-                guard.write_timestamp(),
-                _db.features()));
-
-            // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
-        }
+        co_await generate_resize_finalization_updates(updates, guard, tm, plan.resize_plan().finalize_resize);
 
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
