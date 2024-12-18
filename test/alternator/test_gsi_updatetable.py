@@ -1,6 +1,6 @@
 # Copyright 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests of for UpdateTable's GlobalSecondaryIndexUpdates option for modifying
 # the GSIs (Global Secondary Indexes) on an existing table: Adding a GSI to

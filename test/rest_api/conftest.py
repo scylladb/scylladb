@@ -1,6 +1,6 @@
 # Copyright 2021-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use. A "fixture" is some

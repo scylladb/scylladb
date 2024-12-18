@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: AGPL-3.0-or-later
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  *
  * A crc32 calculation for __PPC64__ uses the code from https://github.com/antonblanchard/crc32-vpmsum
  * written by Anton Blanchard <anton@au.ibm.com>, IBM

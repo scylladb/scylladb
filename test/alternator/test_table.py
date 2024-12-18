@@ -1,6 +1,6 @@
 # Copyright 2019-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests for basic table operations: CreateTable, DeleteTable, ListTables.
 # Also some basic tests for UpdateTable - although UpdateTable usually

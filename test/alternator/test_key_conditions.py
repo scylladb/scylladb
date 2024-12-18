@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright 2020-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests for the KeyConditions parameter of the Query operation.
 # KeyConditions is the older version of the newer "KeyConditionExpression"

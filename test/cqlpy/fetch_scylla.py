@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # Copyright (C) 2024-present ScyllaDB
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 # Fetch from ScyllaDB's S3 bucket (downloads.scylladb.com) a pre-compiled
 # version of Scylla for a desired release, ready to be run by tests (run.py).

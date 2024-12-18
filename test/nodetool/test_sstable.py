@@ -1,7 +1,7 @@
 #
 # Copyright 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.nodetool.utils import check_nodetool_fails_with
 from test.nodetool.rest_api_mock import expected_request

@@ -11,8 +11,8 @@
       "url": "http://scylladb.com"
     },
     "license": {
-      "name": "AGPL",
-      "url": "https://github.com/scylladb/scylla/blob/master/LICENSE.AGPL"
+      "name": "ScyllaDB-Source-Available-1.0",
+      "url": "https://github.com/scylladb/scylla/blob/master/LICENSE-ScyllaDB-Source-Available.md"
     }
   },
   "host": "{{Host}}",

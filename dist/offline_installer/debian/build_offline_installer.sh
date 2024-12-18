@@ -3,7 +3,7 @@
 #  Copyright (C) 2017-present ScyllaDB
 
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 if [ ! -e dist/offline_installer/debian/build_offline_installer.sh ]; then
     echo "run build_offline_installer.sh in top of scylla dir"

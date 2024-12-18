@@ -1,6 +1,6 @@
 # Copyright 2019-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests for batch operations - BatchWriteItem, BatchGetItem.
 # Note that various other tests in other files also use these operations,

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # Copyright 2020-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 #############################################################################
 # Tests for finer points of UTF-8 support. The issue of *invalid* UTF-8 input

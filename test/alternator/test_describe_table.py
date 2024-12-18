@@ -1,6 +1,6 @@
 # Copyright 2019-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests for the DescribeTable operation.
 # Some attributes used only by a specific major feature will be tested

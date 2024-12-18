@@ -5,7 +5,7 @@ setup(
     description='NoSQL data store using the seastar framework, compatible with Apache Cassandra',
     url='https://github.com/scylladb/scylla',
     download_url='https://github.com/scylladb/scylla/tags',
-    license='AGPL',
+    license='ScyllaDB-Source-Available-1.0',
     platforms='any',
     packages=find_packages(),
     include_package_data=True,

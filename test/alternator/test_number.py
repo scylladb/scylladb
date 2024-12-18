@@ -1,6 +1,6 @@
 # Copyright 2020-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 # Tests for the number type. Numbers in DynamoDB have an unusual definition -
 # they are a floating-point type with 38 decimal digits of precision and

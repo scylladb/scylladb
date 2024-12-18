@@ -2,7 +2,7 @@
 #
 # Copyright (C) 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
 # S3 proxy server to inject retryable errors for fuzzy testing.
