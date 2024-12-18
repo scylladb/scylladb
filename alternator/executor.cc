@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/consumed_capacity.hh"
 #include "auth/permission.hh"
@@ -55,6 +56,8 @@
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
 #include "utils/rjson.hh"
+#include "alternator/extract_from_attrs.hh"
+#include "types/types.hh"
 #include "db/system_keyspace.hh"
 
 using namespace std::chrono_literals;
@@ -1170,6 +1173,87 @@ static std::unordered_set<std::string> validate_attribute_definitions(const rjso
     }
     return seen_attribute_names;
 }
+
+// The following "extract_from_attrs_column_computation" implementation is
+// what allows Alternator GSIs to use in a materialized view's key a member
+// from the ":attrs" map instead of a real column in the schema:
+
+const bytes extract_from_attrs_column_computation::MAP_NAME = executor::ATTRS_COLUMN_NAME;
+
+column_computation_ptr extract_from_attrs_column_computation::clone() const {
+    return std::make_unique<extract_from_attrs_column_computation>(*this);
+}
+
+// Serialize the *definition* of this column computation into a JSON
+// string with a unique "type" string - TYPE_NAME - which then causes
+// column_computation::deserialize() to create an object from this class.
+bytes extract_from_attrs_column_computation::serialize() const {
+    rjson::value ret = rjson::empty_object();
+    rjson::add(ret, "type", TYPE_NAME);
+    rjson::add(ret, "attr_name", rjson::from_string(to_string_view(_attr_name)));
+    rjson::add(ret, "desired_type", represent_type(_desired_type).ident);
+    return to_bytes(rjson::print(ret));
+}
+
+// Construct an extract_from_attrs_column_computation object based on the
+// saved output of serialize(). Calls on_internal_error() if the string
+// doesn't match the expected output format of serialize(). "type" is not
+// checked - we assume the caller (column_computation::deserialize()) won't
+// call this constructor if "type" doesn't match.
+extract_from_attrs_column_computation::extract_from_attrs_column_computation(const rjson::value &v) {
+    const rjson::value* attr_name = rjson::find(v, "attr_name");
+    if (attr_name->IsString()) {
+        _attr_name = bytes(to_bytes_view(rjson::to_string_view(*attr_name)));
+        const rjson::value* desired_type = rjson::find(v, "desired_type");
+        if (desired_type->IsString()) {
+            _desired_type = type_info_from_string(rjson::to_string_view(*desired_type)).atype;
+            switch (_desired_type) {
+            case alternator_type::S:
+            case alternator_type::B:
+            case alternator_type::N:
+                // We're done
+                return;
+            default:
+                // Fall through to on_internal_error below.
+                break;
+            }
+        }
+    }
+    on_internal_error(elogger, format("Improperly formatted alternator::extract_from_attrs_column_computation computed column definition: {}", v));
+}
+
+regular_column_transformation::result extract_from_attrs_column_computation::compute_value(
+        const schema& schema,
+        const partition_key& key,
+        const db::view::clustering_or_static_row& row) const
+{
+    const column_definition* attrs_col = schema.get_column_definition(MAP_NAME);
+    if (!attrs_col || !attrs_col->is_regular() || !attrs_col->is_multi_cell()) {
+        on_internal_error(elogger, "extract_from_attrs_column_computation::compute_value() on a table without an attrs map");
+    }
+    // Look for the desired attribute _attr_name in the attrs_col map in row:
+    const atomic_cell_or_collection* attrs = row.cells().find_cell(attrs_col->id);
+    if (!attrs) {
+        return regular_column_transformation::result();
+    }
+    collection_mutation_view cmv = attrs->as_collection_mutation();
+    return cmv.with_deserialized(*attrs_col->type, [this] (const collection_mutation_view_description& cmvd) {
+        for (auto&& [key, cell] : cmvd.cells) {
+            if (key == _attr_name) {
+                return regular_column_transformation::result(cell,
+                    std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
+            }
+        }
+        return regular_column_transformation::result();
+    });
+}
+
+// extract_from_attrs_column_computation needs the whole row to compute
+// value, it cann't use just the partition key.
+bytes extract_from_attrs_column_computation::compute_value(const schema&, const partition_key&) const {
+    on_internal_error(elogger, "extract_from_attrs_column_computation::compute_value called without row");
+}
+
 
 static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization) {
     SCYLLA_ASSERT(this_shard_id() == 0);
