@@ -10,6 +10,7 @@
 
 #include "auth/service.hh"
 #include <seastar/core/seastar.hh>
+#include "seastar/core/scheduling.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
@@ -130,7 +131,9 @@ struct cql_sg_stats {
     cql_sg_stats(maintenance_socket_enabled);
     request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
     void register_metrics();
+    void rename_metrics();
 private:
+    bool _use_metrics = false;
     seastar::metrics::metric_groups _metrics;
     std::vector<request_kind_stats> _cql_requests_stats;
 };
@@ -198,6 +201,7 @@ public:
     }
 
     future<utils::chunked_vector<client_data>> get_client_data();
+    future<> update_connections_scheduling_group();
     future<> update_connections_service_level_params();
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
@@ -214,10 +218,12 @@ private:
         cql_compression _compression = cql_compression::none;
         service::client_state _client_state;
         timer<lowres_clock> _shedding_timer;
+        scheduling_group _current_scheduling_group;
         bool _shed_incoming_requests = false;
         unsigned _request_cpu = 0;
         bool _ready = false;
         bool _authenticating = false;
+        bool _tenant_switch = false;
 
         enum class tracing_request_type : uint8_t {
             not_requested,
@@ -244,6 +250,7 @@ private:
         static std::pair<net::inet_address, int> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
+        void update_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
     private:
         friend class process_request_executor;

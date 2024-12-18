@@ -16,14 +16,17 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "seastar/core/scheduling.hh"
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
 #include "dht/token-sharding.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 #include "service/memory_limiter.hh"
 #include "service/storage_proxy.hh"
+#include "service/qos/service_level_controller.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <seastar/core/coroutine.hh>
@@ -199,12 +202,15 @@ cql_sg_stats::cql_sg_stats(maintenance_socket_enabled used_by_maintenance_socket
     if (std::find(vector_ref.begin(), vector_ref.end(), current_scheduling_group().name()) != vector_ref.end()) {
         return;
     }
+
+    _use_metrics = true;
     register_metrics();
 }
 
 void cql_sg_stats::register_metrics()
 {
     namespace sm = seastar::metrics;
+    auto new_metrics = sm::metric_groups();
     std::vector<sm::metric_definition> transport_metrics;
     auto cur_sg_name = current_scheduling_group().name();
 
@@ -230,7 +236,14 @@ void cql_sg_stats::register_metrics()
         );
     }
 
-    _metrics.add_group("transport", std::move(transport_metrics));
+    new_metrics.add_group("transport", std::move(transport_metrics));
+    _metrics = std::exchange(new_metrics, {});
+}
+
+void cql_sg_stats::rename_metrics() {
+    if (_use_metrics) {
+        register_metrics();
+    }
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
@@ -605,6 +618,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _server(server)
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
+    , _current_scheduling_group(default_scheduling_group())
 {
     _shedding_timer.set_callback([this] {
         clogger.debug("Shedding all incoming requests due to overload");
@@ -640,6 +654,7 @@ client_data cql_server::connection::make_client_data() const {
     } else if (_authenticating) {
         cd.connection_stage = client_connection_stage::authenticating;
     }
+    cd.scheduling_group_name = _current_scheduling_group.name();
     return cd;
 }
 
@@ -933,6 +948,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_return res;
 }
 
+void cql_server::connection::update_scheduling_group() {
+    switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+        auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
+        _current_scheduling_group = shg;
+        co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
+    });
+}
+
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
@@ -941,6 +964,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
     if (sasl_challenge->is_complete()) {
         return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](auth::authenticated_user user) mutable {
             client_state.set_login(std::move(user));
+            update_scheduling_group();
             auto f = client_state.check_user_can_login();
             f = f.then([&client_state] {
                 return client_state.maybe_update_per_service_level_params();
@@ -1230,7 +1254,6 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
         if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
             throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
         }
-
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (init_trace) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
@@ -2053,6 +2076,13 @@ future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
     co_return ret;
 }
 
+future<> cql_server::update_connections_scheduling_group() {
+    return for_each_gently([] (generic_server::connection& conn) {
+        connection& cql_conn = dynamic_cast<connection&>(conn);
+        cql_conn.update_scheduling_group();
+    });
+}
+
 future<> cql_server::update_connections_service_level_params() {
     if (!_sl_controller.is_v2()) {
         // Auto update of connections' service level params requires
@@ -2071,6 +2101,7 @@ future<> cql_server::update_connections_service_level_params() {
                 cs.update_per_service_level_params(*slo);
             }
         }
+        cql_conn.update_scheduling_group();
     });
 }
 

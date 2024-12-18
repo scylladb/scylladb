@@ -207,6 +207,28 @@ public:
     void abort_group0_operations();
 
     /**
+     * this is an executor of a function with arguments under a service level
+     * that corresponds to a given user.
+     * @param usr - the user for determining the service level
+     * @param func - the function to be executed
+     * @return a future that is resolved when the function's operation is resolved
+     * (if it returns a future). or a ready future containing the returned value
+     * from the function/
+     */
+    template <typename Func, typename Ret = std::invoke_result_t<Func>>
+    requires std::invocable<Func>
+    futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& usr, Func&& func) {
+        if (usr && usr->name) {
+            return find_effective_service_level(*usr->name).then([this, func = std::move(func)] (std::optional<service_level_options> opts) mutable {
+                auto& service_level_name = (opts && opts->shares_name) ? *opts->shares_name : default_service_level_name;
+                return with_service_level(service_level_name, std::move(func));
+            });
+        } else {
+            return with_service_level(default_service_level_name, std::move(func));
+        }
+    }
+
+    /**
      * this is an executor of a function with arguments under a specific
      * service level.
      * @param service_level_name
@@ -235,6 +257,12 @@ public:
      * get_scheduling_group("default")
      */
     scheduling_group get_scheduling_group(sstring service_level_name);
+    /**
+     * Get the scheduling group of a specific user
+     * @param user - the user for determining the service level
+     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
+     */
+    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
     /**
      * @return the name of the currently active service level if such exists or an empty
      * optional if no active service level.

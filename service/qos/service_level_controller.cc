@@ -536,6 +536,17 @@ scheduling_group service_level_controller::get_scheduling_group(sstring service_
     }
 }
 
+future<scheduling_group> service_level_controller::get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
+    if (usr && usr->name) {
+        auto sl_opt = co_await find_effective_service_level(*usr->name);
+        auto& sl_name = (sl_opt && sl_opt->shares_name) ? *sl_opt->shares_name : default_service_level_name;
+        co_return get_scheduling_group(sl_name);
+    }
+    else {
+        co_return get_default_scheduling_group();
+    }
+}
+
 std::optional<sstring> service_level_controller::get_active_service_level() {
     unsigned sched_idx = internal::scheduling_group_index(current_scheduling_group());
     if (_sl_lookup[sched_idx].first) {
