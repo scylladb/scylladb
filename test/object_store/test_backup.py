@@ -273,9 +273,9 @@ async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'done'
-    assert status['progress_units'] == "sstables"
-    assert status['progress_completed'] == len(toc_names)
-    assert status['progress_total'] == len(toc_names)
+    assert status['progress_units'] == 'batches'
+    assert status['progress_completed'] == status['progress_total']
+    assert status['progress_completed'] > 0
 
     print('Check that sstables came back')
     files = list_sstables()
