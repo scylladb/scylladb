@@ -16,6 +16,7 @@
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "db/config.hh"
 
 namespace streaming {
@@ -310,6 +311,20 @@ bool stream_manager::has_peer(inet_address endpoint) const {
         }
     }
     return false;
+}
+
+future<> stream_manager::fail_stream_plan(streaming::plan_id plan_id) {
+    return container().invoke_on_all([plan_id] (auto& sm) -> future<> {
+        for (auto sr : sm.get_all_streams()) {
+            for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+                co_await seastar::coroutine::maybe_yield();
+                if (session->plan_id() == plan_id) {
+                    sslog.info("stream_manager: Failed stream_session for stream_plan plan_id={}", plan_id);
+                    session->close_session(stream_session_state::FAILED);
+                }
+            }
+        }
+    });
 }
 
 void stream_manager::fail_sessions(inet_address endpoint) {

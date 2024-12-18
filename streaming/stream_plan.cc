@@ -11,6 +11,7 @@
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_state.hh"
+#include <seastar/coroutine/all.hh>
 
 namespace streaming {
 

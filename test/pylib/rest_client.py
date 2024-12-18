@@ -241,8 +241,8 @@ class ScyllaRESTAPIClient():
         """
         return await self.client.get_json(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
-    async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int) -> None:
-        await self.client.post(f"/storage_service/tablets/move", host=node_ip, params={
+    async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int, timeout: Optional[float] = None) -> None:
+        await self.client.post(f"/storage_service/tablets/move", host=node_ip, timeout=timeout, params={
             "ks": ks,
             "table": table,
             "src_host": str(src_host),

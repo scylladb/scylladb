@@ -243,6 +243,108 @@ async def test_topology_changes(manager: ManagerClient):
 
     await cql.run_async("DROP KEYSPACE test;")
 
+async def get_two_servers_to_move_tablet(manager: ManagerClient):
+    """
+    The first server in servers list is source node to move the tablet from. The second server is the dest node.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = ['--enable-file-stream', 'false']
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    servers.append(await manager.server_add(cmdline=cmdline))
+
+    key = 7 # Whatever
+    tablet_token = 0 # Doesn't matter since there is one tablet
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({key}, 0)")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    replica = await get_tablet_replica(manager, servers[0], 'test', 'test', tablet_token)
+    logger.info(f'{replica=}')
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    # Make sure servers[0] is the source node to move the tablet from
+    if replica[0] != s0_host_id:
+        servers.reverse()
+        s0_host_id, s1_host_id = s1_host_id, s0_host_id
+
+    dst_shard = 0
+
+    return (servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manager: ManagerClient):
+    servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard = await get_two_servers_to_move_tablet(manager)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error", one_shot=True)
+
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token, timeout=30))
+
+    await s1_log.wait_for('stream_manager: Failed stream_session for stream_plan', from_mark=s1_mark)
+    s1_mark = await s1_log.mark()
+
+    await manager.api.disable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error")
+
+    logger.info("Waiting for migration to finish")
+    await migration_task
+    logger.info("Migration done")
+
+    # Sanity test
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 1
+
+    await cql.run_async("TRUNCATE test.test")
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0
+
+    # Verify that there is no data resurrection
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0
+
+    # Verify that moving the tablet back works
+    await manager.api.move_tablet(servers[0].ip_addr, "test", "test", s1_host_id, dst_shard, replica[0], replica[1], tablet_token)
+    rows = await cql.run_async("SELECT pk from test.test")
+    assert len(list(rows)) == 0
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(manager: ManagerClient):
+    servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard = await get_two_servers_to_move_tablet(manager)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error", one_shot=True)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "stream_mutation_fragments_skip_fail_stream_plan", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_skip_fail_stream_plan", one_shot=True)
+
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, "test", "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token, timeout=10))
+
+    try:
+        logger.info("Waiting for migration to finish")
+        await migration_task
+        assert False # The move tablet is not supposed to finish
+    except TimeoutError:
+        logger.info("Migration timeout as expected")
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
