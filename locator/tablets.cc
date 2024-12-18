@@ -817,8 +817,7 @@ private:
         return replicas;
     }
 
-    template<typename Set>
-    Set get_pending_helper(const token& search_token) const {
+    host_id_vector_topology_change get_pending_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -834,11 +833,7 @@ private:
                 }
                 tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                                     search_token, _table, tablet, *info->pending_replica);
-                if constexpr (std::is_same_v<Set, inet_address_vector_topology_change>) {
-                    return {_tmptr->get_endpoint_for_host_id(info->pending_replica->host)};
-                } else {
-                    return {info->pending_replica->host};
-                }
+                return {info->pending_replica->host};
             }
             case write_replica_set_selector::next:
                 return {};
@@ -846,8 +841,7 @@ private:
         on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
     }
 
-    template<typename Set>
-    Set get_for_reading_helper(const token& search_token) const {
+    host_id_vector_replica_set get_for_reading_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -865,13 +859,7 @@ private:
             on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
         });
         tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        if constexpr (std::is_same_v<Set, inet_address_vector_replica_set>) {
-            auto result = to_replica_set(replicas);
-            maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
-            return result;
-        } else {
-            return to_host_set(replicas);
-        }
+        return to_host_set(replicas);
     }
 
 
@@ -899,18 +887,12 @@ public:
         return to_host_set(get_replicas_for_write(search_token));
     }
 
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override {
-        auto result = get_natural_endpoints(search_token);
-        maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
-        return result;
-    }
-
-    virtual future<dht::token_range_vector> get_ranges(inet_address ep) const override {
+    virtual future<dht::token_range_vector> get_ranges(host_id ep) const override {
         dht::token_range_vector ret;
 
         auto& tablet_map = get_tablet_map();
         for (auto tablet_id : tablet_map.tablet_ids()) {
-            auto endpoints = get_natural_endpoints(tablet_map.get_last_token(tablet_id));
+            auto endpoints = get_natural_replicas(tablet_map.get_last_token(tablet_id));
             auto should_add_range = std::find(std::begin(endpoints), std::end(endpoints), ep) != std::end(endpoints);
 
             if (should_add_range) {
@@ -922,20 +904,12 @@ public:
         co_return ret;
     }
 
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
-        return get_pending_helper<inet_address_vector_topology_change>(search_token);
-    }
-
     virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const override {
-        return get_pending_helper<host_id_vector_topology_change>(search_token);
-    }
-
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
-        return get_for_reading_helper<inet_address_vector_replica_set>(search_token);
+        return get_pending_helper(search_token);
     }
 
     virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const override {
-        return get_for_reading_helper<host_id_vector_replica_set>(search_token);
+        return get_for_reading_helper(search_token);
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token) const override {

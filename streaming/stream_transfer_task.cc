@@ -52,7 +52,7 @@ struct send_info {
     netw::messaging_service& ms;
     streaming::plan_id plan_id;
     table_id cf_id;
-    netw::messaging_service::msg_addr id;
+    locator::host_id id;
     uint32_t dst_cpu_id;
     stream_reason reason;
     service::frozen_topology_guard topo_guard;
@@ -65,7 +65,7 @@ struct send_info {
     mutation_fragment_v1_stream reader;
     noncopyable_function<void(size_t)> update;
     send_info(netw::messaging_service& ms_, streaming::plan_id plan_id_, lw_shared_ptr<replica::table> tbl_, reader_permit permit_,
-              dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
+              dht::token_range_vector ranges_, locator::host_id id_,
               uint32_t dst_cpu_id_, stream_reason reason_, service::frozen_topology_guard topo_guard_,
               noncopyable_function<void(size_t)> update_fn)
         : ms(ms_)
@@ -139,7 +139,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                             *got_error_from_peer = true;
                             *table_is_dropped = true;
                         }
-                        sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id.addr, si->plan_id, si->cf_id, status);
+                        sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, status);
                         // we've got an error from the other side, but we cannot just abandon rpc::source we
                         // need to continue reading until EOS since this will signal that no more work
                         // is left and rpc::source can be destroyed. The sender closes connection immediately
@@ -195,7 +195,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                 if (*table_is_dropped) {
                      sslog.info("[Stream #{}] Skipped streaming the dropped table {}.{}", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name());
                 } else {
-                    throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
+                    throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id, si->plan_id, si->cf_id));
                 }
             }
         });
@@ -207,7 +207,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
 future<> stream_transfer_task::execute() {
     auto plan_id = session->plan_id();
     auto cf_id = this->cf_id;
-    auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
+    auto id = session->peer;
     auto& sm = session->manager();
     auto table_dropped = co_await repair::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) {
         auto dst_cpu_id = session->dst_cpu_id;
@@ -218,8 +218,8 @@ future<> stream_transfer_task::execute() {
         return sm.container().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason, topo_guard] (stream_manager& sm) mutable {
             auto tbl = sm.db().find_column_family(cf_id).shared_from_this();
             return sm.db().obtain_reader_permit(*tbl, "stream-transfer-task", db::no_timeout, {}).then([&sm, tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason, topo_guard] (reader_permit permit) mutable {
-                auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, addr = id.addr] (size_t sz) {
-                    sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
+                auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, topo_guard, [&sm, plan_id, id] (size_t sz) {
+                    sm.update_progress(plan_id, id, streaming::progress_info::direction::OUT, sz);
                 });
                 return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
                     if (!has_relevant_range_on_this_shard) {
@@ -241,7 +241,7 @@ future<> stream_transfer_task::execute() {
             });
         }).then([this, id, plan_id] {
             _mutation_done_sent = true;
-            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
+            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id);
         }).handle_exception([plan_id, id, &sm] (std::exception_ptr ep) {
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
             utils::get_local_injector().inject("stream_mutation_fragments_table_dropped", [&sm] () {

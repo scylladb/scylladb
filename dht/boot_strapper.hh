@@ -53,7 +53,7 @@ public:
         , _token_metadata_ptr(std::move(tmptr)) {
     }
 
-    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard, inet_address replace_address = {});
+    future<> bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard, locator::host_id replace_address = {});
 
     /**
      * if initialtoken was specified, use that (split on comma).

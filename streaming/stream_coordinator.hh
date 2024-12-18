@@ -31,7 +31,7 @@ public:
 
 private:
     class host_streaming_data;
-    std::map<inet_address, shared_ptr<stream_session>> _peer_sessions;
+    std::map<locator::host_id, shared_ptr<stream_session>> _peer_sessions;
     bool _is_receiving;
 
 public:
@@ -49,10 +49,10 @@ public:
     bool is_receiving() const;
 
     void connect_all_stream_sessions();
-    std::set<inet_address> get_peers() const;
+    std::set<locator::host_id> get_peers() const;
 
 public:
-    shared_ptr<stream_session> get_or_create_session(stream_manager& mgr, inet_address peer) {
+    shared_ptr<stream_session> get_or_create_session(stream_manager& mgr, locator::host_id peer) {
         auto& session = _peer_sessions[peer];
         if (!session) {
             session = make_shared<stream_session>(mgr, peer);
@@ -61,7 +61,7 @@ public:
     }
 
     std::vector<session_info> get_all_session_info() const;
-    std::vector<session_info> get_peer_session_info(inet_address peer) const;
+    std::vector<session_info> get_peer_session_info(locator::host_id peer) const;
 
     void abort_all_stream_sessions();
 };

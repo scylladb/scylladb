@@ -623,14 +623,23 @@ std::unordered_set<std::reference_wrapper<const node>> topology::get_nodes() con
     return nodes;
 }
 
-std::unordered_set<gms::inet_address> topology::get_all_ips() const {
-    std::unordered_set<gms::inet_address> ips;
+std::unordered_set<locator::host_id> topology::get_all_host_ids() const {
+    std::unordered_set<locator::host_id> ids;
     for (const auto& np : _nodes) {
         if (np && !np->left() && !np->is_none()) {
-            ips.insert(np->endpoint());
+            ids.insert(np->host_id());
         }
     }
-    return ips;
+    return ids;
+}
+
+std::unordered_map<sstring, std::unordered_set<host_id>>
+topology::get_datacenter_host_ids() const {
+    std::unordered_map<sstring, std::unordered_set<host_id>> ret;
+    for (auto& [dc, nodes] : _dc_nodes) {
+        ret[dc] = nodes | std::views::transform([] (const node& n) { return n.host_id(); }) | std::ranges::to<std::unordered_set>();
+    }
+    return ret;
 }
 
 } // namespace locator

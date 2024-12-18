@@ -45,7 +45,7 @@ std::vector<session_info> stream_coordinator::get_all_session_info() const {
     return results;
 }
 
-std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address peer) const {
+std::vector<session_info> stream_coordinator::get_peer_session_info(locator::host_id peer) const {
     std::vector<session_info> results;
     auto it = _peer_sessions.find(peer);
     if (it != _peer_sessions.end()) {
@@ -59,8 +59,8 @@ bool stream_coordinator::is_receiving() const {
     return _is_receiving;
 }
 
-std::set<inet_address> stream_coordinator::get_peers() const {
-    std::set<inet_address> results;
+std::set<locator::host_id> stream_coordinator::get_peers() const {
+    std::set<locator::host_id> results;
     for (auto const& x : _peer_sessions) {
         results.insert(x.first);
     }

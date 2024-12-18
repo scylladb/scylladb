@@ -274,6 +274,9 @@ public:
         return _dc_endpoints;
     }
 
+    std::unordered_map<sstring, std::unordered_set<host_id>>
+    get_datacenter_host_ids() const;
+
     const std::unordered_map<sstring,
                             std::unordered_set<std::reference_wrapper<const node>>>&
     get_datacenter_nodes() const {
@@ -368,8 +371,8 @@ public:
     // Returns pointers to all nodes in a state other than "none" and "left".
     std::unordered_set<std::reference_wrapper<const node>> get_nodes() const;
 
-    // Returns addresses of all nodes in a state other than "none" and "left".
-    std::unordered_set<gms::inet_address> get_all_ips() const;
+    // Returns ids of all nodes in a state other than "none" and "left".
+    std::unordered_set<locator::host_id> get_all_host_ids() const;
 
     host_id my_host_id() const noexcept {
         return _cfg.this_host_id;

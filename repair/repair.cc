@@ -215,7 +215,7 @@ void remove_item(Collection& c, T& item) {
     }
 }
 
-repair_neighbors::repair_neighbors(std::vector<gms::inet_address> nodes, std::vector<shard_id> shards)
+repair_neighbors::repair_neighbors(std::vector<locator::host_id> nodes, std::vector<shard_id> shards)
     : all(std::move(nodes))
 {
     if (all.size() != shards.size()) {
@@ -227,24 +227,24 @@ repair_neighbors::repair_neighbors(std::vector<gms::inet_address> nodes, std::ve
 }
 
 // Return all of the neighbors with whom we share the provided range.
-static std::vector<gms::inet_address> get_neighbors(
+static std::vector<locator::host_id> get_neighbors(
         const locator::effective_replication_map& erm,
         const sstring& ksname, query::range<dht::token> range,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
-        const std::unordered_set<gms::inet_address>& ignore_nodes, bool small_table_optimization = false) {
+        const std::unordered_set<locator::host_id>& ignore_nodes, bool small_table_optimization = false) {
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
-    auto ret = erm.get_natural_endpoints(tok);
+    auto ret = erm.get_natural_replicas(tok);
     if (small_table_optimization) {
-        auto token_owners = erm.get_token_metadata().get_normal_token_owners_ips();
-        ret = inet_address_vector_replica_set(token_owners.begin(), token_owners.end());
+        auto token_owners = erm.get_token_metadata().get_normal_token_owners();
+        ret = host_id_vector_replica_set(token_owners.begin(), token_owners.end());
     }
-    auto my_address = erm.get_topology().my_address();
+    auto my_address = erm.get_topology().my_host_id();
     remove_item(ret, my_address);
 
     if (!data_centers.empty()) {
-        auto dc_endpoints_map = erm.get_token_metadata().get_datacenter_token_owners_ips();
-        std::unordered_set<gms::inet_address> dc_endpoints;
+        auto dc_endpoints_map = erm.get_token_metadata().get_datacenter_token_owners();
+        std::unordered_set<locator::host_id> dc_endpoints;
         for (const sstring& dc : data_centers) {
             auto it = dc_endpoints_map.find(dc);
             if (it == dc_endpoints_map.end()) {
@@ -266,7 +266,7 @@ static std::vector<gms::inet_address> get_neighbors(
         }
         // The resulting list of nodes is the intersection of the nodes in the
         // listed data centers, and the (range-dependent) list of neighbors.
-        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        std::unordered_set<locator::host_id> neighbor_set(ret.begin(), ret.end());
         ret.clear();
         for (const auto& endpoint : dc_endpoints) {
             if (neighbor_set.contains(endpoint)) {
@@ -275,21 +275,26 @@ static std::vector<gms::inet_address> get_neighbors(
         }
     } else if (!hosts.empty()) {
         bool found_me = false;
-        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        std::unordered_set<locator::host_id> neighbor_set(ret.begin(), ret.end());
         ret.clear();
         for (const sstring& host : hosts) {
-            gms::inet_address endpoint;
+            gms::inet_address ip;
             try {
-                endpoint = gms::inet_address(host);
+                ip = gms::inet_address(host);
             } catch(...) {
                 throw std::runtime_error(format("Unknown host specified: {}", host));
             }
-            if (endpoint == my_address) {
-                found_me = true;
-            } else if (neighbor_set.contains(endpoint)) {
-                ret.push_back(endpoint);
-                // If same host is listed twice, don't add it again later
-                neighbor_set.erase(endpoint);
+            auto endpoint = erm.get_token_metadata().get_host_id_if_known(ip);
+            if (endpoint) {
+                if (endpoint == my_address) {
+                    found_me = true;
+                } else if (neighbor_set.contains(*endpoint)) {
+                    ret.push_back(*endpoint);
+                    // If same host is listed twice, don't add it again later
+                    neighbor_set.erase(*endpoint);
+                } else {
+                    rlogger.warn("Provided host ip {} has no corespondent host id", ip);
+                }
             }
             // Nodes which aren't neighbors for this range are ignored.
             // This allows the user to give a list of "good" nodes, where
@@ -306,7 +311,7 @@ static std::vector<gms::inet_address> get_neighbors(
         }
         if (ret.size() < 1) {
             auto me = my_address;
-            auto others = erm.get_natural_endpoints(tok);
+            auto others = erm.get_natural_replicas(tok);
             remove_item(others, me);
             throw std::runtime_error(fmt::format("Repair requires at least two "
                     "endpoints that are neighbors before it can continue, "
@@ -316,51 +321,28 @@ static std::vector<gms::inet_address> get_neighbors(
                     "repair ({}).", me, others, hosts));
         }
     } else if (!ignore_nodes.empty()) {
-        auto it = std::remove_if(ret.begin(), ret.end(), [&ignore_nodes] (const gms::inet_address& node) {
+        auto it = std::remove_if(ret.begin(), ret.end(), [&ignore_nodes] (const locator::host_id& node) {
             return ignore_nodes.contains(node);
         });
         ret.erase(it, ret.end());
     }
 
-    return boost::copy_range<std::vector<gms::inet_address>>(std::move(ret));
-
-#if 0
-    // Origin's ActiveRepairService.getNeighbors() also verifies that the
-    // requested range fits into a local range
-        StorageService ss = StorageService.instance;
-        Map<Range<Token>, List<InetAddress>> replicaSets = ss.getRangeToAddressMap(keyspaceName);
-        Range<Token> rangeSuperSet = null;
-        for (Range<Token> range : ss.getLocalRanges(keyspaceName))
-        {
-            if (range.contains(toRepair))
-            {
-                rangeSuperSet = range;
-                break;
-            }
-            else if (range.intersects(toRepair))
-            {
-                throw new IllegalArgumentException("Requested range intersects a local range but is not fully contained in one; this would lead to imprecise repair");
-            }
-        }
-        if (rangeSuperSet == null || !replicaSets.containsKey(rangeSuperSet))
-            return Collections.emptySet();
-
-#endif
+    return std::move(ret) | std::ranges::to<std::vector<locator::host_id>>();
 }
 
-static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
+static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
         const locator::effective_replication_map& erm,
         const sstring& ksname,
         const dht::token_range_vector& ranges,
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+        const std::unordered_set<locator::host_id>& ignore_nodes) {
 
-    std::unordered_set<gms::inet_address> participating_hosts;
+    std::unordered_set<locator::host_id> participating_hosts;
 
     // Repair coordinator must participate in repair, but it is never
     // returned by get_neighbors - add it here
-    auto my_address = erm.get_topology().my_address();
+    auto my_address = erm.get_topology().my_host_id();
     participating_hosts.insert(my_address);
 
     co_await do_for_each(ranges, [&] (const dht::token_range& range) {
@@ -370,13 +352,13 @@ static future<std::list<gms::inet_address>> get_hosts_participating_in_repair(
         }
     });
 
-    co_return std::list<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
+    co_return std::list<locator::host_id>(participating_hosts.begin(), participating_hosts.end());
 }
 
 
 future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<gms::inet_address> ignore_nodes) {
+        std::unordered_set<locator::host_id> ignore_nodes) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     bool needs_flush_before_repair = false;
@@ -395,7 +377,7 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
     gc_clock::time_point flush_time;
     bool hints_batchlog_flushed = false;
     if (needs_flush_before_repair) {
-        auto waiting_nodes = db.get_token_metadata().get_topology().get_all_ips();
+        auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
         });
@@ -405,12 +387,12 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
-            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (gms::inet_address node) -> future<> {
+            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
-                    auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, netw::msg_addr(node), req);
+                    auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, req);
                     if (resp.flush_time == gc_clock::time_point()) {
                         // This means the node does not support sending flush_time back. Use the time when the flush is requested for flush_time.
                         rlogger.debug("repair[{}]: Got empty flush_time from node={}. Please upgrade the node={}.", uuid, node, node);
@@ -629,7 +611,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         repair_uniq_id parent_id_,
         const std::vector<sstring>& data_centers_,
         const std::vector<sstring>& hosts_,
-        const std::unordered_set<gms::inet_address>& ignore_nodes_,
+        const std::unordered_set<locator::host_id>& ignore_nodes_,
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         bool small_table_optimization,
@@ -712,7 +694,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     auto neighbors = std::move(r_neighbors.all);
     auto mandatory_neighbors = std::move(r_neighbors.mandatory);
     auto live_neighbors = neighbors |
-                std::views::filter([this] (const gms::inet_address& node) { return gossiper.is_alive(node); }) |
+                std::views::filter([this] (const locator::host_id& node) { return gossiper.is_alive(node); }) |
                 std::ranges::to<std::vector>();
     for (auto& node : mandatory_neighbors) {
         auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
@@ -730,7 +712,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     }
     if (live_neighbors.size() != neighbors.size()) {
         nr_failed_ranges++;
-        std::unordered_set<gms::inet_address> live_neighbors_set(live_neighbors.begin(), live_neighbors.end());
+        std::unordered_set<locator::host_id> live_neighbors_set(live_neighbors.begin(), live_neighbors.end());
         for (auto& node : neighbors) {
             if (!live_neighbors_set.contains(node)) {
                 nodes_down.insert(node);
@@ -795,8 +777,8 @@ void repair_stats::add(const repair_stats& o) {
 }
 
 sstring repair_stats::get_stats() {
-    std::map<gms::inet_address, float> row_from_disk_bytes_per_sec;
-    std::map<gms::inet_address, float> row_from_disk_rows_per_sec;
+    std::map<locator::host_id, float> row_from_disk_bytes_per_sec;
+    std::map<locator::host_id, float> row_from_disk_rows_per_sec;
     auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
     for (auto& x : row_from_disk_bytes) {
         if (std::fabs(duration) > FLT_EPSILON) {
@@ -1196,30 +1178,21 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
                 throw std::invalid_argument("Cannot combine ignore_nodes and hosts options.");
             }
 
-            auto host2ip = [&addr_map] (locator::host_id host) -> future<gms::inet_address> {
-                auto ip = addr_map.find(host);
-                if (!ip) {
-                    throw std::runtime_error(format("Could not get ip address for host {} from gossiper_address_map", host));
-                }
-                co_return *ip;
-            };
-
-
-            std::unordered_set<gms::inet_address> hosts;
+            std::unordered_set<locator::host_id> hosts;
             for (const auto& n : options.hosts) {
                 try {
                     auto node = gms::inet_address(n);
-                    hosts.insert(node);
+                    hosts.insert(_gossiper.local().get_host_id(node));
                 } catch(...) {
                     throw std::invalid_argument(fmt::format("Failed to parse node={} in hosts={} specified by user: {}",
                         n, options.hosts, std::current_exception()));
                 }
             }
-            std::unordered_set<gms::inet_address> ignore_nodes;
+            std::unordered_set<locator::host_id> ignore_nodes;
             for (const auto& n : options.ignore_nodes) {
                 try {
                     auto node = gms::inet_address(n);
-                    ignore_nodes.insert(node);
+                    ignore_nodes.insert(_gossiper.local().get_host_id(node));
                 } catch(...) {
                     throw std::invalid_argument(fmt::format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                         n, options.ignore_nodes, std::current_exception()));
@@ -1228,7 +1201,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
 
             bool primary_replica_only = options.primary_range;
             auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-            co_await repair_tablets(id, keyspace, cfs, host2ip, primary_replica_only, options.ranges, options.data_centers, hosts, ignore_nodes, ranges_parallelism);
+            co_await repair_tablets(id, keyspace, cfs, primary_replica_only, options.ranges, options.data_centers, hosts, ignore_nodes, ranges_parallelism);
             co_return id.id;
         }
     }
@@ -1252,6 +1225,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
     dht::token_range_vector ranges;
+    auto my_host_id = erm.get_topology().my_host_id();
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {
@@ -1264,15 +1238,15 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
             // but instead of each range being assigned just one primary owner
             // across the entire cluster, here each range is assigned a primary
             // owner in each of the DCs.
-            ranges = co_await erm.get_primary_ranges_within_dc(my_address);
+            ranges = co_await erm.get_primary_ranges_within_dc(my_host_id);
         } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::invalid_argument("You need to run primary range repair on all nodes in the cluster.");
         } else {
-            ranges = co_await erm.get_primary_ranges(my_address);
+            ranges = co_await erm.get_primary_ranges(my_host_id);
         }
     } else {
         // get keyspace local ranges
-        ranges = co_await erm.get_ranges(my_address);
+        ranges = co_await erm.get_ranges(my_host_id);
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
@@ -1282,11 +1256,11 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     if (!options.ignore_nodes.empty() && !options.hosts.empty()) {
         throw std::invalid_argument("Cannot combine ignore_nodes and hosts options.");
     }
-    std::unordered_set<gms::inet_address> ignore_nodes;
+    std::unordered_set<locator::host_id> ignore_nodes;
     for (const auto& n: options.ignore_nodes) {
         try {
             auto node = gms::inet_address(n);
-            ignore_nodes.insert(node);
+            ignore_nodes.insert(_gossiper.local().get_host_id(node));
         } catch(...) {
             throw std::invalid_argument(fmt::format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                 n, options.ignore_nodes, std::current_exception()));
@@ -1353,10 +1327,10 @@ future<> repair::user_requested_repair_task_impl::run() {
         auto uuid = node_ops_id{id.uuid().uuid()};
         auto start_time = std::chrono::steady_clock::now();
 
-        std::list<gms::inet_address> participants;
+        std::list<locator::host_id> participants;
         if (_small_table_optimization) {
-            auto normal_nodes = germs->get().get_token_metadata().get_normal_token_owners_ips();
-            participants = std::list<gms::inet_address>(normal_nodes.begin(), normal_nodes.end());
+            auto normal_nodes = germs->get().get_token_metadata().get_normal_token_owners();
+            participants = std::list<locator::host_id>(normal_nodes.begin(), normal_nodes.end());
         } else {
             participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
@@ -1372,8 +1346,8 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
-                parallel_for_each(participants, [&rs, uuid, &req] (gms::inet_address node) {
-                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(participants, [&rs, uuid, &req] (locator::host_id node) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -1530,13 +1504,13 @@ future<> repair::data_sync_repair_task_impl::run() {
             auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
             ranges_reduced_factor = _ranges.size();
             _ranges = {range};
-            std::unordered_set<gms::inet_address> nodes;
+            std::unordered_set<locator::host_id> nodes;
             for (auto& [_, neighbor] : _neighbors) {
                 for (auto& n : neighbor.all) {
                     nodes.insert(n);
                 }
             }
-            auto nodes_vec = std::vector<gms::inet_address>(nodes.begin(), nodes.end());
+            auto nodes_vec = std::vector<locator::host_id>(nodes.begin(), nodes.end());
             _neighbors = {{range, repair_neighbors(nodes_vec, nodes_vec)}};
         }
     }
@@ -1558,7 +1532,7 @@ future<> repair::data_sync_repair_task_impl::run() {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
-                auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                auto ignore_nodes = std::unordered_set<locator::host_id>();
                 bool hints_batchlog_flushed = false;
                 auto ranges_parallelism = std::nullopt;
                 auto flush_time = gc_clock::time_point();
@@ -1613,7 +1587,6 @@ std::optional<double> repair::data_sync_repair_task_impl::expected_children_numb
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    using inet_address = gms::inet_address;
     return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         auto& db = get_db().local();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
@@ -1651,12 +1624,12 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get();
-            auto range_addresses = strat.get_range_addresses(metadata_clone).get();
+            auto range_addresses = strat.get_range_host_ids(metadata_clone).get();
 
             //Pending ranges
             metadata_clone.update_topology(myid, myloc, locator::node::state::bootstrapping);
             metadata_clone.update_normal_tokens(tokens, myid).get();
-            auto pending_range_addresses = strat.get_range_addresses(metadata_clone).get();
+            auto pending_range_addresses = strat.get_range_host_ids(metadata_clone).get();
             metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
@@ -1669,13 +1642,13 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                     const wrapping_interval<dht::token>& src_range = x.first;
                     seastar::thread::maybe_yield();
                     if (src_range.contains(desired_range, dht::token_comparator{})) {
-                        std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
+                        std::vector<locator::host_id> old_endpoints(x.second.begin(), x.second.end());
                         auto it = pending_range_addresses.find(desired_range);
                         if (it == pending_range_addresses.end()) {
                             throw std::runtime_error(format("Can not find desired_range = {} in pending_range_addresses", desired_range));
                         }
 
-                        std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
+                        std::unordered_set<locator::host_id> new_endpoints(it->second.begin(), it->second.end());
                         rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, old_endpoints={}, new_endpoints={}",
                                 keyspace_name, desired_range, old_endpoints, new_endpoints);
                         // Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
@@ -1689,15 +1662,15 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         // going to lose the ownership of the range, we need to
                         // choose it as the mandatory neighbor to sync data
                         // from.
-                        std::vector<gms::inet_address> mandatory_neighbors;
+                        std::vector<locator::host_id> mandatory_neighbors;
                         // All neighbors
-                        std::vector<inet_address> neighbors;
-                        auto get_node_losing_the_ranges = [&, &keyspace_name = keyspace_name] (const std::vector<gms::inet_address>& old_nodes, const std::unordered_set<gms::inet_address>& new_nodes) {
+                        std::vector<locator::host_id> neighbors;
+                        auto get_node_losing_the_ranges = [&, &keyspace_name = keyspace_name] (const std::vector<locator::host_id>& old_nodes, const std::unordered_set<locator::host_id>& new_nodes) {
                             // Remove the new nodes from the old nodes list, so
                             // that it contains only the node that will lose
                             // the ownership of the range.
                             auto nodes = old_nodes |
-                                    std::views::filter([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }) |
+                                    std::views::filter([&] (const locator::host_id& node) { return !new_nodes.contains(node); }) |
                                     std::ranges::to<std::vector>();
                             if (nodes.size() != 1) {
                                 throw std::runtime_error(fmt::format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found {} nodes={}",
@@ -1719,7 +1692,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                         };
                         auto get_old_endpoints_in_local_dc = [&] () {
                             return old_endpoints |
-                                std::views::filter([&] (const gms::inet_address& node) {
+                                std::views::filter([&] (const locator::host_id& node) {
                                     return topology.get_datacenter(node) == myloc.dc;
                                 }) |
                                 std::ranges::to<std::vector>();
@@ -1789,22 +1762,20 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     });
 }
 
-future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node_id, shared_ptr<node_ops_info> ops) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    using inet_address = gms::inet_address;
-    return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), leaving_node_id = std::move(leaving_node_id), ops] () mutable {
         auto& db = get_db().local();
         auto& topology = tmptr->get_topology();
-        auto myip = topology.my_address();
-        const auto leaving_node_id = tmptr->get_host_id(leaving_node);
+        auto myhostid = topology.my_host_id();
         auto ks_erms = db.get_non_local_strategy_keyspaces_erms();
         auto local_dc = topology.get_datacenter();
-        bool is_removenode = myip != leaving_node;
+        bool is_removenode = myhostid != leaving_node_id;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node).get();
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node_id).get();
             auto nr_tables = get_nr_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
         }
@@ -1819,11 +1790,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 rs.get_metrics().removenode_total_ranges = nr_ranges_total;
             }).get();
         }
-        auto get_ignore_nodes = [ops] () -> std::list<gms::inet_address>& {
-            static std::list<gms::inet_address> no_ignore_nodes;
-            return ops ? ops->ignore_nodes : no_ignore_nodes;
+        auto get_ignore_nodes = [ops, this] () -> std::list<locator::host_id> {
+            static std::list<locator::host_id> no_ignore_nodes;
+            return ops ? ops->ignore_nodes | std::views::transform([this] (gms::inet_address ip) { return _gossiper.local().get_host_id(ip); }) | std::ranges::to<std::list>() : no_ignore_nodes;
         };
-        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | std::views::keys, leaving_node, get_ignore_nodes());
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | std::views::keys, leaving_node_id, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
@@ -1831,16 +1802,16 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto& strat = erm->get_replication_strategy();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = erm->get_ranges(leaving_node).get();
+            dht::token_range_vector ranges = erm->get_ranges(leaving_node_id).get();
             auto nr_tables = get_nr_tables(db, keyspace_name);
-            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size() * nr_tables);
+            rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node_id, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
-            std::unordered_map<dht::token_range, locator::endpoint_set> current_replica_endpoints;
+            std::unordered_map<dht::token_range, locator::host_id_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_ips(end_token, *tmptr).get();
+                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get();
                 current_replica_endpoints.emplace(r, std::move(eps));
                 seastar::thread::maybe_yield();
             }
@@ -1859,9 +1830,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const auto new_eps = strat.calculate_natural_ips(end_token, temp).get();
+                const auto new_eps = strat.calculate_natural_endpoints(end_token, temp).get();
                 const auto& current_eps = current_replica_endpoints[r];
-                std::unordered_set<inet_address> neighbors_set = new_eps.get_set();
+                std::unordered_set<locator::host_id> neighbors_set = new_eps.get_set();
                 bool skip_this_range = false;
                 auto new_owner = neighbors_set;
                 for (const auto& node : current_eps) {
@@ -1871,17 +1842,17 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, zero replica after the removal",
                             op, keyspace_name, r, current_eps, new_eps));
                 }
-                auto get_neighbors_set = [&, &keyspace_name = keyspace_name] (const std::vector<inet_address>& nodes) {
+                auto get_neighbors_set = [&, &keyspace_name = keyspace_name] (const std::vector<locator::host_id>& nodes) {
                     for (auto& node : nodes) {
                         if (topology.get_datacenter(node) == local_dc) {
-                            return std::unordered_set<inet_address>{node};;
+                            return std::unordered_set<locator::host_id>{node};;
                         }
                     }
                     if (find_node_in_local_dc_only) {
                         throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
                                 op, keyspace_name, r, current_eps, new_eps, local_dc));
                     } else {
-                        return std::unordered_set<inet_address>{nodes.front()};
+                        return std::unordered_set<locator::host_id>{nodes.front()};
                     }
                 };
                 if (new_owner.size() == 1) {
@@ -1900,7 +1871,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // range.
                         // Choose the new owner node n4 to run repair to sync
                         // with all replicas.
-                        skip_this_range = *new_owner.begin() != myip;
+                        skip_this_range = *new_owner.begin() != myhostid;
                         neighbors_set.insert(current_eps.begin(), current_eps.end());
                     } else {
                         // For decommission operation, the decommission node
@@ -1908,7 +1879,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // responsible for.
                         // Choose the decommission node n3 to run repair to
                         // sync with the new owner node n4.
-                        neighbors_set = get_neighbors_set(std::vector<inet_address>{*new_owner.begin()});
+                        neighbors_set = get_neighbors_set(std::vector<locator::host_id>{*new_owner.begin()});
                     }
                 } else if (new_owner.size() == 0) {
                     // For example, with RF = 3 and 3 nodes n1, n2, n3 in the
@@ -1920,7 +1891,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // owner node available.
                         // Choose the primary replica node n1 to run repair to
                         // sync with all replicas.
-                        skip_this_range = new_eps.front() != myip;
+                        skip_this_range = new_eps.front() != myhostid;
                         neighbors_set.insert(current_eps.begin(), current_eps.end());
                     } else {
                         // For decommission operation, the decommission node
@@ -1931,20 +1902,20 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         // Choose the decommission node n3 to run repair to
                         // sync with one of the replica nodes, e.g., n1, in the
                         // local DC.
-                        neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
+                        neighbors_set = get_neighbors_set(boost::copy_range<std::vector<locator::host_id>>(new_eps));
                     }
                 } else {
                     throw std::runtime_error(fmt::format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong number of new owner node={}",
                             op, keyspace_name, r, current_eps, new_eps, new_owner));
                 }
-                neighbors_set.erase(myip);
-                neighbors_set.erase(leaving_node);
+                neighbors_set.erase(myhostid);
+                neighbors_set.erase(leaving_node_id);
                 // Remove nodes in ignore_nodes
                 for (const auto& node : get_ignore_nodes()) {
                     neighbors_set.erase(node);
                 }
                 auto neighbors = neighbors_set |
-                    std::views::filter([&local_dc, &topology] (const gms::inet_address& node) {
+                    std::views::filter([&local_dc, &topology] (const locator::host_id& node) {
                         return topology.get_datacenter(node) == local_dc;
                     }) |
                     std::ranges::to<std::vector>();
@@ -1954,7 +1925,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                     rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, skipped",
                         op, keyspace_name, r, current_eps, new_eps, neighbors);
                 } else {
-                    std::vector<gms::inet_address> mandatory_neighbors = is_removenode ? neighbors : std::vector<gms::inet_address>{};
+                    std::vector<locator::host_id> mandatory_neighbors = is_removenode ? neighbors : std::vector<locator::host_id>{};
                     rlogger.info("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, mandatory_neighbor={}",
                             op, keyspace_name, r, current_eps, new_eps, neighbors, mandatory_neighbors);
                     range_sources[r] = repair_neighbors(std::move(neighbors), std::move(mandatory_neighbors));
@@ -1979,19 +1950,19 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto nr_ranges_synced = ranges.size();
             sync_data_using_repair(keyspace_name, erm, std::move(ranges), std::move(range_sources), reason, ops).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
-                op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced * nr_tables, nr_ranges_skipped * nr_tables);
+                op, keyspace_name, leaving_node_id, nr_ranges_total, nr_ranges_synced * nr_tables, nr_ranges_skipped * nr_tables);
         }
-        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | std::views::keys, leaving_node);
+        rlogger.info("{}: finished with keyspaces={}, leaving_node={}", op, ks_erms | std::views::keys, leaving_node_id);
     });
 }
 
 future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto my_address = tmptr->get_topology().my_address();
+    auto my_address = tmptr->get_topology().my_host_id();
     return do_decommission_removenode_with_repair(std::move(tmptr), my_address, {});
 }
 
-future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node, shared_ptr<node_ops_info> ops) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
@@ -2238,9 +2209,9 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
     co_return co_await do_rebuild_replace_with_repair(std::move(ks_erms), std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes), replaced_node);
 }
 
-static std::unordered_set<gms::inet_address> get_token_owners_in_dcs(std::vector<sstring> data_centers, locator::effective_replication_map_ptr erm) {
-    auto dc_endpoints_map = erm->get_token_metadata().get_datacenter_token_owners_ips();
-    std::unordered_set<gms::inet_address> dc_endpoints;
+static std::unordered_set<locator::host_id> get_token_owners_in_dcs(std::vector<sstring> data_centers, locator::effective_replication_map_ptr erm) {
+    auto dc_endpoints_map = erm->get_token_metadata().get_datacenter_token_owners();
+    std::unordered_set<locator::host_id> dc_endpoints;
     for (const sstring& dc : data_centers) {
         auto it = dc_endpoints_map.find(dc);
         if (it == dc_endpoints_map.end()) {
@@ -2254,7 +2225,7 @@ static std::unordered_set<gms::inet_address> get_token_owners_in_dcs(std::vector
 }
 
 // Repair all tablets belong to this node for the given table
-future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> hosts, std::unordered_set<gms::inet_address> ignore_nodes, std::optional<int> ranges_parallelism) {
+future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2299,7 +2270,6 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         };
         std::vector<repair_tablet_meta> metas;
         auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
-        auto myip = erm->get_topology().my_address();
         auto mydc = erm->get_topology().get_datacenter();
         bool select_primary_ranges_within_dc = false;
         // If the user specified the ranges option, ignore the primary_replica_only option.
@@ -2318,7 +2288,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             }
         }
         if (!hosts.empty()) {
-            if (!hosts.contains(myip)) {
+            if (!hosts.contains(myhostid)) {
                 throw std::runtime_error("The current host must be part of the repair");
             }
         }
@@ -2350,8 +2320,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             return make_ready_future<>();
         });
 
-        std::unordered_set<gms::inet_address> dc_endpoints = get_token_owners_in_dcs(data_centers, erm);
-        if (!data_centers.empty() && !dc_endpoints.contains(myip)) {
+        std::unordered_set<locator::host_id> dc_endpoints = get_token_owners_in_dcs(data_centers, erm);
+        if (!data_centers.empty() && !dc_endpoints.contains(myhostid)) {
             throw std::runtime_error("The current host must be part of the repair");
         }
 
@@ -2360,7 +2330,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             nr++;
             rlogger.debug("repair[{}] Collect {} out of {} tablets: table={}.{} tablet_id={} range={} replicas={} primary_replica_only={}",
                 rid.uuid(), nr, metas.size(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only);
-            std::vector<gms::inet_address> nodes;
+            std::vector<locator::host_id> nodes;
             auto master_shard_id = m.master_shard_id;
             auto range = m.range;
             dht::token_range_vector intersection_ranges;
@@ -2395,23 +2365,22 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             std::vector<shard_id> shards;
             for (auto& r : m.replicas) {
                 auto shard = r.shard;
-                auto ip = co_await host2ip(r.host);
                 if (r.host != myhostid) {
-                    bool select = data_centers.empty() ? true : dc_endpoints.contains(ip);
+                    bool select = data_centers.empty() ? true : dc_endpoints.contains(r.host);
 
                     if (select && !hosts.empty()) {
-                        select = hosts.contains(ip);
+                        select = hosts.contains(r.host);
                     }
 
                     if (select && !ignore_nodes.empty()) {
-                        select = !ignore_nodes.contains(ip);
+                        select = !ignore_nodes.contains(r.host);
                     }
 
                     if (select) {
-                        rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} ip={} myip={} myhostid={}",
-                                rid.uuid(), keyspace_name, table_name, r.host, shard, ip, myip, myhostid);
+                        rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} myhostid={}",
+                                rid.uuid(), keyspace_name, table_name, r.host, shard, myhostid);
                         shards.push_back(shard);
-                        nodes.push_back(ip);
+                        nodes.push_back(r.host);
                     }
                 }
             }
@@ -2434,14 +2403,6 @@ future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locato
     auto table_id = gid.table;
     auto tablet_id = gid.tablet;
 
-    auto host2ip = [&addr_map] (locator::host_id host) -> future<gms::inet_address> {
-        auto ip = addr_map.find(host);
-        if (!ip) {
-            throw std::runtime_error(format("Could not get ip address for host {} from gossiper_address_map", host));
-        }
-        co_return *ip;
-    };
-
     auto t = db.get_tables_metadata().get_table_if_exists(table_id);
     if (!t) {
         co_return;
@@ -2456,14 +2417,13 @@ future<> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locato
     auto range = tmap.get_token_range(tablet_id);
     auto& info = tmap.get_tablet_info(tablet_id);
     auto replicas = info.replicas;
-    std::vector<gms::inet_address> nodes;
+    std::vector<locator::host_id> nodes;
     std::vector<shard_id> shards;
     shard_id master_shard_id;
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
-            auto ip = co_await host2ip(r.host);
-            nodes.push_back(ip);
+            nodes.push_back(r.host);
             shards.push_back(shard);
         } else {
             master_shard_id = r.shard;
@@ -2513,7 +2473,7 @@ future<> repair::tablet_repair_task_impl::run() {
         std::atomic<int> idx{1};
 
         // Start the off strategy updater
-        std::unordered_set<gms::inet_address> participants;
+        std::unordered_set<locator::host_id> participants;
         std::unordered_set<table_id> table_ids;
         for (auto& meta : _metas) {
             thread::maybe_yield();
@@ -2527,8 +2487,8 @@ future<> repair::tablet_repair_task_impl::run() {
             auto update_interval = std::chrono::seconds(30);
             while (!as.abort_requested()) {
                 sleep_abortable(update_interval, as).get();
-                parallel_for_each(participants, [&rs, uuid, &req] (gms::inet_address node) {
-                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                parallel_for_each(participants, [&rs, uuid, &req] (locator::host_id node) {
+                    return ser::node_ops_rpc_verbs::send_node_ops_cmd(&rs._messaging, node, req).then([uuid, node] (node_ops_cmd_response resp) {
                         rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
                     }).handle_exception([uuid, node] (std::exception_ptr ep) {
                         rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
@@ -2587,7 +2547,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
-                auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                std::unordered_set<locator::host_id> ignore_nodes;;
                 auto [hints_batchlog_flushed, flush_time] = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 bool small_table_optimization = false;
 

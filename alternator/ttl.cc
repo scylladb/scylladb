@@ -315,19 +315,19 @@ static size_t random_offset(size_t min, size_t max) {
 // this range's primary node is down. For this we need to return not just
 // a list of this node's secondary ranges - but also the primary owner of
 // each of those ranges.
-static future<std::vector<std::pair<dht::token_range, gms::inet_address>>> get_secondary_ranges(
+static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_secondary_ranges(
         const locator::effective_replication_map_ptr& erm,
-        gms::inet_address ep) {
+        locator::host_id ep) {
     const auto& tm = *erm->get_token_metadata_ptr();
     const auto& sorted_tokens = tm.sorted_tokens();
-    std::vector<std::pair<dht::token_range, gms::inet_address>> ret;
+    std::vector<std::pair<dht::token_range, locator::host_id>> ret;
     if (sorted_tokens.empty()) {
         on_internal_error(tlogger, "Token metadata is empty");
     }
     auto prev_tok = sorted_tokens.back();
     for (const auto& tok : sorted_tokens) {
         co_await coroutine::maybe_yield();
-        inet_address_vector_replica_set eps = erm->get_natural_endpoints(tok);
+        host_id_vector_replica_set eps = erm->get_natural_replicas(tok);
         if (eps.size() <= 1 || eps[1] != ep) {
             prev_tok = tok;
             continue;
@@ -396,7 +396,7 @@ class ranges_holder_primary {
     dht::token_range_vector _token_ranges;
 public:
     explicit ranges_holder_primary(dht::token_range_vector token_ranges) : _token_ranges(std::move(token_ranges)) {}
-    static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map_ptr& erm, gms::inet_address ep) {
+    static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map_ptr& erm, locator::host_id ep) {
         co_return ranges_holder_primary(co_await erm->get_primary_ranges(ep));
     }
     std::size_t size() const { return _token_ranges.size(); }
@@ -410,13 +410,13 @@ public:
 // ranges_holder<secondary> holds the secondary token ranges plus each
 // range's primary owner, needed to implement should_skip().
 class ranges_holder_secondary {
-    std::vector<std::pair<dht::token_range, gms::inet_address>> _token_ranges;
+    std::vector<std::pair<dht::token_range, locator::host_id>> _token_ranges;
     const gms::gossiper& _gossiper;
 public:
-    explicit ranges_holder_secondary(std::vector<std::pair<dht::token_range, gms::inet_address>> token_ranges, const gms::gossiper& g)
+    explicit ranges_holder_secondary(std::vector<std::pair<dht::token_range, locator::host_id>> token_ranges, const gms::gossiper& g)
         : _token_ranges(std::move(token_ranges))
         , _gossiper(g) {}
-    static future<ranges_holder_secondary> make(const locator::effective_replication_map_ptr& erm, gms::inet_address ep, const gms::gossiper& g) {
+    static future<ranges_holder_secondary> make(const locator::effective_replication_map_ptr& erm, locator::host_id ep, const gms::gossiper& g) {
         co_return ranges_holder_secondary(co_await get_secondary_ranges(erm, ep), g);
     }
     std::size_t size() const { return _token_ranges.size(); }
@@ -731,8 +731,8 @@ static future<bool> scan_table(
     // FIXME: need to pace the scan, not do it all at once.
     scan_ranges_context scan_ctx{s, proxy, std::move(column_name), std::move(member)};
     auto erm = db.real_database().find_keyspace(s->ks_name()).get_vnode_effective_replication_map();
-    auto my_address = erm->get_topology().my_address();
-    token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm, my_address));
+    auto my_host_id = erm->get_topology().my_host_id();
+    token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm, my_host_id));
     while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
         // Note that because of issue #9167 we need to run a separate
         // query on each partition range, and can't pass several of
@@ -752,7 +752,7 @@ static future<bool> scan_table(
     // by tasking another node to take over scanning of the dead node's primary
     // ranges. What we do here is that this node will also check expiration
     // on its *secondary* ranges - but only those whose primary owner is down.
-    token_ranges_owned_by_this_shard my_secondary_ranges(s, co_await ranges_holder_secondary::make(erm, my_address, gossiper));
+    token_ranges_owned_by_this_shard my_secondary_ranges(s, co_await ranges_holder_secondary::make(erm, my_host_id, gossiper));
     while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
         expiration_stats.secondary_ranges_scanned++;
         dht::partition_range_vector partition_ranges;

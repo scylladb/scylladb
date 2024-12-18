@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
+#include "locator/token_metadata.hh"
 #include "utils/log.hh"
 #include "message/messaging_service.hh"
 #include <seastar/coroutine/maybe_yield.hh>
@@ -92,7 +93,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
 
     ser::streaming_rpc_verbs::register_prepare_message(&ms, [this] (const rpc::client_info& cinfo, prepare_message msg, streaming::plan_id plan_id, sstring description, rpc::optional<stream_reason> reason_opt, rpc::optional<service::session_id> session) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         auto topo_guard = service::frozen_topology_guard(session.value_or(service::default_session_id));
@@ -107,7 +108,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
         });
     });
     ser::streaming_rpc_verbs::register_prepare_done_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(dst_cpu_id, [plan_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
             session->follower_start_sent();
@@ -118,7 +119,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             rpc::optional<stream_reason> reason_opt,
             rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
             rpc::optional<service::session_id> session) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+
         auto src = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
 
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
@@ -128,7 +131,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     _db.local().get_token_metadata().get_topology().my_address())));
         }
-        return _mm.local().get_schema_for_write(schema_id, src, from.cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+        return _mm.local().get_schema_for_write(schema_id, src, cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
             auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
@@ -168,7 +171,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         frozen_mutation_fragment& fmf = std::get<0>(*opt);
                         auto sz = fmf.representation().size();
                         auto mf = fmf.unfreeze(*s, permit);
-                        sm.local().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                        sm.local().update_progress(plan_id, from, progress_info::direction::IN, sz);
                         offstrategy_update->update();
 
                         return utils::get_local_injector().inject("stream_mutation_fragments", [&guard, &as] (auto& handler) -> future<> {
@@ -226,7 +229,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         status = -2;
                     }
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
-                            plan_id, s->ks_name(), s->cf_name(), from.addr, ex);
+                            plan_id, s->ks_name(), s->cf_name(), from, ex);
                 } else {
                     received_partitions = f.get();
                 }
@@ -243,7 +246,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     level = seastar::log_level::debug;
                 }
                 sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
-                        plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                        plan_id, s->ks_name(), s->cf_name(), from, ep);
             });
           } catch (...) {
             return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
@@ -254,14 +257,14 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
       });
     });
     ser::streaming_rpc_verbs::register_stream_mutation_done(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] (auto& sm) mutable {
             auto session = sm.get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
         });
     });
     ser::streaming_rpc_verbs::register_complete_message(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         if (failed && *failed) {
             return container().invoke_on(dst_cpu_id, [plan_id, from, dst_cpu_id] (auto& sm) {
                 auto session = sm.get_session(plan_id, from, "COMPLETE_MESSAGE");
@@ -284,7 +287,7 @@ future<> stream_manager::uninit_messaging_service_handler() {
         ms.unregister_stream_mutation_fragments()).discard_result();
 }
 
-stream_session::stream_session(stream_manager& mgr, inet_address peer_)
+stream_session::stream_session(stream_manager& mgr, locator::host_id peer_)
     : peer(peer_)
     , _mgr(mgr)
 {
@@ -301,7 +304,7 @@ future<> stream_session::on_initialization_complete() {
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
-    auto id = msg_addr{this->peer, 0};
+    auto id = this->peer;
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
     return ser::streaming_rpc_verbs::send_prepare_message(&manager().ms(), id, std::move(prepare), plan_id(), description(), get_reason(), topo_guard()).then_wrapped([this, id] (auto&& f) {
         try {
@@ -460,15 +463,14 @@ void stream_session::send_failed_complete_message() {
     } else {
         return;
     }
-    auto id = msg_addr{this->peer, this->dst_cpu_id};
-    sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
+    sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, peer);
     auto session = shared_from_this();
     bool failed = true;
     //FIXME: discarded future.
-    (void)ser::streaming_rpc_verbs::send_complete_message(&manager().ms(), id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
-        sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
-    }).handle_exception([session, id, plan_id] (auto ep) {
-        sslog.debug("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
+    (void)ser::streaming_rpc_verbs::send_complete_message(&manager().ms(), peer, plan_id, dst_cpu_id, failed).then([session, peer = this->peer, plan_id] {
+        sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, peer);
+    }).handle_exception([session, peer = this->peer, plan_id] (auto ep) {
+        sslog.debug("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, peer, ep);
     });
 }
 
@@ -593,12 +595,9 @@ void stream_session::start() {
         close_session(stream_session_state::COMPLETE);
         return;
     }
-    auto connecting = manager().ms().get_preferred_ip(peer);
-    if (peer == connecting) {
-        sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
-    } else {
-        sslog.debug("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
-    }
+
+    sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
+
     //FIXME: discarded future.
     (void)on_initialization_complete().handle_exception([this] (auto ep) {
         this->on_error();

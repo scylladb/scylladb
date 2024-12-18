@@ -124,7 +124,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     gc_clock::time_point _flush_hints_batchlog_time;
     future<std::tuple<bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<gms::inet_address> ignore_nodes);
+            std::unordered_set<locator::host_id> ignore_nodes);
 
 public:
     repair_service(sharded<service::topology_state_machine>& tsm,
@@ -158,11 +158,11 @@ public:
     // all repair-based node operation entry points must be called on shard 0
     future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
     future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
-    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node, shared_ptr<node_ops_info> ops);
     future<> rebuild_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc);
     future<> replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node);
 private:
-    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, locator::host_id leaving_node, shared_ptr<node_ops_info> ops);
 
     future<> do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<locator::host_id> ignore_nodes = {}, locator::host_id replaced_node = {});
 
@@ -175,7 +175,7 @@ private:
             shared_ptr<node_ops_info> ops_info);
 
 public:
-    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, host2ip_t host2ip, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<gms::inet_address> hosts = {}, std::unordered_set<gms::inet_address> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
+    future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<locator::host_id> hosts = {}, std::unordered_set<locator::host_id> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
     future<> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
 private:
@@ -196,7 +196,7 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
-    gms::inet_address my_address() const noexcept;
+    locator::host_id my_host_id() const noexcept;
 
     repair::task_manager_module& get_repair_module() noexcept {
         return *_repair_module;
@@ -226,11 +226,10 @@ public:
         return _repair_metas;
     }
 
-    repair_meta_ptr get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
+    repair_meta_ptr get_repair_meta(locator::host_id from, uint32_t repair_meta_id);
 
     future<>
     insert_repair_meta(
-            const gms::inet_address& from,
             locator::host_id from_id,
             uint32_t src_cpu_id,
             uint32_t repair_meta_id,
@@ -245,13 +244,13 @@ public:
             abort_source& as);
 
     future<>
-    remove_repair_meta(const gms::inet_address& from,
+    remove_repair_meta(const locator::host_id& from,
             uint32_t repair_meta_id,
             sstring ks_name,
             sstring cf_name,
             dht::token_range range);
 
-    future<> remove_repair_meta(gms::inet_address from);
+    future<> remove_repair_meta(locator::host_id from);
 
     future<> remove_repair_meta();
 
@@ -272,7 +271,7 @@ class repair_writer;
 
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<gms::inet_address>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time);
+        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);

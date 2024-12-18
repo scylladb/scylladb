@@ -57,7 +57,6 @@ struct replication_strategy_params {
 
 using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
 
-using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vector_replica_set>;
 using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
 
 class vnode_effective_replication_map;
@@ -113,7 +112,6 @@ public:
     // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
     // in a loop.
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
-    future<endpoint_set> calculate_natural_ips(const token& search_token, const token_metadata& tm) const;
 
     virtual ~abstract_replication_strategy() {}
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params);
@@ -162,7 +160,7 @@ public:
     future<dht::token_range_vector> get_ranges(locator::host_id ep, const token_metadata& tm) const;
 
     // Caller must ensure that token_metadata will not change throughout the call.
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_addresses(const token_metadata& tm) const;
+    future<std::unordered_map<dht::token_range, host_id_vector_replica_set>> get_range_host_ids(const token_metadata& tm) const;
 
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const;
 };
@@ -227,8 +225,6 @@ public:
     /// Does not include pending replicas except for a pending replica which
     /// has the same address as one of the old replicas. This can be the case during "nodetool replace"
     /// operation which adds a replica which has the same address as the replaced replica.
-    /// Use get_natural_endpoints_without_node_being_replaced() to get replicas without any pending replicas.
-    /// This won't be necessary after we implement https://github.com/scylladb/scylladb/issues/6403.
     ///
     /// Excludes replicas which are in the left state. After replace, the replaced replica may
     /// still be in the replica set of the tablet until tablet scheduler rebuilds the replacing replica.
@@ -242,19 +238,8 @@ public:
     /// Same as above but returns host ids instead of addresses
     virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const = 0;
 
-    /// Returns a subset of replicas returned by get_natural_endpoints() without the pending replica.
-    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
-
-    /// Returns the set of pending replicas for a given token.
-    /// Pending replica is a replica which gains ownership of data.
-    /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
-
     /// Same as above but returns host ids instead of addresses
     virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const = 0;
-
-    /// Returns a list of nodes to which a read request should be directed.
-    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const = 0;
 
     /// Same as above but returns host ids instead of addresses
     virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const = 0;
@@ -287,7 +272,7 @@ public:
     // This function is not efficient, and not meant for the fast path.
     //
     // Note: must be called after token_metadata has been initialized.
-    virtual future<dht::token_range_vector> get_ranges(inet_address ep) const = 0;
+    virtual future<dht::token_range_vector> get_ranges(host_id ep) const = 0;
 
     shard_id shard_for_reads(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_reads(t);
@@ -352,17 +337,14 @@ private:
 public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
     host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
-    inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override;
     host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
     host_id_vector_replica_set get_replicas(const token& search_token) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
-    future<dht::token_range_vector> get_ranges(inet_address ep) const override;
+    future<dht::token_range_vector> get_ranges(host_id ep) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
@@ -394,17 +376,17 @@ public:
     // StorageService.getPrimaryRangesForEndpoint().
     //
     // Note: must be called after token_metadata has been initialized.
-    future<dht::token_range_vector> get_primary_ranges(inet_address ep) const;
+    future<dht::token_range_vector> get_primary_ranges(locator::host_id ep) const;
 
     // get_primary_ranges_within_dc() is similar to get_primary_ranges()
     // except it assigns a primary node for each range within each dc,
     // instead of one node globally.
     //
     // Note: must be called after token_metadata has been initialized.
-    future<dht::token_range_vector> get_primary_ranges_within_dc(inet_address ep) const;
+    future<dht::token_range_vector> get_primary_ranges_within_dc(locator::host_id ep) const;
 
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-    get_range_addresses() const;
+    future<std::unordered_map<dht::token_range, host_id_vector_replica_set>>
+    get_range_host_ids() const;
 
     // Returns a set of dirty endpoint. An endpoint is dirty if it may have a data
     // for a range it does not own any longer. Will be empty if there is no topology
@@ -416,10 +398,10 @@ public:
     std::unordered_set<locator::host_id> get_all_pending_nodes() const;
 
 private:
-    future<dht::token_range_vector> do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    future<dht::token_range_vector> do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const host_id& natural_endpoint)> consider_range_for_endpoint) const;
     inet_address_vector_replica_set do_get_natural_endpoints(const token& tok, bool is_vnode) const;
     host_id_vector_replica_set do_get_replicas(const token& tok, bool is_vnode) const;
-    stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
+    stop_iteration for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const host_id&)>& func) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
@@ -554,9 +536,5 @@ private:
 
     friend class vnode_effective_replication_map;
 };
-
-void maybe_remove_node_being_replaced(const token_metadata&,
-                                      const abstract_replication_strategy&,
-                                      inet_address_vector_replica_set& natural_endpoints);
 
 }

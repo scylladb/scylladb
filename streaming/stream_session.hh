@@ -123,7 +123,7 @@ public:
      *
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
-    inet_address peer;
+    locator::host_id peer;
     unsigned dst_cpu_id = 0;
 private:
     stream_manager& _mgr;
@@ -193,7 +193,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(stream_manager& mgr, inet_address peer_);
+    stream_session(stream_manager& mgr, locator::host_id peer_);
     ~stream_session();
 
     streaming::plan_id plan_id() const;

@@ -3473,7 +3473,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         });
 
         const auto token_ownership = dht::token::describe_ownership(tokens);
-        const auto datacenter_endpoints = tm.get_topology().get_datacenter_endpoints();
+        const auto datacenter_endpoints = tm.get_topology().get_datacenter_host_ids();
         std::map<gms::inet_address, float> final_ownership;
 
         for (const auto& [dc, endpoints_map] : datacenter_endpoints) {
@@ -3497,10 +3497,10 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                             ownership += loc->second;
                         }
                     }
-                    final_ownership[endpoint] = ownership;
+                    final_ownership[ss._address_map.find(endpoint).value()] = ownership;
                 }  catch (replica::no_such_keyspace&) {
                     // In case ss.get_ranges_for_endpoint(keyspace_name, endpoint) is not found, just mark it as zero and continue
-                    final_ownership[endpoint] = 0;
+                    final_ownership[ss._address_map.find(endpoint).value()] = 0;
                 }
             }
         }
@@ -3867,13 +3867,13 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
-        ctl.sync_nodes.insert(get_broadcast_address());
+        ctl.sync_nodes.insert(my_host_id());
 
         // Step 2: Wait until no pending node operations
-        std::unordered_map<gms::inet_address, std::list<node_ops_id>> pending_ops;
+        std::unordered_map<locator::host_id, std::list<node_ops_id>> pending_ops;
         auto req = node_ops_cmd_request(node_ops_cmd::query_pending_ops, uuid);
-        parallel_for_each(ctl.sync_nodes, [this, req, uuid, &pending_ops] (const gms::inet_address& node) {
-            return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging.local(), netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
+        parallel_for_each(ctl.sync_nodes, [this, req, uuid, &pending_ops] (const locator::host_id& node) {
+            return ser::node_ops_rpc_verbs::send_node_ops_cmd(&_messaging.local(), node, req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
                 slogger.debug("bootstrap[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
                 if (!resp.pending_ops.empty()) {
                     pending_ops.emplace(node, resp.pending_ops);
@@ -3926,16 +3926,15 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     auto stop_ctl = deferred_stop(ctl);
     const auto& uuid = ctl.uuid();
     gms::inet_address replace_address = replace_info.address;
-    ctl.ignore_nodes = replace_info.ignore_nodes | std::views::transform([] (const auto& x) {
-        return x.second.endpoint;
-    }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
+    locator::host_id replace_host_id = replace_info.host_id;
+    ctl.ignore_nodes = replace_info.ignore_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
     // Step 1: Decide who needs to sync data for replace operation
     // The replacing node is not a normal token owner yet
     // Add it back explicitly after checking all other nodes.
-    ctl.start("replace", [&] (gms::inet_address node) {
-        return node != replace_address;
+    ctl.start("replace", [&] (locator::host_id node) {
+        return node != replace_host_id;
     });
-    ctl.sync_nodes.insert(get_broadcast_address());
+    ctl.sync_nodes.insert(my_host_id());
 
     auto sync_nodes_generations = _gossiper.get_generation_for_nodes(ctl.sync_nodes).get();
     // Map existing nodes to replacing nodes
@@ -3971,7 +3970,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), bootstrap_tokens, get_token_metadata_ptr());
-            bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, replace_address).get();
+            bs.bootstrap(streaming::stream_reason::replace, _gossiper, null_topology_guard, replace_info.host_id).get();
         }
         on_streaming_finished();
 
@@ -4105,12 +4104,13 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
             auto stop_ctl = deferred_stop(ctl);
             auto uuid = ctl.uuid();
             const auto& tmptr = ctl.tmptr;
-            auto endpoint_opt = tmptr->get_endpoint_for_host_id_if_known(host_id);
             SCYLLA_ASSERT(ss._group0);
             auto raft_id = raft::server_id{host_id.uuid()};
             bool raft_available = ss._group0->wait_for_raft().get();
             bool is_group0_member = raft_available && ss._group0->is_member(raft_id, false);
-            if (!endpoint_opt && !is_group0_member) {
+            bool removed_from_token_ring = !tmptr->get_topology().find_node(host_id);
+
+            if (removed_from_token_ring && !is_group0_member) {
                 throw std::runtime_error(::format("removenode[{}]: Node {} not found in the cluster", uuid, host_id));
             }
 
@@ -4122,22 +4122,21 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
             // endpoint_opt, while parts related to removing from group 0 are conditioned on
             // is_group0_member.
 
-            if (endpoint_opt && ss._gossiper.is_alive(*endpoint_opt)) {
+            if (ss._gossiper.is_alive(host_id)) {
                 const std::string message = ::format(
                     "removenode[{}]: Rejected removenode operation (node={}); "
                     "the node being removed is alive, maybe you should use decommission instead?",
-                    uuid, *endpoint_opt);
+                    uuid, host_id);
                 slogger.warn("{}", message);
                 throw std::runtime_error(message);
             }
 
             for (auto& hoep : ignore_nodes_params) {
-                ctl.ignore_nodes.insert(hoep.resolve_endpoint(*tmptr));
+                ctl.ignore_nodes.insert(hoep.resolve_id(*tmptr));
             }
 
-            bool removed_from_token_ring = !endpoint_opt;
-            if (endpoint_opt) {
-                auto endpoint = *endpoint_opt;
+            if (!removed_from_token_ring) {
+                auto endpoint = ss._address_map.find(host_id).value();
                 ctl.endpoint = endpoint;
 
                 // Step 1: Make the node a group 0 non-voter before removing it from the token ring.
@@ -4159,8 +4158,8 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
                 // If the user want the removenode operation to succeed even if some of the nodes
                 // are not available, the user has to explicitly pass a list of
                 // node that can be skipped for the operation.
-                ctl.start("removenode", [&] (gms::inet_address node) {
-                    return node != endpoint;
+                ctl.start("removenode", [&] (locator::host_id node) {
+                    return node != host_id;
                 });
 
                 auto tokens = tmptr->get_tokens(host_id);
@@ -4390,10 +4389,10 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             for (auto& node : req.leaving_nodes) {
                 if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using repair, coordinator={}", req.ops_uuid, node, coordinator);
-                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), node, ops).get();
+                    _repair.local().removenode_with_repair(get_token_metadata_ptr(), _gossiper.get_host_id(node), ops).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_stream(node, topo_guard, as).get();
+                    removenode_with_stream(get_token_metadata().get_host_id(node), topo_guard, as).get();
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
@@ -4835,12 +4834,12 @@ future<> storage_service::rebuild(utils::optional_param source_dc) {
             } else {
                 auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
                         tmptr->get_my_id(), ss._snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, null_topology_guard);
-                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_host_ids()));
                 if (source_dc) {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(*source_dc));
                 }
                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                    co_await streamer->add_ranges(keyspace_name, erm, co_await ss.get_ranges_for_endpoint(erm, ss.get_broadcast_address()), ss._gossiper, false);
+                    co_await streamer->add_ranges(keyspace_name, erm, co_await ss.get_ranges_for_endpoint(erm, ss.my_host_id()), ss._gossiper, false);
                 }
                 try {
                     co_await streamer->stream_async();
@@ -4879,19 +4878,19 @@ int32_t storage_service::get_exception_count() {
     return 0;
 }
 
-future<std::unordered_multimap<dht::token_range, inet_address>>
-storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, inet_address endpoint) {
+future<std::unordered_multimap<dht::token_range, locator::host_id>>
+storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, locator::host_id endpoint) {
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = co_await get_ranges_for_endpoint(erm, endpoint);
 
     slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
+    std::unordered_map<dht::token_range, host_id_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = erm->get_natural_endpoints(end_token);
+        auto eps = erm->get_natural_replicas(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
         co_await coroutine::maybe_yield();
     }
@@ -4900,11 +4899,11 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
-    if (const auto host_id = temp.get_host_id_if_known(endpoint); host_id && temp.is_normal_token_owner(*host_id)) {
-        temp.remove_endpoint(*host_id);
+    if (temp.is_normal_token_owner(endpoint)) {
+        temp.remove_endpoint(endpoint);
     }
 
-    std::unordered_multimap<dht::token_range, inet_address> changed_ranges;
+    std::unordered_multimap<dht::token_range, locator::host_id> changed_ranges;
 
     // Go through the ranges and for each range check who will be
     // storing replicas for these ranges when the leaving endpoint
@@ -4914,12 +4913,12 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = co_await rs.calculate_natural_ips(end_token, temp);
+        auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
             const dht::token_range& range_ = it->first;
-            inet_address_vector_replica_set& current_eps = it->second;
+            host_id_vector_replica_set& current_eps = it->second;
             slogger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
             for (auto ep : it->second) {
                 auto beg = new_replica_endpoints.begin();
@@ -4955,11 +4954,11 @@ future<> storage_service::unbootstrap() {
     if (is_repair_based_node_ops_enabled(streaming::stream_reason::decommission)) {
         co_await _repair.local().decommission_with_repair(get_token_metadata_ptr());
     } else {
-        std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
+        std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream;
 
         auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, get_broadcast_address());
+            auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, my_host_id());
             if (slogger.is_enabled(logging::log_level::debug)) {
                 std::vector<wrapping_interval<token>> ranges;
                 for (auto& x : ranges_mm) {
@@ -4986,19 +4985,19 @@ future<> storage_service::unbootstrap() {
     }
 }
 
-future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
-    auto my_address = get_broadcast_address();
+future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, locator::host_id leaving_node) {
+    auto my_address = my_host_id();
     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
     for (const auto& [keyspace_name, erm] : ks_erms) {
-        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = co_await get_changed_ranges_for_leaving(erm, leaving_node);
+        std::unordered_multimap<dht::token_range, locator::host_id> changed_ranges = co_await get_changed_ranges_for_leaving(erm, leaving_node);
         dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
             if (x.second == my_address) {
                 my_new_ranges.emplace_back(x.first);
             }
         }
-        std::unordered_multimap<inet_address, dht::token_range> source_ranges = co_await get_new_source_ranges(erm, my_new_ranges);
-        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+        std::unordered_multimap<locator::host_id, dht::token_range> source_ranges = co_await get_new_source_ranges(erm, my_new_ranges);
+        std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
         for (auto& x : source_ranges) {
             ranges_per_endpoint[x.first].emplace_back(x.second);
         }
@@ -5006,7 +5005,7 @@ future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streame
     }
 }
 
-future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
+future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
                                                  frozen_topology_guard topo_guard,
                                                  shared_ptr<abort_source> as_ptr) {
     return seastar::async([this, leaving_node, as_ptr, topo_guard] {
@@ -5078,7 +5077,7 @@ future<> storage_service::leave_ring() {
 }
 
 future<>
-storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
+storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream_by_keyspace) {
     auto streamer = dht::range_streamer(_db, _stream_manager, get_token_metadata_ptr(), _abort_source, get_token_metadata_ptr()->get_my_id(), _snitch.local()->get_location(), "Unbootstrap", streaming::stream_reason::decommission, null_topology_guard);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
@@ -5088,10 +5087,10 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             continue;
         }
 
-        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+        std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
         for (auto& end_point_entry : ranges_with_endpoints) {
             dht::token_range r = end_point_entry.first;
-            inet_address endpoint = end_point_entry.second;
+            locator::host_id endpoint = end_point_entry.second;
             ranges_per_endpoint[endpoint].emplace_back(r);
             co_await coroutine::maybe_yield();
         }
@@ -5129,16 +5128,16 @@ future<> storage_service::shutdown_protocol_servers() {
     }
 }
 
-future<std::unordered_multimap<inet_address, dht::token_range>>
+future<std::unordered_multimap<locator::host_id, dht::token_range>>
 storage_service::get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
-    auto my_address = get_broadcast_address();
-    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = co_await erm->get_range_addresses();
-    std::unordered_multimap<inet_address, dht::token_range> source_ranges;
+    auto my_address = my_host_id();
+    std::unordered_map<dht::token_range, host_id_vector_replica_set> range_addresses = co_await erm->get_range_host_ids();
+    std::unordered_multimap<locator::host_id, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
     auto tmptr = erm->get_token_metadata_ptr();
     for (auto r : ranges) {
-        inet_address_vector_replica_set sources;
+        host_id_vector_replica_set sources;
         auto it = range_addresses.find(r);
         if (it != range_addresses.end()) {
             sources = it->second;
@@ -5655,9 +5654,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 } else {
                                     dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_token_metadata_ptr()->get_my_id(),
                                                           locator::endpoint_dc_rack{rs.datacenter, rs.rack}, rs.ring.value().tokens, get_token_metadata_ptr());
-                                    auto existing_ip = _address_map.find(locator::host_id(replaced_id.uuid()));
-                                    SCYLLA_ASSERT(existing_ip);
-                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, *existing_ip);
+                                    co_await bs.bootstrap(streaming::stream_reason::replace, _gossiper, _topology_state_machine._topology.session, locator::host_id{replaced_id.uuid()});
                                 }
                             }));
                             co_await task->done();
@@ -5691,12 +5688,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         }
                         auto id = it->first;
                         rtlogger.debug("streaming to remove node {}", id);
-                        const auto& am = _address_map;
-                        auto ip = am.find(locator::host_id{id.uuid()}); // map node id to ip
-                        SCYLLA_ASSERT (ip); // what to do if address is unknown?
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], coroutine::lambda([this, ip] () {
+                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], coroutine::lambda([this, id = locator::host_id{id.uuid()}] () {
                             auto as = make_shared<abort_source>();
                             auto sub = _abort_source.subscribe([as] () noexcept {
                                 if (!as->abort_requested()) {
@@ -5714,9 +5708,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     ignored_ips.push_back(*ip);
                                 }
                                 auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), *ip, ops);
+                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops);
                             } else {
-                                return removenode_with_stream(*ip, _topology_state_machine._topology.session, as);
+                                return removenode_with_stream(id, _topology_state_machine._topology.session, as);
                             }
                         }));
                         co_await task->done();
@@ -5744,12 +5738,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                             } else {
                                 auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, _abort_source,
                                         tmptr->get_my_id(), _snitch.local()->get_location(), "Rebuild", streaming::stream_reason::rebuild, _topology_state_machine._topology.session);
-                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_members()));
+                                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(_gossiper.get_unreachable_host_ids()));
                                 if (source_dc != "") {
                                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
                                 }
                                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                                    co_await streamer->add_ranges(keyspace_name, erm, co_await get_ranges_for_endpoint(erm, get_broadcast_address()), _gossiper, false);
+                                    co_await streamer->add_ranges(keyspace_name, erm, co_await get_ranges_for_endpoint(erm, my_host_id()), _gossiper, false);
                                 }
                                 try {
                                     co_await streamer->stream_async();
@@ -6058,11 +6052,11 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                                                                 std::move(tables));
             tm = nullptr;
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
-                    _gossiper.get_unreachable_members()));
+                    _gossiper.get_unreachable_host_ids()));
 
-            std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+            std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
             for (auto r: streaming_info.read_from) {
-                ranges_per_endpoint[host2ip(r.host)].emplace_back(range);
+                ranges_per_endpoint[r.host].emplace_back(range);
             }
             streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
             co_await streamer->stream_async();
@@ -7251,7 +7245,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
 };
 
 future<dht::token_range_vector>
-storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
+storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const locator::host_id& ep) const {
     return erm->get_ranges(ep);
 }
 

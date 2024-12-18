@@ -94,7 +94,7 @@ class gossiper : public seastar::async_sharded_service<gossiper>, public seastar
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
-    using generation_for_nodes = std::unordered_map<gms::inet_address, generation_type>;
+    using generation_for_nodes = std::unordered_map<locator::host_id, generation_type>;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
@@ -129,7 +129,7 @@ private:
 public:
     // Get current generation number for the given nodes
     future<generation_for_nodes>
-    get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) const;
+    get_generation_for_nodes(std::unordered_set<locator::host_id> nodes) const;
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(generation_for_nodes advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
@@ -304,6 +304,7 @@ public:
      * @return a list of unreachable gossip participants, including fat clients
      */
     std::set<inet_address> get_unreachable_members() const;
+    std::set<locator::host_id> get_unreachable_host_ids() const;
 
     /**
      * @return a list of unreachable token owners
@@ -313,7 +314,7 @@ public:
     /**
      * @return a list of unreachable nodes
      */
-    std::set<inet_address> get_unreachable_nodes() const;
+    std::set<locator::host_id> get_unreachable_nodes() const;
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 

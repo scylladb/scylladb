@@ -16,6 +16,7 @@
 #include "streaming/progress_info.hh"
 #include <vector>
 #include <map>
+#include "locator/host_id.hh"
 
 namespace streaming {
 
@@ -24,8 +25,7 @@ namespace streaming {
  */
 class session_info {
 public:
-    using inet_address = gms::inet_address;
-    inet_address peer;
+    locator::host_id peer;
     /** Immutable collection of receiving summaries */
     std::vector<stream_summary> receiving_summaries;
     /** Immutable collection of sending summaries*/
@@ -37,7 +37,7 @@ public:
     std::map<sstring, progress_info> sending_files;
 
     session_info() = default;
-    session_info(inet_address peer_,
+    session_info(locator::host_id peer_,
                  std::vector<stream_summary> receiving_summaries_,
                  std::vector<stream_summary> sending_summaries_,
                  stream_session_state state_)

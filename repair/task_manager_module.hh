@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "gms/inet_address.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "streaming/stream_reason.hh"
@@ -46,11 +47,11 @@ private:
     dht::token_range_vector _ranges;
     std::vector<sstring> _hosts;
     std::vector<sstring> _data_centers;
-    std::unordered_set<gms::inet_address> _ignore_nodes;
+    std::unordered_set<locator::host_id> _ignore_nodes;
     bool _small_table_optimization;
     std::optional<int> _ranges_parallelism;
 public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism) noexcept
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism) noexcept
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
         , _germs(germs)
         , _cfs(std::move(cfs))
@@ -150,7 +151,7 @@ public:
     repair_uniq_id global_repair_id;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
-    std::unordered_set<gms::inet_address> ignore_nodes;
+    std::unordered_set<locator::host_id> ignore_nodes;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     size_t total_rf;
     uint64_t nr_ranges_finished = 0;
@@ -159,7 +160,7 @@ public:
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
     bool _hints_batchlog_flushed = false;
-    std::unordered_set<gms::inet_address> nodes_down;
+    std::unordered_set<locator::host_id> nodes_down;
     bool _small_table_optimization = false;
     size_t small_table_optimization_ranges_reduced_factor = 1;
 private:
@@ -179,7 +180,7 @@ public:
             repair_uniq_id parent_id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
-            const std::unordered_set<gms::inet_address>& ignore_nodes_,
+            const std::unordered_set<locator::host_id>& ignore_nodes_,
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
             bool small_table_optimization,
