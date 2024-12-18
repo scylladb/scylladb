@@ -755,7 +755,7 @@ private:
                         // Once the seastar issue is fixed, we can just keep the tmp socket aliva across
                         // the listen invoke below.
                         tmp = {};
-                        _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata)).get();
+                        _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata), [host_id] (gms::inet_address ip) {return host_id; }).get();
                     }
                 } catch (std::system_error& e) {
                     // if we still hit a used port (quick other process), just shut down ms and try again.

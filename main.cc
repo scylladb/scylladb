@@ -2118,7 +2118,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
+                return messaging.invoke_on_all([&] (auto& ms) {
+                        return ms.start_listen(token_metadata.local(), [&gossiper] (gms::inet_address ip)  {
+                            if (ip == gossiper.local().get_broadcast_address()) {
+                                return gossiper.local().my_host_id();
+                            }
+                            try {
+                                return gossiper.local().get_host_id(ip);
+                            } catch (...) {
+                                return locator::host_id{};
+                            }
+                        });
+                    });
             }).get();
 
             const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
