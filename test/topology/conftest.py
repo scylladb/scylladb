@@ -8,6 +8,7 @@
 import pathlib
 import ssl
 import platform
+import urllib.parse
 from functools import partial
 from typing import List, Optional, Dict
 from test.pylib.random_tables import RandomTables
@@ -209,8 +210,9 @@ async def manager(request, manager_internal, record_property, build_mode):
         if request.config.getoption('artifacts_dir_url') is not None:
             # get the relative path to the tmpdir for the failed directory
             dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
-            full_url = f"<a href={request.config.getoption('artifacts_dir_url')}/{dir_path_relative}>failed_test_logs</a>"
-            record_property("TEST_LOGS", full_url)
+            full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
+                                            urllib.parse.quote(dir_path_relative))
+            record_property("TEST_LOGS", f"<a href={full_url}>failed_test_logs</a>")
 
     cluster_status = await manager_client.after_test(test_case_name, not failed)
     await manager_client.stop()  # Stop client session and close driver after each test
