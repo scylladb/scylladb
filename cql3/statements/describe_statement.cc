@@ -18,7 +18,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include "seastar/coroutine/exception.hh"
+#include <seastar/coroutine/exception.hh>
 #include "service/client_state.hh"
 #include "types/types.hh"
 #include "cql3/query_processor.hh"

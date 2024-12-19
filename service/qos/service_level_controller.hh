@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/timer.hh>
-#include "seastar/util/bool_class.hh"
+#include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/distributed.hh>

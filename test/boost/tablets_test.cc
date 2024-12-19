@@ -8,7 +8,7 @@
 
 
 
-#include "seastar/core/shard_id.hh"
+#include <seastar/core/shard_id.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
 #include <fmt/ranges.h>
