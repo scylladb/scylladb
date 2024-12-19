@@ -310,6 +310,10 @@ def test_gsi_delete_with_lsi(dynamodb):
                 'Projection': { 'ProjectionType': 'ALL' }
             }
         ]) as table:
+        # We shouldn't need to wait for a GSI created together with the
+        # table, but let's do it anyway to work around bug #9059 (which
+        # isn't what this test is trying to reproduce).
+        wait_for_gsi(table, 'gsi')
         items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
         with table.batch_writer() as batch:
             for item in items:
