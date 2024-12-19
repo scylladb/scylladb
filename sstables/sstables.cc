@@ -1553,6 +1553,15 @@ future<> sstable::reload_reclaimed_components() {
     sstlog.info("Reloaded bloom filter of {}", get_filename());
 }
 
+void sstable::disable_component_memory_reload() {
+    if (total_reclaimable_memory_size() > 0) {
+        // should be called only when the components have been dropped already
+        on_internal_error(sstlog, "disable_component_memory_reload() called with reclaimable memory");
+    }
+
+    _total_memory_reclaimed = 0;
+}
+
 future<> sstable::load_metadata(sstable_open_config cfg, bool validate) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse

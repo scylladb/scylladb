@@ -171,7 +171,9 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
     _total_memory_reclaimed += memory_reclaimed;
     _total_reclaimable_memory -= memory_reclaimed;
     _reclaimed.insert(*sst_with_max_memory);
-    smlogger.info("Reclaimed {} bytes of memory from SSTable components. Total memory reclaimed so far is {} bytes", memory_reclaimed, _total_memory_reclaimed);
+    // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
+    smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
+            memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
 }
 
 size_t sstables_manager::get_memory_available_for_reclaimable_components() {
@@ -225,15 +227,25 @@ future<> sstables_manager::components_reloader_fiber() {
     }
 }
 
+void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
+    // remove the sstable from the memory tracking metrics
+    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
+    _total_memory_reclaimed -= sst->total_memory_reclaimed();
+    // reclaim any remaining memory from the sstable
+    sst->reclaim_memory_from_components();
+    // disable further reload of components
+    _reclaimed.erase(*sst);
+    sst->disable_component_memory_reload();
+}
+
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
 }
 
 void sstables_manager::deactivate(sstable* sst) {
-    // Remove SSTable from the reclaimable memory tracking
-    _total_reclaimable_memory -= sst->total_reclaimable_memory_size();
-    _total_memory_reclaimed -= sst->total_memory_reclaimed();
-    _reclaimed.erase(*sst);
+    // Drop reclaimable components if they are still in memory
+    // and remove SSTable from the reclaimable memory tracking
+    reclaim_memory_and_stop_tracking_sstable(sst);
 
     // At this point, sst has a reference count of zero, since we got here from
     // lw_shared_ptr_deleter<sstables::sstable>::dispose().
@@ -330,8 +342,7 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 }
 
 void sstables_manager::on_unlink(sstable* sst) {
-    // Remove the sst from manager's reclaimed list to prevent any attempts to reload its components.
-    _reclaimed.erase(*sst);
+    reclaim_memory_and_stop_tracking_sstable(sst);
 }
 
 sstables_registry::~sstables_registry() = default;
