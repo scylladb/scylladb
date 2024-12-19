@@ -211,6 +211,10 @@ private:
     // Fiber to reload reclaimed components back into memory when memory becomes available.
     future<> components_reloader_fiber();
     size_t get_memory_available_for_reclaimable_components();
+    // Reclaim memory from the SSTable and remove it from the memory tracking metrics.
+    // The method is idempotent and for an sstable that is deleted, it is called both
+    // during unlink and during deactivation.
+    void reclaim_memory_and_stop_tracking_sstable(sstable* sst);
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

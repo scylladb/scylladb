@@ -708,6 +708,8 @@ private:
     size_t total_memory_reclaimed() const;
     // Reload components from which memory was previously reclaimed
     future<> reload_reclaimed_components();
+    // Disable reload of components for this sstable
+    void disable_component_memory_reload();
 
 public:
     // Finds first position_in_partition in a given partition.
