@@ -24,6 +24,7 @@
 #include "sstables/sstable_set.hh"
 #include "dht/token.hh"
 #include "mutation/async_utils.hh"
+#include "compaction/compaction_manager.hh"
 
 namespace replica {
 
@@ -456,7 +457,7 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
 
 namespace {
 
-tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
+future<tablet_id> process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
         tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -468,8 +469,10 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
     }
 
     db_clock::time_point repair_time;
+    bool update_repair_time = false;
     if (row.has("repair_time")) {
         repair_time = row.get_as<db_clock::time_point>("repair_time");
+        update_repair_time = true;
     }
 
     locator::tablet_task_info repair_task_info;
@@ -505,6 +508,23 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
 
     map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info});
 
+    if (update_repair_time && db) {
+        auto myid = db->get_token_metadata().get_my_id();
+        auto range = map.get_token_range(tid);
+        auto& info = map.get_tablet_info(tid);
+        for (auto r : info.replicas) {
+            if (r.host == myid) {
+                co_await db->container().invoke_on(r.shard, [table, tid, range, repair_time] (replica::database& localdb) {
+                    auto& gc_state = localdb.get_compaction_manager().get_tombstone_gc_state();
+                    gc_state.update_repair_time(table, range, to_gc_clock(repair_time));
+                    tablet_logger.debug("Update repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
+                            table, tid, range, repair_time);
+                });
+                break;
+            }
+        }
+    }
+
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
     auto current_last_token = map.get_last_token(tid);
     if (current_last_token != persisted_last_token) {
@@ -513,7 +533,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
                                         persisted_last_token, current_last_token, table, tid));
     }
 
-    return *map.next_tablet(tid);
+    co_return *map.next_tablet(tid);
 }
 
 struct tablet_metadata_builder {
@@ -525,7 +545,7 @@ struct tablet_metadata_builder {
     };
     std::optional<active_tablet_map> current;
 
-    void process_row(const cql3::untyped_result_set_row& row) {
+    future<> process_row(const cql3::untyped_result_set_row& row) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
 
         if (!current || current->table != table) {
@@ -551,7 +571,7 @@ struct tablet_metadata_builder {
             }
         }
 
-        current->tid = process_one_row(current->table, current->map, current->tid, row);
+        current->tid = co_await process_one_row(nullptr, current->table, current->map, current->tid, row);
     }
 
     void on_end_of_stream() {
@@ -570,8 +590,8 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     try {
         co_await qp.query_internal("select * from system.tablets",
            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-               builder.process_row(row);
-               return make_ready_future<stop_iteration>(stop_iteration::no);
+               co_await builder.process_row(row);
+               co_return stop_iteration::no;
            });
     } catch (...) {
         if (builder.current) {
@@ -629,8 +649,8 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
             {data_value(hint.table_id.uuid())},
             1000,
             [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-                builder.process_row(row);
-                return make_ready_future<stop_iteration>(stop_iteration::no);
+                co_await builder.process_row(row);
+                co_return stop_iteration::no;
             });
     if (builder.current) {
         tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
@@ -640,7 +660,7 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
 }
 
 static future<>
-do_update_tablet_metadata_rows(cql3::query_processor& qp, tablet_map& tmap, const tablet_metadata_change_hint::table_hint& hint) {
+do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, tablet_map& tmap, const tablet_metadata_change_hint::table_hint& hint) {
     for (const auto token : hint.tokens) {
         auto res = co_await qp.execute_internal(
                 "select * from system.tablets where table_id = ? and last_token = ?",
@@ -652,19 +672,19 @@ do_update_tablet_metadata_rows(cql3::query_processor& qp, tablet_map& tmap, cons
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
-            process_one_row(hint.table_id, tmap, tid, res->one());
+            co_await process_one_row(&db, hint.table_id, tmap, tid, res->one());
         }
     }
 }
 
-future<> update_tablet_metadata(cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
+future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
     try {
         for (const auto& [_, table_hint] : hint.tables) {
             if (table_hint.tokens.empty()) {
                 co_await do_update_tablet_metadata_partition(qp, tm, table_hint);
             } else {
                 co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
-                    co_await do_update_tablet_metadata_rows(qp, tmap, table_hint);
+                    co_await do_update_tablet_metadata_rows(db, qp, tmap, table_hint);
                 });
             }
         }
