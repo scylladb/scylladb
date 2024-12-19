@@ -186,10 +186,6 @@ locator::host_id storage_proxy::my_host_id(const locator::effective_replication_
     return erm.get_topology().my_host_id();
 }
 
-bool storage_proxy::is_me(gms::inet_address addr) const noexcept {
-    return local_db().get_token_metadata().get_topology().is_me(addr);
-}
-
 bool storage_proxy::is_me(const locator::effective_replication_map& erm, locator::host_id id) const noexcept {
     return erm.get_topology().is_me(id);
 }
@@ -3392,7 +3388,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     live_endpoints.reserve(all.size());
     dead_endpoints.reserve(all.size());
     std::partition_copy(all.begin(), all.end(), std::back_inserter(live_endpoints),
-            std::back_inserter(dead_endpoints), std::bind_front(&storage_proxy::is_alive_id, this, std::cref(*erm)));
+            std::back_inserter(dead_endpoints), std::bind_front(&storage_proxy::is_alive, this, std::cref(*erm)));
 
     db::per_partition_rate_limit::info rate_limit_info;
     if (allow_limit && _db.local().can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
@@ -3769,7 +3765,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
 
     auto all_as_spans = std::array{std::span(natural_endpoints), std::span(pending_endpoints)};
     std::ranges::copy(all_as_spans | std::views::join |
-            std::views::filter(std::bind_front(&storage_proxy::is_alive_id, this, std::cref(erm))), std::back_inserter(live_endpoints));
+            std::views::filter(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm))), std::back_inserter(live_endpoints));
 
     if (live_endpoints.size() < required_participants) {
         throw exceptions::unavailable_exception(cl_for_paxos, required_participants, live_endpoints.size());
@@ -4019,7 +4015,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                                     std::ranges::to<std::unordered_set<locator::host_id>>());
                             }
                             auto local_rack = topology.get_rack();
-                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive_id, &_p, std::cref(*_ermp)), local_addr,
+                            auto chosen_endpoints = endpoint_filter(std::bind_front(&storage_proxy::is_alive, &_p, std::cref(*_ermp)), local_addr,
                                                                     local_rack, local_token_owners);
 
                             if (chosen_endpoints.empty()) {
@@ -4173,7 +4169,7 @@ future<> storage_proxy::send_to_endpoint(
                 std::array{std::span(pending_endpoints), std::span(target.begin(), target.end())} | std::views::join,
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
-                std::bind_front(&storage_proxy::is_alive_id, this, std::cref(*erm)));
+                std::bind_front(&storage_proxy::is_alive, this, std::cref(*erm)));
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
@@ -6600,7 +6596,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
 host_id_vector_replica_set storage_proxy::get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
     host_id_vector_replica_set eps = erm.get_natural_replicas(token);
-    auto itend = std::ranges::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive_id, this, std::cref(erm)))).begin();
+    auto itend = std::ranges::remove_if(eps, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     eps.erase(itend, eps.end());
     return eps;
 }
@@ -6625,7 +6621,7 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::effective_replica
 host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
     auto endpoints = erm.get_replicas_for_reading(token);
     validate_read_replicas(erm, endpoints);
-    auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive_id, this, std::cref(erm)))).begin();
+    auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm, endpoints);
     return endpoints;
@@ -6662,11 +6658,7 @@ storage_proxy::filter_replicas_for_read(
     return filter_replicas_for_read(cl, erm, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
 }
 
-bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    return _remote ? _remote->is_alive(ep) : is_me(ep);
-}
-
-bool storage_proxy::is_alive_id(const locator::effective_replication_map& erm, const locator::host_id& ep) const {
+bool storage_proxy::is_alive(const locator::effective_replication_map& erm, const locator::host_id& ep) const {
     return is_me(erm, ep) || (_remote ? _remote->is_alive(ep) : false);
 }
 
