@@ -47,6 +47,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_builder.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
 #include "idl/repair.dist.hh"
@@ -404,6 +405,8 @@ class repair_writer_impl : public repair_writer::impl {
     sharded<db::view::view_builder>& _view_builder;
     streaming::stream_reason _reason;
     mutation_reader _queue_reader;
+    // Tracks the sstables that were staged by this writer
+    std::vector<sstables::shared_sstable> _staged_sstables;
 public:
     repair_writer_impl(
         schema_ptr schema,
@@ -429,6 +432,10 @@ public:
     }
 
     virtual future<> wait_for_writer_done() override;
+
+    virtual future<> wait_for_view_update_done() override {
+        return _view_builder.local().wait_until_sstables_are_processed(_staged_sstables);
+    }
 
 private:
     static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
@@ -494,7 +501,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     auto erm = t.get_effective_replication_map();
     auto& sharder = erm->get_sharder(*(w->schema()));
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
+            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard, &_staged_sstables),
     t.stream_in_progress()).then([w, erm] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -578,6 +585,10 @@ future<> repair_writer::wait_for_writer_done() {
                 _schema->ks_name(), _schema->cf_name(), ep);
         return make_exception_future<>(std::move(ep));
     });
+}
+
+future<> repair_writer::wait_for_view_update_done() {
+    return _impl->wait_for_view_update_done();
 }
 
 class repair_meta;
@@ -1917,6 +1928,10 @@ public:
         cf.update_off_strategy_trigger();
         co_await apply_rows_on_follower(std::move(rows));
     }
+
+    future<> wait_for_view_update_done() {
+        return _repair_writer->wait_for_view_update_done();
+    }
 };
 
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization, repair_meta* rm) {
@@ -3153,6 +3168,9 @@ public:
                 co_await master.repair_row_level_stop(node, _shard_task.get_keyspace(), _cf_name, _range, ns.shard);
                 master.set_repair_state(repair_state::row_level_stop_finished, node);
             })).get();
+
+            // wait for view update to complete
+            master.wait_for_view_update_done().get();
 
             _shard_task.update_statistics(master.stats());
             if (_failed) {
