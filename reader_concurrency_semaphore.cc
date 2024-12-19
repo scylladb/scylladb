@@ -155,6 +155,7 @@ public:
     };
 
 private:
+    const db::timeout_clock::time_point _created;
     reader_concurrency_semaphore& _semaphore;
     schema_ptr _schema;
 
@@ -238,25 +239,33 @@ private:
                 _aux_data.pr.set_exception(ex);
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out", this);
                 _semaphore.dequeue_permit(*this);
+                _semaphore.on_permit_rejected();
                 break;
             case state::active:
             case state::active_need_cpu:
             case state::active_await:
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out", this);
+                _semaphore.on_permit_rejected();
                 break;
             case state::inactive:
                 _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
                 break;
             case state::evicted:
+            case state::preemptive_aborted:
                 break;
         }
+
+        // The function call on only sets state to reader_permit::state::preemptive_aborted
+        // but also correctly decreases the statistics i.e. need_cpu_permits and awaits_permits.
+        on_permit_inactive(reader_permit::state::preemptive_aborted);
     }
 
 public:
     struct value_tag {};
 
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name_view(op_name)
         , _base_resources(base_resources)
@@ -267,7 +276,8 @@ public:
         _semaphore.on_permit_created(*this);
     }
     impl(reader_concurrency_semaphore& semaphore, schema_ptr schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
-        : _semaphore(semaphore)
+        : _created(db::timeout_clock::now())
+        , _semaphore(semaphore)
         , _schema(std::move(schema))
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
@@ -364,6 +374,15 @@ public:
 
     void on_executing() {
         on_permit_active();
+    }
+
+    void on_reject() {
+        auto keepalive = std::exchange(_aux_data.permit_keepalive, std::nullopt);
+
+        _ttl_timer.cancel();
+        _state = reader_permit::state::preemptive_aborted;
+        _aux_data.pr.set_exception(named_semaphore_aborted(_semaphore._name));
+        _semaphore.on_permit_rejected();
     }
 
     void on_register_as_inactive() {
@@ -475,6 +494,10 @@ public:
 
     future<> wait_readmission() {
         return _semaphore.do_wait_admission(*this);
+    }
+
+    db::timeout_clock::time_point created() const noexcept {
+        return _created;
     }
 
     db::timeout_clock::time_point timeout() const noexcept {
@@ -696,6 +719,9 @@ auto fmt::formatter<reader_permit::state>::format(reader_permit::state s, fmt::f
             break;
         case reader_permit::state::evicted:
             name = "evicted";
+            break;
+        case reader_permit::state::preemptive_aborted:
+            name = "preemptive_aborted";
             break;
     }
     return formatter<string_view>::format(name, ctx);
@@ -1037,6 +1063,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
         utils::updateable_value<uint32_t> serialize_limit_multiplier,
         utils::updateable_value<uint32_t> kill_limit_multiplier,
         utils::updateable_value<uint32_t> cpu_concurrency,
+        utils::updateable_value<float> preemptive_abort_factor,
         register_metrics metrics)
     : _initial_resources(count, memory)
     , _resources(count, memory)
@@ -1046,6 +1073,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
     , _cpu_concurrency(cpu_concurrency)
+    , _preemptive_abort_factor(preemptive_abort_factor)
 {
     if (metrics == register_metrics::yes) {
         _metrics.emplace();
@@ -1111,6 +1139,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(float(0.0)),
             metrics) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
@@ -1131,12 +1160,15 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(mutation_reader reader,
         const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
+
     if (permit->get_state() == reader_permit::state::waiting_for_memory) {
         // Kill all outstanding memory requests, the read is going to be evicted.
         permit->aux_data().pr.set_exception(std::make_exception_ptr(std::bad_alloc{}));
         dequeue_permit(*permit);
     }
-    permit->on_register_as_inactive();
+    if (permit->get_state() != reader_permit::state::preemptive_aborted) {
+        permit->on_register_as_inactive();
+    }
     if (_blessed_permit == &*permit) {
         _blessed_permit = nullptr;
         maybe_admit_waiters();
@@ -1196,6 +1228,11 @@ mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inact
                     reinterpret_cast<uintptr_t>(this),
                     sem.name(),
                     reinterpret_cast<uintptr_t>(&sem)));
+    }
+
+    if (permit.get_state() == reader_permit::state::preemptive_aborted) {
+        permit.semaphore().close_reader(std::move(irp->reader));
+        return {};
     }
 
     dequeue_permit(permit);
@@ -1486,6 +1523,12 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         auto& permit = _wait_list.front();
         dequeue_permit(permit);
         try {
+            // Abort the read if its remaining time is less than half of its timeout when arrived to the semaphore
+            if (permit.timeout() - db::timeout_clock::now() <= _preemptive_abort_factor() * (permit.timeout() - permit.created())) {
+                permit.on_reject();
+                continue;
+            }
+
             if (permit.get_state() == reader_permit::state::waiting_for_memory) {
                 _blessed_permit = &permit;
                 permit.on_granted_memory();
@@ -1549,10 +1592,15 @@ void reader_concurrency_semaphore::dequeue_permit(reader_permit::impl& permit) {
         case reader_permit::state::active:
         case reader_permit::state::active_need_cpu:
         case reader_permit::state::active_await:
+        case reader_permit::state::preemptive_aborted:
             on_internal_error_noexcept(rcslog, format("reader_concurrency_semaphore::dequeue_permit(): unrecognized queued state: {}", permit.get_state()));
     }
     permit.unlink();
     _permit_list.push_back(permit);
+}
+
+void reader_concurrency_semaphore::on_permit_rejected() noexcept {
+    ++_stats.total_reads_shed_due_to_overload;
 }
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
