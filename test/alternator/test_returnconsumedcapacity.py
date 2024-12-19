@@ -227,3 +227,67 @@ def test_long_delete(test_table):
     test_table.put_item(Item={'p': p, 'c': c, 'att': val, 'another': val2}, ReturnConsumedCapacity='TOTAL')
     response = test_table.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='TOTAL', ReturnValues='ALL_OLD')
     assert 3 == response['ConsumedCapacity']["CapacityUnits"]
+
+# The simple update item validates that when updating a short item in a table
+# we will get 1 WCU
+def test_simple_update_item(test_table_sb):
+    p = random_string()
+    val = random_string()
+    val1 = random_string()
+    c = random_bytes()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'att': val})
+    response = test_table_sb.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET att = :val1',
+        ExpressionAttributeValues={':val1': val1}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 1 == response['ConsumedCapacity']["CapacityUnits"]
+
+
+# The simple update missing item validates that when trying to update non-exist item
+# we will get 1 WCU
+def test_simple_update_missing_item(test_table_sb):
+    p = random_string()
+    val1 = random_string()
+    c = random_bytes()
+    response = test_table_sb.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET att = :val1',
+        ExpressionAttributeValues={':val1': val1}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 1 == response['ConsumedCapacity']["CapacityUnits"]
+
+# The test validates the length of the values passed to update is taking into account
+# when calculating the WCU
+def test_update_item_long_attr(test_table_sb):
+    p = random_string()
+    val = random_string()
+    c = random_bytes()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'att': val}, ReturnConsumedCapacity='TOTAL')
+    combined_keys = "pcatt" # Takes all the keys and make one single string out of them
+    total_length = len(p) + len(c) + len(combined_keys)
+
+    val1 = 'a' * (2*KB + 1 - total_length) # val1 is a string that makes the total message length equals 2KB +1
+    response = test_table_sb.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET att = :val1',
+        ExpressionAttributeValues={':val1': val1}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
+
+# Validates that when the old value is returned the WCU takes
+# Its size into account in the WCU calculation.
+# WCU is calculated based on 1KB block size.
+# The test uses Return value so that the API
+# would take the previous item length into account
+def test_long_update(test_table):
+    p = random_string()
+    c = random_string()
+    val = random_string()
+    combined_keys = "pcattanother" # Takes all the keys and make one single string out of them
+    total_length = len(p) + len(c) + len(val) + len(combined_keys)
+
+    val2 = 'a' * (1 + 2*KB - total_length)  # val2 is a string that makes the total message length equals to 2KB+1
+    test_table.put_item(Item={'p': p, 'c': c, 'att': val, 'another': val2})
+    val1 = 'a' # we replace the long string of val2 with a short string
+    response = test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='SET another = :val1',
+        ExpressionAttributeValues={':val1': val1},
+        ReturnConsumedCapacity='TOTAL', ReturnValues='ALL_OLD')
+    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
