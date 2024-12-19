@@ -1674,13 +1674,14 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     // content, in case the view includes a column that is not included in
     // this mutation.
 
-    //FIXME: Unfortunate copy.
-    co_return interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp)
-            | std::views::transform([] (auto&& v) {
-                return std::move(v).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); });
-            })
-            | std::ranges::to<query::clustering_row_ranges>();
-
+    query::clustering_row_ranges result_ranges;
+    auto deoverlapped_ranges = interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp);
+    result_ranges.reserve(deoverlapped_ranges.size());
+    for (auto&& r : deoverlapped_ranges) {
+        result_ranges.emplace_back(std::move(r).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); }));
+        co_await coroutine::maybe_yield();
+    }
+    co_return result_ranges;
 }
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views) {
