@@ -165,6 +165,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     seastar::named_semaphore _sem{1, named_semaphore_exception_factory{"view builder"}};
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
+    bool _started_flag = false;
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<table_id> _built_views;
     // Used for testing.
