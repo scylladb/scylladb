@@ -124,6 +124,13 @@ public:
     using forwarding = bool_class<partition_range_forwarding_tag>;
     using tracked_buffer = circular_buffer<mutation_fragment_v2, tracking_allocator<mutation_fragment_v2>>;
 
+    struct reader_params {
+        const dht::partition_range& partition_range;
+        const query::partition_slice& partition_slice;
+        reader_permit permit;
+        tracing::trace_state_ptr trace_state;
+    };
+
     class impl {
     private:
         tracked_buffer _buffer;
