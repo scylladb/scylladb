@@ -206,6 +206,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Specific byte limit for failure injection (random by default)")
     parser.add_argument('--skip-internet-dependent-tests', action="store_true",
                         help="Skip tests which depend on artifacts from the internet.")
+    parser.add_argument("--pytest-arg", action='store', type=str,
+                        default=None, dest="pytest_arg",
+                        help="Additional command line arguments to pass to pytest, for example ./test.py --pytest-arg=\"-v -x\"")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
@@ -321,6 +324,9 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
             f'--alluredir={report_dir / f"allure_{host_id}"}',
             '-v' if options.verbose else '-q',
         ])
+    if options.pytest_arg:
+        # If pytest_arg is provided, it should be a string with arguments to pass to pytest
+        args.extend(shlex.split(options.pytest_arg))
     if options.gather_metrics:
         args.append('--gather-metrics')
     if len(expression) > 1:
