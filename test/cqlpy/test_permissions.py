@@ -81,6 +81,25 @@ def check_enforced(cql, username, permission, resource, function):
     revoke(cql, permission, resource, username)
     eventually_unauthorized(function)
 
+def test_user_displays_as_authenticated(cql):
+    with new_session(cql, "cassandra") as user_session_1:
+        with new_session(cql, "cassandra") as user_session_2:
+            with new_session(cql, "cassandra") as user_session_3:
+                # Every opened session should create around 5 connections,
+                # so we'll have 3x5=15 opened connections,
+                # and we expect that their status will be READY,
+                # but, on rare occasions, it may happen that
+                # the connection's status is still stuck at ESTABLISHED or AUTHENTICATING,
+                # and we must handle this case as well,
+                # so we simply sleep and retry later.
+                for retry in range(0, 5):
+                    res = user_session_1.execute("SELECT connection_stage FROM system.clients")
+                    if all([r[0] == "READY" for r in res]):
+                        return
+                    else:
+                        time.sleep(2)
+                assert False
+
 # Test that data permissions can be granted and revoked, and that they're effective
 def test_grant_revoke_data_permissions(cql, test_keyspace):
     with new_user(cql) as username:
@@ -540,7 +559,7 @@ def test_create_on_existing_table(cql):
 # every user with SELECT permission for a table should be able to use
 # the native functions (non UDF/UDA functions)
 # ref: https://github.com/scylladb/scylladb/issues/16526
-def test_native_functions_always_exeutable(cql):
+def test_native_functions_always_executable(cql):
     schema = "a int primary key"
     with new_test_keyspace(cql,"WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql,keyspace,schema) as table:
