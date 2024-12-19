@@ -1337,6 +1337,15 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     set(make_token_metadata_ptr(std::move(tm)));
 }
 
+void shared_token_metadata::mutate_token_metadata_for_test(seastar::noncopyable_function<void (token_metadata&)> func) {
+    auto& tm = *_shared;
+    // bump the token_metadata ring_version
+    // to invalidate cached token/replication mappings
+    // when the modified token_metadata is committed.
+    tm.invalidate_cached_rings();
+    func(tm);
+}
+
 future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto base_shard = this_shard_id();
     SCYLLA_ASSERT(base_shard == 0);
