@@ -13,7 +13,6 @@
 #include "utils/fragment_range.hh"
 #include "utils/to_string.hh"
 
-#include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/intrusive/list.hpp>
 
 namespace sstables {
@@ -155,7 +154,7 @@ std::vector<column_translation::column_info> column_translation::state::build(
                 schema_mismatch
             });
         }
-        boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
+        std::ranges::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
     }
     return cols;
 }
