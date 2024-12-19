@@ -566,14 +566,6 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     return endpoint_dc_rack::default_location;
 }
 
-void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
-    if (_sort_by_proximity) {
-        std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
-            return compare_endpoints(address, a1, a2) < 0;
-        });
-    }
-}
-
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
     if (_sort_by_proximity) {
         std::sort(addresses.begin(), addresses.end(), [this, &address](locator::host_id& a1, locator::host_id& a2) {
@@ -582,8 +574,7 @@ void topology::sort_by_proximity(locator::host_id address, host_id_vector_replic
     }
 }
 
-template<typename T>
-std::weak_ordering topology::compare_endpoints(const T& address, const T& a1, const T& a2) const {
+std::weak_ordering topology::compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
     const auto& loc = get_location(address);
     const auto& loc1 = get_location(a1);
     const auto& loc2 = get_location(a2);
