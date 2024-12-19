@@ -11,10 +11,6 @@
 #include <seastar/testing/perf_tests.hh>
 #include <seastar/util/closeable.hh>
 
-#include <boost/range/adaptor/sliced.hpp>
-#include <boost/range/adaptor/strided.hpp>
-#include <boost/range/algorithm/for_each.hpp>
-
 #include "test/lib/simple_schema.hh"
 #include "test/lib/simple_position_reader_queue.hh"
 #include "test/perf/perf.hh"
@@ -98,11 +94,13 @@ std::vector<std::vector<mutation>> combined::create_disjoint_interleaved_streams
     auto base = create_single_stream(s, permit);
     std::vector<std::vector<mutation>> mss;
     for (auto i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+        mss.emplace_back(
             base
-            | boost::adaptors::sliced(i, base.size())
-            | boost::adaptors::strided(4)
-        ));
+            | std::views::drop(i)
+            | std::views::take(base.size() - i)
+            | std::views::stride(4)
+            | std::ranges::to<std::vector>()
+        );
     }
     return mss;
 }
@@ -113,10 +111,12 @@ std::vector<std::vector<mutation>> combined::create_disjoint_ranges_streams(simp
     std::vector<std::vector<mutation>> mss;
     auto slice = base.size() / 4;
     for (auto i = 0; i < 4; i++) {
-        mss.emplace_back(boost::copy_range<std::vector<mutation>>(
+        mss.emplace_back(
             base
-            | boost::adaptors::sliced(i * slice, std::min((i + 1) * slice, base.size()))
-        ));
+            | std::views::drop(i * slice)
+            | std::views::take(std::min((i + 1) * slice, base.size()) - i * slice)
+            | std::ranges::to<std::vector>()
+        );
     }
     return mss;
 }

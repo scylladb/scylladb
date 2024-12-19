@@ -399,8 +399,8 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
 
     auto replicas = cur_replicas;
     // all_dc_racks is ordered lexicographically on purpose
-    auto all_dc_racks = boost::copy_range<std::map<sstring, std::unordered_set<std::reference_wrapper<const node>>>>(
-            tm->get_datacenter_racks_token_owners_nodes().at(dc));
+    auto all_dc_racks = tm->get_datacenter_racks_token_owners_nodes().at(dc)
+        | std::ranges::to<std::map>();
 
     // Track all nodes with no replicas on them for this tablet, per rack.
     struct node_load {
