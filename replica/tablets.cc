@@ -33,8 +33,8 @@ static thread_local auto repair_scheduler_config_type = user_type_impl::get_inst
         "system", "repair_scheduler_config", {"auto_repair_enabled", "auto_repair_threshold"},
         {boolean_type, long_type}, false);
 static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
-        "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time"},
-        {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type}, false);
+        "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time", "repair_hosts_filter", "repair_dcs_filter"},
+        {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type, utf8_type, utf8_type}, false);
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
@@ -97,7 +97,9 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
         data_value(info.tablet_task_id.uuid()),
         data_value(info.request_time),
         data_value(info.sched_nr),
-        data_value(info.sched_time)
+        data_value(info.sched_time),
+        data_value(info.repair_hosts_filter),
+        data_value(info.repair_dcs_filter),
     });
     return result;
 };
@@ -297,6 +299,8 @@ locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
         value_cast<db_clock::time_point>(dv[2]),
         value_cast<int64_t>(dv[3]),
         value_cast<db_clock::time_point>(dv[4]),
+        value_cast<sstring>(dv[5]),
+        value_cast<sstring>(dv[6]),
     };
     return result;
 }
