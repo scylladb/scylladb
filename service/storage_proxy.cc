@@ -4257,7 +4257,7 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
     }
 }
 
-future<result<>> storage_proxy::schedule_repair(locator::effective_replication_map_ptr ermp, std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
+future<result<>> storage_proxy::schedule_repair(locator::effective_replication_map_ptr ermp, mutations_per_partition_key_map diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
                                         service_permit permit) {
     if (diffs.empty()) {
         return make_ready_future<result<>>(bo::success());
@@ -4563,7 +4563,7 @@ class data_read_resolver : public abstract_read_resolver {
     bool _all_reached_end = true;
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
-    std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> _diffs;
+    mutations_per_partition_key_map _diffs;
 private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
@@ -4770,7 +4770,8 @@ private:
         return got_incomplete_information_across_partitions(s, cmd, last_row, rp, versions, is_reversed);
     }
 public:
-    data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout) {
+    data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout),
+    _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema)) {
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
@@ -4921,15 +4922,12 @@ public:
                     has_diff = true;
                     mdiff = mutation(schema, m.decorated_key(), std::move(diff));
                 }
-                if (auto [it, added] = _diffs[m.token()].try_emplace(v.from, std::move(mdiff)); !added) {
-                    // should not really happen, but lets try to deal with it
-                    if (mdiff) {
-                        if (it->second) {
-                            it->second.value().apply(std::move(mdiff.value()));
-                        } else {
-                            it->second = std::move(mdiff);
-                        }
-                    }
+                if (auto [it, added] = _diffs[m.key()].try_emplace(v.from, std::move(mdiff)); !added) {
+                    // A collision could happen only in 2 cases:
+                    // 1. We have 2 versions for the same node.
+                    // 2. `versions` (and or) `reconciled_partitions` are not unique per partition key.
+                    // Both cases are not possible unless there is a bug in the reconcilliation code.
+                    on_internal_error(slogger, fmt::format("Partition key conflict, key: {}, node: {}, table: {}.", m.key(), v.from, schema->ks_name()));
                 }
                 co_await coroutine::maybe_yield();
             }

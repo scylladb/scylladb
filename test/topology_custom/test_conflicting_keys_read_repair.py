@@ -17,7 +17,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/19101")
 @pytest.mark.asyncio
 async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """
