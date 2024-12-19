@@ -40,6 +40,7 @@
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_voter_registry.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -114,6 +115,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
+    service::group0_voter_registry& _voter_registry;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -462,7 +464,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> step_down_as_nonvoter() {
         // Become a nonvoter which triggers a leader stepdown.
-        co_await _group0.become_nonvoter(_as);
+        co_await _voter_registry.remove_node(_raft.id(), _as);
         if (_raft.is_leader()) {
             co_await _raft.wait_for_state_change(&_as);
         }
@@ -1916,6 +1918,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 }
 
+                co_await _voter_registry.insert_node(node.id, _as);
+
                 switch (node.rs->state) {
                     case node_state::bootstrapping: {
                         SCYLLA_ASSERT(!node.rs->ring);
@@ -2128,7 +2132,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
                     // restoring its voter state on the recovery path.
                     if (node.rs->state == node_state::removing) {
-                        co_await _group0.make_nonvoter(node.id, _as);
+                        co_await _voter_registry.remove_node(node.id, _as);
                     }
 
                     // If we decommission a node when the number of nodes is even, we make it a non-voter early.
@@ -2145,7 +2149,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                          "giving up leadership");
                             co_await step_down_as_nonvoter();
                         } else {
-                            co_await _group0.make_nonvoter(node.id, _as);
+                            co_await _voter_registry.remove_node(node.id, _as);
                         }
                     }
                 }
@@ -2153,7 +2157,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // We make a replaced node a non-voter early, just like a removed node.
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
-                        co_await _group0.make_nonvoter(replaced_node_id, _as);
+                        co_await _voter_registry.remove_node(replaced_node_id, _as);
                     }
                 }
                 utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
@@ -2683,10 +2687,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         release_node(std::move(node));
 
-        if (!_raft.get_configuration().contains(id)) {
-            co_await _raft.modify_config({raft::config_member({id, {}}, {})}, {}, &_as);
-        }
-
         auto responded = false;
         try {
             co_await respond_to_joining_node(id, join_node_response_params{
@@ -2792,11 +2792,13 @@ public:
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
-            gms::feature_service& feature_service)
+            gms::feature_service& feature_service,
+            service::group0_voter_registry& voter_registry)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
+        , _voter_registry(voter_registry)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -3393,7 +3395,8 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service) {
+        gms::feature_service& feature_service,
+        service::group0_voter_registry& voter_registry) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
@@ -3401,7 +3404,8 @@ future<> run_topology_coordinator(
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service};
+            feature_service,
+            voter_registry};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);

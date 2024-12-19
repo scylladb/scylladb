@@ -726,6 +726,7 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
+#if 0
             utils::get_local_injector().inject("stop_before_becoming_raft_voter",
                 [] { std::raise(SIGSTOP); });
             group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
@@ -734,6 +735,7 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             raft::server_address my_addr{my_id, {}};
             co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
             group0_log.info("finish_setup_after_join: became a group 0 voter.");
+#endif
 
             // No need to run `upgrade_to_group0()` since we must have bootstrapped with Raft
             // (that's the only way to join as non-voter today).
@@ -1640,7 +1642,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        auto handshaker = make_legacy_handshaker(true); // Voter
+        auto handshaker = make_legacy_handshaker(can_vote::no);
         co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled);
     } else {
         upgrade_log.info(

@@ -18,6 +18,7 @@
 #include "schema/schema_fwd.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/raft/group0_voter_registry.hh"
 #include "service/topology_guard.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
@@ -125,6 +126,27 @@ class node_ops_meta_data;
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
 
+class group0_server_info_accessor : public raft_server_info_accessor {
+    using topology_type = topology;
+    const topology_type& _topology;
+
+public:
+    explicit group0_server_info_accessor(const topology_type& topology)
+        : _topology(topology) {
+    }
+    [[nodiscard]] const replica_state& find(raft::server_id id) const override;
+};
+
+class group0_voter_client : public raft_voter_client {
+    raft_group0& _group0;
+
+public:
+    explicit group0_voter_client(raft_group0& group0)
+        : _group0(group0) {
+    }
+    future<> set_voters_status(const std::unordered_set<raft::server_id>& nodes, can_vote can_vote, abort_source& as) override;
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -168,6 +190,9 @@ private:
 
     // Engaged on shard 0 before `join_cluster`.
     service::raft_group0* _group0;
+    group0_server_info_accessor _server_info_accessor;
+    std::unique_ptr<group0_voter_client> _voter_client;
+    std::unique_ptr<group0_voter_registry> _voter_registry;
 
     sstring _operation_in_progress;
     seastar::metrics::metric_groups _metrics;
