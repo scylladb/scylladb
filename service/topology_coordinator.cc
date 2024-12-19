@@ -1623,11 +1623,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 on_internal_error(rtlogger, "should_preempt_balancing() retook the guard");
             }
         }
-        if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
-            if (!drain || plan.has_nodes_to_drain()) {
-                co_await generate_migration_updates(updates, guard, plan);
-            }
+
+        auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
+        if (!preempt && (!drain || plan.has_nodes_to_drain())) {
+            co_await generate_migration_updates(updates, guard, plan);
         }
 
         // The updates have to be executed under the same guard which was used to read tablet metadata
@@ -1669,6 +1668,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await await_event();
             }
             co_return;
+        }
+
+        // generate updates for resize finalizations
+        if (!plan.resize_plan().finalize_resize.empty() && !utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
+            // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
+            // of token metadata will complete before we update topology.
+            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            co_await generate_resize_finalization_updates(updates, guard, get_token_metadata_ptr(), plan.resize_plan().finalize_resize);
         }
 
         if (drain) {
@@ -2876,10 +2883,9 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await generate_migration_updates(updates, guard, plan);
 
-    // We only want to consider transitioning into tablet resize finalization path, if there's no other work
-    // to be done (e.g. start migration or/and emit split decision).
-    if (updates.empty()) {
-        co_return co_await maybe_start_tablet_resize_finalization(std::move(guard), plan.resize_plan());
+    // Transition to tablet_migration iff migration work is pending or a tablet resize needs finalization.
+    if (updates.empty() && plan.resize_plan().finalize_resize.empty()) {
+        co_return false;
     }
 
     updates.emplace_back(

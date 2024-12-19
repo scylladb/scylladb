@@ -805,7 +805,7 @@ async def test_tablet_split_finalization(manager: ManagerClient):
     await manager.api.disable_injection(servers[0].ip_addr, injection_name)
 
     logger.info("Verify that split finalisation is preferred over migration")
-    split_finalization_mark = await log.wait_for("Finished tablet split finalization", mark)
+    split_finalization_mark = await log.wait_for("Finished generating tablet resize finalization updates", mark)
     migration_mark = await log.wait_for(f"Will set tablet {table_id}:\\d+ stage to write_both_read_old", mark)
     assert split_finalization_mark < migration_mark, "Tablet migration was scheduled before resize finalization"
 
