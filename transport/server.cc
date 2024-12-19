@@ -2034,24 +2034,37 @@ void cql_server::response::write(const cql3::prepared_metadata& m, uint8_t versi
 
 future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
     utils::chunked_vector<client_data> ret;
-    co_await for_each_gently([&ret] (const generic_server::connection& c) -> future<> {
+    co_await for_each_gently([&ret] (const generic_server::connection& c) {
         const connection& conn = dynamic_cast<const connection&>(c);
         ret.emplace_back(conn.make_client_data());
-        return make_ready_future<>();
     });
     co_return ret;
 }
 
 future<> cql_server::update_connections_service_level_params() {
-    return for_each_gently([] (generic_server::connection& conn) -> future<> {
+    if (!_sl_controller.is_v2()) {
+        // Auto update of connections' service level params requires
+        // service levels in v2.
+        return make_ready_future<>();
+    }
+
+    return for_each_gently([this] (generic_server::connection& conn) {
         connection& cql_conn = dynamic_cast<connection&>(conn);
-        return cql_conn.get_client_state().maybe_update_per_service_level_params();
+        auto& cs = cql_conn.get_client_state();
+        auto& user = cs.user();
+
+        if (user && user->name) {
+            auto slo = _sl_controller.find_cached_effective_service_level(user->name.value());
+            if (slo) {
+                cs.update_per_service_level_params(*slo);
+            }
+        }
     });
 }
 
 future<std::vector<connection_service_level_params>> cql_server::get_connections_service_level_params() {
     std::vector<connection_service_level_params> sl_params;
-    co_await for_each_gently([&sl_params] (const generic_server::connection& conn) -> future<> {
+    co_await for_each_gently([&sl_params] (const generic_server::connection& conn) {
         auto& cql_conn = dynamic_cast<const connection&>(conn);
         auto& client_state = cql_conn.get_client_state();
         auto& user = client_state.user();
@@ -2060,7 +2073,6 @@ future<std::vector<connection_service_level_params>> cql_server::get_connections
                 : "UNAUTHENTICATED";
 
         sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type());
-        co_return;
     });
     co_return sl_params;
 }
