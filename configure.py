@@ -643,6 +643,7 @@ perf_tests = set([
     'test/perf/perf_idl',
     'test/perf/perf_vint',
     'test/perf/perf_big_decimal',
+    'test/perf/perf_sort_by_proximity',
 ])
 
 raft_tests = set([
@@ -1338,6 +1339,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/exception_utils.cc',
     'test/lib/random_schema.cc',
     'test/lib/key_utils.cc',
+    'test/lib/topology.cc',
 ]
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']

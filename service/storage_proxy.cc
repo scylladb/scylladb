@@ -6610,11 +6610,15 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::effective_replica
         return;
     }
     auto my_id = my_host_id(erm);
-    erm.get_topology().sort_by_proximity(my_id, ids);
-    // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
-    auto it = std::ranges::find(ids, my_id);
-    if (it != ids.end() && it != ids.begin()) {
-        std::iter_swap(it, ids.begin());
+    const auto& topology = erm.get_topology();
+    if (topology.can_sort_by_proximity()) {
+        topology.do_sort_by_proximity(my_id, ids);
+    } else {
+        // FIXME: before dynamic snitch is implemented put local address (if present) at the beginning
+        auto it = std::ranges::find(ids, my_id);
+        if (it != ids.end() && it != ids.begin()) {
+            std::iter_swap(it, ids.begin());
+        }
     }
 }
 
