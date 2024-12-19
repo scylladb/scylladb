@@ -73,7 +73,6 @@ def wait_for_gsi_gone(table, gsi_name):
 # the wrong type are silently ignored and not added to the index. We also
 # check that after adding the GSI, it is no longer possible to add more
 # items with wrong types to the base table.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill(dynamodb):
     # First create, and fill, a table without GSI. The items in items1
     # will have the appropriate string type for 'x' and will later get
@@ -141,7 +140,6 @@ def test_gsi_backfill(dynamodb):
 # check that the new GSI works. In Alternator's implementation, the LSI key
 # column will become a real column in the schema, and the GSI needs to use
 # that instead of the usual computed column.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_lsi(dynamodb):
     # First create, and fill, a table with an LSI but without GSI.
     with new_test_table(dynamodb,
@@ -208,7 +206,6 @@ def test_gsi_backfill_with_lsi(dynamodb):
 # checked the case of a new GSI key being a real column because it was an
 # LSI key. In this test the GSI key is a real column because it was a
 # key column of the base table itself.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_real_column(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[
@@ -237,7 +234,6 @@ def test_gsi_backfill_with_real_column(dynamodb):
         assert multiset(items) == multiset(full_scan(table, ConsistentRead=False, IndexName='gsi'))
 
 # Test deleting an existing GSI using UpdateTable
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -285,7 +281,6 @@ def test_gsi_delete(dynamodb):
 # still enforced because it is still an LSI key. In Alternator's
 # implementation this happens because the LSI key column was - and remains -
 # a real column in the schema.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete_with_lsi(dynamodb):
     # A table whose non-key column "x" serves as a range key in an LSI,
     # and partition key in a GSI.
@@ -362,7 +357,6 @@ def test_gsi_delete_with_lsi(dynamodb):
 # operation on a table set up by CreateTable. In this test we try several
 # of these operations in sequence, to check we can add more than one GSI,
 # delete a GSI that we just added, recreate a GSI that we just deleted, etc.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_creates_and_deletes(dynamodb):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -491,7 +485,6 @@ def test_gsi_backfill_empty_string(dynamodb):
 # happens during the table creation, and one here where the second GSI is
 # added after the table already exists with the first GSI.
 # Reproduces #13870.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_key_type_conflict_on_update(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -532,7 +525,6 @@ def table1(dynamodb):
         yield table
 
 # An empty update_table() call, without any parameters changed, is not allowed.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_empty(dynamodb, table1):
     with pytest.raises(ClientError, match='ValidationException.*UpdateTable'):
         dynamodb.meta.client.update_table(TableName=table1.name)
@@ -543,7 +535,6 @@ def test_updatetable_empty(dynamodb, table1):
             GlobalSecondaryIndexUpdates=[])
 
 # Test various invalid cases of UpdateTable's GlobalSecondaryIndexUpdates.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_errors(dynamodb, table1):
     client = dynamodb.meta.client
 
@@ -637,7 +628,6 @@ def test_gsi_updatetable_errors(dynamodb, table1):
 # In Alternator, we decided to detect this case anyway - it can help users
 # notice problems (see #19784). So because we differ from DynamoDB on this,
 # this test is marked scylla_only.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
     with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
         table1.meta.client.update_table(TableName=table1.name,
@@ -654,7 +644,6 @@ def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
 
 # Check that attempting to delete a GSI that doesn't exist results in
 # the expected ResourceNotFoundException.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_delete_missing_gsi(dynamodb, table1):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.update_table(TableName=table1.name,
