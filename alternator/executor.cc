@@ -219,7 +219,7 @@ static void validate_table_name(const std::string& name) {
 // instead of each component individually as DynamoDB does.
 // The view_name() function assumes the table_name has already been validated
 // but validates the legality of index_name and the combination of both.
-static std::string view_name(const std::string& table_name, std::string_view index_name, const std::string& delim = ":") {
+static std::string view_name(std::string_view table_name, std::string_view index_name, const std::string& delim = ":") {
     if (index_name.length() < 3) {
         throw api_error::validation("IndexName must be at least 3 characters long");
     }
@@ -227,7 +227,7 @@ static std::string view_name(const std::string& table_name, std::string_view ind
         throw api_error::validation(
                 fmt::format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
-    std::string ret = table_name + delim + std::string(index_name);
+    std::string ret = std::string(table_name) + delim + std::string(index_name);
     if (ret.length() > max_table_name_length) {
         throw api_error::validation(
                 fmt::format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
@@ -236,7 +236,7 @@ static std::string view_name(const std::string& table_name, std::string_view ind
     return ret;
 }
 
-static std::string lsi_name(const std::string& table_name, std::string_view index_name) {
+static std::string lsi_name(std::string_view table_name, std::string_view index_name) {
     return view_name(table_name, index_name, "!:");
 }
 
@@ -806,7 +806,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     co_return make_jsonable(std::move(response));
 }
 
-static data_type parse_key_type(const std::string& type) {
+static data_type parse_key_type(std::string_view type) {
     // Note that keys are only allowed to be string, blob or number (S/B/N).
     // The other types: boolean and various lists or sets - are not allowed.
     if (type.length() == 1) {
@@ -821,7 +821,7 @@ static data_type parse_key_type(const std::string& type) {
 }
 
 
-static void add_column(schema_builder& builder, const std::string& name, const rjson::value& attribute_definitions, column_kind kind) {
+static void add_column(schema_builder& builder, const std::string& name, const rjson::value& attribute_definitions, column_kind kind, bool computed_column=false) {
     // FIXME: Currently, the column name ATTRS_COLUMN_NAME is not allowed
     // because we use it for our untyped attribute map, and we can't have a
     // second column with the same name. We should fix this, by renaming
@@ -833,7 +833,16 @@ static void add_column(schema_builder& builder, const std::string& name, const r
         const rjson::value& attribute_info = *it;
         if (attribute_info["AttributeName"].GetString() == name) {
             auto type = attribute_info["AttributeType"].GetString();
-            builder.with_column(to_bytes(name), parse_key_type(type), kind);
+            data_type dt = parse_key_type(type);
+            if (computed_column) {
+                // Computed column for GSI (doesn't choose a real column as-is
+                // but rather extracts a single value from the ":attrs" map)
+                alternator_type at = type_info_from_string(type).atype;
+                builder.with_computed_column(to_bytes(name), dt, kind,
+                    std::make_unique<extract_from_attrs_column_computation>(to_bytes(name), at));
+            } else {
+                builder.with_column(to_bytes(name), dt, kind);
+            }
             return;
         }
     }
@@ -1293,67 +1302,15 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
 
     schema_ptr partial_schema = builder.build();
 
-    // Parse GlobalSecondaryIndexes parameters before creating the base
-    // table, so if we have a parse errors we can fail without creating
+    // Parse Local/GlobalSecondaryIndexes parameters before creating the
+    // base table, so if we have a parse errors we can fail without creating
     // any table.
-    const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
     std::vector<schema_builder> view_builders;
     std::unordered_set<std::string> index_names;
-    if (gsi) {
-        if (!gsi->IsArray()) {
-            co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
-        }
-        for (const rjson::value& g : gsi->GetArray()) {
-            const rjson::value* index_name_v = rjson::find(g, "IndexName");
-            if (!index_name_v || !index_name_v->IsString()) {
-                co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
-            }
-            std::string_view index_name = rjson::to_string_view(*index_name_v);
-            auto [it, added] = index_names.emplace(index_name);
-            if (!added) {
-                co_return api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
-            }
-            std::string vname(view_name(table_name, index_name));
-            elogger.trace("Adding GSI {}", index_name);
-            // FIXME: read and handle "Projection" parameter. This will
-            // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(keyspace_name, vname);
-            auto [view_hash_key, view_range_key] = parse_key_schema(g);
-            if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
-                // A column that exists in a global secondary index is upgraded from being a map entry
-                // to having a regular column definition in the base schema
-                add_column(builder, view_hash_key, attribute_definitions, column_kind::regular_column);
-            }
-            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
-            unused_attribute_definitions.erase(view_hash_key);
-            if (!view_range_key.empty()) {
-                if (partial_schema->get_column_definition(to_bytes(view_range_key)) == nullptr) {
-                    // A column that exists in a global secondary index is upgraded from being a map entry
-                    // to having a regular column definition in the base schema
-                    if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
-                        // FIXME: this is alternator limitation only, because Scylla's materialized views
-                        // we use underneath do not allow more than 1 base regular column to be part of the MV key
-                        elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
-                    }
-                    add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
-                }
-                add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
-                unused_attribute_definitions.erase(view_range_key);
-            }
-            // Base key columns which aren't part of the index's key need to
-            // be added to the view nonetheless, as (additional) clustering
-            // key(s).
-            if  (hash_key != view_hash_key && hash_key != view_range_key) {
-                add_column(view_builder, hash_key, attribute_definitions, column_kind::clustering_key);
-            }
-            if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
-                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
-            }
-            // GSIs have no tags:
-            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
-            view_builders.emplace_back(std::move(view_builder));
-        }
-    }
+    // Remember the attributes used for LSI keys. Since LSI must be created
+    // with the table, we make these attributes real schema columns, and need
+    // to remember this below if the same attributes are used as GSI keys.
+    std::unordered_set<std::string> lsi_range_keys;
 
     const rjson::value* lsi = rjson::find(request, "LocalSecondaryIndexes");
     if (lsi) {
@@ -1411,9 +1368,68 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
+            lsi_range_keys.emplace(view_range_key);
         }
     }
 
+    const rjson::value* gsi = rjson::find(request, "GlobalSecondaryIndexes");
+    if (gsi) {
+        if (!gsi->IsArray()) {
+            co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
+        }
+        for (const rjson::value& g : gsi->GetArray()) {
+            const rjson::value* index_name_v = rjson::find(g, "IndexName");
+            if (!index_name_v || !index_name_v->IsString()) {
+                co_return api_error::validation("GlobalSecondaryIndexes IndexName must be a string.");
+            }
+            std::string_view index_name = rjson::to_string_view(*index_name_v);
+            auto [it, added] = index_names.emplace(index_name);
+            if (!added) {
+                co_return api_error::validation(fmt::format("Duplicate IndexName '{}', ", index_name));
+            }
+            std::string vname(view_name(table_name, index_name));
+            elogger.trace("Adding GSI {}", index_name);
+            // FIXME: read and handle "Projection" parameter. This will
+            // require the MV code to copy just parts of the attrs map.
+            schema_builder view_builder(keyspace_name, vname);
+            auto [view_hash_key, view_range_key] = parse_key_schema(g);
+
+            // If an attribute is already a real column in the base table
+            // (i.e., a key attribute) or we already made it a real column
+            // as an LSI key above, we can use it directly as a view key.
+            // Otherwise, we need to add it as a "computed column", which
+            // extracts and deserializes the attribute from the ":attrs" map.
+            bool view_hash_key_real_column =
+                partial_schema->get_column_definition(to_bytes(view_hash_key)) ||
+                lsi_range_keys.contains(view_hash_key);
+            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+            unused_attribute_definitions.erase(view_hash_key);
+            if (!view_range_key.empty()) {
+                bool view_range_key_real_column =
+                    partial_schema->get_column_definition(to_bytes(view_range_key)) ||
+                    lsi_range_keys.contains(view_range_key);
+                add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
+                if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
+                    !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
+                    // FIXME: This warning should go away. See issue #6714
+                    elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
+                }
+                unused_attribute_definitions.erase(view_range_key);
+            }
+            // Base key columns which aren't part of the index's key need to
+            // be added to the view nonetheless, as (additional) clustering
+            // key(s).
+            if  (hash_key != view_hash_key && hash_key != view_range_key) {
+                add_column(view_builder, hash_key, attribute_definitions, column_kind::clustering_key);
+            }
+            if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
+                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
+            }
+            // GSIs have no tags:
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+            view_builders.emplace_back(std::move(view_builder));
+        }
+    }
     if (!unused_attribute_definitions.empty()) {
         co_return api_error::validation(fmt::format(
             "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
@@ -1554,12 +1570,37 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     });
 }
 
+// When UpdateTable adds a GSI, the type of its key columns must be specified
+// in a AttributeDefinitions. If one of these key columns are *already* key
+// columns of the base table or any of its prior GSIs or LSIs, the type
+// given in AttributeDefinitions must match the type of the existing key -
+// otherise Alternator will not know which type to enforce in new writes.
+// This function checks for such conflicts. It assumes that the structure of
+// the given attribute_definitions was already validated (with
+// validate_attribute_definitions()).
+// This function should be called multiple times - once for the base schema
+// and once for each of its views (existing GSIs and LSIs on this table).
+ static void check_attribute_definitions_conflicts(const rjson::value& attribute_definitions, const schema& schema) {
+    for (auto& def : schema.primary_key_columns()) {
+        std::string def_type = type_to_string(def.type);
+        for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
+            const rjson::value& attribute_info = *it;
+            if (attribute_info["AttributeName"].GetString() == def.name_as_text()) {
+                auto type = attribute_info["AttributeType"].GetString();
+                if (type != def_type) {
+                    throw api_error::validation(fmt::format("AttributeDefinitions redefined {} to {} already a key attribute of type {} in this table", def.name_as_text(), type, def_type));
+                }
+                break;
+            }
+        }
+    }
+}
+
 future<executor::request_return_type> executor::update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_table++;
     elogger.trace("Updating table {}", request);
 
     static const std::vector<sstring> unsupported = {
-        "GlobalSecondaryIndexUpdates",
         "ProvisionedThroughput",
         "ReplicaUpdates",
         "SSESpecification",
@@ -1571,11 +1612,14 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
     }
 
+    bool empty_request = true;
+
     if (rjson::find(request, "BillingMode")) {
+        empty_request = false;
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), client_state_other_shard = client_state.move_to_other_shard()]
+    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
@@ -1595,6 +1639,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
         if (stream_specification && stream_specification->IsObject()) {
+            empty_request = false;
             add_stream_options(*stream_specification, builder, p.local());
             // Alternator Streams doesn't yet work when the table uses tablets (#16317)
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -1606,8 +1651,162 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
 
         auto schema = builder.build();
+        std::vector<view_ptr> new_views;
+        std::vector<std::string> dropped_views;
+
+        rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
+        if (gsi_updates) {
+            if (!gsi_updates->IsArray()) {
+                co_return api_error::validation("GlobalSecondaryIndexUpdates must be an array");
+            }
+            if (gsi_updates->Size() > 1) {
+                // Although UpdateTable takes an array of operations and could
+                // support multiple Create and/or Delete operations in one
+                // command, DynamoDB doesn't actually allows this, and throws
+                // a LimitExceededException if this is attempted.
+                co_return api_error::limit_exceeded("GlobalSecondaryIndexUpdates only allows one index creation or deletion");
+            }
+            if (gsi_updates->Size() == 1) {
+                empty_request = false;
+                if (!(*gsi_updates)[0].IsObject() || (*gsi_updates)[0].MemberCount() != 1) {
+                    co_return api_error::validation("GlobalSecondaryIndexUpdates array must contain one object with a Create, Delete or Update operation");
+                }
+                auto it = (*gsi_updates)[0].MemberBegin();
+                const std::string_view op = rjson::to_string_view(it->name);
+                if (!it->value.IsObject()) {
+                    co_return api_error::validation("GlobalSecondaryIndexUpdates entries must be objects");
+                }
+                const rjson::value* index_name_v = rjson::find(it->value, "IndexName");
+                if (!index_name_v || !index_name_v->IsString()) {
+                    co_return api_error::validation("GlobalSecondaryIndexUpdates operation must have IndexName");
+                }
+                std::string_view index_name = rjson::to_string_view(*index_name_v);
+                std::string_view table_name = schema->cf_name();
+                std::string_view keyspace_name = schema->ks_name();
+                std::string vname(view_name(table_name, index_name));
+                if (op == "Create") {
+                    const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
+                    if (!attribute_definitions) {
+                        co_return api_error::validation("GlobalSecondaryIndexUpdates Create needs AttributeDefinitions");
+                    }
+                    std::unordered_set<std::string> unused_attribute_definitions =
+                        validate_attribute_definitions(*attribute_definitions);
+                    check_attribute_definitions_conflicts(*attribute_definitions, *schema);
+                    for (auto& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                        check_attribute_definitions_conflicts(*attribute_definitions, *view);
+                    }
+
+                    if (p.local().data_dictionary().has_schema(keyspace_name, vname)) {
+                        // Surprisingly, DynamoDB uses validation error here, not resource_in_use
+                        co_return api_error::validation(fmt::format(
+                            "GSI {} already exists in table {}", index_name, table_name));
+                    }
+                    if (p.local().data_dictionary().has_schema(keyspace_name, lsi_name(table_name, index_name))) {
+                        co_return api_error::validation(fmt::format(
+                            "LSI {} already exists in table {}, can't use same name for GSI", index_name, table_name));
+                    }
+
+                    elogger.trace("Adding GSI {}", index_name);
+                    // FIXME: read and handle "Projection" parameter. This will
+                    // require the MV code to copy just parts of the attrs map.
+                    schema_builder view_builder(keyspace_name, vname);
+                    auto [view_hash_key, view_range_key] = parse_key_schema(it->value);
+                    // If an attribute is already a real column in the base
+                    // table (i.e., a key attribute in the base table or LSI),
+                    // we can use it directly as a view key. Otherwise, we
+                    // need to add it as a "computed column", which extracts
+                    // and deserializes the attribute from the ":attrs" map.
+                    bool view_hash_key_real_column =
+                        schema->get_column_definition(to_bytes(view_hash_key));
+                    add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+                    unused_attribute_definitions.erase(view_hash_key);
+                    if (!view_range_key.empty()) {
+                        bool view_range_key_real_column =
+                            schema->get_column_definition(to_bytes(view_range_key));
+                        add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
+                        if (!schema->get_column_definition(to_bytes(view_range_key)) &&
+                            !schema->get_column_definition(to_bytes(view_hash_key))) {
+                            // FIXME: This warning should go away. See issue #6714
+                            elogger.warn("Only 1 regular column from the base table should be used in the GSI key in order to ensure correct liveness management without assumptions");
+                        }
+                        unused_attribute_definitions.erase(view_range_key);
+                    }
+                    // Surprisingly, although DynamoDB checks for unused
+                    // AttributeDefinitions in CreateTable, it does not
+                    // check it in UpdateTable. We decided to check anyway.
+                    if (!unused_attribute_definitions.empty()) {
+                        co_return api_error::validation(fmt::format(
+                            "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
+                            unused_attribute_definitions));
+                    }
+                    // Base key columns which aren't part of the index's key need to
+                    // be added to the view nonetheless, as (additional) clustering
+                    // key(s).
+                    for (auto& def : schema->primary_key_columns()) {
+                        if  (def.name_as_text() != view_hash_key && def.name_as_text() != view_range_key) {
+                            view_builder.with_column(def.name(), def.type, column_kind::clustering_key);
+                        }
+                    }
+                    // GSIs have no tags:
+                    view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+                    // Note below we don't need to add virtual columns, as all
+                    // base columns were copied to view. TODO: reconsider the need
+                    // for virtual columns when we support Projection.
+                    for (const column_definition& regular_cdef : schema->regular_columns()) {
+                        if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
+                            view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+                        }
+                    }
+                    const bool include_all_columns = true;
+                    view_builder.with_view_info(*schema, include_all_columns, ""/*where clause*/);
+                    new_views.emplace_back(view_builder.build());
+                } else if (op == "Delete") {
+                    elogger.trace("Deleting GSI {}", index_name);
+                    if (!p.local().data_dictionary().has_schema(keyspace_name, vname)) {
+                        co_return api_error::resource_not_found(fmt::format("No GSI {} in table {}", index_name, table_name));
+                    }
+                    dropped_views.emplace_back(vname);
+                } else if (op == "Update") {
+                    co_return api_error::validation("GlobalSecondaryIndexUpdates Update not yet supported");
+                } else {
+                    co_return api_error::validation(fmt::format("GlobalSecondaryIndexUpdates supports a Create, Delete or Update operation, saw '{}'", op));
+                }
+            }
+        }
+
+        if (empty_request) {
+            co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, StreamSpecification or BillingMode to be specified");
+        }
+
         co_await verify_permission(enforce_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER);
-        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
+        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
+        for (view_ptr view : new_views) {
+            auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
+            std::move(m2.begin(), m2.end(), std::back_inserter(m));
+        }
+        for (const std::string& view_name : dropped_views) {
+            auto m2 = co_await service::prepare_view_drop_announcement(p.local(), schema->ks_name(), view_name, group0_guard.write_timestamp());
+            std::move(m2.begin(), m2.end(), std::back_inserter(m));
+        }
+        // If a role is allowed to create a GSI, we should give it permissions
+        // to read the GSI it just created. This is known as "auto-grant".
+        // Also, when we delete a GSI we should revoke any permissions set on
+        // it - so if it's ever created again the old permissions wouldn't be
+        // remembered for the new GSI. This is known as "auto-revoke"
+        if (client_state_other_shard.get().user() && (!new_views.empty() || !dropped_views.empty())) {
+            service::group0_batch mc(std::move(group0_guard));
+            mc.add_mutations(std::move(m));
+            for (view_ptr view : new_views) {
+                auto resource = auth::make_data_resource(view->ks_name(), view->cf_name());
+                co_await auth::grant_applicable_permissions(
+                    *client_state_other_shard.get().get_auth_service(), *client_state_other_shard.get().user(), resource, mc);
+            }
+            for (const auto& view_name : dropped_views) {
+                auto resource = auth::make_data_resource(schema->ks_name(), view_name);
+                co_await auth::revoke_all(*client_state_other_shard.get().get_auth_service(), resource, mc);
+        }
+            std::tie(m, group0_guard) = co_await std::move(mc).extract();
+        }
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 
@@ -1729,7 +1928,7 @@ public:
     struct delete_item {};
     struct put_item {};
     put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item);
+    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
     // moved between shards for LWT) so it needs to be given again to build():
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
@@ -1761,7 +1960,75 @@ static inline const column_definition* find_attribute(const schema& schema, cons
     return cdef;
 }
 
-put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item)
+
+// Get a list of all attributes that serve as a key attributes for any of the
+// GSIs or LSIs of this table, and the declared type for each (can be only
+// "S", "B", or "N"). The implementation below will also list the base table's
+// key columns (they are the views' clustering keys).
+std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table t) {
+    std::unordered_map<bytes, std::string> ret;
+    for (const view_ptr& v : t.views()) {
+        for (const column_definition& cdef : v->partition_key_columns()) {
+            ret[cdef.name()] = type_to_string(cdef.type);
+        }
+        for (const column_definition& cdef : v->clustering_key_columns()) {
+            ret[cdef.name()] = type_to_string(cdef.type);
+        }
+    }
+    return ret;
+}
+
+// When an attribute is a key (hash or sort) of one of the GSIs on a table,
+// DynamoDB refuses an update to that attribute with an unsuitable value.
+// Unsuitable values are:
+//   1. An empty string (those are normally allowed as values, but not allowed
+//      as keys, including GSI keys).
+//   2. A value with a type different than that declared for the GSI key.
+//      Normally non-key attributes can take values of any type (DynamoDB is
+//      schema-less), but as soon as an attribute is used as a GSI key, it
+//      must be set only to the specific type declared for that key.
+//   (Note that a missing value for an GSI key attribute is fine - the update
+//   will happen on the base table, but won't reach the view table. In this
+//   case, this function simply won't be called for this attribute.)
+//
+// This function checks if the given attribute update is an update to some
+// GSI's key, and if the value is unsuitable, a api_error::validation is
+// thrown. The checking here is similar to the checking done in
+// get_key_from_typed_value() for the base table's key columns.
+//
+// validate_value_if_gsi_key() should only be called after validate_value()
+// already validated that the value itself has a valid form.
+static inline void validate_value_if_gsi_key(
+        std::unordered_map<bytes, std::string> key_attributes,
+        const bytes& attribute,
+        const rjson::value& value) {
+    if (key_attributes.empty()) {
+        return;
+    }
+    auto it = key_attributes.find(attribute);
+    if (it == key_attributes.end()) {
+        // Given attribute is not a key column with a fixed type, so no
+        // more validation to do.
+        return;
+    }
+    const std::string& expected_type = it->second;
+    // We assume that validate_value() was previously called on this value,
+    // so value is known to be of the proper format (an object with one
+    // member, whose key and value are strings)
+    std::string_view value_type = rjson::to_string_view(value.MemberBegin()->name);
+    if (expected_type != value_type) {
+        throw api_error::validation(fmt::format(
+            "Type mismatch: expected type {} for GSI key attribute {}, got type {}",
+            expected_type, to_string_view(attribute), value_type));
+    }
+    std::string_view value_content = rjson::to_string_view(value.MemberBegin()->value);
+    if (value_content.empty()) {
+        throw api_error::validation(fmt::format(
+            "GSI key attribute {} cannot be set to an empty string", to_string_view(attribute)));
+    }
+}
+
+put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
@@ -1771,6 +2038,9 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         const column_definition* cdef = find_attribute(*schema, column_name);
         _length_in_bytes += column_name.size();
         if (!cdef) {
+            // This attribute may be a key column of one of the GSI, in which
+            // case there are some limitations on the value
+            validate_value_if_gsi_key(key_attributes, column_name, it->value);
             bytes value = serialize_item(it->value);
             if (value.size()) {
                 // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
@@ -1778,7 +2048,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
             }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
-            // Fixed-type regular column can be used for GSI key
+            // Fixed-type regular column can be used for LSI key
             bytes value = get_key_from_typed_value(it->value, *cdef);
             _cells->push_back({std::move(column_name),
                     value});
@@ -2137,7 +2407,8 @@ public:
     parsed::condition_expression _condition_expression;
     put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
-        , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{}) {
+        , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{},
+            si_key_attributes(proxy.data_dictionary().find_table(schema()->ks_name(), schema()->cf_name()))) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -2498,7 +2769,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 const rjson::value& put_request = r->value;
                 const rjson::value& item = put_request["Item"];
                 mutation_builders.emplace_back(schema, put_or_delete_item(
-                        item, schema, put_or_delete_item::put_item{}));
+                        item, schema, put_or_delete_item::put_item{},
+                        si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name()))));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
                     co_return api_error::validation("Provided list of item keys contains duplicates");
@@ -3042,6 +3314,10 @@ public:
     // them by top-level attribute, and detects forbidden overlaps/conflicts.
     attribute_path_map<parsed::update_expression::action> _update_expression;
 
+    // Saved list of GSI keys in the table being updated, used for
+    // validate_value_if_gsi_key()
+    std::unordered_map<bytes, std::string> _key_attributes;
+
     parsed::condition_expression _condition_expression;
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
@@ -3133,6 +3409,9 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     if (expression_attribute_values) {
         _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
     }
+
+    _key_attributes = si_key_attributes(proxy.data_dictionary().find_table(
+        _schema->ks_name(), _schema->cf_name()));
 }
 
 // These are the cases where update_item_operation::apply() needs to use
@@ -3430,6 +3709,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
         } else {
+            // This attribute may be a key column of one of the GSIs, in which
+            // case there are some limitations on the value.
+            validate_value_if_gsi_key(_key_attributes, column_name, json_value);
             attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
         }
     };
