@@ -158,6 +158,8 @@ struct tablet_task_info {
     db_clock::time_point request_time;
     int64_t sched_nr = 0;
     db_clock::time_point sched_time;
+    sstring repair_hosts_filter;
+    sstring repair_dcs_filter;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_request() const;
