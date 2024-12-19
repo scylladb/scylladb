@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include "gms/inet_address.hh"
+#include "inet_address_vectors.hh"
 #include "locator/types.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
@@ -21,6 +22,7 @@
 #include "utils/log.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
+#include <ranges>
 #include <vector>
 #include <string>
 #include <map>
@@ -840,8 +842,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     }
 }
 
-
-void generate_topology(topology& topo, const std::unordered_map<sstring, size_t> datacenters, const std::vector<host_id>& nodes) {
+void generate_topology(topology& topo, const std::unordered_map<sstring, size_t> datacenters, const host_id_vector_replica_set& nodes) {
     auto& e1 = seastar::testing::local_random_engine;
 
     std::unordered_map<sstring, size_t> racks_per_dc;
@@ -885,7 +886,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
                     { "rf5_2", 5 },
                     { "rf5_3", 5 },
     };
-    std::vector<host_id> nodes;
+    host_id_vector_replica_set nodes;
     nodes.reserve(NODES);
     std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
         return host_id{utils::UUID(0, ++i)};
@@ -941,7 +942,7 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
 
 namespace locator {
 
-void topology::test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const {
+void topology::test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
     std::optional<std::partial_ordering> expected;
     const auto& loc = get_location(address);
     const auto& loc1 = get_location(a1);
@@ -982,6 +983,24 @@ void topology::test_compare_endpoints(const inet_address& address, const inet_ad
     }
 }
 
+void topology::test_sort_by_proximity(const locator::host_id& address, const host_id_vector_replica_set& nodes) const {
+    auto sorted_nodes = nodes;
+    sort_by_proximity(address, sorted_nodes);
+    std::unordered_set<locator::host_id> nodes_set(nodes.begin(), nodes.end());
+    std::unordered_set<locator::host_id> sorted_nodes_set(sorted_nodes.begin(), sorted_nodes.end());
+    // Test that no nodes were lost by sort_by_proximity
+    BOOST_REQUIRE_EQUAL(nodes_set, sorted_nodes_set);
+    // Verify that the reference address is sorted as first
+    // if it is part of the input vector
+    if (std::ranges::find(nodes, address) != nodes.end()) {
+        BOOST_REQUIRE_EQUAL(sorted_nodes[0], address);
+    }
+    // Test sort monotonicity
+    for (size_t i = 1; i < sorted_nodes.size(); ++i) {
+        BOOST_REQUIRE(compare_endpoints(address, sorted_nodes[i-1], sorted_nodes[i]) <= 0);
+    }
+}
+
 } // namespace locator
 
 SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
@@ -997,7 +1016,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
                     { "rf2", 2 },
                     { "rf3", 3 },
     };
-    std::vector<host_id> nodes;
+    host_id_vector_replica_set nodes;
     nodes.reserve(NODES);
 
     auto make_address = [] (unsigned i) {
@@ -1012,7 +1031,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     std::generate_n(std::back_inserter(nodes), NODES, [&, i = 0u]() mutable {
         return make_address(++i);
     });
-    auto bogus_address = inet_address((127u << 24) | static_cast<int>(NODES + 1));
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
@@ -1020,9 +1038,9 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         auto& topo = tm.get_topology();
         generate_topology(topo, datacenters, nodes);
 
-        const auto& address = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
-        const auto& a1 = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
-        const auto& a2 = tm.get_endpoint_for_host_id(nodes[tests::random::get_int<size_t>(0, NODES-1)]);
+        const auto& address = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+        const auto& a1 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+        const auto& a2 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
 
         topo.test_compare_endpoints(address, address, address);
         topo.test_compare_endpoints(address, address, a1);
@@ -1030,13 +1048,50 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         topo.test_compare_endpoints(address, a1, a1);
         topo.test_compare_endpoints(address, a1, a2);
         topo.test_compare_endpoints(address, a2, a1);
-
-        topo.test_compare_endpoints(bogus_address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, bogus_address);
-        topo.test_compare_endpoints(address, a1, bogus_address);
-        topo.test_compare_endpoints(address, bogus_address, a2);
         return make_ready_future<>();
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_topology_sort_by_proximity) {
+    using map_type = std::unordered_map<sstring, size_t>;
+    map_type datacenters;
+    size_t num_dcs = tests::random::get_int<size_t>(1, 3);
+    for (size_t i = 0; i < num_dcs; ++i) {
+        size_t rf = tests::random::get_int<size_t>(3, 5);
+        datacenters.emplace(format("dc{}", i), rf);
+    }
+    size_t num_nodes = std::ranges::fold_left(datacenters | std::views::transform(std::mem_fn(&map_type::value_type::second)), size_t(0), std::plus{});
+    host_id_vector_replica_set nodes;
+    auto make_address = [] (unsigned i) {
+        return host_id{utils::UUID(0, i)};
+    };
+    nodes.reserve(num_nodes);
+    std::generate_n(std::back_inserter(nodes), num_nodes, [&, i = 0u]() mutable {
+        return make_address(++i);
+    });
+
+    locator::token_metadata::config tm_cfg;
+    auto my_address = gms::inet_address("localhost");
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = nodes[0];
+    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        generate_topology(tm.get_topology(), datacenters, nodes);
+        return make_ready_future();
+    }).get();
+
+    auto tmptr = stm.get();
+    const auto& topology = stm.get()->get_topology();
+    auto it = nodes.begin() + tests::random::get_int<size_t>(0, num_nodes - 1);
+    auto address = *it;
+    topology.test_sort_by_proximity(address, nodes);
+
+    // remove the reference node from the nodes list
+    nodes.erase(it);
+    topology.test_sort_by_proximity(address, nodes);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
