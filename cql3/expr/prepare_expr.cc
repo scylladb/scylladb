@@ -1450,9 +1450,9 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
 static lw_shared_ptr<column_specification> get_rhs_receiver(lw_shared_ptr<column_specification>& lhs_receiver, oper_t oper) {
     const data_type lhs_type = lhs_receiver->type->underlying_type();
 
-    if (oper == oper_t::IN) {
+    if (oper == oper_t::IN || oper == oper_t::NOT_IN) {
         data_type rhs_receiver_type = list_type_impl::get_instance(std::move(lhs_type), false);
-        auto in_name = ::make_shared<column_identifier>(format("in({})", lhs_receiver->name->text()), true);
+        auto in_name = ::make_shared<column_identifier>(format("{}({})", oper, lhs_receiver->name->text()), true);
         return make_lw_shared<column_specification>(lhs_receiver->ks_name,
                                                     lhs_receiver->cf_name,
                                                     in_name,
