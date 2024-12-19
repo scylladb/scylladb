@@ -5035,7 +5035,6 @@ public:
                 if (ver.par) {
                     mutation_application_stats app_stats;
                     co_await apply_gently(m.partition(), *schema, ver.par->mut().partition(), *schema, app_stats);
-                    co_await coroutine::maybe_yield();
                 }
             }
             auto live_row_count = m.live_row_count();
