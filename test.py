@@ -1010,6 +1010,8 @@ class PythonTest(Test):
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
+        if options.pytest_arg:
+            self.args += shlex.split(options.pytest_arg)
 
         arg = str(self.suite.suite_path / (self.shortname + ".py"))
         if self.casename is not None:
@@ -1410,6 +1412,10 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
                         help="Set the pool_size for PythonTest and its descendants. Alternatively environment variable "
                              "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.add_argument("--pytest-arg", action='store', type=str,
+                        default=None, dest="pytest_arg",
+                        help="Additional command line arguments to pass to "
+                        "pytest, for example ./test.py --pytest-arg=\"-v -x\"")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
