@@ -328,8 +328,10 @@ public:
 
     void set_topology_state_machine(service::topology_state_machine* m) {
         _topo_sm = m;
-        // In raft topology mode the coodinator maintains banned nodes list
-        _just_removed_endpoints.clear();
+        if (m) {
+            // In raft topology mode the coodinator maintains banned nodes list
+            _just_removed_endpoints.clear();
+        }
     }
 
 private:

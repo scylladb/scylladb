@@ -657,6 +657,10 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                 // If there is no host id in the new state there should be one locally
                 hid = get_host_id(ep);
             }
+            if (hid == my_host_id()) {
+                 logger.trace("Ignoring gossip for {} because it maps to local id, but is not local address", ep);
+                 return make_ready_future<>();
+            }
             if (_topo_sm->_topology.left_nodes.contains(raft::server_id(hid.uuid()))) {
                 logger.trace("Ignoring gossip for {} because it left", ep);
                 return make_ready_future<>();
@@ -1712,6 +1716,11 @@ void gossiper::mark_alive(inet_address addr) {
     });
 
     auto id = get_host_id(addr);
+    if (id == my_host_id()) {
+        // We are here because this node changed address and now tries to
+        // ping an old gossip entry.
+        return;
+    }
     auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
