@@ -1510,7 +1510,8 @@ protected:
     size_t _total_block_for = 0;
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
-    host_id_vector_replica_set _targets; // who we sent this mutation to
+    host_id_vector_replica_set _targets; // who we sent this mutation to, excluding successful targets
+    host_id_vector_replica_set _successful_targets; // targets we got a successful response from
     // added dead_endpoints as a member here as well. This to be able to carry the info across
     // calls in helper methods in a convenient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
@@ -1655,6 +1656,7 @@ public:
             signal(from);
             using std::swap;
             swap(*it, _targets.back());
+            _successful_targets.push_back(std::move(_targets.back()));
             _targets.pop_back();
         } else {
             slogger.warn("Receive outdated write ack from {}", from);
@@ -1727,7 +1729,7 @@ public:
     }
     db::view::update_backlog max_backlog() {
         return std::ranges::fold_left(
-                get_targets() | std::views::transform([this] (locator::host_id ep) {
+                std::views::join(std::array{_targets, _successful_targets}) | std::views::transform([this] (locator::host_id ep) {
                     return _proxy->get_backlog_of(ep);
                 }),
                 db::view::update_backlog::no_backlog(),
