@@ -8,6 +8,7 @@
 
 #include "locator/tablets.hh"
 #include "replica/database.hh"
+#include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "service/task_manager_module.hh"
 #include "tasks/task_handler.hh"
@@ -78,6 +79,8 @@ static bool tablet_id_provided(const locator::tablet_task_type& task_type) {
 }
 
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {
+    co_await _ss._migration_manager.local().get_group0_barrier().trigger();
+
     auto tables = get_table_ids();
     for (auto table : tables) {
         auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
