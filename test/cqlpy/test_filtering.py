@@ -152,6 +152,30 @@ def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
         res = cql.execute(f"select * from {table} where v in (5,7) ALLOW FILTERING")
         assert set(res) == set([(2,3,4,5), (4,5,6,7)])
 
+# Test that NOT IN restrictions are supported with filtering and return the
+# correct results.
+# We mark this test "cassandra_bug" because Cassandra could support this
+# feature but doesn't yet: It reports "IN predicates on non-primary-key
+# columns (v) is not yet supported" when v is a regular column, or "IN
+# restrictions are not supported when the query involves filtering" on
+# partition-key columns p1 or p2. By the way, it does support IN restrictions
+# on a clustering-key column.
+def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
+    schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (3, 4, 5, 6)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (4, 5, 6, 7)")
+        res = cql.execute(f"select * from {table} where p1 NOT IN (2,4) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+        res = cql.execute(f"select * from {table} where p2 NOT IN (2,4) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
+        res = cql.execute(f"select * from {table} where c NOT IN (3,5) ALLOW FILTERING")
+        assert set(res) == set([(2,3,4,5), (4,5,6,7)])
+        res = cql.execute(f"select * from {table} where v NOT IN (5,7) ALLOW FILTERING")
+        assert set(res) == set([(1,2,3,4), (3,4,5,6)])
+
 # Test that subscripts in expressions work as expected. They should only work
 # on map columns, and must have the correct type. Test that they also work
 # as expected for null or unset subscripts.
@@ -445,13 +469,13 @@ def test_multi_column_relation_tuples_null_check(cql, test_keyspace):
 #This test shows how Scylla handles invalid number of items in one of the tuples of multi-column relation.
 #If the number of items is lesser than required, Scylla throws "Expected {} elements in value tuple, but got {}"
 #But if the number of items is greater than required, Scylla throws different error: 
-#"Invalid list literal for in((b,c,d)): value (1, 2, 3, 4) is not of type frozen<tuple<int, int, int>>"
+#"Invalid list literal for IN((b,c,d)): value (1, 2, 3, 4) is not of type frozen<tuple<int, int, int>>"
 # Reproduces #13217
 def test_multi_column_relation_wrong_number_of_items_in_tuple(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
         with pytest.raises(InvalidRequest, match='elements in value tuple, but got'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2), (2, 1, 4))')
-        with pytest.raises(InvalidRequest, match='Invalid list literal for in'):
+        with pytest.raises(InvalidRequest, match='Invalid list literal for IN'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3, 4, 5), (2, 1, 4))')
 
 # Test for a bug found while developing the fix for #10357. The bug was that if a regular column was selected

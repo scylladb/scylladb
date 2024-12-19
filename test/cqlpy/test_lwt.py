@@ -102,3 +102,14 @@ def test_lwt_with_batch_conflict_2(cql, table1):
     # Scylla returns a separate row for each of the two conditions.
     for r in rs:
         assert r.applied == False
+
+# Test NOT IN condition in LWT IF clause
+def test_lwt_not_in(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, c, r) values ({p}, 1, 1)')
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r NOT IN (1, 2)'))
+    for r in rs:
+        assert r.applied == False
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r NOT IN (7, 8)'))
+    for r in rs:
+        assert r.applied == True

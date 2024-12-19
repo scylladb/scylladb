@@ -209,6 +209,15 @@ public:
     }
 };
 
+static
+bool_or_null
+sql_not(bool_or_null val) {
+    if (val.is_null()) {
+        return null_value();
+    }
+    return !val.get_value();
+}
+
 /// True iff lhs's value equals rhs.
 bool_or_null equal(const expression& lhs, const managed_bytes_opt& rhs_bytes, const evaluation_inputs& inputs) {
     raw_value lhs_value = evaluate(lhs, inputs);
@@ -329,6 +338,8 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
                 } else {
                     return list_contains_null(*sides_bytes.second);
                 }
+            case oper_t::NOT_IN:
+                on_internal_error(expr_logger, "NOT IN operator on limits(), despite being rejected via !is_slice()");
             }
         }
     }
@@ -609,12 +620,12 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                         out = fmt::format_to(out, " [[lwt_nulls]]");
                     }
                 } else {
-                    if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
+                    if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<collection_constructor>(opr.rhs)) {
                         tuple_constructor rhs_tuple {
                             .elements = as<collection_constructor>(opr.rhs).elements
                         };
                         out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
-                    } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
+                    } else if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
                         tuple_constructor rhs_tuple;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
                         for (const managed_bytes_opt& elem : get_list_elements(as<constant>(opr.rhs).value)) {
@@ -1064,6 +1075,11 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
             break;
         case oper_t::IN:
             binop_result = is_one_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
+            break;
+        case oper_t::NOT_IN:
+            // With binop.null_handling == null_handling_style::lwt, the result is never NULL,
+            // so we don't have to worry about not() for that case.
+            binop_result = sql_not(is_one_of(binop.lhs, binop.rhs, inputs, binop.null_handling));
             break;
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
@@ -2305,6 +2321,8 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return ">=";
     case oper_t::IN:
         return "IN";
+    case oper_t::NOT_IN:
+        return "NOT IN";
     case oper_t::CONTAINS:
         return "CONTAINS";
     case oper_t::CONTAINS_KEY:
