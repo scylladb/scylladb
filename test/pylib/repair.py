@@ -44,3 +44,13 @@ async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fas
     logging.info(f'Got hosts={hosts}');
     table_id = await manager.get_table_id("test", "test")
     return (servers, cql, hosts, table_id)
+
+async def get_tablet_task_id(cql, host, table_id, token):
+    rows = await cql.run_async(f"SELECT last_token, repair_task_info from system.tablets where table_id = {table_id}", host=host)
+    for row in rows:
+        if row.last_token == token:
+            if row.repair_task_info == None:
+                return None
+            else:
+                return str(row.repair_task_info.tablet_task_id)
+    return None

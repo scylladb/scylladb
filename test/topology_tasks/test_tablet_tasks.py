@@ -9,12 +9,14 @@ import pytest
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.pylib.repair import create_table_insert_data_for_repair
+from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
 from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology_experimental_raft.test_tablets import inject_error_on
 from test.topology_tasks.task_manager_client import TaskManagerClient
 from test.topology_tasks.task_manager_types import TaskStatus, TaskStats
+
+empty_id = "00000000-0000-0000-0000-000000000000"
 
 async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
     for server in servers:
@@ -280,3 +282,23 @@ async def test_tablet_migration_task_failed(manager: ManagerClient):
     src = replicas[0].replicas[0]
     dst = (src[0], 1 - src[1])
     await asyncio.gather(move_tablet(src, dst), check("intranode_migration", log, mark))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_task_sees_latest_state(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        # Check failed repair request can be deleted
+        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+
+    async def del_repair_task():
+        tablet_task_id = empty_id
+        while tablet_task_id == empty_id:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        await manager.api.abort_task(servers[0].ip_addr, tablet_task_id)
+
+    await asyncio.gather(repair_task(), del_repair_task())
