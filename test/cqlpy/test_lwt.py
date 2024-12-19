@@ -102,3 +102,29 @@ def test_lwt_with_batch_conflict_2(cql, table1):
     # Scylla returns a separate row for each of the two conditions.
     for r in rs:
         assert r.applied == False
+
+# Test NOT IN condition in LWT IF clause
+#
+# Cassandra rejects this with "line 1:84 no viable alternative at input 'NOT' (...AND c=1 IF r [NOT]...)"",
+# indicating its grammar only supports this for WHERE, not IF.
+def test_lwt_not_in(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, c, r) values ({p}, 1, 1)')
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r NOT IN (1, 2)'))
+    for r in rs:
+        assert r.applied == False
+    # Check that we look at the entire list, not just the first element
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r NOT IN (2, 1)'))
+    for r in rs:
+        assert r.applied == False
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r NOT IN (7, 8)'))
+    for r in rs:
+        assert r.applied == True
+    # LWT IF conditions don't treat NULL as a special value
+    rs = list(cql.execute(f'UPDATE {table1} SET r=NULL WHERE p={p} AND c=1 IF r NOT IN (NULL, 7, 8)'))
+    for r in rs:
+        assert r.applied == True
+    # Similar, but now show that NULL input fails the condition
+    rs = list(cql.execute(f'UPDATE {table1} SET r=NULL WHERE p={p} AND c=1 IF r NOT IN (NULL, 7, 8)'))
+    for r in rs:
+        assert r.applied == False

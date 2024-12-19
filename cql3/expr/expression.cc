@@ -329,6 +329,8 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
                 } else {
                     return list_contains_null(*sides_bytes.second);
                 }
+            case oper_t::NOT_IN:
+                on_internal_error(expr_logger, "NOT IN operator on limits(), despite being rejected via !is_slice()");
             }
         }
     }
@@ -492,6 +494,50 @@ bool_or_null is_one_of(const expression& lhs, const expression& rhs, const evalu
     return false;
 }
 
+/// True iff the column value is NOT in the set defined by rhs. Differs from !is_one_of() in handling NULLs.
+bool_or_null is_none_of(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs, null_handling_style null_handling) {
+    std::pair<managed_bytes_opt, managed_bytes_opt> sides_bytes =
+        evaluate_binop_sides(lhs, rhs, oper_t::IN, inputs);
+    if (!sides_bytes.first || !sides_bytes.second) {
+        switch (null_handling) {
+        case null_handling_style::sql:
+            return bool_or_null::null();
+        case null_handling_style::lwt_nulls:
+            if (!sides_bytes.second) {
+                return true;
+            } else {
+                return !list_contains_null(*sides_bytes.second);
+            }
+        }
+    }
+
+    auto [lhs_bytes, rhs_bytes] = std::move(sides_bytes);
+
+    expression lhs_constant = constant(raw_value::make_value(std::move(*lhs_bytes)), type_of(lhs));
+    utils::chunked_vector<managed_bytes_opt> list_elems = get_list_elements(raw_value::make_value(std::move(*rhs_bytes)));
+    bool saw_null = false;
+    for (const managed_bytes_opt& elem : list_elems) {
+        auto cmp_result = equal(lhs_constant, elem, inputs);
+        if (cmp_result.is_null()) {
+            // If we match another element in the list, we can return `false` with
+            // confidence. If we don't, we return NULL to indicate we don't know.
+            saw_null = true;
+        } else if (cmp_result.is_true()) {
+            return false;
+        }
+    }
+    if (saw_null) {
+            switch (null_handling) {
+            case null_handling_style::sql:
+                return bool_or_null::null();
+            case null_handling_style::lwt_nulls:
+                // In LWT, `3 NOT IN (NULL, 5)` counts as true
+                return true;
+            }
+    }
+    return true;
+}
+
 bool is_not_null(const expression& lhs, const expression& rhs, const evaluation_inputs& inputs) {
     cql3::raw_value lhs_val = evaluate(lhs, inputs);
     cql3::raw_value rhs_val = evaluate(rhs, inputs);
@@ -609,12 +655,12 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                         out = fmt::format_to(out, " [[lwt_nulls]]");
                     }
                 } else {
-                    if (opr.op == oper_t::IN && is<collection_constructor>(opr.rhs)) {
+                    if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<collection_constructor>(opr.rhs)) {
                         tuple_constructor rhs_tuple {
                             .elements = as<collection_constructor>(opr.rhs).elements
                         };
                         out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
-                    } else if (opr.op == oper_t::IN && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
+                    } else if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
                         tuple_constructor rhs_tuple;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
                         for (const managed_bytes_opt& elem : get_list_elements(as<constant>(opr.rhs).value)) {
@@ -1064,6 +1110,9 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
             break;
         case oper_t::IN:
             binop_result = is_one_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
+            break;
+        case oper_t::NOT_IN:
+            binop_result = is_none_of(binop.lhs, binop.rhs, inputs, binop.null_handling);
             break;
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
@@ -2305,6 +2354,8 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return ">=";
     case oper_t::IN:
         return "IN";
+    case oper_t::NOT_IN:
+        return "NOT IN";
     case oper_t::CONTAINS:
         return "CONTAINS";
     case oper_t::CONTAINS_KEY:
