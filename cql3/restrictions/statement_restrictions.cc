@@ -99,7 +99,7 @@ extern bool index_supports_some_column(
 
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) ;
+           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
 }
 
 inline auto find_needs_filtering(const expression& e) {
