@@ -112,14 +112,11 @@ another using native systems, which requires access to aarch64 and s390x machine
     1. check out the branch containing the new toolchain name
     2. Run `git submodule update --init --recursive` to make sure
        all the submodules are synchronized
-    3. Run `podman build --no-cache --pull --tag mytag-arch -f tools/toolchain/Dockerfile .`, where mytag-arch is a new, unique tag that is different for x86 and ARM.
-    4. Push the resulting images to a personal docker repository.
+    3. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive <archive-path> --disable-multiarch`. This should complete relatively quickly.
 4. Now, create a multiarch image with the following:
-    1. Pull the two images with `podman pull`. Let's call the two tags
-       `mytag-x86` and `mytag-arm`.
-    2. Create the new toolchain manifest with `podman manifest create $(<tools/toolchain/image)`
-    3. Add each image with `podman manifest add --all $(<tools/toolchain/image) mytag-x86` and `podman manifest add --all $(<tools/toolchain/image) mytag-arm`
-    4. Push the image with `podman manifest push --all $(<tools/toolchain/image) docker://$(<tools/toolchain/image)`
+    1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
+    2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
+    3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
 5. Now push the commit that updated the toolchain with `git push`.
 
 ## Troubleshooting
