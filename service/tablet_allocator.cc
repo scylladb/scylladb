@@ -939,7 +939,9 @@ public:
             auto first_non_matching_replicas = [] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
                 assert(r1.size() == r2.size());
                 // Subtract intersecting (co-located) elements from the replicas set of sibling tablets.
-                // Think for example that tablet 0 and 1 have replicas [n2, n4] and [n1, n2] respectively.
+                // For example:
+                // tablet 0 replicas: [    n2, n4]
+                // tablet 1 replicas: [n1, n2]
                 // After subtraction, replica of tablet 1 in n1 will be a candidate for co-location with
                 // replica of tablet 0 in n4.
                 std::unordered_set<tablet_replica> intersection;
@@ -957,10 +959,10 @@ public:
                 std::ranges::transform(r1, std::inserter(r1_map, r1_map.begin()), [] (tablet_replica r) {
                     return std::make_pair(r.host, r);
                 });
-                for (unsigned i = 0; i < r2.size(); i++) {
-                    auto r1_it = r1_map.find(r2[i].host);
+                for (auto& r2_replica : r2) {
+                    auto r1_it = r1_map.find(r2_replica.host);
                     if (r1_it != r1_map.end()) {
-                        return std::make_pair(r1_it->second, r2[i]);
+                        return std::make_pair(r1_it->second, r2_replica);
                     }
                 }
                 // Since sets had intersection subtracted, the remaining replicas are certainly not co-located.
@@ -990,12 +992,13 @@ public:
                 if (r1 == r2) {
                     return make_ready_future<>();
                 }
-                auto t1_id = global_tablet_id{table, t1.tid};
-                auto t2_id = global_tablet_id{table, t2.tid};
 
                 if (migrating(t1) || migrating(t2)) {
                     return make_ready_future<>();
                 }
+
+                auto t1_id = global_tablet_id{table, t1.tid};
+                auto t2_id = global_tablet_id{table, t2.tid};
                 // During RF change, tablets may have incrementally replicas allocated / deallocated to them.
                 // Let's temporarily delay their co-location until their replica sets have the same size.
                 if (r1.size() != r2.size()) {
@@ -1008,7 +1011,7 @@ public:
                 const auto r2_hosts = r2
                     | std::views::transform(std::mem_fn(&locator::tablet_replica::host))
                     | std::ranges::to<std::unordered_set<host_id>>();
-                auto check_constraints = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
+                auto is_constraint_violated = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
                     // handles intra-node migration.
                     if (src.host == dst.host && src.shard != dst.shard) {
                         return false;
@@ -1027,12 +1030,10 @@ public:
                 }
 
                 // Emits migration for replica of t2 to co-habit same shard as replica of t1.
-                auto src = ret->second;
-                auto dst = ret->first;
+                auto [dst, src] = *ret;
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
-                auto skip = check_constraints(src, dst);
-                if (skip) {
+                if (is_constraint_violated(src, dst)) {
                     lblogger.debug("Replication constraint check failed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
                     return make_ready_future<>();
