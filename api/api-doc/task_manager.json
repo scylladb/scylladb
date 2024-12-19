@@ -284,7 +284,8 @@
                   "created",
                   "running",
                   "done",
-                  "failed"
+                  "failed",
+                  "suspended"
                ],
                "description":"The state of a task"
             },
@@ -352,7 +353,8 @@
                   "created",
                   "running",
                   "done",
-                  "failed"
+                  "failed",
+                  "suspended"
                ],
                "description":"The state of the task"
             },
