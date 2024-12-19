@@ -455,7 +455,7 @@ private:
 
     friend class token_metadata_impl;
 public:
-    void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    void test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const;
 };
 
 } // namespace locator
