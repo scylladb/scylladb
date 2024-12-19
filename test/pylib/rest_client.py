@@ -273,8 +273,8 @@ class ScyllaRESTAPIClient():
             "token": str(token)
         })
 
-    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int) -> None:
-        await self.client.post(f"/storage_service/tablets/repair", host=node_ip, params={
+    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int, timeout: Optional[float] = None) -> None:
+        await self.client.post(f"/storage_service/tablets/repair", host=node_ip, timeout=timeout, params={
             "ks": ks,
             "table": table,
             "tokens": str(token)

@@ -1579,6 +1579,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::end_repair);
                         auto update = get_mutation_builder()
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
+                                        .del_repair_task_info(last_token)
                                         .del_session(last_token);
                         if (valid) {
                             auto time = tinfo.repair_task_info.sched_time;
@@ -1593,7 +1594,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                             .del_transition(last_token)
-                            .del_repair_task_info(last_token)
                             .build());
                     }
                 }
