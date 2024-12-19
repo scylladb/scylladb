@@ -507,6 +507,7 @@ class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
     std::variant<sstring, table_id> _location;
+    seastar::abort_source* _as;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
@@ -522,10 +523,11 @@ class s3_storage : public sstables::storage {
     }
 
 public:
-    s3_storage(shared_ptr<s3::client> client, sstring bucket, std::variant<sstring, table_id> loc)
+    s3_storage(shared_ptr<s3::client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
         : _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
+        , _as(as)
     {
     }
 
@@ -585,17 +587,17 @@ void s3_storage::open(sstable& sst) {
 }
 
 future<file> s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    co_return _client->make_readable_file(make_s3_object_name(sst, type));
+    co_return _client->make_readable_file(make_s3_object_name(sst, type), _as);
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
+    co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as);
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    co_return _client->make_upload_sink(make_s3_object_name(sst, type));
+    co_return _client->make_upload_sink(make_s3_object_name(sst, type), _as);
 }
 
 future<> s3_storage::seal(const sstable& sst) {
@@ -676,7 +678,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
                     }, os.location)) {
                 on_internal_error(sstlog, "S3 storage options is missing 'location'");
             }
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location);
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
         }
     }, s_opts.value);
 }

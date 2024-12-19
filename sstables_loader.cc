@@ -496,6 +496,11 @@ public:
     virtual tasks::is_user_task is_user_task() const noexcept override {
         return tasks::is_user_task::yes;
     }
+
+    tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
+
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
         llog.debug("get_progress: {}", _num_sstables_processed);
         unsigned processed = co_await _loader.map_reduce(adder<unsigned>(), [this] (auto&) {
@@ -515,14 +520,50 @@ future<> sstables_loader::download_task_impl::run() {
         .load_bloom_filter = false,
     };
     llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg);
-    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
-    co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-        co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false, false,
-                                        [this] (unsigned num_streamed) {
-            _num_sstables_processed[this_shard_id()] += num_streamed;
-        });
+
+    std::vector<seastar::abort_source> shard_aborts(smp::count);
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, _bucket, _prefix, cfg, [&] {
+        return &shard_aborts[this_shard_id()];
     });
+    llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
+    std::exception_ptr ex;
+    gate g;
+    try {
+        _as.check();
+
+        auto s = _as.subscribe([&]() noexcept {
+            try {
+                auto h = g.hold();
+                (void)smp::invoke_on_all([&shard_aborts, ex = _as.abort_requested_exception_ptr()] {
+                    shard_aborts[this_shard_id()].request_abort_ex(ex);
+                }).finally([h = std::move(h)] {});
+            } catch (...) {
+            }
+        });
+
+        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
+            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false, false, [this] (unsigned num_streamed) {
+                _num_sstables_processed[this_shard_id()] += num_streamed;
+            });
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await g.close();
+
+    if (_as.abort_requested()) {
+        if (!ex) {
+            ex = _as.abort_requested_exception_ptr();
+        }
+    }
+
+    if (ex) {
+        co_await _loader.invoke_on_all([&sstables_on_shards] (sstables_loader&) {
+            sstables_on_shards[this_shard_id()] = {}; // clear on correct shard
+        });
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 sstables_loader::sstables_loader(sharded<replica::database>& db,
@@ -552,6 +593,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
     llog.info("Restore sstables from {}({}) to {}", endpoint, prefix, ks_name);
+
     auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstables));
     co_return task->id();
 }
