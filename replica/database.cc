@@ -8,13 +8,17 @@
 
 #include <algorithm>
 
+#include <exception>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include "seastar/core/rwlock.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
+#include "seastar/core/shard_id.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include <memory>
 #include <seastar/core/future-util.hh>
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_sstables_registry.hh"
@@ -93,9 +97,8 @@ make_flush_controller(const db::config& cfg, backlog_controller::scheduling_grou
     return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
 }
 
-keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory)
-    : _metadata(std::move(metadata))
-    , _config(std::move(cfg))
+keyspace::keyspace(config cfg, locator::effective_replication_map_factory& erm_factory)
+    : _config(std::move(cfg))
     , _erm_factory(erm_factory)
 {}
 
@@ -694,8 +697,10 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
-        auto ksm = co_await create_keyspace_from_schema_partition(proxy, v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        auto ksm = co_await create_keyspace_metadata(proxy, v, scylla_specific_rs);
+        auto ks = co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        insert_keyspace(std::move(ks));
+        co_return;
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -790,7 +795,7 @@ database::init_commitlog() {
     });
 }
 
-future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier) {
+future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
@@ -801,46 +806,48 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
         }
         return func(db);
     });
-    co_await sharded_db.invoke_on_all(notifier);
 }
 
-future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
-    auto& ks = find_keyspace(tmp_ksm.name());
-    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.initial_tablets(), tmp_ksm.durable_writes(),
-                    ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), std::move(ks.metadata()->user_types()), tmp_ksm.get_storage_options());
+future<keyspace_change> database::prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const {
+    auto strategy = keyspace::create_replication_strategy(metadata);
+    auto erm = co_await ks.create_effective_replication_map(strategy,
+            get_shared_token_metadata());
+    co_return keyspace_change{
+        .metadata = metadata,
+        .strategy = std::move(strategy),
+        .erm = std::move(erm),
+    };
+}
 
+void database::update_keyspace(std::unique_ptr<keyspace_change> change) {
+    auto& ks = find_keyspace(change->metadata->name());
     bool old_durable_writes = ks.metadata()->durable_writes();
-    bool new_durable_writes = new_ksm->durable_writes();
+    bool new_durable_writes = change->metadata->durable_writes();
     if (old_durable_writes != new_durable_writes) {
-        for (auto& [cf_name, cf_schema] : new_ksm->cf_meta_data()) {
+        for (auto& [cf_name, cf_schema] : change->metadata->cf_meta_data()) {
             auto& cf = find_column_family(cf_schema);
             cf.set_durable_writes(new_durable_writes);
         }
     }
-
-    co_await ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
+    ks.apply(*change);
 }
 
-future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm) {
-    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
-        return db.update_keyspace(ksm);
-    }, [&] (replica::database& db) {
-        const auto& ks = db.find_keyspace(ksm.name());
-        return db.get_notifier().update_keyspace(ks.metadata());
+future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm) {
+    keyspace_change_per_shard changes(smp::count);
+    co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
+        auto& ks = db.find_keyspace(ksm.name());
+        auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.durable_writes(),
+                ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), std::move(ks.metadata()->user_types()), ksm.get_storage_options());
+
+        auto change = co_await db.prepare_update_keyspace(ks, new_ksm);
+        changes[this_shard_id()] = make_foreign(std::make_unique<keyspace_change>(std::move(change)));
+        co_return;
     });
+    co_return changes;
 }
 
 void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
-}
-
-future<> database::drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name) {
-    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
-        db.drop_keyspace(name);
-        return make_ready_future<>();
-    }, [&] (replica::database& db) {
-        return db.get_notifier().drop_keyspace(name);
-    });
 }
 
 static bool is_system_table(const schema& s) {
@@ -894,7 +901,8 @@ future<> database::create_local_system_table(
                 std::nullopt,
                 durable
                 );
-        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+        auto ks = co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+        insert_keyspace(std::move(ks));
     }
     auto& ks = find_keyspace(ks_name);
     auto cfg = ks.make_column_family_config(*table, *this);
@@ -904,7 +912,9 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    co_await add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+    auto lock = get_tables_metadata().hold_write_lock();
+    auto cleanup = add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+    co_await cleanup();
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
@@ -913,13 +923,18 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
+std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
     if (auto pt_rs = rs.maybe_as_per_table()) {
-        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
+        auto metadata_ptr = not_commited_new_metadata;
+        if (!metadata_ptr) {
+            // use the current one
+            metadata_ptr = _shared_token_metadata.get();
+        }
+        erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
         erm = ks.get_vnode_effective_replication_map();
     }
@@ -942,19 +957,33 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     cf->start();
-    auto f = co_await coroutine::as_future(_tables_metadata.add_table(*this, ks, *cf, schema));
-    if (f.failed()) {
-        co_await cf->stop();
-        co_await coroutine::return_exception_ptr(f.get_exception());
-    }
+    std::exception_ptr ex;
+    try {
+        _tables_metadata.add_table(*this, ks, *cf, schema);
+    } catch (...) {
+        ex = std::current_exception();
+    };
+    // cleanup function
+    return [cf, ex] () -> future<> {
+        if (ex) {
+            co_await cf->stop();
+            co_await coroutine::return_exception_ptr(ex);
+        }
+    };
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
-    auto& ks = find_keyspace(schema->ks_name());
-    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+future<> database::make_column_family_directory(schema_ptr schema) {
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();
+}
+
+future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
+    auto lock = co_await get_tables_metadata().hold_write_lock();
+    auto& ks = find_keyspace(schema->ks_name());
+    auto cleanup = add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+    co_await cleanup();
+    co_await make_column_family_directory(schema);
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -975,19 +1004,9 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::remove(table& cf) noexcept {
+void database::remove(table& cf) noexcept {
     cf.deregister_metrics();
-    return _tables_metadata.remove_table(*this, cf);
-}
-
-future<> database::detach_column_family(table& cf) {
-    auto uuid = cf.schema()->id();
-    co_await remove(cf);
-    cf.clear_views();
-    co_await cf.await_pending_ops();
-    co_await foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
-        co_await sem.evict_inactive_reads_for_table(uuid);
-    });
+    _tables_metadata.remove_table(*this, cf);
 }
 
 global_table_ptr::global_table_ptr() {
@@ -1007,6 +1026,10 @@ void global_table_ptr::assign(table& t) {
 table* global_table_ptr::operator->() const noexcept { return &*_p[this_shard_id()]; }
 table& global_table_ptr::operator*() const noexcept { return *_p[this_shard_id()]; }
 
+void tables_metadata_lock_on_all_shards::assign_lock(seastar::rwlock::holder&& h) {
+    _holders[this_shard_id()] = make_foreign(std::make_unique<seastar::rwlock::holder>(std::move(h)));
+}
+
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     return get_table_on_all_shards(sharded_db, std::move(uuid));
@@ -1024,30 +1047,62 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
     co_return table_shards;
 }
 
-future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        sstring ks_name, sstring cf_name, bool with_snapshot) {
+future<tables_metadata_lock_on_all_shards> database::prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db) {
+    tables_metadata_lock_on_all_shards locks;
+    co_await sharded_db.invoke_on_all([&] (auto& db) -> future<> {
+        locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
+    });
+    co_return locks;
+}
+
+future<global_table_ptr> database::prepare_drop_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
+    co_return co_await get_table_on_all_shards(sharded_db, uuid);;
+}
+
+void database::drop_table(sharded<database>& sharded_db,
+        sstring ks_name, sstring cf_name, bool with_snapshot, global_table_ptr& table_shards) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
+    auto& cf = *table_shards;
+    sharded_db.local().remove(cf);
+    cf.clear_views();
+}
 
-    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
-    auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    std::optional<sstring> snapshot_name_opt;
-    if (with_snapshot) {
-        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
-    }
-    co_await sharded_db.invoke_on_all([&] (database& db) {
-        return db.detach_column_family(*table_shards);
+future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        bool with_snapshot, global_table_ptr& table_shards) {
+    co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+        auto& cf = *table_shards;
+        auto uuid = cf.schema()->id();
+        co_await cf.await_pending_ops();
+        co_await db.foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
+            co_await sem.evict_inactive_reads_for_table(uuid);
+        });
     });
     // Use a time point in the far future (9999-12-31T00:00:00+0000)
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
     constexpr db_clock::time_point truncated_at(std::chrono::seconds(253402214400));
+    std::optional<sstring> snapshot_name_opt;
+    if (with_snapshot) {
+        snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
+    }
     auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
     co_await table_shards->destroy_storage();
+}
+
+future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        sstring ks_name, sstring cf_name, bool with_snapshot) {
+    auto locks = co_await prepare_tables_metadata_change_on_all_shards(sharded_db);
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, uuid);
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        return db.drop_table(sharded_db, ks_name, cf_name, with_snapshot, table_shards);
+    });
+    co_await cleanup_drop_table_on_all_shards(sharded_db, sys_ks, with_snapshot, table_shards);
 }
 
 table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
@@ -1202,19 +1257,17 @@ bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
 
-future<>
-keyspace::create_replication_strategy(const locator::shared_token_metadata& stm) {
+locator::replication_strategy_ptr
+keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata) {
     using namespace locator;
-
-    locator::replication_strategy_params params(_metadata->strategy_options(), _metadata->initial_tablets());
-    _replication_strategy =
-            abstract_replication_strategy::create_replication_strategy(_metadata->strategy_name(), params);
+    replication_strategy_params params(metadata->strategy_options(), metadata->initial_tablets());
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
-            _metadata->name(), _metadata->strategy_name(), _metadata->strategy_options());
-    if (!_replication_strategy->is_per_table()) {
-        auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
-        update_effective_replication_map(std::move(erm));
-    }
+            metadata->name(), metadata->strategy_name(), metadata->strategy_options());
+    return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params);
+}
+
+future<locator::vnode_effective_replication_map_ptr> keyspace::create_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::shared_token_metadata& stm) const {
+    co_return co_await _erm_factory.create_effective_replication_map(strategy, stm.get());
 }
 
 void
@@ -1227,9 +1280,10 @@ keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 
-future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
-    _metadata = std::move(ksm);
-   return create_replication_strategy(stm);
+void keyspace::apply(keyspace_change kc) {
+    _metadata = std::move(kc.metadata);
+    _replication_strategy = std::move(kc.strategy);
+    _effective_replication_map = std::move(kc.erm);
 }
 
 column_family::config
@@ -1319,7 +1373,7 @@ std::vector<view_ptr> database::get_views() const {
             | std::views::transform([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
+future<std::unique_ptr<keyspace>> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm);
     if (system == system_keyspace::yes) {
         kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
@@ -1331,29 +1385,34 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
         // don't make internal keyspaces write wait for user writes (if under pressure), and also to avoid possible deadlocks.
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
-    keyspace ks(ksm, std::move(kscfg), erm_factory);
-    co_await ks.create_replication_strategy(get_shared_token_metadata());
-    _keyspaces.emplace(ksm->name(), std::move(ks));
+    auto ks(std::make_unique<keyspace>(std::move(kscfg), erm_factory));
+    auto change = co_await prepare_update_keyspace(*ks, ksm);
+    ks->apply(std::move(change));
+    co_return ks;
 }
 
-future<>
+future<std::unique_ptr<keyspace>>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
-    if (_keyspaces.contains(ksm->name())) {
-        co_return;
-    }
-
-    co_await create_in_memory_keyspace(ksm, erm_factory, system);
     co_await get_sstables_manager(system).init_keyspace_storage(ksm->get_storage_options(), ksm->name());
+    co_return co_await create_in_memory_keyspace(ksm, erm_factory, system);
 }
 
-future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
+void database::insert_keyspace(std::unique_ptr<keyspace> ks) {
+    auto& name = ks->metadata()->name();
+    if (_keyspaces.contains(name)) {
+        return;
+    }
+    _keyspaces.emplace(name, std::move(*ks));
+}
+
+future<database::created_keyspace_per_shard> database::prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
+    created_keyspace_per_shard created(smp::count);
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
-        co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
-    }, [&] (replica::database& db) -> future<> {
-        const auto& ks = db.find_keyspace(ks_metadata.name());
-        co_await db.get_notifier().create_keyspace(ks.metadata());
+        auto ks = co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
+        created[this_shard_id()] = make_foreign(std::move(ks));
     });
+    co_return created;
 }
 
 future<>
@@ -2806,14 +2865,18 @@ size_t database::tables_metadata::size() const noexcept {
     return _column_families.size();
 }
 
-future<> database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
-    auto holder = co_await _cf_lock.hold_write_lock();
+future<rwlock::holder> database::tables_metadata::hold_write_lock() {
+    co_return co_await _cf_lock.hold_write_lock();
+}
+
+void database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
+    SCYLLA_ASSERT(!_cf_lock.try_write_lock()); // lock should be acquired before the call
     add_table_helper(db, ks, cf, s);
 }
 
-future<> database::tables_metadata::remove_table(database& db, table& cf) noexcept {
+void database::tables_metadata::remove_table(database& db, table& cf) noexcept {
+    SCYLLA_ASSERT(!_cf_lock.try_write_lock()); // lock should be acquired before the call
     try {
-        auto holder = co_await _cf_lock.hold_write_lock();
         auto s = cf.schema();
         auto& ks = db.find_keyspace(s->ks_name());
         remove_table_helper(db, ks, cf, s);
