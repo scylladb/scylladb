@@ -323,11 +323,6 @@ public:
     const sstring& get_datacenter(host_id id) const {
         return get_location(id).dc;
     }
-    // Get datacenter of a node identified by endpoint
-    // The specified node must exist.
-    const sstring& get_datacenter(inet_address ep) const {
-        return get_location(ep).dc;
-    }
 
     // Get rack of this node
     const sstring& get_rack() const noexcept {
@@ -337,11 +332,6 @@ public:
     // The specified node must exist.
     const sstring& get_rack(host_id id) const {
         return get_location(id).rack;
-    }
-    // Get rack of a node identified by endpoint
-    // The specified node must exist.
-    const sstring& get_rack(inet_address ep) const {
-        return get_location(ep).rack;
     }
 
     auto get_local_dc_filter() const noexcept {
