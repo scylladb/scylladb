@@ -1785,6 +1785,13 @@ columnCondition returns [uexpression e]
                             oper_t::IN,
                             std::move(values));
                 }
+        | K_NOT K_IN
+            values=singleColumnInValuesOrMarkerExpr {
+                    e = binary_operator(
+                            std::move(key),
+                            oper_t::NOT_IN,
+                            std::move(values));
+                }
         )
     ;
 
@@ -1835,6 +1842,14 @@ relation returns [uexpression e]
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
     | name=cident K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
+        collection_constructor {
+            .style = collection_constructor::style_type::list,
+            .elements = std::move(in_values)
+        }); }
+    | name=cident K_NOT K_IN marker1=marker
+        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN, std::move(marker1)); }
+    | name=cident K_NOT K_IN in_values=singleColumnInValues
+        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
         collection_constructor {
             .style = collection_constructor::style_type::list,
             .elements = std::move(in_values)
