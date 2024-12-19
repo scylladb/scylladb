@@ -62,6 +62,10 @@ public:
         _reclaimed.erase(*sst);
     }
 
+    auto& get_active_list() {
+        return _active;
+    }
+
     auto& get_reclaimed_set() {
         return _reclaimed;
     }
