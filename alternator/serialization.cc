@@ -245,6 +245,25 @@ rjson::value deserialize_item(bytes_view bv) {
     return deserialized;
 }
 
+// If the value in bv (supposedly created earlier by serialize_item()) has the
+// right type "expected_type", this function returns the value as a serialized
+// Scylla type. If the type doesn't match, returns a null optional.
+// In the current implementation, this function is much more efficient than
+// deserialize_item() above because it avoids transformation to/from JSON.
+// However, serialized_value_if_type() is only implemented for the natively-
+// serialized types S, B and N.
+std::optional<bytes> serialized_value_if_type(bytes_view bv, alternator_type expected_type) {
+    if (bv.empty() || alternator_type(bv[0]) != expected_type) {
+        return std::nullopt;
+    }
+    // Currently, serialize_item() for types in alternator_type (notably S, B
+    // and N) are nothing more than Scylla's raw format for these types
+    // preceded by a type byte. So we just need to skip that byte and we are
+    // left by exactly what we need to return.
+    bv.remove_prefix(1);
+    return bytes(bv);
+}
+
 std::string type_to_string(data_type type) {
     static thread_local std::unordered_map<data_type, std::string> types = {
         {utf8_type, "S"},
