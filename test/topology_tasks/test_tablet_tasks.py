@@ -493,3 +493,23 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
         check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2])
 
     await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_task_sees_latest_state(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        # Check failed repair request can be deleted
+        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+
+    async def del_repair_task():
+        tablet_task_id = None
+        while tablet_task_id is None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        await manager.api.abort_task(servers[0].ip_addr, tablet_task_id)
+
+    await asyncio.gather(repair_task(), del_repair_task())
