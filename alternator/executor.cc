@@ -2807,6 +2807,47 @@ static bool check_needs_read_before_write(const attribute_path_map<parsed::updat
     });
 }
 
+/*!
+ * \brief estimate_value_size provides a rough size estimation
+ * for an rjson value object.
+ *
+ * When calculating RCU and WCU, we need to determine the length of the JSON representation
+ * (specifically, the length of each key and each value).
+ *
+ * When possible, this is calculated as a side effect of other operations.
+ * estimate_value_size is used when this calculation cannot be performed directly,
+ * but we still need an estimated value.
+ *
+ * It achieves this without streaming any values and uses a fixed size for numbers.
+ * The aim is not to provide a perfect 1-to-1 size calculation, as WCU is calculated
+ * in 1KB units. A ballpark estimate is sufficient.
+ */
+static size_t estimate_value_size(const rjson::value& value) {
+    size_t size = 0;
+
+    if (value.IsString()) {
+        size += value.GetStringLength();
+    }
+    else if (value.IsNumber()) {
+        size += 8;
+    }
+    else if (value.IsBool()) {
+        size += 5;
+    }
+    else if (value.IsArray()) {
+        for (auto& v : value.GetArray()) {
+            size += estimate_value_size(v);  // Recursively calculate array element sizes
+        }
+    }
+    else if (value.IsObject()) {
+        for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
+            size += it->name.GetStringLength();  // Size of the key
+            size += estimate_value_size(it->value);   // Size of the value
+        }
+    }
+    return size;
+}
+
 class update_item_operation  : public rmw_operation {
 public:
     // Some information parsed during the constructor to check for input
@@ -2893,6 +2934,20 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     if (_attribute_updates && !_condition_expression.empty()) {
         throw api_error::validation(
                 format("UpdateItem does not allow both old-style AttributeUpdates and new-style ConditionExpression to be given together"));
+    }
+    if (_pk.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _consumed_capacity._total_bytes += _pk.representation().size() - 2;
+    }
+    if (_ck.representation().size() > 2) {
+        // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
+        _consumed_capacity._total_bytes += _ck.representation().size() - 2;
+    }
+    if (expression_attribute_names) {
+        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_names);
+    }
+    if (expression_attribute_values) {
+        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
     }
 }
 
@@ -3128,6 +3183,9 @@ static bool hierarchy_actions(
 
 std::optional<mutation>
 update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
+    if (_consumed_capacity._total_bytes == 0) {
+        _consumed_capacity._total_bytes = 1;
+    }
     if (!verify_expected(_request, previous_item.get()) ||
         !verify_condition_expression(_condition_expression, previous_item.get())) {
         if (previous_item && _returnvalues_on_condition_check_failure ==
