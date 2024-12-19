@@ -151,7 +151,7 @@ def scylla_sstable(table_factory, cql, ks, data_dir):
     sstables = glob.glob(os.path.join(data_dir, ks, table + '-*', '*-Data.db'))
 
     try:
-        yield (schema_file, sstables)
+        yield (table, schema_file, sstables)
     finally:
         cql.execute(f"DROP TABLE {ks}.{table}")
         os.unlink(schema_file)
@@ -170,7 +170,7 @@ def all_sstables(sstables):
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
 @pytest.mark.parametrize("which_sstables", [one_sstable, all_sstables])
 def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_data_dir, what, which_sstables):
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
 
     print(out)
@@ -193,7 +193,7 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
     if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
         request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
 
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
         if merge:
             args.append("--merge")
@@ -211,7 +211,7 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
         simple_clustering_table,
 ])
 def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
-    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json", "--merge"]
             generation = util.unique_key_int()
@@ -319,7 +319,7 @@ end
     with open(script_file, 'w') as f:
         f.write(script)
 
-    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         sst1 = os.path.basename(sstables[0])
         sst2 = os.path.basename(sstables[1])
         def run_scenario(script_args, expected):
@@ -440,7 +440,7 @@ def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_dat
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     script_file = os.path.join(scripts_path, 'slice.lua')
 
-    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         reference_summary = summarize_dump(json.loads(subprocess.check_output([scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--merge"] + sstables)))
 
         # same order as in dump
@@ -493,7 +493,7 @@ def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     slice_script_path = os.path.join(scripts_path, 'slice.lua')
     dump_script_path = os.path.join(scripts_path, 'dump.lua')
-    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (_,schema_file, sstables):
         dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json"]
         script_common_args = [scylla_path, "sstable", "script", "--schema-file", schema_file]
 
@@ -1202,7 +1202,7 @@ def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, 
         all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)
         keys = itertools.islice(all_keys_for_shard, num_keys)
         table_factory = functools.partial(_simple_table_with_keys, keys=keys)
-        with scylla_sstable(table_factory, cql, test_keyspace_vnodes, scylla_data_dir) as (schema_file, sstables):
+        with scylla_sstable(table_factory, cql, test_keyspace_vnodes, scylla_data_dir) as (_, schema_file, sstables):
             out = subprocess.check_output([scylla_path,
                                            "sstable", "shard-of",
                                            "--vnodes",
@@ -1222,7 +1222,7 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
     shard_to_key = {0: 0, 1: 142}
     for shard_id, key in shard_to_key.items():
         table_factory = functools.partial(_simple_table_with_keys, keys=[key])
-        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (schema_file, sstables):
+        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
             with nodetool.no_autocompaction_context(cql, "system.tablets"):
                 nodetool.flush_keyspace(cql, "system")
                 out = subprocess.check_output([scylla_path,
@@ -1253,7 +1253,7 @@ def test_scylla_sstable_bad_scylla_yaml(cql, test_keyspace, scylla_path, scylla_
     This test checks that the config is successfully read, even if there are errors.
     Reproduces: https://github.com/scylladb/scylladb/issues/16538
     """
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.NamedTemporaryFile("w+t") as scylla_yaml:
             scylla_yaml.write("foo: bar")
             scylla_yaml.flush()
@@ -1282,7 +1282,7 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
                                 (?P<id>[^-]+)-          # sstable identifier
                                 (?P<format>\w+)-        # format: 'big'
                                 (?P<component>.*)       # component: e.g., 'Data'""", re.X)
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, _, sstables):
         for fn in sstables:
             stem = pathlib.Path(fn).stem
             matched = sstable_re.match(stem)
