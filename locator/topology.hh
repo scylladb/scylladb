@@ -100,6 +100,14 @@ public:
         return _dc_rack;
     }
 
+    const sstring& dc() const noexcept {
+        return _dc_rack.dc;
+    }
+
+    const sstring& rack() const noexcept {
+        return _dc_rack.rack;
+    }
+
     // Is this "localhost"?
     this_node is_this_node() const noexcept { return _is_this_node; }
 
@@ -305,9 +313,8 @@ public:
     }
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
-    const endpoint_dc_rack& get_location(host_id id) const {
-        return find_node(id)->dc_rack();
-    }
+    const endpoint_dc_rack& get_location(host_id id) const;
+
     // Get dc/rack location of a node identified by endpoint
     // The specified node must exist.
     const endpoint_dc_rack& get_location(const inet_address& ep) const;

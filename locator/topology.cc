@@ -10,6 +10,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/lazy.hh>
+#include <stdexcept>
 #include <utility>
 
 #include "seastar/core/shard_id.hh"
@@ -546,6 +547,20 @@ bool topology::has_node(inet_address ep) const noexcept {
 bool topology::has_endpoint(inet_address ep) const
 {
     return has_node(ep);
+}
+
+const endpoint_dc_rack& topology::get_location(host_id id) const {
+    if (auto node = find_node(id)) {
+        return node->dc_rack();
+    }
+    // We should do the following check after lookup in nodes.
+    // In tests, there may be no config for local node, so fall back to get_location()
+    // only if no mapping is found. Otherwise, get_location() will return empty location
+    // from config or random node, neither of which is correct.
+    if (id == _cfg.this_host_id) {
+        return get_location();
+    }
+    throw std::runtime_error(format("Requested location for node {} not in topology. backtrace {}", id, lazy_backtrace()));
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
