@@ -11,6 +11,7 @@
 #include <seastar/core/future.hh>
 #include <stdexcept>
 #include <string_view>
+#include <filesystem>
 #include "cql3/description.hh"
 #include "utils/class_registrator.hh"
 
@@ -41,7 +42,7 @@ future<> maintenance_socket_role_manager::start() {
 }
 
 future<> maintenance_socket_role_manager::stop() {
-    return make_ready_future<>();
+    return delete_maintenance_socket();
 }
 
 future<> maintenance_socket_role_manager::ensure_superuser_is_created() {
@@ -116,6 +117,15 @@ future<> maintenance_socket_role_manager::remove_attribute(std::string_view role
 
 future<std::vector<cql3::description>> maintenance_socket_role_manager::describe_role_grants() {
     return operation_not_supported_exception<std::vector<cql3::description>>("DESCRIBE SCHEMA WITH INTERNALS");
+}
+
+future<> maintenance_socket_role_manager::delete_maintenance_socket() {
+    std::error_code ec;
+    std::filesystem::remove("maintenance_socket", ec);
+    if (ec) {
+        return make_exception_future<>(std::runtime_error(fmt::format("Failed to delete maintenance socket: {}", ec.message())));
+    }
+    return make_ready_future<>();
 }
 
 } // namespace auth
