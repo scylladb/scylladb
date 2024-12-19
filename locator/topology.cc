@@ -555,24 +555,6 @@ bool topology::has_endpoint(inet_address ep) const
     return has_node(ep);
 }
 
-const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
-    if (auto node = find_node(ep)) {
-        return node->dc_rack();
-    }
-    // We should do the following check after lookup in nodes.
-    // In tests, there may be no config for local node, so fall back to get_location()
-    // only if no mapping is found. Otherwise, get_location() will return empty location
-    // from config or random node, neither of which is correct.
-    if (ep == _cfg.this_endpoint) {
-        return get_location();
-    }
-    // FIXME -- this shouldn't happen. After topology is stable and is
-    // correctly populated with endpoints, this should be replaced with
-    // on_internal_error()
-    tlogger.warn("Requested location for node {} not in topology. backtrace {}", ep, lazy_backtrace());
-    return endpoint_dc_rack::default_location;
-}
-
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
     if (can_sort_by_proximity()) {
         do_sort_by_proximity(address, addresses);

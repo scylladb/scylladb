@@ -92,8 +92,11 @@ public:
                 }
                 set_cell(cr, "host_id", hostid.uuid());
 
-                sstring dc = tm.get_topology().get_location(endpoint).dc;
-                set_cell(cr, "dc", dc);
+                if (tm.get_topology().has_node(hostid)) {
+                    // Not all entries in gossiper are present in the topology
+                    sstring dc = tm.get_topology().get_location(hostid).dc;
+                    set_cell(cr, "dc", dc);
+                }
 
                 if (ownership.contains(endpoint)) {
                     set_cell(cr, "owns", ownership[endpoint]);

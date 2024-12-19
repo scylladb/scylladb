@@ -310,9 +310,6 @@ public:
     const endpoint_dc_rack& get_location(host_id id) const {
         return find_node(id)->dc_rack();
     }
-    // Get dc/rack location of a node identified by endpoint
-    // The specified node must exist.
-    const endpoint_dc_rack& get_location(const inet_address& ep) const;
 
     // Get datacenter of this node
     const sstring& get_datacenter() const noexcept {
