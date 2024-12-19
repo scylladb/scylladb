@@ -113,6 +113,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "gms/gossip_address_map.hh"
+#include "utils/disk_space_monitor.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -748,6 +749,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<locator::effective_replication_map_factory> erm_factory;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
+    std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
     sharded<compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
     distributed<replica::database> db;
@@ -800,7 +802,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
         tcp_timestamps_sanity();
 
-        return seastar::async([&app, cfg, ext, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
@@ -1117,7 +1119,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             utils::directories::set data_dir_set;
             data_dir_set.add(cfg->data_file_directories());
             dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
-            utils::directories::verify_owner_and_mode_of_data_dir(std::move(data_dir_set)).get();
+            utils::directories::verify_owner_and_mode_of_data_dir(data_dir_set).get();
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
@@ -1171,6 +1173,26 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto maintenance_cql_sg_stats_key = scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get();
             scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
             auto cql_sg_stats_key = scheduling_group_key_create(cql_sg_stats_cfg).get();
+
+            supervisor::notify("starting disk space monitor");
+            auto dsm_cfg = utils::disk_space_monitor::config{
+                .sched_group = dbcfg.compaction_scheduling_group,
+                .normal_polling_interval = cfg->disk_space_monitor_normal_polling_interval_in_seconds,
+                .high_polling_interval = cfg->disk_space_monitor_high_polling_interval_in_seconds,
+                .polling_interval_threshold = cfg->disk_space_monitor_polling_interval_threshold,
+            };
+            if (data_dir_set.get_paths().empty()) {
+                throw std::runtime_error("data_dir_set must be non-empty");
+            }
+            fs::path data_dir = *data_dir_set.get_paths().begin();
+            if (data_dir_set.get_paths().size() > 1) {
+                startlog.warn("Multiple data directories aren't supported. Will monitor only {}", data_dir);
+            }
+            disk_space_monitor_shard0.emplace(stop_signal.as_local_abort_source(), data_dir, dsm_cfg);
+            disk_space_monitor_shard0->start().get();
+            auto stop_dsm = defer_verbose_shutdown("disk space monitor", [&disk_space_monitor_shard0] {
+                disk_space_monitor_shard0->stop().get();
+            });
 
             supervisor::notify("starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>

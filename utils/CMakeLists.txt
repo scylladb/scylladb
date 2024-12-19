@@ -18,6 +18,7 @@ target_sources(utils
     config_file.cc
     directories.cc
     disk-error-handler.cc
+    disk_space_monitor.cc
     dynamic_bitset.cc
     error_injection.cc
     exceptions.cc
