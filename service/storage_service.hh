@@ -327,7 +327,7 @@ private:
         return get_token_metadata_ptr()->get_topology().my_host_id();
     }
     bool is_me(inet_address addr) const noexcept {
-        return get_token_metadata_ptr()->get_topology().is_me(addr);
+        return addr == get_broadcast_address();
     }
     bool is_me(locator::host_id id) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(id);

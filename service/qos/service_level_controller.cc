@@ -894,7 +894,7 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
 void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
 
 void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
-    if (this_shard_id() == global_controller && _token_metadata.get()->get_topology().is_me(endpoint)) {
+    if (this_shard_id() == global_controller && _token_metadata.get()->get_topology().is_me(hid)) {
         _global_controller_db->dist_data_update_aborter.request_abort();
         _global_controller_db->group0_aborter.request_abort();
     }

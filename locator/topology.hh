@@ -393,10 +393,6 @@ public:
         return id == my_host_id();
     }
 
-    bool is_me(const inet_address& addr) const noexcept {
-        return addr == my_address();
-    }
-
 private:
     using random_engine_type = std::mt19937_64;
 
