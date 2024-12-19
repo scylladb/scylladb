@@ -11,7 +11,6 @@
 #include <boost/algorithm/string.hpp>
 #include <fmt/ranges.h>
 #include <seastar/core/fstream.hh>
-#include <seastar/http/short_streams.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 
