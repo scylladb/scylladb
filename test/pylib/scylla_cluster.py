@@ -33,6 +33,7 @@ import aiohttp
 import aiohttp.web
 import yaml
 import signal
+import sys
 import glob
 import errno
 import re
@@ -987,6 +988,15 @@ class ScyllaCluster:
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
+            await handle_join_failure()
+            raise
+        except:
+            # catches everything
+            workdir = '<unknown>' if server is None else server.workdir.name
+            exc_type, exc_value, _ = sys.exc_info()
+            self.logger.error("Failed to start Scylla server at host %s in %s: %s(%s)",
+                              ip_addr, workdir, exc_type.__name__, exc_value)
+            self.logger.error("Traceback: ", exc_info=sys.exc_info())
             await handle_join_failure()
             raise
 
