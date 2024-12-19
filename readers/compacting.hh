@@ -36,4 +36,4 @@ class tombstone_gc_state;
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
         max_purgeable_fn get_max_purgeable,
         const tombstone_gc_state& gc_state,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+        mutation_reader::reader_params params);
