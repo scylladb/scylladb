@@ -101,6 +101,7 @@ class config;
 struct local_cache;
 
 using system_keyspace_view_name = std::pair<sstring, sstring>;
+using system_keyspace_vbc_tasks = std::map<system_keyspace_view_name, std::map<std::pair<locator::host_id, unsigned>, dht::token_range_vector>>;
 class system_keyspace_view_build_progress;
 
 struct replay_position;
@@ -184,6 +185,7 @@ public:
     static constexpr auto TABLETS = "tablets";
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
+    static constexpr auto VIEW_BUILDING_COORDINATOR_TASKS = "view_building_coordinator_tasks";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -278,6 +280,7 @@ public:
     static schema_ptr tablets();
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
+    static schema_ptr view_building_coordinator_tasks();
 
     // auth
     static schema_ptr roles();
@@ -533,6 +536,9 @@ public:
     future<> remove_built_view(sstring ks_name, sstring view_name);
     future<std::vector<view_name>> load_built_views();
     future<std::vector<view_build_progress>> load_view_build_progress();
+
+    
+    future<system_keyspace_vbc_tasks> get_view_building_coordinator_tasks();
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
