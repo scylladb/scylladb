@@ -145,6 +145,8 @@ add_scylla_test(gossiping_property_file_snitch_test
   KIND SEASTAR)
 add_scylla_test(group0_cmd_merge_test
   KIND SEASTAR)
+add_scylla_test(group0_voter_registry_test
+  KIND SEASTAR)
 add_scylla_test(group0_test
   KIND SEASTAR)
 add_scylla_test(hash_test

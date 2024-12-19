@@ -152,6 +152,19 @@ namespace {
 }
 } // namespace
 
+const replica_state& group0_server_info_accessor::find(raft::server_id id) const {
+    const auto* it = _topology.find(id);
+    if (!it) {
+        throw std::runtime_error(::format("node {} is not a member of the cluster", id));
+    }
+
+    return it->second;
+}
+
+future<> group0_voter_client::set_voters_status(const std::unordered_set<raft::server_id>& nodes, can_vote can_vote, abort_source& as) {
+    return _group0.set_voters_status(nodes, can_vote, as);
+}
+
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
 storage_service::storage_service(abort_source& abort_source,
@@ -188,6 +201,9 @@ storage_service::storage_service(abort_source& abort_source,
         , _snitch(snitch)
         , _sl_controller(sl_controller)
         , _group0(nullptr)
+        , _server_info_accessor(topology_state_machine._topology)
+        , _voter_client(nullptr)
+        , _voter_registry(nullptr)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
         , _tablets_module(make_shared<service::task_manager_module>(tm))
@@ -1168,7 +1184,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
-                    _feature_service);
+                    _feature_service,
+                    *_voter_registry);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -2901,6 +2918,8 @@ future<> storage_service::drain_on_shutdown() {
 
 void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
+    _voter_client = std::make_unique<group0_voter_client>(group0);
+    _voter_registry = std::make_unique<group0_voter_registry>(_server_info_accessor, *_voter_client);
 }
 
 future<> storage_service::init_address_map(gms::gossip_address_map& address_map) {
@@ -4062,7 +4081,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         }
         try {
             // Make non voter during request submission for better HA
-            co_await _group0->make_nonvoters(ignored_ids, _group0_as, raft_timeout{});
+            co_await _voter_registry->remove_nodes(ignored_ids, _group0_as);
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
@@ -4145,7 +4164,7 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
                 // but before removing it group 0, group 0's availability won't be reduced.
                 if (is_group0_member && ss._group0->is_member(raft_id, true)) {
                     slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
-                    ss._group0->make_nonvoter(raft_id, ss._group0_as).get();
+                    ss._voter_registry->remove_node(raft_id, ss._group0_as).get();
                     slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
                 }
 
@@ -6804,7 +6823,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
 
         try {
             // Make replaced node and ignored nodes non voters earlier for better HA
-            co_await _group0->make_nonvoters(ignored_nodes_from_join_params(params), _group0_as, raft_timeout{});
+            co_await _voter_registry->remove_nodes(ignored_nodes_from_join_params(params), _group0_as);
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
