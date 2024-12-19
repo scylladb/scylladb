@@ -1674,6 +1674,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_return;
         }
 
+        // generate updates for any planned resize finalizations
+        if (!utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
+            guard = co_await generate_resize_finalization_updates(updates, std::move(guard));
+        }
+
         if (drain) {
             if (has_nodes_to_drain) {
                 // Prevent jumping to write_both_read_old with un-drained tablets.
