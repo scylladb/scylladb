@@ -355,12 +355,6 @@ public:
 
     /**
      * This method will sort the <tt>List</tt> by proximity to the given
-     * address.
-     */
-    void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
-
-    /**
-     * This method will sort the <tt>List</tt> by proximity to the given
      * host_id.
      */
     void sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const;
@@ -418,8 +412,7 @@ private:
      * 2. Nodes in the same RACK as the reference node
      * 3. Nodes in the same DC as the reference node
      */
-    template<typename T>
-    std::weak_ordering compare_endpoints(const T& address, const T& a1, const T& a2) const;
+    std::weak_ordering compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const;
 
     unsigned _shard;
     config _cfg;
@@ -455,7 +448,8 @@ private:
 
     friend class token_metadata_impl;
 public:
-    void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+    void test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const;
+    void test_sort_by_proximity(const locator::host_id& address, const host_id_vector_replica_set& nodes) const;
 };
 
 } // namespace locator
