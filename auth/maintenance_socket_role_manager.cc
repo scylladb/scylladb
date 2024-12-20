@@ -14,6 +14,8 @@
 #include <filesystem>
 #include "cql3/description.hh"
 #include "utils/class_registrator.hh"
+#include <seastar/core/file.hh>
+#include <seastar/core/reactor.hh>
 
 namespace auth {
 
@@ -120,12 +122,9 @@ future<std::vector<cql3::description>> maintenance_socket_role_manager::describe
 }
 
 future<> maintenance_socket_role_manager::delete_maintenance_socket() {
-    std::error_code ec;
-    std::filesystem::remove("maintenance_socket", ec);
-    if (ec) {
-        return make_exception_future<>(std::runtime_error(fmt::format("Failed to delete maintenance socket: {}", ec.message())));
-    }
-    return make_ready_future<>();
+    return seastar::remove_file("maintenance_socket").handle_exception([] (std::exception_ptr ep) {
+        return make_exception_future<>(std::runtime_error(fmt::format("Failed to delete maintenance socket: {}", ep)));
+    });
 }
 
 } // namespace auth
