@@ -2782,9 +2782,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet resize finalization path.
-    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
-
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
@@ -2895,26 +2892,6 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
-    co_return true;
-}
-
-future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
-    if (plan.finalize_resize.empty()) {
-        co_return false;
-    }
-    if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
-        co_return false;
-    }
-
-    std::vector<canonical_mutation> updates;
-
-    updates.emplace_back(
-        topology_mutation_builder(guard.write_timestamp())
-            .set_transition_state(topology::transition_state::tablet_resize_finalization)
-            .set_version(_topo_sm._topology.version + 1)
-            .build());
-
-    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
     co_return true;
 }
 
