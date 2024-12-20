@@ -643,7 +643,7 @@ public:
     future<service::topology_request_state> get_topology_request_state(utils::UUID id, bool require_entry);
     topology_requests_entry topology_request_row_to_entry(utils::UUID id, const cql3::untyped_result_set_row& row);
     future<topology_requests_entry> get_topology_request_entry(utils::UUID id, bool require_entry);
-    future<topology_requests_entries> get_topology_request_entries(db_clock::time_point end_time_limit);
+    future<topology_requests_entries> get_node_ops_request_entries(db_clock::time_point end_time_limit);
 
 public:
     future<std::optional<int8_t>> get_service_levels_version();

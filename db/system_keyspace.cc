@@ -3413,7 +3413,7 @@ future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_r
     co_return topology_request_row_to_entry(id, row);
 }
 
-future<system_keyspace::topology_requests_entries> system_keyspace::get_topology_request_entries(db_clock::time_point end_time_limit) {
+future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops_request_entries(db_clock::time_point end_time_limit) {
     // Running requests.
     auto rs_running = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE done = false AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS,

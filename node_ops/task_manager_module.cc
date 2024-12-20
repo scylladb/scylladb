@@ -56,7 +56,7 @@ static std::set<tasks::task_id> get_pending_ids(service::topology& topology) {
 
 static future<db::system_keyspace::topology_requests_entries> get_entries(db::system_keyspace& sys_ks, service::topology& topology, std::chrono::seconds ttl) {
     // Started requests.
-    auto entries = co_await sys_ks.get_topology_request_entries(db_clock::now() - ttl);
+    auto entries = co_await sys_ks.get_node_ops_request_entries(db_clock::now() - ttl);
 
     // Pending requests.
     for (auto& id : get_pending_ids(topology)) {
