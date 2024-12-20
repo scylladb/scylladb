@@ -293,7 +293,7 @@ static std::vector<locator::host_id> get_neighbors(
                     // If same host is listed twice, don't add it again later
                     neighbor_set.erase(*endpoint);
                 } else {
-                    rlogger.warn("Provided host ip {} has no corespondent host id", ip);
+                    rlogger.warn("Provided host ip {} has no corresponding host id", ip);
                 }
             }
             // Nodes which aren't neighbors for this range are ignored.
