@@ -43,7 +43,7 @@ def check_task_status(status: TaskStatus, states: list[str], type: str, scope: s
     assert not status.children_ids
     assert status.state in states
 
-async def check_and_abort_repair_task(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str):
+async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo], module_name: str):
     # Wait until user repair task is created.
     repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair")
 
@@ -57,11 +57,15 @@ async def check_and_abort_repair_task(tm: TaskManagerClient, servers: list[Serve
 
     check_task_status(status, ["created", "running"], "user_repair", "table", True)
 
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
     async def wait_for_task():
         status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
         check_task_status(status_wait, ["done"], "user_repair", "table", True)
 
     async def abort_task():
+        await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
         await tm.abort_task(servers[0].ip_addr, task.task_id)
 
     await asyncio.gather(wait_for_task(), abort_task())
@@ -81,7 +85,7 @@ async def test_tablet_repair_task(manager: ManagerClient):
         await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
         await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
 
-    await asyncio.gather(repair_task(), check_and_abort_repair_task(tm, servers, module_name))
+    await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name))
 
 async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str):
     def get_task_with_id(repair_tasks, task_id):
