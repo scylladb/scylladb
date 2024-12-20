@@ -25,7 +25,9 @@ async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_ena
     - client requests to normal nodes in the presence of zero-token nodes (2 normal nodes, RF=2, CL=2) succeed
     """
     logging.info('Trying to add a zero-token server in the gossip-based topology')
-    await manager.server_add(config={'join_ring': False, 'force_gossip_topology_changes': True},
+    await manager.server_add(config={'join_ring': False,
+                                     'force_gossip_topology_changes': True,
+                                     'enable_tablets': False},
                              expected_error='the raft-based topology is disabled')
 
     normal_cfg = {'enable_tablets': tablets_enabled}

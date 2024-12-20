@@ -27,7 +27,8 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     """
     # 4 servers, one dead
     cfg = {'enable_user_defined_functions': False,
-           'force_gossip_topology_changes': True}
+           'force_gossip_topology_changes': True,
+           'enable_tablets': False}
     servers = [await manager.server_add(config=cfg) for _ in range(4)]
 
     # Make sure that the driver has connected to all nodes, and they see each other as NORMAL
