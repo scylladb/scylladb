@@ -45,6 +45,7 @@ struct client_data {
     std::optional<bool> ssl_enabled;
     std::optional<sstring> ssl_protocol;
     std::optional<sstring> username;
+    std::optional<sstring> scheduling_group_name;
 
     sstring stage_str() const { return to_string(connection_stage); }
     sstring client_type_str() const { return to_string(ct); }

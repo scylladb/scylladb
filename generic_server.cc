@@ -38,6 +38,19 @@ connection::~connection()
     _server._connections_list.erase(iter);
 }
 
+connection::execute_under_tenant_type
+connection::no_tenant() {
+    // return a function that runs the process loop with no scheduling group games
+    return [] (connection_process_loop loop) {
+        return loop();
+    };
+}
+
+void connection::switch_tenant(execute_under_tenant_type exec) {
+    _execute_under_current_tenant = std::move(exec);
+    _tenant_switch = true;
+}
+
 future<> server::for_each_gently(noncopyable_function<void(connection&)> fn) {
     _gentle_iterators.emplace_front(*this);
     std::list<gentle_iterator>::iterator gi = _gentle_iterators.begin();
@@ -63,13 +76,26 @@ static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
     return false;
 }
 
+future<> connection::process_until_tenant_switch() {
+    _tenant_switch = false;
+    {
+        return do_until([this] {
+            return _read_buf.eof() || _tenant_switch;
+        }, [this] {
+            return process_request();
+        });
+    }
+}
+
 future<> connection::process()
 {
     return with_gate(_pending_requests_gate, [this] {
         return do_until([this] {
             return _read_buf.eof();
         }, [this] {
-            return process_request();
+            return _execute_under_current_tenant([this] {
+                return process_until_tenant_switch();
+            });
         }).then_wrapped([this] (future<> f) {
             handle_error(std::move(f));
         });

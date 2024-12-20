@@ -16,6 +16,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "db/view/view_update_generator.hh"
+#include "service/qos/service_level_controller.hh"
 #include "replica/database.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
@@ -183,7 +185,11 @@ public:
 
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
 
+    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() = 0;
+
     data_dictionary::database data_dictionary();
+
+    virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});

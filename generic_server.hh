@@ -17,6 +17,7 @@
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
 
@@ -35,6 +36,11 @@ class server;
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
+public:
+    using connection_process_loop = noncopyable_function<future<> ()>;
+    using execute_under_tenant_type = noncopyable_function<future<> (connection_process_loop)>;
+    bool _tenant_switch = false;
+    execute_under_tenant_type _execute_under_current_tenant = no_tenant();
 protected:
     server& _server;
     connected_socket _fd;
@@ -44,6 +50,8 @@ protected:
     seastar::gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
+private:
+    future<> process_until_tenant_switch();
 public:
     connection(server& server, connected_socket&& fd);
     virtual ~connection();
@@ -57,6 +65,10 @@ public:
     virtual void on_connection_close();
 
     virtual future<> shutdown();
+
+    void switch_tenant(execute_under_tenant_type execute);
+
+    static execute_under_tenant_type no_tenant();
 };
 
 // A generic TCP socket server.

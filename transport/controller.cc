@@ -351,6 +351,16 @@ future<utils::chunked_vector<client_data>> controller::get_client_data() {
     return _server ? _server->local().get_client_data() : protocol_server::get_client_data();
 }
 
+future<> controller::update_connections_scheduling_group() {
+    if (!_server) {
+        co_return;
+    }
+
+    co_await _server->invoke_on_all([] (auto& server) {
+        return server.update_connections_scheduling_group();
+    });
+}
+
 future<std::vector<connection_service_level_params>> controller::get_connections_service_level_params() {
     if (!_server) {
         co_return std::vector<connection_service_level_params>();
