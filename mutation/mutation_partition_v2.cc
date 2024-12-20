@@ -755,13 +755,6 @@ void mutation_partition_v2::for_each_row(const schema& schema, const query::clus
     }
 }
 
-// Transforms given range of printable into a range of strings where each element
-// in the original range is prefxied with given string.
-template<typename RangeOfPrintable>
-static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
-    return r | std::views::transform([&] (auto&& e) { return format("{}{}", prefix, e); });
-}
-
 auto fmt::formatter<mutation_partition_v2::printer>::format(const mutation_partition_v2::printer& p, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     const auto indent = "";
