@@ -207,7 +207,7 @@ static service_level_options::timeout_type get_duration(const cql3::untyped_resu
 static qos::service_level_options::shares_type get_shares(const cql3::untyped_result_set_row& row, std::string_view col_name) {
     auto shares_opt = row.get_opt<int32_t>(col_name);
     if (!shares_opt) {
-        return qos::service_level_controller::default_shares;
+        return qos::service_level_options::unset_marker{};
     }
     return *shares_opt;
 }

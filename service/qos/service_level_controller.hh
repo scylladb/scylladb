@@ -21,6 +21,7 @@
 #include "auth/service.hh"
 #include "cql3/description.hh"
 #include <map>
+#include <stack>
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"

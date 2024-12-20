@@ -16,6 +16,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "db/view/view_update_generator.hh"
 #include "service/qos/service_level_controller.hh"
 #include "replica/database.hh"
 #include "transport/messages/result_message_base.hh"
@@ -185,6 +186,8 @@ public:
     virtual sharded<service::storage_service>& get_storage_service() = 0;
 
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
+
+    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() = 0;
 
     data_dictionary::database data_dictionary();
 

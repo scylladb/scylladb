@@ -962,17 +962,21 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
     auto buf = in.read_raw_bytes_view(in.bytes_left());
     auto challenge = sasl_challenge->evaluate_response(buf);
     if (sasl_challenge->is_complete()) {
-        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](auth::authenticated_user user) mutable {
-            client_state.set_login(std::move(user));
-            update_scheduling_group();
-            auto f = client_state.check_user_can_login();
-            f = f.then([&client_state] {
-                return client_state.maybe_update_per_service_level_params();
-            });
-            return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
-                _authenticating = false;
-                _ready = true;
-                return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
+        return sasl_challenge->get_authenticated_user().then_wrapped([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](future<auth::authenticated_user> f) mutable {
+            bool failed = f.failed();
+            return audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), failed).then(
+                    [this, stream, challenge = std::move(challenge), &client_state, sasl_challenge, ff = std::move(f), trace_state = std::move(trace_state)] () mutable {
+                client_state.set_login(ff.get());
+                update_scheduling_group();
+                auto f = client_state.check_user_can_login();
+                f = f.then([&client_state] {
+                    return client_state.maybe_update_per_service_level_params();
+                });
+                return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
+                    _authenticating = false;
+                    _ready = true;
+                    return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
+                });
             });
         });
     }

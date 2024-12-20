@@ -2468,6 +2468,9 @@ def test_desc_auth_service_levels(cql):
         # Enterprise is limited in the number of service levels it supports
         sl_create_stmts = set(random.sample(list(sl_create_stmts), k=5))
 
+        # Enterprise is limited in the number of service levels it supports
+        sl_create_stmts = set(random.sample(list(sl_create_stmts), k=5))
+
         for stmt in sl_create_stmts:
             cql.execute(stmt)
 

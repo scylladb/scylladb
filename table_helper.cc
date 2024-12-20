@@ -175,7 +175,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             else {
                 opts["replication_factor"] = replication_factor;
             }
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), true);
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));
