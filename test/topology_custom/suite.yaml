@@ -5,18 +5,29 @@ cluster:
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
+    enable_user_defined_functions: False
+    enable_tablets: True
 run_first:
   - test_raft_recovery_stuck
   - test_raft_recovery_basic
   - test_group0_schema_versioning
   - test_tablets_migration
   - test_zero_token_nodes_topology_ops
+  - test_raft_cluster_features
+  - test_raft_ignore_nodes
+  - test_tablets
+  - test_tablets2
+skip_in_release:
+  - test_raft_cluster_features
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
   - test_old_ip_notification_repro
   - test_node_shutdown_waits_for_pending_requests
+  - test_cdc_generation_clearing
+  - test_cdc_generation_publishing
 run_in_dev:
+  - test_raft_ignore_nodes
   - test_group0_schema_versioning
   - test_different_group0_ids
   - test_replace_ignore_nodes

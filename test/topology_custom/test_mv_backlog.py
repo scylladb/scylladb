@@ -11,7 +11,7 @@ import asyncio
 import pytest
 from test.topology.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for
-from test.topology_experimental_raft.test_mv_tablets import pin_the_only_tablet
+from test.topology_custom.test_mv_tablets import pin_the_only_tablet
 from test.pylib.tablets import get_tablet_replica
 
 logger = logging.getLogger(__name__)
