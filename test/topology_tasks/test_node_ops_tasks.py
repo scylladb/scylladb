@@ -72,20 +72,14 @@ def check_regular_task_status(task: TaskStatus, expected_state: str, expected_ty
 
 async def check_bootstrap_tasks_tree(tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID] = []) -> tuple[list[ServerInfo], list[TaskID]]:
-    virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, len(servers))
-
-    # No streaming task for first node bootstrap.
-    bootstrap_with_streaming = [status.id for status in virtual_tasks if status.children_ids]
-    assert len(bootstrap_with_streaming) == len(virtual_tasks) - 1, "All but one tasks should have children"
+    # Bootstrap of the first node is omitted.
+    virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, len(servers) - 1)
 
     for virtual_task in virtual_tasks:
-        if virtual_task.id in bootstrap_with_streaming:
-            check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
+        check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
 
-            child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-            check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
-        else:
-            check_virtual_task_status(virtual_task, "done", "bootstrap", 0)
+        child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
+        check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
 
     return (servers, [vt.id for vt in virtual_tasks])
 

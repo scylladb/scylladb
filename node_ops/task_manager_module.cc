@@ -114,7 +114,7 @@ future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(
     }
 
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry(task_id.uuid(), false);
-    co_return bool(entry.id) ? empty_hint : std::nullopt;
+    co_return bool(entry.id) && entry.request_type ? empty_hint : std::nullopt;
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint) const {
