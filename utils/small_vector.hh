@@ -251,6 +251,10 @@ public:
         }
     }
 
+    static constexpr size_t internal_capacity() noexcept {
+        return N;
+    }
+
     size_t external_memory_usage() const {
         if (uses_internal_storage()) {
             return 0;
