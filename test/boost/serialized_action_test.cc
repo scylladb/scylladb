@@ -7,6 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/semaphore.hh>
 #include "utils/serialized_action.hh"
@@ -182,4 +183,57 @@ SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
     bar1.advance_and_await().get();
     bar2.advance_and_await().get();
     completion_timer.cancel();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_phased_barrier_stop) {
+    utils::phased_barrier bar;
+    semaphore sem(0);
+    auto task = [&] () -> future<> {
+        auto op = bar.start();
+        co_await get_units(sem, 1);
+    };
+    auto task_fut = task();
+    BOOST_REQUIRE(!task_fut.available());
+
+    auto close_fut = bar.close();
+    BOOST_REQUIRE(!close_fut.available());
+    BOOST_REQUIRE(bar.is_closed());
+
+    BOOST_REQUIRE_THROW(task().get(), seastar::gate_closed_exception);
+
+    sem.signal();
+    BOOST_REQUIRE_NO_THROW(task_fut.get());
+    BOOST_REQUIRE_NO_THROW(close_fut.get());
+
+    BOOST_REQUIRE(bar.is_closed());
+    BOOST_REQUIRE_THROW(task().get(), seastar::gate_closed_exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_phased_barrier_stop_while_awaiting) {
+    utils::phased_barrier bar;
+    semaphore sem(0);
+    auto task = [&] () -> future<> {
+        auto op = bar.start();
+        co_await get_units(sem, 1);
+    };
+    auto task_fut = task();
+    BOOST_REQUIRE(!task_fut.available());
+
+    auto wait_fut = bar.advance_and_await();
+    BOOST_REQUIRE(!wait_fut.available());
+    BOOST_REQUIRE(!bar.is_closed());
+
+    auto close_fut = bar.close();
+    BOOST_REQUIRE(!close_fut.available());
+    BOOST_REQUIRE(bar.is_closed());
+
+    BOOST_REQUIRE_THROW(task().get(), seastar::gate_closed_exception);
+
+    sem.signal();
+    BOOST_REQUIRE_NO_THROW(task_fut.get());
+    BOOST_REQUIRE_NO_THROW(wait_fut.get());
+    BOOST_REQUIRE_NO_THROW(close_fut.get());
+
+    BOOST_REQUIRE(bar.is_closed());
+    BOOST_REQUIRE_THROW(task().get(), seastar::gate_closed_exception);
 }

@@ -58,6 +58,14 @@ public:
         return { _gate };
     }
 
+    future<> close() noexcept {
+        return _gate->close();
+    }
+
+    bool is_closed() const noexcept {
+        return _gate->is_closed();
+    }
+
     // Starts a new phase and waits for all operations started in any of the earlier phases.
     // It is fine to start multiple awaits in parallel.
     // Cannot fail.
