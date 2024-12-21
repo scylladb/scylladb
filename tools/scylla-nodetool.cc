@@ -74,7 +74,7 @@ struct file_size_printer {
     bool human_readable;
     bool use_correct_units;
     // Cassandra nodetool uses base_2 and base_10 units interchangeably, some
-    // commands use this, some that. Let's accomodate this for now, and maybe
+    // commands use this, some that. Let's accommodate this for now, and maybe
     // fix this mess at one point in the future, after the rewrite is done.
     file_size_printer(uint64_t value, bool human_readable = true, bool use_correct_units = false)
         : value{value}
