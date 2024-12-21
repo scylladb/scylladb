@@ -99,6 +99,8 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
  */
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
+    static inline const int32_t default_shares = 1000;
+
     class service_level_distributed_data_accessor {
     public:
         virtual future<qos::service_levels_info> get_service_levels(qos::query_context ctx = qos::query_context::unspecified) const = 0;

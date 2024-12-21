@@ -7,6 +7,7 @@
  */
 
 #include "qos_common.hh"
+#include "service/qos/service_level_controller.hh"
 #include "utils/overloaded_functor.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/result_set.hh"
@@ -187,6 +188,14 @@ static service_level_options::timeout_type get_duration(const cql3::untyped_resu
     return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(dur_opt->nanoseconds));
 };
 
+static qos::service_level_options::shares_type get_shares(const cql3::untyped_result_set_row& row, std::string_view col_name) {
+    auto shares_opt = row.get_opt<int32_t>(col_name);
+    if (!shares_opt) {
+        return qos::service_level_controller::default_shares;
+    }
+    return *shares_opt;
+}
+
 static sstring get_columns(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name) {
     auto schema = qp.db().find_schema(ks_name, cf_name);
     return boost::algorithm::join(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {
@@ -206,6 +215,7 @@ future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, s
             qos::service_level_options slo{
                 .timeout = get_duration(row, "timeout"),
                 .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+                .shares = get_shares(row, "shares"),
             };
             service_levels.emplace(service_level_name, slo);
         } catch (...) {
@@ -228,6 +238,7 @@ future<service_levels_info> get_service_level(cql3::query_processor& qp, std::st
             qos::service_level_options slo{
                 .timeout = get_duration(row, "timeout"),
                 .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+                .shares = get_shares(row, "shares"),
             };
             service_levels.emplace(service_level_name, slo);
         } catch (...) {

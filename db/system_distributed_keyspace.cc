@@ -803,6 +803,19 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
             },
         }, tv);
     };
+    auto to_data_value_g = [&] <typename T> (const std::variant<qos::service_level_options::unset_marker, qos::service_level_options::delete_marker, T>& v) {
+        return std::visit(overloaded_functor {
+            [&] (const qos::service_level_options::unset_marker&) {
+                return data_value::make_null(data_type_for<T>());
+            },
+            [&] (const qos::service_level_options::delete_marker&) {
+                return data_value::make_null(data_type_for<T>());
+            },
+            [&] (const T& v) {
+                return data_value(v);
+            },
+        }, v);
+    };
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
             ? data_value::make_null(utf8_type)
             : data_value(qos::service_level_options::to_string(slo.workload));
@@ -812,6 +825,11 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
                 {to_data_value(slo.timeout),
                     workload,
                     service_level_name},
+                cql3::query_processor::cache_internal::no);
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET shares = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
+                db::consistency_level::ONE,
+                internal_distributed_query_state(),
+                {to_data_value_g(slo.shares), service_level_name},
                 cql3::query_processor::cache_internal::no);
 }
 
