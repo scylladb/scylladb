@@ -6,7 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -14,6 +15,8 @@
 
 #include "db/schema_tables.hh"
 #include "transport/messages/result_message.hh"
+
+BOOST_AUTO_TEST_SUITE(column_mapping_test)
 
 SEASTAR_TEST_CASE(test_column_mapping_persistence) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -84,3 +87,5 @@ SEASTAR_TEST_CASE(test_column_mapping_ttl_check) {
         BOOST_REQUIRE(ttl_val > 0);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

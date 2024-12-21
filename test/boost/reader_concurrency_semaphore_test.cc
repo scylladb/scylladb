@@ -25,13 +25,16 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <boost/test/unit_test.hpp>
 #include "readers/empty_v2.hh"
 #include "readers/from_mutations_v2.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(reader_concurrency_semaphore_test)
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;
@@ -683,6 +686,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
 }
 
 
+} // reader_concurrency_semaphore_test namespace
+
 static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& semaphore, bool expected_can_admit, const char* description,
         seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
@@ -710,6 +715,8 @@ static void require_can_admit(schema_ptr schema, reader_concurrency_semaphore& s
                 expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
     }
 };
+
+namespace reader_concurrency_semaphore_test {
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     simple_schema s;
@@ -1209,6 +1216,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     permit3_fut.get();
 }
 
+} // namespace reader_concurrency_semaphore_test
+
 namespace {
 
 class allocating_reader {
@@ -1344,6 +1353,8 @@ public:
 };
 
 } //anonymous namespace
+
+namespace reader_concurrency_semaphore_test {
 
 // Check that the memory consumption limiting mechanism doesn't leak any
 // resources or cause any internal consistencies in the semaphore.
@@ -2139,3 +2150,5 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
     }
     require_can_admit(true, "!need_cpu");
 }
+
+BOOST_AUTO_TEST_SUITE_END()

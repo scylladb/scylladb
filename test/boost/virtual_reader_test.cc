@@ -13,7 +13,8 @@
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
@@ -22,6 +23,8 @@
 #include "db/system_keyspace.hh"
 #include "db/view/view_builder.hh"
 #include <seastar/core/future-util.hh>
+
+BOOST_AUTO_TEST_SUITE(virtual_reader_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -212,3 +215,5 @@ SEASTAR_TEST_CASE(test_query_view_built_progress_virtual_table) {
         assert_that(rs).is_rows().with_size(0);
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

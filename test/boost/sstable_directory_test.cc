@@ -12,7 +12,9 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/file.hh>
 #include "sstables/generation_type.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_directory.hh"
 #include "replica/distributed_loader.hh"
@@ -162,6 +164,8 @@ static void with_sstable_directory(sharded<replica::database>& db,
     auto stop_sstdir = defer([&sstdir] { sstdir.stop().get(); });
     func(sstdir);
 }
+
+BOOST_AUTO_TEST_SUITE(sstable_directory_test)
 
 SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
     return sstables::test_env::do_with_async([] (test_env& env) {
@@ -838,3 +842,5 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
       }
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -7,12 +7,16 @@
  */
 
 #include <fmt/ranges.h>
-#include "test/lib/scylla_test_case.hh"
+
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+
+BOOST_AUTO_TEST_SUITE(commitlog_cleanup_test)
 
 // Test that `canonical_token_range(tr)` contains the same tokens as `tr`.
 SEASTAR_TEST_CASE(test_canonical_token_range) {
@@ -219,3 +223,5 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
         BOOST_REQUIRE_EQUAL(get_num_records(), 1);
     }, cfg);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

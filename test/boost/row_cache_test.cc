@@ -13,7 +13,8 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/closeable.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -125,6 +126,8 @@ void verify_has(row_cache& cache, const mutation& m) {
     auto reader = cache.make_reader(cache.schema(), semaphore.make_permit(), range);
     assert_that(std::move(reader)).next_mutation().is_equal_to(m);
 }
+
+BOOST_AUTO_TEST_SUITE(row_cache_test)
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
     return seastar::async([] {
@@ -2133,6 +2136,8 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
     });
 }
 
+} // row_cache_test namespace
+
 static void consume_all(mutation_reader& rd) {
     while (auto mfopt = rd().get()) {}
 }
@@ -2159,6 +2164,8 @@ static void apply(row_cache& cache, memtable_snapshot_source& underlying, replic
     mt1->apply(m, semaphore.make_permit()).get();
     cache.update(row_cache::external_updater([&] { underlying.apply(std::move(mt1)); }), m).get();
 }
+
+namespace row_cache_test {
 
 SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
     return seastar::async([] {
@@ -4892,3 +4899,5 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     auto close_rd = deferred_close(rd);
     read_mutation_from_mutation_reader(rd).get();
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -16,7 +16,8 @@
 #include "utils/sequenced_set.hh"
 #include "utils/to_string.hh"
 #include "locator/network_topology_strategy.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "utils/log.hh"
@@ -422,6 +423,7 @@ void heavy_origin_test() {
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
 
+BOOST_AUTO_TEST_SUITE(network_topology_strategy_test)
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_simple) {
     return simple_test();
@@ -940,6 +942,8 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
     });
 }
 
+} // namespace network_topology_strategy_test
+
 namespace locator {
 
 void topology::test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
@@ -1002,6 +1006,8 @@ void topology::test_sort_by_proximity(const locator::host_id& address, const hos
 }
 
 } // namespace locator
+
+namespace network_topology_strategy_test {
 
 SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     locator::token_metadata::config tm_cfg;
@@ -1210,3 +1216,5 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack_v2);
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack_v2);
 }
+
+BOOST_AUTO_TEST_SUITE_END()

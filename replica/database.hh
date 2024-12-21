@@ -141,7 +141,7 @@ class mutation_reordered_with_truncate_exception : public std::exception {};
 
 class column_family_test;
 class table_for_tests;
-class database_test;
+class database_test_wrapper;
 using sstable_list = sstables::sstable_list;
 
 class sigquit_handler;
@@ -1384,7 +1384,7 @@ class db_user_types_storage;
 //   use table::shard_for_reads()/table::shard_for_writes() for data
 
 class database : public peering_sharded_service<database> {
-    friend class ::database_test;
+    friend class ::database_test_wrapper;
 public:
     enum class table_kind {
         system,

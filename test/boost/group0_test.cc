@@ -6,7 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -31,6 +32,8 @@ static future<utils::chunked_vector<std::vector<managed_bytes_opt>>> fetch_rows(
 static future<size_t> get_history_size(cql_test_env& e) {
     co_return (co_await fetch_rows(e, "select * from system.group0_history")).size();
 }
+
+BOOST_AUTO_TEST_SUITE(group0_test)
 
 SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
@@ -341,3 +344,5 @@ SEASTAR_TEST_CASE(test_group0_batch) {
         co_await std::move(mc1).commit(rclient, as, ::service::raft_timeout{});
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

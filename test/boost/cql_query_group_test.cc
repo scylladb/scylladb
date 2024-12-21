@@ -14,13 +14,16 @@
 
 #include <seastar/net/inet_address.hh>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include "test/lib/exception_utils.hh"
+
+BOOST_AUTO_TEST_SUITE(cql_query_group_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -233,3 +236,5 @@ SEASTAR_TEST_CASE(test_group_by_null_clustering) {
         return make_ready_future<>();
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

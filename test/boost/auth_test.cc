@@ -21,7 +21,9 @@
 #include "cql3/CqlParser.hpp"
 #include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "test/lib/scylla_test_case.hh"
+
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/exception_utils.hh"
@@ -33,6 +35,8 @@
 #include "auth/authenticated_user.hh"
 
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(auth_test)
 
 cql_test_config auth_on(bool with_authorizer = true) {
     cql_test_config cfg;
@@ -407,3 +411,5 @@ SEASTAR_TEST_CASE(test_try_describe_schema_with_internals_and_passwords_as_anony
                 exception_predicate::message_equals("DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
     }, auth_on(true));
 }
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -10,11 +10,14 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/map.hpp>
 
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
+
+BOOST_AUTO_TEST_SUITE(view_schema_ckey_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -491,3 +494,5 @@ SEASTAR_TEST_CASE(test_no_clustering_key_2) {
         });
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

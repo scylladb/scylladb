@@ -7,10 +7,13 @@
  */
 
 #include <fmt/ranges.h>
+#undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "db/config.hh"
+
+BOOST_AUTO_TEST_SUITE(cache_algorithm_test)
 
 // These tests are slow, and tuned to a particular amount of memory
 // (and --memory is ignored in debug mode).
@@ -217,3 +220,4 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
 }
 
 #endif
+BOOST_AUTO_TEST_SUITE_END()

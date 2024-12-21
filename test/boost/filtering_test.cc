@@ -15,7 +15,8 @@
 #include <seastar/net/inet_address.hh>
 
 #include "test/lib/eventually.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 
@@ -25,6 +26,8 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+
+BOOST_AUTO_TEST_SUITE(filtering_test)
 
 using namespace std::literals::chrono_literals;
 
@@ -1152,3 +1155,5 @@ SEASTAR_TEST_CASE(test_filtering) {
 
     });
 }
+
+BOOST_AUTO_TEST_SUITE_END()

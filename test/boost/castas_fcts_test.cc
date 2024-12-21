@@ -14,13 +14,16 @@
 
 #include "utils/big_decimal.hh"
 #include "exceptions/exceptions.hh"
-#include "test/lib/scylla_test_case.hh"
+#undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/exception_utils.hh"
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
+
+BOOST_AUTO_TEST_SUITE(castas_fcts_test)
 
 namespace {
 
@@ -615,3 +618,5 @@ SEASTAR_TEST_CASE(test_identity_casts) {
 }
 
 // FIXME: Add test with user-defined functions after they are available.
+
+BOOST_AUTO_TEST_SUITE_END()
