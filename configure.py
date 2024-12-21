@@ -643,6 +643,7 @@ perf_tests = set([
     'test/perf/perf_idl',
     'test/perf/perf_vint',
     'test/perf/perf_big_decimal',
+    'test/perf/perf_sort_by_proximity',
 ])
 
 raft_tests = set([
