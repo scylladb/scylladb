@@ -62,6 +62,10 @@ public:
     // It is fine to start multiple awaits in parallel.
     // Cannot fail.
     future<> advance_and_await() noexcept {
+        if (!operations_in_progress()) {
+            ++_phase;
+            return make_ready_future();
+        }
         auto new_gate = [] {
             seastar::memory::scoped_critical_alloc_section _;
             return make_lw_shared<gate>();
