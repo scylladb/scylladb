@@ -17,6 +17,7 @@
 #include <string_view>
 #include <variant>
 #include <seastar/core/lowres_clock.hh>
+#include <optional>
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -62,6 +63,11 @@ struct service_level_options {
     timeout_type timeout = unset_marker{};
     workload_type workload = workload_type::unspecified;
 
+    using shares_type = std::variant<unset_marker, delete_marker, int32_t>;
+    shares_type shares = unset_marker{};
+
+    std::optional<sstring> shares_name; // service level name, if shares is set
+
     service_level_options replace_defaults(const service_level_options& other) const;
     // Merges the values of two service level options. The semantics depends
     // on the type of the parameter - e.g. for timeouts, a min value is preferred.
@@ -75,6 +81,7 @@ struct service_level_options {
     struct slo_effective_names {
         sstring timeout;
         sstring workload;
+        sstring shares;
 
         bool operator==(const slo_effective_names& other) const = default;
         bool operator!=(const slo_effective_names& other) const = default;

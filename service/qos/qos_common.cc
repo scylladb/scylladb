@@ -45,6 +45,19 @@ service_level_options service_level_options::replace_defaults(const service_leve
         // no-op
         break;
     }
+    std::visit(overloaded_functor {
+        [&] (const unset_marker& um) {
+            // reset the value to the default one
+            ret.shares = default_values.shares;
+        },
+        [&] (const delete_marker& dm) {
+            // remove the value
+            ret.shares = unset_marker{};
+        },
+        [&] (const int32_t&) {
+            // leave the value as is
+        },
+    }, ret.shares);
     return ret;
 }
 
@@ -52,6 +65,11 @@ service_level_options service_level_options::merge_with(const service_level_opti
     auto maybe_update_timeout_name = [] (service_level_options& slo, const service_level_options& other) {
         if (slo.effective_names && other.effective_names) {
             slo.effective_names->timeout = other.effective_names->timeout;
+        }
+    };
+    auto maybe_update_shares_name = [] (service_level_options& slo, const service_level_options& other) {
+        if (slo.effective_names && other.effective_names) {
+            slo.effective_names->shares = other.effective_names->shares;
         }
     };
     auto maybe_update_workload_name = [] (service_level_options& slo, const service_level_options& other) {
@@ -93,6 +111,28 @@ service_level_options service_level_options::merge_with(const service_level_opti
         maybe_update_workload_name(ret, other);
     }
 
+    std::visit(overloaded_functor {
+        [&] (const unset_marker& um) {
+            ret.shares = other.shares;
+            maybe_update_shares_name(ret, other);
+        },
+        [&] (const delete_marker& dm) {
+            ret.shares = other.shares;
+            maybe_update_shares_name(ret, other);
+        },
+        [&] (const int32_t& s) {
+            if (auto* other_shares = std::get_if<int32_t>(&other.shares)) {
+                auto prev_shares = ret.shares;
+                ret.shares = std::min(s, *other_shares);
+
+                if (prev_shares != ret.shares) {
+                    ret.shares_name = other.shares_name;
+                    maybe_update_shares_name(ret, other);
+                }
+            }
+        },
+    }, ret.shares);
+
     return ret;
 }
 
@@ -124,7 +164,8 @@ std::optional<service_level_options::workload_type> service_level_options::parse
 void service_level_options::init_effective_names(std::string_view service_level_name) {
     effective_names = service_level_options::slo_effective_names {
         .timeout = sstring(service_level_name),
-        .workload = sstring(service_level_name)
+        .workload = sstring(service_level_name),
+        .shares = sstring(service_level_name),
     };
 }
 
