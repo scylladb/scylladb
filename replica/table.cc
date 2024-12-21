@@ -1684,7 +1684,11 @@ table::stop() {
     // Allow `compaction_group::stop` to stop ongoing compactions
     // while they may still hold the table _async_gate
     auto gate_closed_fut = _async_gate.close();
-    co_await await_pending_ops();
+    co_await when_all(
+        _pending_reads_phaser.close(),
+        _pending_writes_phaser.close(),
+        _pending_streams_phaser.close(),
+        _pending_flushes_phaser.close());
     co_await _sg_manager->stop_storage_groups();
     co_await _sstable_deletion_gate.close();
     co_await std::move(gate_closed_fut);
