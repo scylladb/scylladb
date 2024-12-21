@@ -456,9 +456,16 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
     tracing::trace(trace_state, "{}", op);
-    rjson::value json_request = co_await _json_parser.parse(std::move(content));
-    co_return co_await callback_it->second(_executor, client_state, trace_state,
-            make_service_permit(std::move(units)), std::move(json_request), std::move(req));
+
+    auto user = client_state.user();
+    auto f = [this, content = std::move(content), &callback = callback_it->second,
+            client_state = std::move(client_state), trace_state = std::move(trace_state),
+            units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
+                rjson::value json_request = co_await _json_parser.parse(std::move(content));
+                co_return co_await callback(_executor, client_state, trace_state,
+                    make_service_permit(std::move(units)), std::move(json_request), std::move(req));
+    };
+    co_return co_await _sl_controller.with_user_service_level(user, std::ref(f));
 }
 
 void server::set_routes(routes& r) {

@@ -159,6 +159,37 @@ If you don't know the name of the table, you can try a forbidden operation
 and the AccessDeniedException error will contain the name of the table
 that was lacking permissions.
 
+## Workload Isolation
+
+In DynamoDB read/write capacity of each table can be defined either to a fixed
+value (provisioned mode) or to be adaptive (on-demand). On top of that requests
+are also subject to per table and per account quotas.
+
+Due to the nature of Alternator deployment the whole cluster is available to serve
+user requests and underlying hardware can be utilized to its full capacity. When
+there is a need to allow more resources to given workload on the expense of some competing
+one we offer feature called **Workload Prioritization**.
+
+To use this feature define service level with a fixed amount of shares
+(higher value means proportionally more capacity) and attach it to a role
+which then will be used to authorize requests. This can be currently done
+only via CQL API, here is an example on how to do that:
+```cql
+CREATE ROLE alice WITH PASSWORD = 'abcd' AND LOGIN = true;
+CREATE ROLE bob WITH PASSWORD = 'abcd' AND LOGIN = true;
+
+CREATE SERVICE_LEVEL IF NOT EXISTS olap WITH SHARES = 100;
+CREATE SERVICE_LEVEL IF NOT EXISTS oltp WITH SHARES = 1000;
+
+ATTACH SERVICE_LEVEL olap TO alice;
+ATTACH SERVICE_LEVEL oltp TO bob;
+```
+Note that `alternator_enforce_authorization` has to be enabled in Scylla configuration.
+
+See [Authorization](##Authorization) section to learn more about roles and authorization.
+See <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>
+to read about **Workload Prioritization** in detail.
+
 ## Metrics
 
 Scylla has an advanced and extensive monitoring framework for inspecting
