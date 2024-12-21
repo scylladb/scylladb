@@ -6931,7 +6931,7 @@ future<> storage_proxy::abort_view_writes() {
 
 future<>
 storage_proxy::stop() {
-    return make_ready_future<>();
+    return await_pending_writes();
 }
 
 locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
