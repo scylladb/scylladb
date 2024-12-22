@@ -98,6 +98,7 @@ static mutation_partition get_partition(reader_permit permit, replica::memtable&
 future<>
 with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::sstables_manager& sm, noncopyable_function<future<> (replica::column_family&)> func) {
     std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 3 /* 8 CGs */ };
+    abort_source abort;
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
         auto tracker = make_lw_shared<cache_tracker>();
         auto dir = tmpdir();
@@ -106,7 +107,7 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
         auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto s_opts = make_lw_shared<replica::storage_options>(data_dictionary::make_local_options(dir.path()));
-        auto cf = make_lw_shared<replica::column_family>(s, cfg, s_opts, *cm, sm, *cl_stats, *tracker, nullptr);
+        auto cf = make_lw_shared<replica::column_family>(s, cfg, abort, s_opts, *cm, sm, *cl_stats, *tracker, nullptr);
         cf->mark_ready_for_writes(nullptr);
         co_await func(*cf);
         co_await cf->stop();

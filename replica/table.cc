@@ -2488,7 +2488,7 @@ void storage_group::clear_sstables() {
     }
 }
 
-table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
+table::table(schema_ptr schema, config config, abort_source& abort, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
@@ -2499,6 +2499,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
                         )
+    , _abort_source(abort)
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sg_manager(make_storage_group_manager())
