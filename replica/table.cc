@@ -356,7 +356,7 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     SCYLLA_ASSERT(m.schema() == _counter_cell_locks->schema());
-    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
+    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout, _abort_source);
 }
 
 void table::for_each_active_memtable(noncopyable_function<void(memtable&)> action) {
