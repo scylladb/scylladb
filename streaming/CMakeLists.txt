@@ -14,6 +14,7 @@ target_sources(streaming
     stream_session_state.cc
     stream_summary.cc
     stream_task.cc
+    stream_blob.cc
     stream_transfer_task.cc)
 target_include_directories(streaming
   PUBLIC

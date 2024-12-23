@@ -159,6 +159,7 @@ public:
 
     gms::feature workload_prioritization { *this, "WORKLOAD_PRIORITIZATION"sv };
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
+    gms::feature file_stream { *this, "FILE_STREAM"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
