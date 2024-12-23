@@ -336,11 +336,13 @@ future<size_t> network_topology_strategy::calculate_min_tablet_count(schema_ptr 
     if (tablet_options.expected_data_size_in_gb) {
         tablet_count = std::max<size_t>(tablet_count, (tablet_options.expected_data_size_in_gb.value() << 30) / target_tablet_size);
     }
-    if (tablet_options.min_per_shard_tablet_count) {
-        tablet_count = std::max<size_t>(tablet_count, calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor, tablet_options.min_per_shard_tablet_count.value()));
-    }
-    if (tablet_count == 0) {
-        tablet_count = co_await calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale.value_or(1);
+    auto min_per_shard_tablet_count = tablet_options.min_per_shard_tablet_count.value_or(
+            // If min_tablet_count is set, initial_scale should not be effective for
+            // compatibility with the deprecated "initial" tablet count.
+            (get_initial_tablets() || tablet_options.min_tablet_count) ? 0 : initial_scale.value_or(1));
+    if (min_per_shard_tablet_count) {
+        tablet_count = std::max<size_t>(tablet_count, co_await calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor,
+                                                              min_per_shard_tablet_count));
     }
     co_return tablet_count;
 }
