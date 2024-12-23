@@ -542,6 +542,7 @@ class PythonTestSuite(TestSuite):
             default_config_options = \
                     {"authenticator": "PasswordAuthenticator",
                      "authorizer": "CassandraAuthorizer"}
+            default_config_options["tablets_initial_scale_factor"] = 4 if self.mode == "release" else 2
             config_options = default_config_options | \
                              self.cfg.get("extra_scylla_config_options", {}) | \
                              create_cfg.config_from_test
