@@ -1180,8 +1180,16 @@ def _simple_table_with_keys(cql, keyspace: str, keys: Iterable[int]) -> tuple[st
     return table, schema
 
 
+<<<<<<< HEAD:test/cql-pytest/test_tools.py
 def test_scylla_sstable_shard_of(cql, test_keyspace, scylla_path, scylla_data_dir) -> None:
     # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
+||||||| parent of c268cf2e33 (Merge 'test: rename "cql-pytest" to "cqlpy"' from Nadav Har'El):test/cql-pytest/test_tools.py
+def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, scylla_data_dir) -> None:
+    # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
+=======
+def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, scylla_data_dir) -> None:
+    # cqlpy/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
+>>>>>>> c268cf2e33 (Merge 'test: rename "cql-pytest" to "cqlpy"' from Nadav Har'El):test/cqlpy/test_tools.py
     # need to be consistent with it to get the correct sstable-shard mapping
     scylla_option_smp = 2
     shards = scylla_option_smp
