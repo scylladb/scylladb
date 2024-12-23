@@ -876,7 +876,7 @@ def testMultipleOperationOnSetWithinTheSameQuery(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET s = s - ? , s = s + ?  WHERE pk = ?", {3}, {3, 4}, 1)
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE pk = 1") , [1, {0, 1, 2, 4}])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice and subscript assignment not yet supported. Issue #22075")
 def testMapOperation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, l text, m map<text, text>, fm frozen<map<text, text>>, sm map<text, text> STATIC, fsm frozen<map<text, text>> STATIC, o int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "INSERT INTO %s(k, c, l, m, fm, sm, fsm, o) VALUES (0, 0, 'foobar', ?, ?, ?, ?, 42)",
@@ -1028,7 +1028,7 @@ def testMapOperation(cql, test_keyspace):
                    [0, "foobar", {"1": "value1", "22": "value22"}, 42],
                    [0, "foobar", {"1": "value1_2"}, 42])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice and subscript assignment not yet supported. Issue #22075")
 def testMapOperationWithIntKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, l text, m map<int, text>, fm frozen<map<int, text>>, sm map<int, text> STATIC, fsm frozen<map<int, text>> STATIC, o int, PRIMARY KEY (k, c))") as table:
         # used type "int" as map key intentionally since CQL parsing relies on "BigInteger"
@@ -1133,7 +1133,7 @@ def testMapOperationWithIntKey(cql, test_keyspace):
                    [0, "foobar", {1: "value1", 22: "value22"}, 42],
                    [0, "foobar", {1: "value1_2"}, 42])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testMapOperationOnPartKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k frozen<map<text, text>> PRIMARY KEY, l text, o int)") as table:
         execute(cql, table, "INSERT INTO %s(k, l, o) VALUES (?, 'foobar', 42)", {"1": "value1", "22": "value22", "333": "value333"})
@@ -1168,7 +1168,7 @@ def testMapOperationOnPartKey(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT l, k, o FROM %s WHERE k = ?", {"1": "value1", "22": "value22", "333": "value333"}),
                    ["foobar", {"1": "value1", "22": "value22", "333": "value333"}, 42])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testMapOperationOnClustKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c frozen<map<text, text>>, l text, o int, PRIMARY KEY (k,c))") as table:
         execute(cql, table, "INSERT INTO %s(k, c, l, o) VALUES (0, ?, 'foobar', 42)", {"1": "value1", "22": "value22", "333": "value333"})
@@ -1203,7 +1203,7 @@ def testMapOperationOnClustKey(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT k, l, c, o FROM %s WHERE k = 0 AND c = ?", {"1": "value1", "22": "value22", "333": "value333"}),
                    [0, "foobar", {"1": "value1", "22": "value22", "333": "value333"}, 42])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a set slice not yet supported. Issue #22075")
 def testSetOperation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, l text, s set<text>, fs frozen<set<text>>, ss set<text> STATIC, fss frozen<set<text>> STATIC, o int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "INSERT INTO %s(k, c, l, s, fs, ss, fss, o) VALUES (0, 0, 'foobar', ?, ?, ?, ?, 42)",
@@ -1273,7 +1273,7 @@ def testSetOperation(cql, test_keyspace):
                    [0, "foobar", {"1", "22", "22_2", "333"}, 42],
                    [0, "foobar", {"22", "333"}, 42])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testCollectionSliceOnMV(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, l text, m map<text, text>, o int, PRIMARY KEY (k, c))") as table:
         assert_invalid_message(cql, table, "Can only select columns by name when defining a materialized view (got m['abc'])",
@@ -1281,18 +1281,18 @@ def testCollectionSliceOnMV(cql, test_keyspace):
         assert_invalid_message(cql, table, "Can only select columns by name when defining a materialized view (got m['abc'..'def'])",
                              "CREATE MATERIALIZED VIEW " + test_keyspace + ".view1 AS SELECT m['abc'..'def'] FROM %s WHERE k IS NOT NULL AND c IS NOT NULL AND m IS NOT NULL PRIMARY KEY (c, k)");
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
-def testElementAccessOnList(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, l list<int>)") as table:
-        execute(cql, table, "INSERT INTO %s (pk, l) VALUES (1, [1, 2, 3])");
+# Scylla supports element access on list.
+#    def testElementAccessOnList(cql, test_keyspace):
+#        with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, l list<int>)") as table:
+#            execute(cql, table, "INSERT INTO %s (pk, l) VALUES (1, [1, 2, 3])");
+#
+#            assert_invalid_message(cql, table, "Element selection is only allowed on sets and maps, but l is a list",
+#                                 "SELECT pk, l[0] FROM %s");
+#
+#            assert_invalid_message(cql, table, "Slice selection is only allowed on sets and maps, but l is a list",
+#                    "SELECT pk, l[1..3] FROM %s");
 
-        assert_invalid_message(cql, table, "Element selection is only allowed on sets and maps, but l is a list",
-                             "SELECT pk, l[0] FROM %s");
-
-        assert_invalid_message(cql, table, "Slice selection is only allowed on sets and maps, but l is a list",
-                "SELECT pk, l[1..3] FROM %s");
-
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testCollectionOperationResultSetMetadata(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<text, text>, fm frozen<map<text, text>>, s set<text>, fs frozen<set<text>>)") as table:
         execute(cql, table, "INSERT INTO %s (k, m, fm, s, fs) VALUES (?, ?, ?, ?, ?)",
@@ -1350,7 +1350,7 @@ def testCollectionOperationResultSetMetadata(cql, test_keyspace):
         }
         """
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testFrozenCollectionNestedAccess(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<text, frozen<map<text, set<int>>>>)") as table:
         execute(cql, table, "INSERT INTO %s(k, m) VALUES (0, ?)", {"1": {"a": {1, 2, 4}, "b": {3}}, "2": {"a": {2, 4}}})
@@ -1368,7 +1368,7 @@ def testFrozenCollectionNestedAccess(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT m[?][?][?] FROM %s WHERE k = 0", "1", "a", 2), [2])
         assert_rows(execute(cql, table, "SELECT m[?][?][?..?] FROM %s WHERE k = 0", "1", "a", 2, 3), [{2}])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testUDTAndCollectionNestedAccess(cql, test_keyspace):
     sm_tuple = collections.namedtuple('sm_tuple', ['s', 'm'])
     with create_type(cql, test_keyspace, "(s set<int>, m map<text, text>)") as type_name:
@@ -1406,7 +1406,7 @@ def testUDTAndCollectionNestedAccess(cql, test_keyspace):
                     assert_rows(execute(cql, table, "SELECT v.m[..?] FROM %s WHERE k = 0", "b"), [{"a": "v1"}])
                     assert_rows(execute(cql, table, "SELECT v.m[?] FROM %s WHERE k = 0", "d"), ["v2"])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testMapOverlappingSlices(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<int,int>)") as table:
         execute(cql, table, "INSERT INTO %s(k, m) VALUES (?, ?)", 0, {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5})
@@ -1431,7 +1431,7 @@ def testMapOverlappingSlices(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT m[1..3], m[2] FROM %s WHERE k=?", 0),
                    [{1: 1, 2: 2, 3: 3}, 2])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testMapOverlappingSlicesWithDoubles(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<double, double>)") as table:
         execute(cql, table, "INSERT INTO %s(k, m) VALUES (?, ?)", 0, {0.0: 0.0, 1.1: 1.1, 2.2: 2.2, 3.0: 3.0, 4.4: 4.4, 5.5: 5.5})
@@ -1453,7 +1453,7 @@ def testMapOverlappingSlicesWithDoubles(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT m[1.1..3.0], m[2.2] FROM %s WHERE k=?", 0),
                    [{1.1: 1.1, 2.2: 2.2, 3.0: 3.0}, 2.2])
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testNestedAccessWithNestedMap(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id text PRIMARY KEY, m map<float,frozen<map<int, text>>>)") as table:
         execute(cql, table, "INSERT INTO %s (id,m) VALUES ('1', {1: {2: 'one-two'}})")
@@ -1507,7 +1507,7 @@ def testInsertingCollectionsWithInvalidElements(cql, test_keyspace):
         assert_invalid_message(cql, table, "Invalid map literal for m: value (1, '1', 1.0, 1) is not of type frozen<tuple<int, text, double>>",
                              "INSERT INTO %s (k, m) VALUES (0, {1 : (1, '1', 1.0, 1)})")
 
-@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting part of map or list not yet supported. Issue #7751")
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testSelectionOfEmptyCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m frozen<map<text, int>>, s frozen<set<int>>)") as table:
         execute(cql, table, "INSERT INTO %s(k) VALUES (0)")

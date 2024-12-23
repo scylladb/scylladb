@@ -1286,7 +1286,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
             return expression_test_assignment(col_val.col->type, receiver);
         },
         [&] (const subscript&) -> test_result {
-            on_internal_error(expr_logger, "subscripts are not yet reachable via test_assignment()");
+            // not implemented. issue #22075
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
         },
         [&] (const unresolved_identifier& ui) -> test_result {
             return unresolved_identifier_test_assignment(ui, db, keyspace, schema_opt, receiver);
