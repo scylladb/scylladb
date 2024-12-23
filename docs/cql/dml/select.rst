@@ -20,10 +20,12 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ BYPASS CACHE ]
                    : [ USING TIMEOUT `timeout` ]
    select_clause: `selector` [ AS `identifier` ] ( ',' `selector` [ AS `identifier` ] )*
-   selector: `column_name`
+   selector: ( `column_name`
            : | CAST '(' `selector` AS `cql_type` ')'
            : | `function_name` '(' [ `selector` ( ',' `selector` )* ] ')'
            : | COUNT '(' '*' ')'
+           : )
+           : ( '.' `field_name` | '[' `term` ']' )*
    where_clause: `relation` ( AND `relation` )*
    relation: `column_name` `operator` `term`
            : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
