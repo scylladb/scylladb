@@ -83,7 +83,7 @@ future<> get_config_swagger_entry(std::string_view name, const std::string& desc
 
 namespace cs = httpd::config_json;
 
-void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r, const db::config& cfg, bool first) {
+void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r, db::config& cfg, bool first) {
     rb->register_function(r, [&cfg, first] (output_stream<char>& os) {
         return do_with(first, [&os, &cfg] (bool& first) {
             auto f = make_ready_future();
@@ -193,6 +193,17 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         return cfg.saved_caches_directory();
     });
 
+    ss::set_compaction_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
+        api::req_param<uint32_t> value(*req, "value", 0);
+        cfg.compaction_throughput_mb_per_sec(value.value, utils::config_file::config_source::API);
+        return make_ready_future<json::json_return_type>(json::json_void());
+    });
+
+    ss::set_stream_throughput_mb_per_sec.set(r, [&cfg](std::unique_ptr<http::request> req) mutable {
+        api::req_param<uint32_t> value(*req, "value", 0);
+        cfg.stream_io_throughput_mb_per_sec(value.value, utils::config_file::config_source::API);
+        return make_ready_future<json::json_return_type>(json::json_void());
+    });
 }
 
 void unset_config(http_context& ctx, routes& r) {
@@ -213,6 +224,8 @@ void unset_config(http_context& ctx, routes& r) {
     sp::set_truncate_rpc_timeout.unset(r);
     ss::get_all_data_file_locations.unset(r);
     ss::get_saved_caches_location.unset(r);
+    ss::set_compaction_throughput_mb_per_sec.unset(r);
+    ss::set_stream_throughput_mb_per_sec.unset(r);
 }
 
 }

@@ -60,6 +60,10 @@ Nodetool
    nodetool-commands/upgradesstables
    nodetool-commands/viewbuildstatus
    nodetool-commands/version
+   nodetool-commands/getcompactionthroughput
+   nodetool-commands/setcompactionthroughput
+   nodetool-commands/getstreamthroughput
+   nodetool-commands/setstreamthroughput
 
 The ``nodetool`` utility provides a simple command-line interface to the following exposed operations and attributes.
 
@@ -132,5 +136,8 @@ Operations that are not listed below are currently not available.
 * :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
 * :doc:`version </operating-scylla/nodetool-commands/version>` - Print the DB version.
-
+* :doc:`getcompactionthroughput </operating-scylla/nodetool-commands/getcompactionthroughput>` - Print the throughput cap for compaction in the system
+* :doc:`setcompactionthroughput </operating-scylla/nodetool-commands/setcompactionthroughput>` - Set the throughput cap for compaction in the system
+* :doc:`getstreamthroughput </operating-scylla/nodetool-commands/getstreamthroughput>` - Print the throughput cap for SSTables streaming in the system
+* :doc:`setstreamthroughput </operating-scylla/nodetool-commands/setstreamthroughput>` - Set the throughput cap for SSTables streaming in the system
 
