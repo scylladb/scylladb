@@ -84,7 +84,10 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "RequestTimeTooSkewedException",
                         "RequestTimeTooSkewed",
                         "RequestTimeoutException",
-                        "RequestTimeout"))
+                        "RequestTimeout",
+                        # Not really retryable, but we can use it to test the client behavior when the token is expired
+                        "ExpiredTokenException",
+                        ))
 
     def __init__(self, policies, logger, minio_uri, max_retries, *args, **kwargs):
         self.minio_uri = minio_uri
@@ -151,7 +154,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
                                 <Error>
                                     <Code>{error_name}</Code>
-                                    <Message>Minio proxy injected error. Client should retry.</Message>
+                                    <Message>Minio proxy injected error. {"The provided token has expired." if error_name == "ExpiredTokenException" else "Client should retry."}</Message>
                                     <RequestId>{req_uuid}</RequestId>
                                     <HostId>Uuag1LuByRx9e6j5Onimru9pO4ZVKnJ2Qz7/C1NPcfTWAtRPfTaOFg==</HostId>
                                 </Error>""".encode('utf-8')

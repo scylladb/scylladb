@@ -181,6 +181,8 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
         case aws::aws_error_type::ACCESS_DENIED:
             error_code = EACCES;
             break;
+        case aws::aws_error_type::EXPIRED_TOKEN:
+            throw;
         default:
             error_code = EIO;
         }
@@ -251,10 +253,39 @@ client::group_client& client::find_or_create_client() {
     return it->second;
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req,
+                              http::experimental::client::reply_handler handle,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client();
-    co_return co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    bool renew_creds = false;
+    std::exception_ptr ex;
+    while (true) {
+        try {
+            co_await gc.retryable_client.make_request(req, handle, expected, as);
+        } catch (const aws::aws_exception& e) {
+            ex = std::current_exception();
+            if (e.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                renew_creds = true;
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        if (renew_creds) {
+            _credentials = {};
+            co_await authorize(req);
+            s3l.debug("AWS credentials expired, renewing and retrying request");
+            renew_creds = false;
+            ex = {};
+            continue;
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        break;
+    }
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
@@ -263,7 +294,7 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, st
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_return co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    co_await make_request(std::move(req), std::move(handle), expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
