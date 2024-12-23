@@ -334,6 +334,10 @@ Further, maps support:
 
   Note that for removing multiple elements in a ``map``, you remove from it a ``set`` of keys.
 
+- Selecting one element::
+
+    SELECT favs['fruit'] FROM users WHERE id = 'jsmith';
+
 Lastly, TTLs are allowed for both ``INSERT`` and ``UPDATE``, but in both cases, the TTL set only applies to the newly
 inserted/updated elements. In other words::
 
@@ -375,6 +379,10 @@ Further, sets support:
 - Removing one or multiple elements (if an element doesn't exist, removing it is a no-op but no error is thrown)::
 
     UPDATE images SET tags = tags - { 'cat' } WHERE name = 'cat.jpg';
+
+- Selecting an element (if the element doesn't exist, returns null)::
+
+    SELECT tags['gray'] FROM images;
 
 Lastly, as for :ref:`maps <maps>`, TTLs, if used, only apply to the newly inserted values.
 
@@ -431,6 +439,10 @@ Further, lists support:
   list, it is simply ignored, and no error is thrown)::
 
     UPDATE plays SET scores = scores - [ 12, 21 ] WHERE id = '123-afde';
+
+- Selecting an element by its position in the list::
+
+    SELECT scores[1] FROM plays;
 
 .. warning:: The append and prepend operations are not idempotent by nature. So, in particular, if one of these operation
    timeouts, then retrying the operation is not safe, and it may (or may not) lead to appending/prepending the value

@@ -317,8 +317,7 @@ def testOrderByForInClause(cql, test_keyspace):
             assert_invalid_message(cql, table, "LIMIT must be strictly positive",
                                  "SELECT v as c2 FROM %s where pk1 = ? AND pk2 IN (?, ?) ORDER BY c1 DESC , c2 DESC LIMIT 0; ", 1, 1, 2)
 
-# Reproduces #7751
-@pytest.mark.xfail(reason="Issue #7751")
+@pytest.mark.skip(reason="Issue #22061")
 def testOrderByForInClauseWithCollectionElementSelection(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c frozen<set<int>>, v int, PRIMARY KEY (pk, c))") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) VALUES (0, {1, 2}, 0)")
