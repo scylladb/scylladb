@@ -1176,8 +1176,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
+        const auto& tables_waiting_for_resize_finalization = plan.resize_plan().finalize_resize;
         for (const tablet_migration_info& mig : plan.migrations()) {
             co_await coroutine::maybe_yield();
+            if (tables_waiting_for_resize_finalization.contains(mig.tablet.table) && !plan.has_nodes_to_drain()) {
+                // do not schedule migration for tables waiting for resize finalization unless there are nodes to drain
+                rtlogger.debug("Table {} waiting for resize finalization, ignoring migration: {}", mig.tablet.table, mig);
+                continue;
+            }
             generate_migration_update(out, guard, mig);
         }
 
