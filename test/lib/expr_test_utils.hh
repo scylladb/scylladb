@@ -19,6 +19,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 
 namespace cql3 {
 namespace expr {
@@ -67,6 +68,12 @@ raw_value make_map_raw(const std::vector<std::pair<raw_value, raw_value>>& value
 // which is impossible to express using the existing code.
 raw_value make_tuple_raw(const std::vector<raw_value>& values);
 
+// This function implements custom serialization of vectors.
+// Some tests require the vector to contain unset_value or an empty value,
+// which is impossible to express using the existing code.
+// It only supports vectors of fixed-length elements.
+raw_value make_vector_raw(const std::vector<raw_value>& values);
+
 constant make_list_const(const std::vector<raw_value>& vals, data_type elements_type);
 constant make_list_const(const std::vector<constant>& vals, data_type elements_type);
 
@@ -84,14 +91,21 @@ constant make_map_const(const std::vector<std::pair<constant, constant>>& vals,
 constant make_tuple_const(const std::vector<raw_value>& vals, const std::vector<data_type>& element_types);
 constant make_tuple_const(const std::vector<constant>& vals, const std::vector<data_type>& element_types);
 
+constant make_vector_const(const std::vector<raw_value>& vals, data_type elements_type);
+constant make_vector_const(const std::vector<constant>& vals, data_type elements_type);
+
 raw_value make_int_list_raw(const std::vector<std::optional<int32_t>>& values);
 raw_value make_int_set_raw(const std::vector<int32_t>& values);
 
 raw_value make_int_int_map_raw(const std::vector<std::pair<int32_t, int32_t>>& values);
 
+raw_value make_int_vector_raw(const std::vector<int32_t>& values);
+
 constant make_int_list_const(const std::vector<std::optional<int32_t>>& values);
 constant make_int_set_const(const std::vector<int32_t>& values);
 constant make_int_int_map_const(const std::vector<std::pair<int32_t, int32_t>>& values);
+
+constant make_int_vector_const(const std::vector<int32_t>& values);
 
 collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type);
 collection_constructor make_set_constructor(std::vector<expression> elements, data_type elements_type);
@@ -102,6 +116,7 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
                                             data_type key_type,
                                             data_type element_type);
 tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
+collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, size_t dimension);
 usertype_constructor make_usertype_constructor(std::vector<std::pair<std::string_view, constant>> field_values);
 
 ::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");
