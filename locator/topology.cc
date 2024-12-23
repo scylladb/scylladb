@@ -394,7 +394,7 @@ void topology::index_node(const node& node) {
     if (!node.left() && !node.is_none()) {
         const auto& dc = node.dc_rack().dc;
         const auto& rack = node.dc_rack().rack;
-        const auto& endpoint = node.endpoint();
+        const auto& endpoint = node.host_id();
         _dc_nodes[dc].emplace(std::cref(node));
         _dc_rack_nodes[dc][rack].emplace(std::cref(node));
         _dc_endpoints[dc].insert(endpoint);
@@ -416,7 +416,7 @@ void topology::unindex_node(const node& node) {
         bool found = _dc_nodes.at(dc).erase(std::cref(node));
         if (found) {
             if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
-                const auto& ep = node.endpoint();
+                const auto& ep = node.host_id();
                 auto& eps = dit->second;
                 eps.erase(ep);
                 if (eps.empty()) {

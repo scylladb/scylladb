@@ -271,7 +271,7 @@ public:
     bool has_endpoint(inet_address) const;
 
     const std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>&
+                           std::unordered_set<host_id>>&
     get_datacenter_endpoints() const {
         return _dc_endpoints;
     }
@@ -292,7 +292,7 @@ public:
 
     const std::unordered_map<sstring,
                        std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
+                                          std::unordered_set<host_id>>>&
     get_datacenter_racks() const {
         return _dc_racks;
     }
@@ -424,13 +424,13 @@ private:
 
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>
+                       std::unordered_set<host_id>>
         _dc_endpoints;
 
     /** map: DC -> (multi-map: rack -> endpoints in that rack) */
     std::unordered_map<sstring,
                        std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>
+                                          std::unordered_set<host_id>>>
         _dc_racks;
 
     bool _sort_by_proximity = true;
