@@ -251,6 +251,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
         '--logger-log-level', 'raft_topology=trace',
+        '--enable-file-stream', 'false',
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 

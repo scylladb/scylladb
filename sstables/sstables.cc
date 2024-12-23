@@ -3388,6 +3388,223 @@ std::string to_string(const shared_sstable& sst, bool include_origin) {
         fmt::format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level());
 }
 
+std::string sstable_stream_source::component_basename() const {
+    return _sst->component_basename(_type);
+}
+
+sstable_stream_source::sstable_stream_source(shared_sstable sst, component_type type)
+    : _sst(std::move(sst))
+    , _type(type)
+{}
+
+std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot) {
+    std::vector<std::unique_ptr<sstable_stream_source>> result;
+    result.reserve(snapshot.files.size());
+
+    class sstable_stream_source_impl : public sstable_stream_source {
+        file _file;
+    public:
+        sstable_stream_source_impl(shared_sstable table, component_type type, file f)
+            : sstable_stream_source(std::move(table), type)
+            , _file(std::move(f))
+        {}
+        future<input_stream<char>> input(const file_input_stream_options& options) const override {
+            if (_type == component_type::Scylla) {
+                // Filter out any node-local info (i.e. extensions)
+                // and reserialize data. Load into a temp object.
+                // TODO/FIXME. Not all extension attributes might
+                // need removing. In fact, it might be wrong (in the future)
+                // to do so. ATM we know this is safe and correct, but really
+                // extensions should remove themselves if required.
+                scylla_metadata tmp;
+                uint64_t size = co_await _file.size();
+                auto r = file_random_access_reader(_file, size, default_sstable_buffer_size);
+                co_await parse(*_sst->get_schema(), _sst->get_version(), r, tmp);
+                co_await r.close();
+
+                tmp.remove_extension_attributes();
+
+                std::vector<temporary_buffer<char>> bufs;
+                // TODO: move to seastar. Based on memory_data_sink, but allowing us
+                // to actually move away the buffers later. I don't want to modify
+                // util classes in an enterprise patch.
+                class buffer_data_sink_impl : public data_sink_impl {
+                    std::vector<temporary_buffer<char>>& _bufs;
+                public:
+                    buffer_data_sink_impl(std::vector<temporary_buffer<char>>& bufs)
+                        : _bufs(bufs)
+                    {}
+                    future<> put(net::packet data) override {
+                        throw std::logic_error("unsupported operation");
+                    }
+                    future<> put(temporary_buffer<char> buf) override {
+                        _bufs.emplace_back(std::move(buf));
+                        return make_ready_future<>();
+                    }
+                    future<> flush() override {
+                        return make_ready_future<>();
+                    }
+                    future<> close() override {
+                        return make_ready_future<>();
+                    }
+                    size_t buffer_size() const noexcept override {
+                        return 128*1024;
+                    }
+                };
+
+                co_await seastar::async([&] {
+                    file_writer fw(data_sink(std::make_unique<buffer_data_sink_impl>(bufs)));
+                    write(_sst->get_version(), fw, tmp);
+                    fw.close();
+                });
+                // TODO: move to seastar. Based on buffer_input... in utils, but
+                // handles potential 1+ buffers
+                class buffer_data_source_impl : public data_source_impl {
+                private:
+                    std::vector<temporary_buffer<char>> _bufs;
+                    size_t _index = 0;
+                public:
+                    buffer_data_source_impl(std::vector<temporary_buffer<char>>&& bufs)
+                        : _bufs(std::move(bufs))
+                    {}
+                    buffer_data_source_impl(buffer_data_source_impl&&) noexcept = default;
+                    buffer_data_source_impl& operator=(buffer_data_source_impl&&) noexcept = default;
+
+                    future<temporary_buffer<char>> get() override {
+                        if (_index < _bufs.size()) {
+                            return make_ready_future<temporary_buffer<char>>(std::move(_bufs.at(_index++)));
+                        }
+                        return make_ready_future<temporary_buffer<char>>();
+                    }
+                    future<temporary_buffer<char>> skip(uint64_t n) override {
+                        while (n > 0 && _index < _bufs.size()) {
+                            auto& buf = _bufs.at(_index);
+                            auto min = std::min(n, buf.size());
+                            buf.trim_front(min);
+                            if (buf.empty()) {
+                                ++_index;
+                            }
+                            n -= min;
+                        }
+                        return get();
+                    }
+                };
+                co_return input_stream<char>(data_source(std::make_unique<buffer_data_source_impl>(std::move(bufs))));
+            }
+            co_return make_file_input_stream(_file, options);
+        }
+    };
+
+    auto& files = snapshot.files;
+
+    auto add = [&](component_type type, file f) {
+        result.emplace_back(std::make_unique<sstable_stream_source_impl>(snapshot.sst, type, std::move(f)));
+    };
+
+    try {
+        add(component_type::TOC, files.at(component_type::TOC));
+        add(component_type::Scylla, files.at(component_type::Scylla));
+    } catch (std::out_of_range&) {
+        std::throw_with_nested(std::invalid_argument("Missing required sstable component"));
+    }
+    for (auto&& [type, f] : files) {
+        if (type != component_type::TOC && type != component_type::Scylla) {
+            add(type, std::move(f));
+        }
+    }
+
+    return result;
+}
+
+class sstable_stream_sink_impl : public sstable_stream_sink {
+    shared_sstable _sst;
+    component_type _type;
+    bool _last_component;
+public:
+    sstable_stream_sink_impl(shared_sstable sst, component_type type, bool last_component)
+        : _sst(std::move(sst))
+        , _type(type)
+        , _last_component(last_component)
+    {}
+private:
+    future<> load_metadata() const {
+        auto metafile = _sst->filename(sstables::component_type::Scylla);
+        if (!co_await file_exists(metafile)) {
+            // for compatibility with streaming a non-scylla table (no scylla component)
+            co_return;
+        }
+        if (!_sst->get_shared_components().scylla_metadata) {
+            sstables::scylla_metadata tmp;
+            co_await _sst->read_simple<component_type::Scylla>(tmp);
+            _sst->get_shared_components().scylla_metadata = std::move(tmp);
+        }
+    }
+    future<> save_metadata() const {
+        if (!_sst->get_shared_components().scylla_metadata) {
+            co_return;
+        }
+        file_output_stream_options options;
+        options.buffer_size = default_sstable_buffer_size;
+        co_await seastar::async([&] {
+            auto w = _sst->make_component_file_writer(component_type::Scylla, std::move(options), open_flags::wo | open_flags::create).get();
+            write(_sst->get_version(), w, *_sst->get_shared_components().scylla_metadata);
+            w.close();
+        });
+    }
+public:
+    future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
+        assert(_type != component_type::TOC);
+        // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
+        bool load_save_meta = _type != component_type::TemporaryTOC && _type != component_type::Scylla;
+
+        // otherwise, first load scylla metadata from disk as written so far.
+        if (load_save_meta) {
+            co_await load_metadata();
+        }
+        // now we can open the component file. any extensions applied should write info into metadata
+        auto f = co_await _sst->open_file(_type, open_flags::wo | open_flags::create, foptions);
+
+        // Save back to disk.
+        if (load_save_meta) {
+            co_await save_metadata();
+        }
+
+        co_return co_await make_file_output_stream(std::move(f), stream_options);
+    }
+    future<shared_sstable> close_and_seal() override {
+        if (_last_component) {
+            // If we are the last component in a sequence, we can seal the table.
+            co_await _sst->_storage->seal(*_sst);
+            co_return std::move(_sst);
+        }
+        _sst = {};
+        co_return nullptr;
+    }
+    future<> abort() override {
+        if (!_sst) {
+            co_return;
+        }
+        auto filename = fs::path(_sst->_storage->prefix()) / std::string_view(_sst->component_basename(_type));
+        // TODO: if we are the last component (or really always), should we remove all component files?
+        // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
+        co_await remove_file(filename.native());
+    }
+};
+
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, std::string_view component_filename, bool last_component) {
+    auto desc = parse_path(component_filename, schema->ks_name(), schema->cf_name());
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, state, desc.version, desc.format);
+
+    auto type = desc.component;
+    // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual
+    // TOC (see above close_and_seal).
+    if (type == component_type::TOC) {
+        type = component_type::TemporaryTOC;
+    }
+
+    return std::make_unique<sstable_stream_sink_impl>(std::move(sst), type, last_component);
+}
+
 generation_type
 generation_type::from_string(const std::string& s) {
     int64_t int_value;

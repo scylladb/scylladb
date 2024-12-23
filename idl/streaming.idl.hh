@@ -9,8 +9,10 @@
 #include "idl/range.idl.hh"
 #include "idl/token.idl.hh"
 #include "idl/uuid.idl.hh"
+#include "idl/sstables.idl.hh"
 
 #include "streaming/stream_fwd.hh"
+#include "streaming/stream_blob.hh"
 
 namespace service {
 
@@ -68,8 +70,65 @@ enum class stream_mutation_fragments_cmd : uint8_t {
     end_of_stream,
 };
 
+class file_stream_id final {
+    utils::UUID uuid();
+};
+
+enum class stream_blob_cmd : uint8_t {
+    ok,
+    error,
+    data,
+    end_of_stream,
+};
+
+enum class file_ops : uint16_t {
+    stream_sstables,
+    load_sstables,
+};
+
+class stream_blob_data {
+    temporary_buffer<char> buf;
+};
+
+class stream_blob_cmd_data {
+    streaming::stream_blob_cmd cmd;
+    std::optional<streaming::stream_blob_data> data;
+};
+
+class stream_blob_meta {
+    streaming::file_stream_id ops_id;
+    table_id table;
+    sstring filename;
+    seastar::shard_id dst_shard_id;
+    streaming::file_ops fops;
+    service::frozen_topology_guard topo_guard;
+    std::optional<sstables::sstable_state> sstable_state;
+};
+
+class node_and_shard {
+    locator::host_id node;
+    seastar::shard_id shard;
+};
+
+class stream_files_request {
+    streaming::file_stream_id ops_id;
+    sstring keyspace_name;
+    sstring table_name;
+    table_id table;
+    dht::token_range range;
+    std::vector<streaming::node_and_shard> targets;
+    service::frozen_topology_guard topo_guard;
+};
+
+class stream_files_response {
+    size_t stream_bytes;
+};
+
 verb [[with_client_info]] prepare_message (streaming::prepare_message msg, streaming::plan_id plan_id, sstring description, streaming::stream_reason reason [[version 3.1.0]], service::session_id session [[version 6.0.0]]) -> streaming::prepare_message;
 verb [[with_client_info]] prepare_done_message (streaming::plan_id plan_id, unsigned dst_cpu_id);
 verb [[with_client_info]] stream_mutation_done (streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id);
 verb [[with_client_info]] complete_message (streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed [[version 2.1.0]]);
+
+verb [[with_client_info, cancellable]] tablet_stream_files (streaming::stream_files_request req) -> streaming::stream_files_response;
+
 }

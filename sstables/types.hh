@@ -626,6 +626,9 @@ struct scylla_metadata {
     const extension_attributes* get_extension_attributes() const {
         return data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
     }
+    void remove_extension_attributes() {
+        data.data.erase(scylla_metadata_type::ExtensionAttributes);
+    }
     extension_attributes& get_or_create_extension_attributes() {
         auto* ext = data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
         if (ext == nullptr) {
