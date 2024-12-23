@@ -180,6 +180,8 @@ public:
     future<> commit();
 };
 
+class sstable_stream_sink_impl;
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
@@ -255,6 +257,10 @@ public:
     // Known states are normal, staging, upload and quarantine.
     // It's up to the storage driver how to implement this.
     future<> change_state(sstable_state to, delayed_commit_changes* delay = nullptr);
+
+    sstable_state state() const {
+        return _state;
+    }
 
     // Filesystem-specific call to grab an sstable from upload dir and
     // put it into the desired destination assigning the given generation
@@ -517,6 +523,7 @@ private:
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
+    friend class sstable_stream_sink_impl;
     friend class sstable_directory;
     friend class filesystem_storage;
     friend class s3_storage;
@@ -1130,6 +1137,50 @@ struct sstable_files_snapshot {
     shared_sstable sst;
     std::unordered_map<component_type, file> files;
 };
+
+// A sstable_stream_source gives back
+// component input streams suitable for streaming to other nodes,
+// in appropriate order. Data will be decrypted and sanitized as required.
+class sstable_stream_source {
+protected:
+    shared_sstable _sst;
+    component_type _type;
+public:
+    sstable_stream_source(shared_sstable, component_type);
+    virtual ~sstable_stream_source() = default;
+
+    // Input stream for data appropriate for stream transfer for this component
+    virtual future<input_stream<char>> input(const file_input_stream_options&) const = 0;
+
+    // source sstable
+    const sstable& source() const {
+        return *_sst;
+    }
+    // component
+    component_type type() const {
+        return _type;
+    }
+    std::string component_basename() const;
+};
+
+// Translates the result of gathering readable snapshot files into ordered items for streaming.
+std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot&);
+
+class sstable_stream_sink {
+public:
+    virtual ~sstable_stream_sink() = default;
+    // Stream to the component file
+    virtual future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) = 0;
+    // closes this component. If this is the last component in a set (see "last_component" in creating method below)
+    // the table on disk will be sealed.
+    // Returns sealed sstable if last, or nullptr otherwise.
+    virtual future<shared_sstable> close_and_seal() = 0;
+    virtual future<> abort() = 0;
+};
+
+// Creates a sink object which can receive a component file sourced from above source object data.
+
+std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr, sstables_manager&, const data_dictionary::storage_options&, sstable_state, std::string_view component_filename, bool last_component);
 
 } // namespace sstables
 
