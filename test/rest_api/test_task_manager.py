@@ -3,8 +3,8 @@ import requests
 import sys
 import time
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+# Use the util.py library from ../cqlpy:
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
 from util import new_test_table, new_test_keyspace
 from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error
 from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task

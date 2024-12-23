@@ -10,7 +10,7 @@ import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 
-sys.path.insert(0, sys.path[0] + "/test/cql-pytest")
+sys.path.insert(0, sys.path[0] + "/test/cqlpy")
 import nodetool
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
