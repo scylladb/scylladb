@@ -22,6 +22,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
 #include "transport/messages/result_message.hh"
+#include "types/vector.hh"
 #include "utils/big_decimal.hh"
 #include "types/tuple.hh"
 #include "types/user.hh"
@@ -714,6 +715,33 @@ SEASTAR_TEST_CASE(test_json_tuple) {
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, \"test123\", 2.5, 3]}';").get(), marshal_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 2.5]}';").get(), marshal_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\": 5}}';").get(), marshal_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_json_vector) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t(id int PRIMARY KEY, v vector<int, 3>);").get();
+
+        e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, 123, 25]}';").get();
+
+        auto vt = vector_type_impl::get_instance(int32_type, 3);
+
+        auto msg = e.execute_cql("SELECT * FROM t;").get();
+        assert_that(msg).is_rows().with_rows({{
+            {int32_type->decompose(7)},
+            {vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(5), int32_t(123), int32_t(25)})))},
+        }});
+
+        e.execute_cql("INSERT INTO t (id, v) VALUES (3, [5, 543, 45]);").get();
+
+        msg = e.execute_cql("SELECT JSON * FROM t WHERE id = 3;").get();
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose(sstring("{\"id\": 3, \"v\": [5, 543, 45]}"))
+        }});
+
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [5, 123, 25, 3]}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": [\"test123\", 5, 25]}';").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t JSON '{\"id\" : 7, \"v\": {\"1\" : 5}}';").get(), marshal_exception);
     });
 }
 
