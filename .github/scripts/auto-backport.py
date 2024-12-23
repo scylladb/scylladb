@@ -66,7 +66,8 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     if pr.merged:
         merge_commit = repo.get_commit(pr.merge_commit_sha)
         if len(merge_commit.parents) > 1:  # Check if this merge commit includes multiple commits
-            commits.append(pr.merge_commit_sha)
+            for commit in pr.get_commits():
+                commits.append(commit.sha)
         else:
             if start_commit:
                 promoted_commits = repo.compare(start_commit, stable_branch).commits
@@ -114,7 +115,7 @@ def backport(repo, pr, version, commits, backport_base_branch):
             is_draft = False
             for commit in commits:
                 try:
-                    repo_local.git.cherry_pick(commit, '-m1', '-x')
+                    repo_local.git.cherry_pick(commit, '-x')
                 except GitCommandError as e:
                     logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
                     is_draft = True
