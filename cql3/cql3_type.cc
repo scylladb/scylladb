@@ -20,6 +20,7 @@
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
+#include "types/vector.hh"
 #include "concrete_types.hh"
 
 namespace cql3 {
@@ -49,6 +50,7 @@ static cql3_type::kind get_cql3_kind(const abstract_type& t) {
         cql3_type::kind operator()(const varint_type_impl&) { return cql3_type::kind::VARINT; }
         cql3_type::kind operator()(const reversed_type_impl& r) { return get_cql3_kind(*r.underlying_type()); }
         cql3_type::kind operator()(const tuple_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const vector_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
         cql3_type::kind operator()(const collection_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
     };
     return visit(t, visitor{});

@@ -15,6 +15,7 @@
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/tuple.hh"
+#include "types/vector.hh"
 #include "types/user.hh"
 #include "utils/big_decimal.hh"
 
@@ -170,6 +171,7 @@ template <typename Func> concept CanHandleAllTypes = requires(Func f) {
     { f(*static_cast<const utf8_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
     { f(*static_cast<const uuid_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
     { f(*static_cast<const varint_type_impl*>(nullptr)) }      -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const vector_type_impl*>(nullptr)) }      -> std::same_as<visit_ret_type<Func>>;
 };
 
 template<typename Func>
@@ -232,6 +234,8 @@ inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
         return f(*static_cast<const uuid_type_impl*>(&t));
     case abstract_type::kind::varint:
         return f(*static_cast<const varint_type_impl*>(&t));
+    case abstract_type::kind::vector:
+        return f(*static_cast<const vector_type_impl*>(&t));
     }
     __builtin_unreachable();
 }

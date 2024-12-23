@@ -47,6 +47,7 @@
 
 #include "types/user.hh"
 #include "types/tuple.hh"
+#include "types/vector.hh"
 #include "types/collection.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -785,6 +786,15 @@ bool abstract_type::is_tuple() const {
     return visit(*this, visitor{});
 }
 
+bool abstract_type::is_vector() const {
+    struct visitor {
+        bool operator()(const abstract_type&) { return false; }
+        bool operator()(const reversed_type_impl& t) { return t.underlying_type()->is_vector(); }
+        bool operator()(const vector_type_impl&) { return true; }
+    };
+    return visit(*this, visitor{});
+}
+
 bool abstract_type::is_multi_cell() const {
     struct visitor {
         bool operator()(const abstract_type&) { return false; }
@@ -795,7 +805,7 @@ bool abstract_type::is_multi_cell() const {
     return visit(*this, visitor{});
 }
 
-bool abstract_type::is_native() const { return !is_collection() && !is_tuple(); }
+bool abstract_type::is_native() const { return !is_collection() && !is_tuple() && !is_vector(); }
 
 bool abstract_type::is_string() const {
     struct visitor {
@@ -816,6 +826,7 @@ static bool find(const abstract_type& t, const Predicate& f) {
         bool operator()(const tuple_type_impl& t) {
             return std::ranges::any_of(t.all_types(), [&] (const data_type& dt) { return find(*dt, f); });
         }
+        bool operator()(const vector_type_impl& t) { return find(*t.get_elements_type(), f); }
         bool operator()(const map_type_impl& m) { return find(*m.get_keys_type(), f) || find(*m.get_values_type(), f); }
         bool operator()(const listlike_collection_type_impl& l) { return find(*l.get_elements_type(), f); }
     };
@@ -867,6 +878,9 @@ struct get_all_referenced_user_types_visitor {
             visit(*field, *this);
         }
     }
+    void operator()(const vector_type_impl& v) {
+        visit(*v.get_elements_type(), *this);
+    }
     void operator()(const map_type_impl& m) {
         visit(*m.get_keys_type(), *this);
         visit(*m.get_values_type(), *this);
@@ -905,6 +919,9 @@ bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_or
 static bool
 check_compatibility(const tuple_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const);
 
+static bool
+check_compatibility(const vector_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const);
+
 static
 bool
 is_fixed_size_int_type(const abstract_type& t) {
@@ -939,6 +956,7 @@ is_fixed_size_int_type(const abstract_type& t) {
     case k::utf8:
     case k::uuid:
     case k::varint:
+    case k::vector:
         return false;
     }
     __builtin_unreachable();
@@ -995,6 +1013,9 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
         bool operator()(const tuple_type_impl& t) {
             return check_compatibility(t, previous, &abstract_type::is_compatible_with);
         }
+        bool operator()(const vector_type_impl& t) {
+            return check_compatibility(t, previous, &abstract_type::is_compatible_with);
+        }
         bool operator()(const collection_type_impl& t) { return is_compatible_with_aux(t, previous); }
         bool operator()(const varint_type_impl& t) {
             return is_fixed_size_int_type(previous);
@@ -1045,6 +1066,7 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
         sstring operator()(const utf8_type_impl&) { return "text"; }
         sstring operator()(const uuid_type_impl&) { return "uuid"; }
         sstring operator()(const varint_type_impl&) { return "varint"; }
+        sstring operator()(const vector_type_impl& v) { return format("vector<{}, {}>", v.get_elements_type()->as_cql3_type(), v.get_dimension()); }
     };
     return visit(t, visitor{});
 }
@@ -1052,7 +1074,7 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
 const sstring& abstract_type::cql3_type_name() const {
     if (_cql3_type_name.empty()) {
         auto name = cql3_type_name_impl(*this);
-        if (!is_native() && !is_multi_cell()) {
+        if (!is_native() && !is_multi_cell() && !is_vector()) {
             name = "frozen<" + name + ">";
         }
         _cql3_type_name = name;
@@ -1610,6 +1632,124 @@ static void validate_aux(const tuple_type_impl& t, View v) {
     }
 }
 
+sstring vector_type_impl::make_name(data_type type, size_t dimension) {
+    // To keep format compatibility with Origin we never wrap
+    // vector name into
+    // "org.apache.cassandra.db.marshal.FrozenType(...)".
+    return seastar::format("org.apache.cassandra.db.marshal.VectorType({}, {})", type->name(), dimension);
+}
+
+vector_type_impl::vector_type_impl(data_type elements, size_t dimension)
+        : concrete_type(kind::vector, make_name(elements, dimension),
+        elements->value_length_if_fixed() ? std::optional(elements->value_length_if_fixed().value()*dimension):std::nullopt),
+        _elements_type(elements), _dimension(dimension) {
+    _contains_set_or_map = _elements_type->contains_set_or_map();
+}
+
+shared_ptr<const vector_type_impl>
+vector_type_impl::get_instance(data_type elements, size_t dimension) {
+    return intern::get_instance(elements, dimension);
+}
+
+static void serialize_vector(const vector_type_impl& type, const vector_type_impl::native_type* val, bytes::iterator& out) {
+    auto elements_type = type.get_elements_type();
+    if (type.value_length_if_fixed()) {
+        for (const auto& value : *val) {
+            value.serialize(out);
+        }
+    } else {
+        for (const auto& value : *val) {
+            size_t val_len = value.serialized_size();
+
+            out += unsigned_vint::serialize(val_len, out);
+            
+
+            value.serialize(out);
+        }
+    }
+}
+
+std::strong_ordering
+vector_type_impl::compare_vectors(data_type elements, size_t dimension, managed_bytes_view o1, managed_bytes_view o2) {
+    if (o1.empty()) {
+        return o2.empty() ? std::strong_ordering::equal : std::strong_ordering::less;
+    } else if (o2.empty()) {
+        return std::strong_ordering::greater;
+    }
+
+    for (size_t i = 0; i < dimension; i++) {
+        auto v1 = read_vector_element(o1, elements->value_length_if_fixed());
+        auto v2 = read_vector_element(o2, elements->value_length_if_fixed());
+        auto cmp = elements->compare(v1, v2);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+
+    return std::strong_ordering::equal;
+}
+
+template <FragmentedView View>
+data_value
+deserialize_vector(const vector_type_impl& t, View v){
+    vector_type_impl::native_type ret;
+    ret.reserve(t.get_dimension());
+
+    auto value_length = t.get_elements_type()->value_length_if_fixed();
+
+    for (size_t i = 0; i < t.get_dimension(); i++) {
+        ret.push_back(t.get_elements_type()->deserialize(read_vector_element(v, value_length)));
+    }
+
+    return data_value::make(t.shared_from_this(), std::make_unique<vector_type_impl::native_type>(std::move(ret)));
+}
+
+static size_t vector_serialized_size(const vector_type_impl::native_type* v) {
+    if (v->empty()) {
+        return 0;
+    }
+
+    auto type = v->front().type();
+
+    size_t len = 0;
+
+    if (type->value_length_if_fixed()) {
+        len = v->size() * type->value_length_if_fixed().value();
+    } else {
+        for (const auto& value : *v) {
+            size_t val_len = value.serialized_size();
+            len += (size_t)unsigned_vint::serialized_size(val_len) + val_len;
+        }
+    }
+    return len;
+}
+
+template <FragmentedView View>
+static void validate_aux(const vector_type_impl& t, View v) {
+    for (size_t i = 0; i < t.get_dimension(); ++i) {
+        auto val = read_vector_element(v, t.get_elements_type()->value_length_if_fixed());
+        t.get_elements_type()->validate(val);
+    }
+    if (v.size_bytes()) {
+        auto hex = with_linearized(v, [] (bytes_view bv) { return to_hex(bv); });
+        throw marshal_exception(format("Validation failed for type {}: bytes remaining after "
+                                       "reading all {} elements of the vector -> [{}]",
+                t.name(), t.get_dimension(), hex));
+    }
+}
+
+static std::optional<data_type> update_user_type_aux(
+    const vector_type_impl& m, const shared_ptr<const user_type_impl> updated) {
+
+    auto old_elements = m.get_elements_type();
+    if (auto new_elements = old_elements->update_user_type(updated)) {
+        return std::make_optional(static_pointer_cast<const abstract_type>(
+                vector_type_impl::get_instance(*new_elements, m.get_dimension())));
+    }
+
+    return std::nullopt;
+}
+
 namespace {
 template <FragmentedView View>
 struct validate_visitor {
@@ -1782,6 +1922,11 @@ struct validate_visitor {
         });
     }
     void operator()(const tuple_type_impl& t) {
+        with_simplified(v, [&] (FragmentedView auto v) {
+            validate_aux(t, v);
+        });
+    }
+    void operator()(const vector_type_impl& t) {
         with_simplified(v, [&] (FragmentedView auto v) {
             validate_aux(t, v);
         });
@@ -2003,6 +2148,9 @@ struct serialize_visitor {
     }
     void operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* value) {
         return serialize_aux(t, value, out);
+    }
+    void operator()(const vector_type_impl& t, const vector_type_impl::native_type* value) {
+        serialize_vector(t, value, out);
     }
 };
 }
@@ -2263,6 +2411,7 @@ struct deserialize_visitor {
         return t.deserialize(v);
     }
     data_value operator()(const tuple_type_impl& t) { return deserialize_aux(t, v); }
+    data_value operator()(const vector_type_impl& t) { return deserialize_vector(t,v); }
     data_value operator()(const user_type_impl& t) { return deserialize_aux(t, v); }
     data_value operator()(const empty_type_impl& t) { return data_value(empty_type_representation()); }
 };
@@ -2416,6 +2565,8 @@ struct compare_visitor {
     }
     std::strong_ordering operator()(const empty_type_impl&) { return std::strong_ordering::equal; }
     std::strong_ordering operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
+    std::strong_ordering operator()(const vector_type_impl& t) {
+        return vector_type_impl::compare_vectors(t.get_elements_type(),t.get_dimension(), v1, v2); }
     std::strong_ordering operator()(const counter_type_impl&) {
         // untouched (empty) counter evaluates as 0
         const auto a = v1.empty() ? 0 : simple_type_traits<int64_t>::read_nonempty(v1);
@@ -2677,6 +2828,7 @@ struct serialized_size_visitor {
             const std::vector<data_value>* v) {
         return listlike_serialized_size(v);
     }
+    size_t operator()(const vector_type_impl& t, const vector_type_impl::native_type* v) { return vector_serialized_size(v); }
 };
 }
 
@@ -2852,6 +3004,11 @@ struct from_string_visitor {
         }
         return concat_fields(fields, field_len);
     }
+    bytes operator()(const vector_type_impl& t) {
+        // FIXME:
+        abort();
+        return bytes();
+    }
     bytes operator()(const collection_type_impl&) {
         // FIXME:
         abort();
@@ -2952,6 +3109,10 @@ struct to_string_impl_visitor {
     sstring operator()(const tuple_type_impl& t, const tuple_type_impl::native_type* v) {
         return format_if_not_empty(t, v, [&t] (const tuple_type_impl::native_type& b) { return tuple_to_string(t, b); });
     }
+    sstring operator()(const vector_type_impl& vt, const vector_type_impl::native_type* v) {
+        return format_if_not_empty(
+                vt, v, [] (const vector_type_impl::native_type& v) { return vector_to_string(v, ", "); });
+    }
     sstring operator()(const uuid_type_impl& u, const uuid_type_impl::native_type* v) {
         return format_if_not_empty(u, v, [] (const utils::UUID& v) { return fmt::to_string(v); });
     }
@@ -2980,6 +3141,15 @@ check_compatibility(const tuple_type_impl &t, const abstract_type& previous, boo
                 x->all_types().begin(), x->all_types().end(),
                 [predicate] (data_type a, data_type b) { return ((*a).*predicate)(*b); });
     return c.second == x->all_types().end();  // this allowed to be longer
+}
+
+static bool
+check_compatibility(const vector_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) {
+    auto* x = dynamic_cast<const vector_type_impl*>(&previous);
+    if (!x) {
+        return false;
+    }
+    return ((*t.get_elements_type()).*predicate)(*x->get_elements_type()) && t.get_dimension() == x->get_dimension();
 }
 
 static bool is_value_compatible_with_internal_aux(const user_type_impl& t, const abstract_type& previous) {
@@ -3027,6 +3197,9 @@ static bool is_value_compatible_with_internal(const abstract_type& t, const abst
         }
         bool operator()(const user_type_impl& t) { return is_value_compatible_with_internal_aux(t, other); }
         bool operator()(const tuple_type_impl& t) {
+            return check_compatibility(t, other, &abstract_type::is_value_compatible_with);
+        }
+        bool operator()(const vector_type_impl& t) {
             return check_compatibility(t, other, &abstract_type::is_value_compatible_with);
         }
         bool operator()(const collection_type_impl& t) { return is_value_compatible_with_internal_aux(t, other); }
@@ -3323,6 +3496,7 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
         std::optional<data_type> operator()(const list_type_impl& l) {
             return update_listlike(l, list_type_impl::get_instance, updated);
         }
+        std::optional<data_type> operator()(const vector_type_impl& v) { return update_user_type_aux(v, updated); }
     };
     return visit(*this, visitor{updated});
 }
@@ -3692,6 +3866,20 @@ sstring data_value::to_parsable_string() const {
         return std::move(result).str();
     }
 
+    if (_type->without_reversed().is_vector()) {
+        const vector_type_impl::native_type* vector_elements = (const vector_type_impl::native_type*)_value;
+        std::ostringstream result;
+        result << "[";
+        for (std::size_t i = 0; i < vector_elements->size(); i++) {
+            if (i != 0) {
+                result << ", ";
+            }
+            result << (*vector_elements)[i].to_parsable_string();
+        }
+        result << "]";
+        return std::move(result).str();
+    }
+
     abstract_type::kind type_kind = _type->without_reversed().get_kind();
 
     if (type_kind == abstract_type::kind::utf8
@@ -3726,6 +3914,11 @@ make_map_value(data_type type, map_type_impl::native_type value) {
 
 data_value
 make_tuple_value(data_type type, tuple_type_impl::native_type value) {
+    return data_value::make_new(std::move(type), std::move(value));
+}
+
+data_value
+make_vector_value(data_type type, vector_type_impl::native_type value) {
     return data_value::make_new(std::move(type), std::move(value));
 }
 

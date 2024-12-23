@@ -24,6 +24,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
 #include "types/user.hh"
@@ -1382,6 +1383,20 @@ static managed_bytes reserialize_value(View value_bytes,
         return tuple_type_impl::build_value_fragmented(std::move(elements));
     }
 
+    if (type.is_vector()) {
+        const vector_type_impl& vtype = dynamic_cast<const vector_type_impl&>(type);
+        std::vector<managed_bytes> elements = vtype.split_fragmented(value_bytes);
+
+        auto elements_type = vtype.get_elements_type()->without_reversed();
+
+        if (elements_type.bound_value_needs_to_be_reserialized()) {
+            for (size_t i = 0; i < elements.size(); i++) {
+                elements[i] = reserialize_value(managed_bytes_view(elements[i]), elements_type);
+            }
+        }
+
+        return vector_type_impl::build_value_fragmented(std::move(elements), elements_type.value_length_if_fixed());
+    }
     on_internal_error(expr_logger,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
@@ -1694,6 +1709,16 @@ std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value& val, co
     });
 }
 
+std::vector<managed_bytes> get_vector_elements(const cql3::raw_value& val, const abstract_type& type) {
+    ensure_can_get_value_elements(val, "expr::get_vector_elements");
+
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
+        const vector_type_impl& vtype = static_cast<const vector_type_impl&>(type.without_reversed());
+        return vtype.split_fragmented(value_bytes);
+    });
+
+}
+
 std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val, const abstract_type& type) {
     ensure_can_get_value_elements(val, "expr::get_user_type_elements");
 
@@ -1704,6 +1729,11 @@ std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val
 }
 
 static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes_opt>&& elements) {
+    return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
+                                          std::make_move_iterator(elements.end()));
+}
+
+static std::vector<managed_bytes_opt> convert_vector(std::vector<managed_bytes>&& elements) {
     return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
                                           std::make_move_iterator(elements.end()));
 }
@@ -1723,6 +1753,9 @@ std::vector<managed_bytes_opt> get_elements(const cql3::raw_value& val, const ab
 
         case abstract_type::kind::user:
             return get_user_type_elements(val, type);
+
+        case abstract_type::kind::vector:
+            return convert_vector(get_vector_elements(val, type));
 
         default:
             on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", type.name()));
