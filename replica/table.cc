@@ -3395,14 +3395,14 @@ table::local_base_lock(
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _abort_source, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true, timeout, _row_locker_stats);
+        return _row_locker.lock_pk(pk, true, timeout, _abort_source, _row_locker_stats);
     }
 }
 
