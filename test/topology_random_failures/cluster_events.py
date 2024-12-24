@@ -67,6 +67,14 @@ def deselect_for(reason: str, error_injections: list[str] | None = None) -> Call
 #       >>> await anext(cluster_event, None)
 
 
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
 async def sleep_for_30_seconds(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
@@ -525,6 +533,14 @@ async def remove_node(manager: ManagerClient,
     yield
 
 
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
 async def restart_non_coordinator_node(manager: ManagerClient,
                                        random_tables: RandomTables,
                                        error_injection: str) -> AsyncIterator[None]:
@@ -536,6 +552,14 @@ async def restart_non_coordinator_node(manager: ManagerClient,
     yield
 
 
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
 async def restart_coordinator_node(manager: ManagerClient,
                                    random_tables: RandomTables,
                                    error_injection: str) -> AsyncIterator[None]:
@@ -546,7 +570,14 @@ async def restart_coordinator_node(manager: ManagerClient,
 
     yield
 
-
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
 async def stop_non_coordinator_node_gracefully(manager: ManagerClient,
                                                random_tables: RandomTables,
                                                error_injection: str) -> AsyncIterator[None]:
@@ -558,6 +589,25 @@ async def stop_non_coordinator_node_gracefully(manager: ManagerClient,
     yield
 
 
+<<<<<<< HEAD
+||||||| parent of 5992e8b031 (test.py: topology_random_failures: more deselects for #21534)
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
+=======
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
+>>>>>>> 5992e8b031 (test.py: topology_random_failures: more deselects for #21534)
 async def stop_coordinator_node_gracefully(manager: ManagerClient,
                                            random_tables: RandomTables,
                                            error_injection: str) -> AsyncIterator[None]:
@@ -569,6 +619,14 @@ async def stop_coordinator_node_gracefully(manager: ManagerClient,
     yield
 
 
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
 async def kill_non_coordinator_node(manager: ManagerClient,
                                     random_tables: RandomTables,
                                     error_injection: str) -> AsyncIterator[None]:
@@ -583,6 +641,25 @@ async def kill_non_coordinator_node(manager: ManagerClient,
     yield
 
 
+<<<<<<< HEAD
+||||||| parent of 5992e8b031 (test.py: topology_random_failures: more deselects for #21534)
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
+=======
+@deselect_for(
+    # TODO: remove this skip when #21534 will be resolved.
+    error_injections=[
+        "stop_after_setting_mode_to_normal_raft_topology",
+        "stop_before_becoming_raft_voter",
+    ],
+    reason="See issue #21534 (assertion 'local_is_initialized()' failed during shutdown after a failed boot)",
+)
+>>>>>>> 5992e8b031 (test.py: topology_random_failures: more deselects for #21534)
 async def kill_coordinator_node(manager: ManagerClient,
                                 random_tables: RandomTables,
                                 error_injection: str) -> AsyncIterator[None]:
