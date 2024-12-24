@@ -26,9 +26,7 @@
 #include <type_traits>
 #include <optional>
 #include <unordered_map>
-
-#include <boost/lexical_cast.hpp>
-
+#include <charconv>
 
 namespace utils {
 
@@ -163,7 +161,14 @@ class error_injection {
             if constexpr (std::is_same_v<T, std::string_view>) {
                 return s;
             } else {
-                return boost::lexical_cast<T>(s.data(), s.size());
+                T value;
+                auto conv_result = std::from_chars<T>(s.data(), s.data() + s.size(), value);
+                if (conv_result.ptr == s.data() + s.size() && conv_result.ec == std::errc()) {
+                    return value;
+                } else {
+                    throw std::runtime_error(fmt::format("Failed to convert injected value [{}] for parameter [{}], injection [{}]",
+                        s, name, injection_name));
+                }
             }
         }
     };
