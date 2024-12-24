@@ -43,6 +43,7 @@ using vbc_view_tasks = vbc_tasks::mapped_type;
 
 struct view_building_state {
     vbc_tasks build_tasks;
+    std::optional<view_name> processing_view;
 };
 
 query_state& vb_coordinator_query_state() {
@@ -98,8 +99,11 @@ private:
 
     future<> initialize_coordinator_state() {
         auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
+        auto processing_view = co_await _sys_ks.get_vbc_processing_view();
+
         _vb_state = view_building_state {
-            .build_tasks = std::move(tasks)
+            .build_tasks = std::move(tasks),
+            .processing_view = std::move(processing_view),
         };
     }
 
@@ -177,18 +181,15 @@ future<> view_building_coordinator::update_coordinator_state(group0_guard guard)
         }
     }
 
-<<<<<<< Updated upstream
-=======
     if (!_vb_state->processing_view && !state_copy.build_tasks.empty()) {
         auto& view_name = state_copy.build_tasks.cbegin()->first;
-        vbc_logger.info("Start building view: {}.{}", view_name.first, view_name.second);
+        vbc_logger.info("Start building {}.{}", view_name.first, view_name.second);
 
         auto mut = co_await _sys_ks.make_vbc_processing_view_mutation(batch.write_timestamp(), view_name);
         batch.add_mutation(std::move(mut), "start building next view");
         state_copy.processing_view = view_name;
     }
 
->>>>>>> Stashed changes
     if (!batch.empty()) {
         co_await std::move(batch).commit(_group0.client(), _as, std::nullopt); //TODO: specify timeout?
         _vb_state = std::move(state_copy);
