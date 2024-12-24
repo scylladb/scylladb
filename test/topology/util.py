@@ -219,6 +219,9 @@ async def wait_until_last_generation_is_in_use(cql: Session):
         logger.info(f"The last generation is already in use.")
 
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host], cqls: Optional[list[Session]] = None):
+    # This function expects that all nodes in the topology are normal or left. Don't call it, for example, while a node
+    # is joining the topology.
+    #
     # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
     # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
     # in the system.peers table.
@@ -241,14 +244,16 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
             assert row.host_id is not None
             assert row.datacenter is not None
             assert row.ignore_msb is not None
-            assert row.node_state == "normal"
+            assert row.node_state == "normal" or row.node_state == "left"
             assert row.num_tokens is not None
             assert row.rack is not None
             assert row.release_version is not None
             assert row.supported_features is not None
             assert row.shard_count is not None
 
-            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
+            tokens = 0 if row.tokens is None else len(row.tokens)
+            expected_tokens = row.num_tokens if row.node_state == "normal" else 0
+            assert tokens == expected_tokens
 
         assert topo_res[0].committed_cdc_generations is not None
         committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
