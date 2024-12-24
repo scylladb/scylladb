@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/from_chars_exactly.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
@@ -26,9 +27,6 @@
 #include <type_traits>
 #include <optional>
 #include <unordered_map>
-
-#include <boost/lexical_cast.hpp>
-
 
 namespace utils {
 
@@ -163,7 +161,10 @@ class error_injection {
             if constexpr (std::is_same_v<T, std::string_view>) {
                 return s;
             } else {
-                return boost::lexical_cast<T>(s.data(), s.size());
+                return utils::from_chars_exactly<T>(s, [&] (std::string_view s) {
+                    return std::runtime_error(fmt::format("Failed to convert injected value [{}] for parameter [{}], injection [{}]",
+                        s, name, injection_name));
+                });
             }
         }
     };
