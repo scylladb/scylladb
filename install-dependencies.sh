@@ -205,7 +205,7 @@ arch_packages=(
 )
 
 go_arch() {
-    declare -A local GO_ARCH=(
+    local -A GO_ARCH=(
         ["x86_64"]=amd64
         ["aarch64"]=arm64
         ["s390x"]=s390x
@@ -350,7 +350,7 @@ elif [ "$ID" = "fedora" ]; then
     dnf install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
     PIP_DEFAULT_ARGS="--only-binary=:all: -v"
     pip_constrained_packages=""
-    for package in ${!pip_packages[@]}
+    for package in "${!pip_packages[@]}"
     do
         pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
     done
