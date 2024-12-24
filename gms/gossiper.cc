@@ -182,8 +182,10 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         co_return;
     }
 
-    /* If the message is from a node with a different group0 id throw it away. */
-    if (syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
+    // If the message is from a node with a different group0 id throw it away.
+    // Group 0 ID mismatch is expected while permorming a rolling restart during Raft recovery.
+    if (_gcfg.recovery_leader().empty()
+            && syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
         logger.warn("Group0Id mismatch from {} {} != {}", from.addr, syn_msg.group0_id(), get_group0_id());
         co_return;
     }
