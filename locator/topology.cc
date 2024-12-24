@@ -6,11 +6,14 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <bit>
+#include <ranges>
+#include <utility>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/lazy.hh>
-#include <utility>
 
 #include <seastar/core/shard_id.hh>
 #include "utils/log.hh"
@@ -108,6 +111,7 @@ topology::topology(config cfg)
         : _shard(this_shard_id())
         , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
+        , _random_engine(std::random_device{}())
 {
     tlogger.trace("topology[{}]: constructing using config: endpoint={} id={} dc={} rack={}", fmt::ptr(this),
             cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
@@ -127,6 +131,7 @@ topology::topology(topology&& o) noexcept
     , _dc_racks(std::move(o._dc_racks))
     , _sort_by_proximity(o._sort_by_proximity)
     , _datacenters(std::move(o._datacenters))
+    , _random_engine(std::move(o._random_engine))
 {
     SCYLLA_ASSERT(_shard == this_shard_id());
     tlogger.trace("topology[{}]: move from [{}]", fmt::ptr(this), fmt::ptr(&o));
@@ -178,6 +183,7 @@ future<topology> topology::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
     ret._sort_by_proximity = _sort_by_proximity;
+    ret._random_engine = _random_engine;
     co_return ret;
 }
 
@@ -567,18 +573,40 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 }
 
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
-    if (_sort_by_proximity) {
-        std::sort(addresses.begin(), addresses.end(), [this, &address](locator::host_id& a1, locator::host_id& a2) {
-            return compare_endpoints(address, a1, a2) < 0;
-        });
+    if (can_sort_by_proximity()) {
+        do_sort_by_proximity(address, addresses);
     }
 }
 
-std::weak_ordering topology::compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const {
+void topology::do_sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
     const auto& loc = get_location(address);
-    const auto& loc1 = get_location(a1);
-    const auto& loc2 = get_location(a2);
+    struct info {
+        locator::host_id id;
+        int distance;
+    };
+    auto host_infos = addresses | std::views::transform([&] (locator::host_id id) {
+        const auto& loc1 = get_location(id);
+        return info{id, distance(address, loc, id, loc1)};
+    }) | std::ranges::to<utils::small_vector<info, host_id_vector_replica_set::internal_capacity()>>();
+    std::ranges::sort(host_infos, std::ranges::less{}, std::mem_fn(&info::distance));
+    auto dst = addresses.begin();
+    auto it = host_infos.begin();
+    auto prev = it;
+    auto shuffler = _random_engine();
+    for (++it; it < host_infos.end(); ++it, ++dst) {
+        if (prev->distance == it->distance) {
+            if (shuffler & 1) {
+                std::swap(prev->id, it->id);
+            }
+            shuffler = std::rotr(shuffler, 1);
+        }
+        *dst = prev->id;
+        prev = it;
+    }
+    *dst = prev->id;
+}
 
+int topology::distance(const locator::host_id& address, const endpoint_dc_rack& loc, const locator::host_id& a1, const endpoint_dc_rack& loc1) noexcept {
     // The farthest nodes from a given node are:
     // 1. Nodes in other DCs then the reference node
     // 2. Nodes in the other RACKs in the same DC as the reference node
@@ -587,13 +615,7 @@ std::weak_ordering topology::compare_endpoints(const locator::host_id& address, 
     int same_rack1 = same_dc1 & (loc1.rack == loc.rack);
     int same_node1 = a1 == address;
     int d1 = ((same_dc1 << 2) | (same_rack1 << 1) | same_node1) ^ 7;
-
-    int same_dc2 = loc2.dc == loc.dc;
-    int same_rack2 = same_dc2 & (loc2.rack == loc.rack);
-    int same_node2 = a2 == address;
-    int d2 = ((same_dc2 << 2) | (same_rack2 << 1) | same_node2) ^ 7;
-
-    return d1 <=> d2;
+    return d1;
 }
 
 void topology::for_each_node(std::function<void(const node&)> func) const {
@@ -631,6 +653,10 @@ topology::get_datacenter_host_ids() const {
         ret[dc] = nodes | std::views::transform([] (const node& n) { return n.host_id(); }) | std::ranges::to<std::unordered_set>();
     }
     return ret;
+}
+
+void topology::seed_random_engine(random_engine_type::result_type value) {
+    _random_engine.seed(value);
 }
 
 } // namespace locator

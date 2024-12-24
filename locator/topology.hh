@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <compare>
 #include <iostream>
+#include <random>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -26,6 +27,8 @@
 #include "inet_address_vectors.hh"
 
 using namespace seastar;
+
+struct sort_by_proximity_topology;
 
 namespace locator {
 class topology;
@@ -353,11 +356,31 @@ public:
         return std::count_if(endpoints.begin(), endpoints.end(), get_local_dc_filter());
     }
 
+    bool can_sort_by_proximity() const noexcept {
+        return _sort_by_proximity;
+    }
+
     /**
-     * This method will sort the <tt>List</tt> by proximity to the given
-     * host_id.
+     * This method will sort the addresses list by proximity to the given host_id,
+     * if `can_sort_by_proximity()`.
      */
     void sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const;
+
+    /**
+     * Unconditionally sort the addresses list by proximity to the given host_id,
+     * assuming `can_sort_by_proximity`.
+     */
+    void do_sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const;
+
+    /**
+     * Calculates topology-distance between two endpoints.
+     *
+     * The closest nodes to a given node are:
+     * 1. The node itself
+     * 2. Nodes in the same RACK
+     * 3. Nodes in the same DC
+     */
+    static int distance(const locator::host_id& address, const endpoint_dc_rack& loc, const locator::host_id& address1, const endpoint_dc_rack& loc1) noexcept;
 
     // Executes a function for each node in a state other than "none" and "left".
     void for_each_node(std::function<void(const node&)> func) const;
@@ -389,6 +412,8 @@ public:
     }
 
 private:
+    using random_engine_type = std::mt19937_64;
+
     bool is_configured_this_node(const node&) const;
     const node& add_node(node_holder node);
     void remove_node(const node& node);
@@ -403,16 +428,7 @@ private:
         return const_cast<node*>(nptr);
     }
 
-    /**
-     * compares two endpoints in relation to the target endpoint, returning as
-     * Comparator.compare would
-     *
-     * The closest nodes to a given node are:
-     * 1. The node itself
-     * 2. Nodes in the same RACK as the reference node
-     * 3. Nodes in the same DC as the reference node
-     */
-    std::weak_ordering compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const;
+    void seed_random_engine(random_engine_type::result_type);
 
     unsigned _shard;
     config _cfg;
@@ -446,7 +462,10 @@ private:
         return _nodes_by_endpoint;
     };
 
+    mutable random_engine_type _random_engine;
+
     friend class token_metadata_impl;
+    friend struct ::sort_by_proximity_topology;
 public:
     void test_compare_endpoints(const locator::host_id& address, const locator::host_id& a1, const locator::host_id& a2) const;
     void test_sort_by_proximity(const locator::host_id& address, const host_id_vector_replica_set& nodes) const;
