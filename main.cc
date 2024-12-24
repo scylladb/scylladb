@@ -1635,6 +1635,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
                 gcfg.force_gossip_generation = cfg->force_gossip_generation;
+                gcfg.recovery_leader = cfg->recovery_leader;
                 return gcfg;
             });
 
