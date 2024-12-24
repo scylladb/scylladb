@@ -280,15 +280,25 @@ async def check_node_log_for_failed_mutations(manager: ManagerClient, server: Se
     assert len(occurrences) == 0
 
 
-async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3):
+async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3,
+                       ks_name: Optional[str] = None, node_shutdowns: bool = False):
     logging.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
 
+<<<<<<< HEAD:test/topology/util.py
     ks_name = unique_name()
     await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+||||||| parent of d0efc77d20 (test: topology: util: extend start_writes):test/cluster/util.py
+    ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+=======
+    if ks_name is None:
+        ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+>>>>>>> d0efc77d20 (test: topology: util: extend start_writes):test/cluster/util.py
     await cql.run_async(f"USE {ks_name}")
-    await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE TABLE IF NOT EXISTS tbl (pk int PRIMARY KEY, v int)")
 
     # In the test we only care about whether operations report success or not
     # and whether they trigger errors in the nodes' logs. Inserting the same
@@ -302,6 +312,12 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
             try:
                 await cql.run_async(stmt)
                 write_count += 1
+            except NoHostAvailable as e:
+                for _, err in e.errors.items():
+                    # ConnectionException can be raised when the node is shutting down.
+                    if not node_shutdowns or not isinstance(err, ConnectionException):
+                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                        raise
             except Exception as e:
                 logging.error(f"Write started {time.time() - start_time}s ago failed: {e}")
                 raise
