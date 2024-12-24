@@ -23,7 +23,7 @@ from test.topology.util import wait_for_token_ring_and_group0_consistency, get_c
 from test.topology.conftest import skip_mode
 from test.pylib.internal_types import ServerUpState
 from test.topology_random_failures.cluster_events import CLUSTER_EVENTS, TOPOLOGY_TIMEOUT
-from test.topology_random_failures.error_injections import ERROR_INJECTIONS
+from test.topology_random_failures.error_injections import ERROR_INJECTIONS, ERROR_INJECTIONS_NODE_MAY_HANG
 
 if TYPE_CHECKING:
     from test.pylib.random_tables import RandomTables
@@ -149,14 +149,19 @@ async def test_random_failures(manager: ManagerClient,
 
     server_log = await manager.server_open_log(server_id=s_info.server_id)
 
-    if cluster_event_duration + 1 >= WAIT_FOR_IP_TIMEOUT and error_injection in (  # give one more second for a tolerance
-        "stop_after_sending_join_node_request",
-        "stop_after_bootstrapping_initial_raft_configuration",
-    ):
+    if cluster_event_duration + 1 >= WAIT_FOR_IP_TIMEOUT and error_injection in ERROR_INJECTIONS_NODE_MAY_HANG:
         LOGGER.info("Expecting the added node can hang and we'll have a message in the coordinator's log.  See #18638.")
         coordinator = await get_coordinator_host(manager=manager)
         coordinator_log = await manager.server_open_log(server_id=coordinator.server_id)
-        if matches := await coordinator_log.grep(r"The node may hang\. It's safe to shut it down manually now\."):
+        coordinator_log_pattern = r"The node may hang\. It's safe to shut it down manually now\."
+        if matches := await server_log.grep(r"init - Setting local host id to (?P<hostid>[0-9a-f-]+)"):
+            line, match = matches[-1]
+            LOGGER.info("Found following message in the coordinator's log:\n\t%s", line)
+            coordinator_log_pattern += (
+                rf"|updating topology state: rollback {match.group('hostid')} after bootstrapping failure, moving"
+                rf" transition state to left token ring and setting cleanup flag"
+            )
+        if matches := await coordinator_log.grep(coordinator_log_pattern):
             LOGGER.info("Found following message in the coordinator's log:\n\t%s", matches[-1][0])
             await manager.server_stop(server_id=s_info.server_id)
 
