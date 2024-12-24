@@ -1,0 +1,58 @@
+name: Urgent Issue Reminder
+
+on:
+  schedule:
+    - cron: '10 8 * * 1' # Runs every Monday at 8 AM
+
+jobs:
+  reminder:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Send reminders
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const labelFilters = ['P0', 'P1', 'Field-Tier1','status/release blocker', 'status/regression']; 
+          const excludingLabelFilters = ['documentation'];
+          const daysInactive = 7;
+          const now = new Date();
+
+          // Fetch open issues
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open'
+          });
+          console.log("Looking for issues with labels:"+labelFilters+", excluding labels:"+excludingLabelFilters+ ", inactive for more than "+daysInactive+" days.");
+          for (const issue of issues.data) {
+            // Check if issue has any of the specified labels
+            const hasFilteredLabel = issue.labels.some(label => labelFilters.includes(label.name));
+            const hasExcludingLabel = issue.labels.some(label => excludingLabelFilters.includes(label.name));
+            if (hasExcludingLabel) continue;
+            if (!hasFilteredLabel) continue;
+
+            // Check for inactivity
+            const lastUpdated = new Date(issue.updated_at);
+            const diffInDays = (now - lastUpdated) / (1000 * 60 * 60 * 24);
+            console.log("Issue #"+issue.number+"; Days inactive:"+diffInDays);
+            if (diffInDays > daysInactive) {
+              if (issue.assignees.length > 0) {
+                console.log("==>> Alert about issue #"+issue.number);
+                const assigneesLogins = issue.assignees.map(assignee => `@${assignee.login}`).join(', ');
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `${assigneesLogins}, This urgent issue had no activity for more than ${daysInactive} days. Please check its status.\n CC @mykaul @dani-tweig`
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `This urgent issue had no activity for more than ${daysInactive} days. Please check its status.\n CC @mykaul @dani-tweig`
+                });
+              }
+            }
+          }
