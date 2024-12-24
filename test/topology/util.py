@@ -285,20 +285,21 @@ async def check_node_log_for_failed_mutations(manager: ManagerClient, server: Se
     assert len(occurrences) == 0
 
 
-async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3):
+async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3,
+                       ks_name: Optional[str] = None, node_shutdowns: bool = False):
     logging.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
 
-    ks_name = unique_name()
+    if ks_name is None:
+        ks_name = unique_name()
     await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
-    await cql.run_async(f"USE {ks_name}")
-    await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)")
 
     # In the test we only care about whether operations report success or not
     # and whether they trigger errors in the nodes' logs. Inserting the same
     # value repeatedly is enough for our purposes.
-    stmt = SimpleStatement("INSERT INTO tbl (pk, v) VALUES (0, 0)", consistency_level=cl)
+    stmt = SimpleStatement(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (0, 0)", consistency_level=cl)
 
     async def do_writes(worker_id: int):
         write_count = 0
@@ -307,6 +308,12 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
             try:
                 await cql.run_async(stmt)
                 write_count += 1
+            except NoHostAvailable as e:
+                for _, err in e.errors.items():
+                    # ConnectionException can be raised when the node is shutting down.
+                    if not node_shutdowns or not isinstance(err, ConnectionException):
+                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                        raise
             except Exception as e:
                 logging.error(f"Write started {time.time() - start_time}s ago failed: {e}")
                 raise
@@ -314,12 +321,21 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
 
     tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
 
-    async def finish():
+    async def restart(new_cql: Session):
+        nonlocal cql
+        nonlocal tasks
+        logger.info("Restarting write workers")
+        assert stop_event.is_set()
+        stop_event.clear()
+        cql = new_cql
+        tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
+
+    async def stop():
         logging.info("Stopping write workers")
         stop_event.set()
         await asyncio.gather(*tasks)
 
-    return finish
+    return restart, stop
 
 async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
