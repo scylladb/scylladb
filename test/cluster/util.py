@@ -171,8 +171,19 @@ async def delete_raft_data(cql: Session, host: Host) -> None:
     await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
 
 
+async def delete_discovery_state_and_group0_id(cql: Session, host: Host) -> None:
+    await cql.run_async("truncate table system.discovery", host=host)
+    await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
+
+
 async def delete_upgrade_state(cql: Session, host: Host) -> None:
     await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+
+
+async def delete_raft_group_data(group_id: str, cql: Session, host: Host) -> None:
+    await cql.run_async(f'delete from system.raft where group_id = {group_id}', host=host)
+    await cql.run_async(f'delete from system.raft_snapshots where group_id = {group_id}', host=host)
+    await cql.run_async(f'delete from system.raft_snapshot_config where group_id = {group_id}', host=host)
 
 
 async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:

@@ -1814,6 +1814,11 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
                 throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
             }
 
+            co_await utils::get_local_injector().inject("crash_before_topology_request_completion", [] (auto& handler) -> future<> {
+                co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+                throw std::runtime_error("Crashed in crash_before_topology_request_completion");
+            });
+
             auto err = co_await wait_for_topology_request_completion(join_params.request_id);
             if (!err.empty()) {
                 throw std::runtime_error(fmt::format("{} failed. See earlier errors ({})", raft_replace_info ? "Replace" : "Bootstrap", err));
