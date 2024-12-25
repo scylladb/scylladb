@@ -356,16 +356,6 @@ static future<> set_gossip_tokens(gms::gossiper& g,
     );
 }
 
-static std::unordered_map<token, gms::inet_address> get_token_to_endpoint(const locator::token_metadata& tm) {
-    const auto& map = tm.get_token_to_endpoint();
-    std::unordered_map<token, gms::inet_address> result;
-    result.reserve(map.size());
-    for (const auto [t, id]: map) {
-        result.insert({t, tm.get_endpoint_for_host_id(id)});
-    }
-    return result;
-}
-
 /*
  * The helper waits for two things
  *  1) for schema agreement
@@ -1964,7 +1954,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
                 for (auto token : bootstrap_tokens) {
                     auto existing = tmptr->get_endpoint(token);
                     if (existing) {
-                        auto eps = _gossiper.get_endpoint_state_ptr(tmptr->get_endpoint_for_host_id(*existing));
+                        auto eps = _gossiper.get_endpoint_state_ptr(*existing);
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - delay) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
@@ -2468,7 +2458,10 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     // token_to_endpoint_map is used to track the current token owners for the purpose of removing replaced endpoints.
     // when any token is replaced by a new owner, we track the existing owner in `candidates_for_removal`
     // and eventually, if any candidate for removal ends up owning no tokens, it is removed from token_metadata.
-    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_to_endpoint(get_token_metadata());
+    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint() |
+            std::views::transform([this] (auto& e) {
+                return std::make_pair(e.first, _address_map.get(e.second));
+            }) | std::ranges::to<std::unordered_map>();
     std::unordered_set<inet_address> candidates_for_removal;
 
     // Here we convert endpoint tokens from gossiper to owned_tokens, which will be assigned as a new
@@ -2587,7 +2580,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         const auto& tm = get_token_metadata();
         auto ver = tm.get_ring_version();
         for (auto& x : tm.get_token_to_endpoint()) {
-            slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}/{}", ver, x.first, tm.get_endpoint_for_host_id(x.second), x.second);
+            slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}/{}", ver, x.first, _address_map.get(x.second), x.second);
         }
     }
     _normal_state_handled_on_boot.insert(endpoint);
@@ -3472,7 +3465,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
-    return run_with_no_api_lock([] (storage_service& ss) {
+    return run_with_no_api_lock([this] (storage_service& ss) {
         const auto& tm = ss.get_token_metadata();
         auto token_map = dht::token::describe_ownership(tm.sorted_tokens());
         // describeOwnership returns tokens in an unspecified order, let's re-order them
@@ -3480,7 +3473,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
         for (auto entry : token_map) {
             locator::host_id id = tm.get_endpoint(entry.first).value();
             auto token_ownership = entry.second;
-            ownership[tm.get_endpoint_for_host_id(id)] += token_ownership;
+            ownership[_address_map.get(id)] += token_ownership;
         }
         return ownership;
     });
@@ -5299,10 +5292,10 @@ std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
     const auto& tm = get_token_metadata();
     std::map<token, inet_address> result;
     for (const auto [t, id]: tm.get_token_to_endpoint()) {
-        result.insert({t, tm.get_endpoint_for_host_id(id)});
+        result.insert({t, _address_map.get(id)});
     }
     for (const auto [t, id]: tm.get_bootstrap_tokens()) {
-        result.insert({t, tm.get_endpoint_for_host_id(id)});
+        result.insert({t, _address_map.get(id)});
     }
     return result;
 }
@@ -5312,7 +5305,7 @@ future<std::map<token, inet_address>> storage_service::get_tablet_to_endpoint_ma
     const auto& tmap = tm.tablets().get_tablet_map(table);
     std::map<token, inet_address> result;
     for (std::optional<locator::tablet_id> tid = tmap.first_tablet(); tid; tid = tmap.next_tablet(*tid)) {
-        result.emplace(tmap.get_last_token(*tid), tm.get_endpoint_for_host_id(tmap.get_primary_replica(*tid).host));
+        result.emplace(tmap.get_last_token(*tid), _address_map.get(tmap.get_primary_replica(*tid).host));
         co_await coroutine::maybe_yield();
     }
     co_return result;
