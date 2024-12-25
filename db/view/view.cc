@@ -2058,6 +2058,7 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         _current_step = _base_to_build_step.begin();
         // Waited on indirectly in stop().
         (void)_build_step.trigger();
+        _started_flag = true;
     } catch (...) {
         auto ex = std::current_exception();
         auto ll = log_level::error;
@@ -2098,7 +2099,9 @@ future<> view_builder::drain() {
 
 future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
-    return drain();
+    // If the view builder has been started, verify that it's also been drained before we stop it.
+    SCYLLA_ASSERT(!_started_flag || _as.abort_requested());
+    co_return;
 }
 
 view_builder::build_step& view_builder::get_or_create_build_step(table_id base_id) {
