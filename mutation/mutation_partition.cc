@@ -1761,12 +1761,12 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             if (cell) {
                 r.append_cell(c.key(), std::move(*cell));
             }
-        } else if (s.column_at(kind, c.key()).is_atomic()) {
+        } else if (cdef.is_atomic()) {
             if (compare_atomic_cell_for_merge(c->cell.as_atomic_cell(cdef), it->cell.as_atomic_cell(cdef)) > 0) {
                 r.append_cell(c.key(), c->cell.copy(*cdef.type));
             }
         } else {
-            auto diff = ::difference(*s.column_at(kind, c.key()).type,
+            auto diff = ::difference(*cdef.type,
                     c->cell.as_collection_mutation(), it->cell.as_collection_mutation());
             if (!static_cast<collection_mutation_view>(diff).is_empty()) {
                 r.append_cell(c.key(), std::move(diff));
