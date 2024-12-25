@@ -19,6 +19,7 @@ Syntax
                --keyspace <keyspace>
                --table <table>
                [--nowait]
+               [--scope <scope>]
                <sstables>...
 
 Example
@@ -43,7 +44,21 @@ Options
 * ``--keyspace`` - Name of the keyspace to load SSTables into
 * ``--table`` - Name of the table to load SSTables into
 * ``--nowait`` - Don't wait on the restore process
+* ``--scope <scope>`` - Use specified load-and-stream scope
 * ``<sstables>`` - Remainder of keys of the TOC (Table of Contents) components of SSTables to restore, relative to the specified prefix
+
+The `scope` parameter describes the subset of cluster nodes where you want to load data:
+
+* `node` - On the local node.
+* `rack` - On the local rack.
+* `dc` - In the datacenter (DC) where the local node lives.
+* `all` (default) - Everywhere across the cluster.
+
+To fully restore a cluster, you should combine the ``scope`` parameter with the correct list of
+SStables to restore to each node.
+On one extreme, one node is given all SStables with the scope ``all``; on the other extreme, all
+nodes are restoring only their own SStables with the scope ``node``. In between, you can choose
+a subset of nodes to restore only SStables that belong to the rack or DC.
 
 See also
 

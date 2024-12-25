@@ -463,6 +463,22 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
+static sstables_loader::stream_scope parse_stream_scope(const sstring& scope_str) {
+    using namespace ss::ns_start_restore;
+    auto sc = scope_str.empty() ? scope::all : str2scope(scope_str);
+
+    switch (sc) {
+    case scope::all: return sstables_loader::stream_scope::all;
+    case scope::dc: return sstables_loader::stream_scope::dc;
+    case scope::rack: return sstables_loader::stream_scope::rack;
+    case scope::node: return sstables_loader::stream_scope::node;
+    case scope::NUM_ITEMS:
+        break;
+    }
+
+    throw httpd::bad_param_exception("invalid scope parameter value");
+}
+
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
     ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<http::request> req) {
         auto ks = validate_keyspace(ctx, req);
@@ -479,7 +495,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
                 load_and_stream, primary_replica_only] (sstables_loader& loader) {
-            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
+            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, sstables_loader::stream_scope::all);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
@@ -495,6 +511,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto table = req->get_query_param("table");
         auto bucket = req->get_query_param("bucket");
         auto prefix = req->get_query_param("prefix");
+        auto scope = parse_stream_scope(req->get_query_param("scope"));
 
         // TODO: the http_server backing the API does not use content streaming
         // should use it for better performance
@@ -505,7 +522,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto sstables = parsed.GetArray() |
             std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
             std::ranges::to<std::vector>();
-        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket);
+        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 
