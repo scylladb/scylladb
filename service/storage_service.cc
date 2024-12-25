@@ -2334,7 +2334,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
         }
         tmptr->remove_endpoint(host_id);
     }
-    tmptr->update_topology(host_id, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
+    tmptr->update_topology(host_id, get_dc_rack_for(host_id), locator::node::state::bootstrapping);
     tmptr->add_bootstrap_tokens(tokens, host_id);
     tmptr->update_host_id(host_id, endpoint);
 
@@ -2544,7 +2544,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             do_notify_joined = true;
         }
 
-        const auto dc_rack = get_dc_rack_for(endpoint);
+        const auto dc_rack = get_dc_rack_for(host_id);
         tmptr->update_topology(host_id, dc_rack, locator::node::state::normal);
         co_await tmptr->update_normal_tokens(owned_tokens, host_id);
         if (replaced_id) {
@@ -2661,7 +2661,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        const auto dc_rack = get_dc_rack_for(endpoint);
+        const auto dc_rack = get_dc_rack_for(host_id);
         tmptr->update_host_id(host_id, endpoint);
         tmptr->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -2881,7 +2881,7 @@ std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(const 
     };
 }
 
-std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(inet_address endpoint) {
+std::optional<locator::endpoint_dc_rack> storage_service::get_dc_rack_for(locator::host_id endpoint) {
     auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!eps) {
         return std::nullopt;
@@ -3410,11 +3410,11 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         }
     }
 
-    auto dc_rack = get_dc_rack_for(replace_address).value_or(locator::endpoint_dc_rack::default_location);
-
     if (!replace_host_id) {
         replace_host_id = _gossiper.get_host_id(replace_address);
     }
+
+    auto dc_rack = get_dc_rack_for(replace_host_id).value_or(locator::endpoint_dc_rack::default_location);
 
     auto ri = replacement_info {
         .tokens = std::move(tokens),
@@ -4568,7 +4568,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     // excluded from normal_endpoints (maybe_remove_node_being_replaced function).
                     // In handle_state_normal we'll remap the IP to the new host_id.
                     tmptr->update_topology(existing_node_id, std::nullopt, locator::node::state::being_replaced);
-                    tmptr->update_topology(replacing_node_id, get_dc_rack_for(replacing_node), locator::node::state::replacing);
+                    tmptr->update_topology(replacing_node_id, get_dc_rack_for(replacing_node_id), locator::node::state::replacing);
                     tmptr->update_host_id(replacing_node_id, replacing_node);
                     tmptr->add_replacing_endpoint(existing_node_id, replacing_node_id);
                 }
@@ -4586,7 +4586,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                             req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
 
                         tmptr->del_replacing_endpoint(existing_node_id);
-                        const auto dc_rack = get_dc_rack_for(replacing_node);
+                        const auto dc_rack = get_dc_rack_for(replacing_node_id);
                         tmptr->update_topology(existing_node_id, dc_rack, locator::node::state::normal);
                         tmptr->remove_endpoint(replacing_node_id);
                     }
@@ -4632,7 +4632,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
                     const auto host_id = *coordinator_host_id;
-                    const auto dc_rack = get_dc_rack_for(endpoint);
+                    const auto dc_rack = get_dc_rack_for(host_id);
                     slogger.info("bootstrap[{}]: Added node={}/{} as bootstrap, coordinator={}/{}",
                         req.ops_uuid, endpoint, host_id, coordinator, *coordinator_host_id);
                     tmptr->update_host_id(host_id, endpoint);
@@ -5368,7 +5368,7 @@ future<> storage_service::update_topology_change_info(mutable_token_metadata_ptr
                 return std::nullopt;
             }
 
-            return get_dc_rack_for(tm.get_endpoint_for_host_id(host_id));
+            return get_dc_rack_for(host_id);
         });
         co_await tmptr->update_topology_change_info(get_dc_rack_by_host_id);
     } catch (...) {

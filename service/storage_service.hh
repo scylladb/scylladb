@@ -530,7 +530,7 @@ private:
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
-    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);
+    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(locator::host_id endpoint);
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
