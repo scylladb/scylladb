@@ -44,10 +44,6 @@ def deselect_for(reason: str, error_injections: list[str] | None = None) -> Call
     If `error_injection` is None then the cluster event disabled for all error injections available.
     """
     def add_deselected_metadata(fn: Callable[P, T]) -> Callable[P, T]:
-        if not hasattr(fn, "deselected_random_failures"):
-            fn.deselected_random_failures = {}
-        for inj in ERROR_INJECTIONS if error_injections is None else error_injections:
-            fn.deselected_random_failures[inj] = reason
         return fn
     return add_deselected_metadata
 
