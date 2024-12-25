@@ -1244,8 +1244,7 @@ public:
             tracing::trace_state_ptr tr_state) override {
         auto m = _mutations[hid];
         if (m) {
-            const auto ep = ermptr->get_token_metadata().get_endpoint_for_host_id(hid);
-            return hm.store_hint(hid, ep, _schema, std::move(m), tr_state);
+            return hm.store_hint(hid, _schema, std::move(m), tr_state);
         } else {
             return false;
         }
@@ -1303,8 +1302,7 @@ public:
     }
     virtual bool store_hint(db::hints::manager& hm, locator::host_id hid, locator::effective_replication_map_ptr ermptr,
             tracing::trace_state_ptr tr_state) override {
-        const auto ep = ermptr->get_token_metadata().get_endpoint_for_host_id(hid);
-        return hm.store_hint(hid, ep, _schema, _mutation, tr_state);
+        return hm.store_hint(hid, _schema, _mutation, tr_state);
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,

@@ -430,9 +430,10 @@ bool manager::have_ep_manager(const std::variant<locator::host_id, gms::inet_add
     return _hint_directory_manager.has_mapping(std::get<gms::inet_address>(ep));
 }
 
-bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+bool manager::store_hint(endpoint_id host_id, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
         tracing::trace_state_ptr tr_state) noexcept
 {
+    auto ip = _gossiper_anchor->get_address_map().get(host_id);
     if (utils::get_local_injector().enter("reject_incoming_hints")) {
         manager_logger.debug("Rejecting a hint to {} / {} due to an error injection", host_id, ip);
         ++_stats.dropped;
