@@ -11,3 +11,11 @@
 sleep_fn seastar_sleep_fn = [] (std::chrono::milliseconds ms) -> future<> {
     return seastar::sleep(ms);
 };
+
+sleep_fn manual_clock_sleep_fn = [] (std::chrono::milliseconds ms) -> future<> {
+    auto end = manual_clock::now() + ms;
+    while (manual_clock::now() < end) {
+        manual_clock::advance(std::chrono::milliseconds(1));
+        co_await yield();
+    }
+};
