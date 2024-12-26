@@ -11,16 +11,17 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
-from test.topology_tasks.task_manager_client import TaskManagerClient
+from test.topology_custom.tasks.task_manager_client import TaskManagerClient
+from test.topology_custom.tasks.task_manager_types import TaskID, TaskStats, TaskStatus
 
 import asyncio
 import logging
 import pytest
 import time
 
-from test.topology_tasks.task_manager_types import TaskID, TaskStats, TaskStatus
 
 logger = logging.getLogger(__name__)
+CMD = ['--task-ttl-in-seconds=10000000']
 
 async def get_status_allow_peer_connection_failure(tm: TaskManagerClient, node_ip: IPAddress, task_id: TaskID) -> Optional[TaskStatus]:
     ret = await tm.api.client.get_json(f"/task_manager/task_status/{task_id}", host = node_ip, allow_failed = True)
@@ -99,7 +100,7 @@ async def check_replace_tasks_tree(manager: ManagerClient, tm: TaskManagerClient
 
     logger.info(f"Replacing node {replaced_server}")
     replace_cfg = ReplaceConfig(replaced_id = replaced_server.server_id, reuse_ip_addr = False, use_host_id = False)
-    replacing_server = await manager.server_add(replace_cfg)
+    replacing_server = await manager.server_add(replace_cfg, cmdline = CMD)
 
     servers = servers[1:] + [replacing_server]
     virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, 1)
@@ -206,7 +207,7 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
 
-    servers = [await manager.server_add() for _ in range(3)]
+    servers = [await manager.server_add(cmdline = CMD) for _ in range(3)]
     assert module_name in await tm.list_modules(servers[0].ip_addr), "node_ops module wasn't registered"
 
     servers, vt_ids = await check_bootstrap_tasks_tree(tm, module_name, servers)
@@ -221,7 +222,7 @@ async def test_node_ops_tasks_ttl(manager: ManagerClient):
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
 
-    servers = [await manager.server_add() for _ in range(2)]
+    servers = [await manager.server_add(cmdline = CMD) for _ in range(2)]
     [await tm.set_user_task_ttl(server.ip_addr, 3) for server in servers]
     time.sleep(3)
     await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)
@@ -244,7 +245,7 @@ async def test_node_ops_task_wait(manager: ManagerClient):
     module_name = "node_ops"
     tm = TaskManagerClient(manager.api)
 
-    servers = [await manager.server_add() for _ in range(2)]
+    servers = [await manager.server_add(cmdline = CMD) for _ in range(2)]
     injection = "streaming_task_impl_decommission_run"
     handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, injection)
 

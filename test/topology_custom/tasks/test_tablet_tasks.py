@@ -13,8 +13,8 @@ from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_ta
 from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology_custom.test_tablets2 import inject_error_on
-from test.topology_tasks.task_manager_client import TaskManagerClient
-from test.topology_tasks.task_manager_types import TaskStatus, TaskStats
+from test.topology_custom.tasks.task_manager_client import TaskManagerClient
+from test.topology_custom.tasks.task_manager_types import TaskStatus, TaskStats
 
 async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
     for server in servers:
