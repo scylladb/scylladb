@@ -4,6 +4,8 @@ target_sources(compaction
     compaction.cc
     compaction_manager.cc
     compaction_strategy.cc
+    incremental_backlog_tracker.cc
+    incremental_compaction_strategy.cc
     leveled_compaction_strategy.cc
     size_tiered_compaction_strategy.cc
     task_manager_module.cc
