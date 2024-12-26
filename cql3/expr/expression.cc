@@ -141,7 +141,7 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
     auto col_type = static_pointer_cast<const collection_type_impl>(type_of(s.val));
     const auto deserialized = type_of(s.val)->deserialize(managed_bytes_view(*serialized));
     const auto key = evaluate(s.sub, inputs);
-    auto&& key_type = col_type->is_map() ? col_type->name_comparator() : int32_type;
+    auto&& key_type = col_type->is_list() ? int32_type : col_type->name_comparator();
     if (key.is_null()) {
         // For m[null] return null.
         // This is different from Cassandra - which treats m[null]
@@ -162,6 +162,15 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
             });
         });
         return found == data_map.cend() ? std::nullopt : managed_bytes_opt(found->second.serialize_nonnull());
+    } else if (col_type->is_set()) {
+        const auto& data_set = value_cast<set_type_impl::native_type>(deserialized);
+        const auto found = key.view().with_linearized([&] (bytes_view key_bv) {
+            using entry = data_value;
+            return std::find_if(data_set.cbegin(), data_set.cend(), [&] (const entry& element) {
+                return key_type->compare(element.serialize_nonnull(), key_bv) == 0;
+            });
+        });
+        return found == data_set.cend() ? std::nullopt : managed_bytes_opt(found->serialize_nonnull());
     } else if (col_type->is_list()) {
         const auto& data_list = value_cast<list_type_impl::native_type>(deserialized);
         auto key_deserialized = key.view().with_linearized([&] (bytes_view key_bv) {

@@ -1191,18 +1191,24 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
 
             auto col_spec = column_specification_of(sub_col);
             lw_shared_ptr<column_specification> subscript_column_spec;
+            data_type value_cmp;
             if (sub_col_type.is_map()) {
                 subscript_column_spec = map_key_spec_of(*col_spec);
+                value_cmp = static_cast<const collection_type_impl&>(sub_col_type).value_comparator();
+            } else if (sub_col_type.is_set()) {
+                subscript_column_spec = set_value_spec_of(*col_spec);
+                value_cmp = static_cast<const collection_type_impl&>(sub_col_type).name_comparator();
             } else if (sub_col_type.is_list()) {
                 subscript_column_spec = list_key_spec_of(*col_spec);
+                value_cmp = static_cast<const collection_type_impl&>(sub_col_type).value_comparator();
             } else {
-                throw exceptions::invalid_request_exception(format("Column {} is not a map/list, cannot be subscripted", col_spec->name->text()));
+                throw exceptions::invalid_request_exception(format("Column {} is not a map/set/list, cannot be subscripted", col_spec->name->text()));
             }
 
             return subscript {
                 .val = sub_col,
                 .sub = prepare_expression(sub.sub, db, schema.ks_name(), &schema, std::move(subscript_column_spec)),
-                .type = static_cast<const collection_type_impl&>(sub_col_type).value_comparator(),
+                .type = value_cmp,
             };
         },
         [&] (const unresolved_identifier& unin) -> std::optional<expression> {
@@ -1388,6 +1394,8 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
             const column_value& sub_col = get_subscripted_column(col_val);
             if (sub_col.col->type->is_map()) {
                 return map_value_spec_of(*sub_col.col->column_specification);
+            } else if (sub_col.col->type->is_set()) {
+                return set_value_spec_of(*sub_col.col->column_specification);
             } else {
                 return list_value_spec_of(*sub_col.col->column_specification);
             }
