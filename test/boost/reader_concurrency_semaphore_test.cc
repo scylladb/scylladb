@@ -464,7 +464,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
         }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(4 * 1024, semaphore.available_resources().memory);
+        REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, 4 * 1024);
     });
 }
 
@@ -508,7 +508,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
        }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(replica::new_reader_base_cost, semaphore.available_resources().memory);
+        REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
     });
 }
 
@@ -540,7 +540,7 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
             }
         }
 
-        REQUIRE_EVENTUALLY_EQUAL(replica::new_reader_base_cost, semaphore.available_resources().memory);
+        REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
     });
 }
 
