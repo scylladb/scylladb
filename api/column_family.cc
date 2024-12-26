@@ -202,7 +202,7 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
     return ctx.db.map(fun).then([](const std::vector<utils::ihistogram> &res) {
         std::vector<httpd::utils_json::histogram> r;
         std::ranges::copy(res | std::views::transform(to_json), std::back_inserter(r));
-        return make_ready_future<json::json_return_type>(r);
+        return make_ready_future<json::json_return_type>(std::move(r));
     });
 }
 
