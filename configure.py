@@ -1339,6 +1339,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/test_utils.cc',
     'test/lib/tmpdir.cc',
     'test/lib/sstable_run_based_compaction_strategy_for_tests.cc',
+    'test/lib/eventually.cc',
 ]
 
 scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_generic_dependencies + [
@@ -1380,6 +1381,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/lib/key_utils.cc',
                 'test/lib/random_schema.cc',
                 'test/lib/data_model.cc',
+                'test/lib/eventually.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
@@ -1574,11 +1576,11 @@ deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc', 'tools/read_mutation.cc']
 deps['test/boost/rust_test'] += ['rust/inc/src/lib.rs']
 
-deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
-deps['test/raft/raft_server_test'] = ['test/raft/raft_server_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
+deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
+deps['test/raft/raft_server_test'] = ['test/raft/raft_server_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/randomized_nemesis_test'] = ['test/raft/randomized_nemesis_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc', 'direct_failure_detector/failure_detector.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
-deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
+deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
