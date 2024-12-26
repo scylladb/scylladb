@@ -707,9 +707,21 @@ class ScyllaServer:
             # this step to fail unconditionally.
             pass
         await self.shutdown_control_connection()
+
+        if self.cmd.returncode is not None:
+            # process has already exited
+            if self.cmd.returncode != 0:
+                self.logger.error("%s exited with non-zero status code: %d", self, self.cmd.returncode)
+            self.logger.info("stopped %s in %s", self, self.workdir.name)
+            self.cmd = None
+            return
+
         try:
             self.cmd.kill()
         except ProcessLookupError:
+            # the process *might* exit after checking for self.cmd.returncode
+            # and before self.cmd.kill() call. this is unlikely, but should not
+            # be considered as a failure.
             pass
         else:
             await self.cmd.wait()
