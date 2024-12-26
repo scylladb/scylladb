@@ -39,6 +39,8 @@
 #include "partition_slice_builder.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"
+#include "compaction/incremental_backlog_tracker.hh"
+#include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "counters.hh"
 #include "test/lib/simple_schema.hh"
@@ -5082,6 +5084,50 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
     });
 }
 
+SEASTAR_TEST_CASE(basic_ics_controller_correctness_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        static constexpr uint64_t default_fragment_size = 1UL*1024UL*1024UL*1024UL;
+
+        auto s = simple_schema().schema();
+
+        auto backlog = [&] (compaction_backlog_tracker backlog_tracker, uint64_t max_fragment_size) {
+            table_for_tests cf = env.make_table_for_tests();
+            auto stop_cf = defer([&] { cf.stop().get(); });
+
+            uint64_t current_sstable_size = default_fragment_size;
+            uint64_t data_set_size = 0;
+            static constexpr uint64_t target_data_set_size = 1000UL*1024UL*1024UL*1024UL;
+
+            while (data_set_size < target_data_set_size) {
+                auto run_identifier = sstables::run_id::create_random_id();
+
+                auto expected_fragments = std::max(1UL, current_sstable_size / max_fragment_size);
+                uint64_t fragment_size = std::max(default_fragment_size, current_sstable_size / expected_fragments);
+                auto tokens = tests::generate_partition_keys(expected_fragments, s, local_shard_only::yes);
+
+                for (auto i = 0UL; i < expected_fragments; i++) {
+                    auto sst = sstable_for_overlapping_test(env, cf->schema(), tokens[i].key(), tokens[i].key());
+                    sstables::test(sst).set_data_file_size(fragment_size);
+                    sstables::test(sst).set_run_identifier(run_identifier);
+                    backlog_tracker.replace_sstables({}, {std::move(sst)});
+                }
+                data_set_size += current_sstable_size;
+                current_sstable_size *= 2;
+            }
+
+            return backlog_tracker.backlog();
+        };
+
+        sstables::incremental_compaction_strategy_options ics_options;
+        auto ics_backlog = backlog(compaction_backlog_tracker(std::make_unique<incremental_backlog_tracker>(ics_options)), default_fragment_size);
+        sstables::size_tiered_compaction_strategy_options stcs_options;
+        auto stcs_backlog = backlog(compaction_backlog_tracker(std::make_unique<size_tiered_backlog_tracker>(stcs_options)), std::numeric_limits<size_t>::max());
+
+        // don't expect ics and stcs to yield different backlogs for the same workload.
+        BOOST_CHECK_CLOSE(ics_backlog, stcs_backlog, 0.0001);
+    });
+}
+
 SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
     return test_env::do_with_async([] (test_env& env) {
         auto builder = schema_builder("tests", "test_major_does_not_miss_data_in_memtable")
@@ -5253,6 +5299,10 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test_leveled) {
     return run_controller_test(sstables::compaction_strategy_type::leveled);
 }
 
+SEASTAR_TEST_CASE(simple_backlog_controller_test_incremental) {
+    return run_controller_test(sstables::compaction_strategy_type::incremental);
+}
+
 SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
     return test_env::do_with_async([] (test_env& env) {
         constexpr size_t all_files = 64;
@@ -5339,6 +5389,9 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
         // LCS: Check that 1 jobs is returned for all non-overlapping files in level 1, as incremental compaction can be employed
         // to limit memory usage and space requirement.
         run_cleanup_strategy_test(sstables::compaction_strategy_type::leveled, 64, empty_opts, 0ms, 1);
+
+        // ICS: Check that 2 jobs are returned for a size tier containing 2x more files (single-fragment runs) than max threshold.
+        run_cleanup_strategy_test(sstables::compaction_strategy_type::incremental, 32);
     });
 }
 

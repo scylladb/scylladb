@@ -385,9 +385,9 @@ public:
                 try {
                     builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
                 } catch (const exceptions::configuration_exception& e) {
-                    // If compaction strategy class isn't supported, fallback to size tiered.
-                    mlogger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
-                    builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+                    // If compaction strategy class isn't supported, fallback to incremental.
+                    mlogger.warn("Falling back to incremental compaction strategy after the problem: {}", e.what());
+                    builder.set_compaction_strategy(sstables::compaction_strategy_type::incremental);
                 }
             }
             if (td.has("compaction_strategy_options")) {

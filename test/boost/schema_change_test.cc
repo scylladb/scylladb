@@ -1158,7 +1158,7 @@ SEASTAR_TEST_CASE(test_system_schema_version_is_stable) {
 
         // If you changed the schema of system.batchlog then this is expected to fail.
         // Just replace expected version with the new version.
-        BOOST_REQUIRE_EQUAL(s->version(), table_schema_version(utils::UUID("9621f170-f101-3459-a8d3-f342c83ad86e")));
+        BOOST_REQUIRE_EQUAL(s->version(), table_schema_version(utils::UUID("776f1766-8688-3d52-908b-a5228900dc00")));
     });
 }
 

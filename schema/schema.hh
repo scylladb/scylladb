@@ -594,7 +594,7 @@ private:
         int32_t _memtable_flush_period = 0;
         ::speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
         // This is the compaction strategy that will be used by default on tables which don't have one explicitly specified.
-        sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
+        sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::incremental;
         std::map<sstring, sstring> _compaction_strategy_options;
         bool _compaction_enabled = true;
         ::caching_options _caching_options;
