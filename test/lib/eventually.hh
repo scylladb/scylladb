@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <boost/test/unit_test.hpp>
+
 #include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
 
@@ -49,5 +51,16 @@ bool eventually_true(noncopyable_function<bool ()> f) {
     return false;
 }
 
-#define REQUIRE_EVENTUALLY_EQUAL(a, b) BOOST_REQUIRE(eventually_true([&] { return a == b; }))
-#define CHECK_EVENTUALLY_EQUAL(a, b) BOOST_CHECK(eventually_true([&] { return a == b; }))
+// Must be called in a seastar thread
+template <typename T>
+void REQUIRE_EVENTUALLY_EQUAL(std::function<T()> a, T b) {
+    eventually_true([&] { return a() == b; });
+    BOOST_REQUIRE_EQUAL(a(), b);
+}
+
+// Must be called in a seastar thread
+template <typename T>
+void CHECK_EVENTUALLY_EQUAL(std::function<T()> a, T b) {
+    eventually_true([&] { return a() == b; });
+    BOOST_CHECK_EQUAL(a(), b);
+}
