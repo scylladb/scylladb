@@ -35,9 +35,9 @@ TESTS_COUNT = 1  # number of tests from the whole matrix to run, None to run the
 
 # Following parameters can be adjusted to run same sequence of tests from a previous run.  Look at logs for the values.
 # Also see `pytest_generate_tests()` below for details.
-TESTS_SHUFFLE_SEED = None  # seed for the tests order randomization
-ERROR_INJECTIONS_COUNT = None  # limit number of error injections
-CLUSTER_EVENTS_COUNT = None  # limit number of cluster events
+TESTS_SHUFFLE_SEED = random.randrange(sys.maxsize)  # seed for the tests order randomization
+ERROR_INJECTIONS_COUNT = len(ERROR_INJECTIONS)  # change it to limit number of error injections
+CLUSTER_EVENTS_COUNT = len(CLUSTER_EVENTS)  # change it to limit number of cluster events
 
 WAIT_FOR_IP_TIMEOUT = 30  # seconds
 
@@ -49,8 +49,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     cluster_events = CLUSTER_EVENTS[:CLUSTER_EVENTS_COUNT]
     tests = list(itertools.product(error_injections, cluster_events))
 
-    seed = random.randrange(sys.maxsize) if TESTS_SHUFFLE_SEED is None else TESTS_SHUFFLE_SEED
-    random.Random(seed).shuffle(tests)
+    random.Random(TESTS_SHUFFLE_SEED).shuffle(tests)
 
     # Deselect unsupported combinations.  Do it after the shuffle to have the stable order.
     tests = [
@@ -58,12 +57,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     ]
 
     metafunc.parametrize(["error_injection", "cluster_event"], tests[:TESTS_COUNT])
-
-    LOGGER.info(
-        "To repeat this run set TESTS_COUNT to %s, TESTS_SHUFFLE_SEED to %s, ERROR_INJECTIONS_COUNT to %s,"
-        " and CLUSTER_EVENTS_COUNT to %s",
-        TESTS_COUNT, seed, len(error_injections), len(cluster_events),
-    )
 
 
 @pytest.fixture
@@ -90,6 +83,12 @@ async def test_random_failures(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str,
                                cluster_event: ClusterEventType) -> None:
+    LOGGER.info(
+        "To repeat this run set TESTS_COUNT to %s, TESTS_SHUFFLE_SEED to %s, ERROR_INJECTIONS_COUNT to %s,"
+        " and CLUSTER_EVENTS_COUNT to %s",
+        TESTS_COUNT, TESTS_SHUFFLE_SEED, ERROR_INJECTIONS_COUNT, CLUSTER_EVENTS_COUNT,
+    )
+
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
 
