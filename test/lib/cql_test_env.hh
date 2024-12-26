@@ -104,7 +104,8 @@ public:
 };
 
 struct cql_test_init_configurables {
-    db::extensions& extensions;
+    db::extensions* extensions{nullptr};
+    std::optional<std::filesystem::path> tmp_dir_path;
 };
 
 class cql_test_env {
@@ -186,8 +187,10 @@ public:
     data_dictionary::database data_dictionary();
 };
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config = {}, thread_attributes thread_attr = {}, std::optional<cql_test_init_configurables> = {});
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, cql_test_init_configurables = {});
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config = {}, thread_attributes thread_attr = {}, cql_test_init_configurables = {});
+
+void do_with_cql_env_noreentrant_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, cql_test_init_configurables = {});
 
 // this function should be called in seastar thread
 void do_with_mc(cql_test_env& env, std::function<void(service::group0_batch&)> func);

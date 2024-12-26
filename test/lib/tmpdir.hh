@@ -29,7 +29,7 @@ private:
     };
 
 public:
-    tmpdir();
+    tmpdir(fs::path tmp_dir_path = fs::temp_directory_path());
 
     tmpdir(tmpdir&& other) noexcept;
     tmpdir(const tmpdir&) = delete;

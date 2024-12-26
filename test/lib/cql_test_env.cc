@@ -415,7 +415,7 @@ public:
         return execute_cql(query).discard_result();
     }
 
-    static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+    static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, cql_test_init_configurables init_configurables) {
         return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
@@ -442,8 +442,13 @@ public:
         });
     }
 
+    static void do_with_noreentrant_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, cql_test_init_configurables init_configurables) {
+        single_node_cql_env env;
+        env.run_in_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
+    }
+
 private:
-    void run_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+    void run_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, cql_test_init_configurables init_configurables) {
             using namespace std::filesystem;
 
             // disable reactor stall detection during startup
@@ -474,7 +479,11 @@ private:
             if (!cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.is_set()) {
                 cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.set(std::numeric_limits<uint32_t>::max());
             }
-            tmpdir data_dir;
+            fs::path temp_dir_path = fs::temp_directory_path();
+            if (init_configurables.tmp_dir_path) {
+                temp_dir_path = *init_configurables.tmp_dir_path;
+            }
+            tmpdir data_dir(temp_dir_path);
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
                 cfg->data_file_directories.set({data_dir_path});
@@ -508,8 +517,8 @@ private:
 
             auto scheduling_groups = get_scheduling_groups().get();
 
-            auto notify_set = init_configurables
-                ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
+            auto notify_set = init_configurables.extensions
+                ? configurable::init_all(*cfg, *init_configurables.extensions, service_set(
                     _db, _ss, _mm, _proxy, _feature_service, _ms, _qp, _batchlog_manager
                 )).get()
                 : configurable::notify_set{}
@@ -1094,16 +1103,20 @@ public:
 
 std::atomic<bool> single_node_cql_env::active = { false };
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, cql_test_init_configurables init_configurables) {
     return single_node_cql_env::do_with(func, std::move(cfg_in), std::move(init_configurables));
 }
 
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr, std::optional<cql_test_init_configurables> init_configurables) {
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr, cql_test_init_configurables init_configurables) {
     return single_node_cql_env::do_with([func = std::move(func), thread_attr] (auto& e) {
         return seastar::async(thread_attr, [func = std::move(func), &e] {
             return func(e);
         });
     }, std::move(cfg_in), std::move(init_configurables));
+}
+
+void do_with_cql_env_noreentrant_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, cql_test_init_configurables init_configurables) {
+    single_node_cql_env::do_with_noreentrant_thread(std::move(func), std::move(cfg_in), std::move(init_configurables));
 }
 
 // this function should be called in seastar thread

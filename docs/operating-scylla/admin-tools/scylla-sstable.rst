@@ -697,6 +697,97 @@ The content is dumped in JSON, using the following schema when ``--vnodes`` comm
 
     $SHARD_ID := Uint
 
+query
+^^^^^
+
+The query is run on the combined content of all input sstables.
+
+By default, the following query is run: ``SELECT * FROM $table``.
+Basic query customization is possible with command-line parameters, change the
+selected fields with ``--select``, constrain the query with ``--where`` and add
+filtering with ``--allow-filtering``.
+More advanced queries are possible by writing them into a file and passing the
+file to ``--query-file``.
+When writing queries by hand, there are some things to keep in in mind:
+
+* The keyspace of the table is changed to ``scylla_sstable.`` This is to avoid any
+  collisions in case the sstables belong to a system keyspace.
+* If the schema is read from the sstable itself, partition key columns will be
+  ``$pk0..$pkN`` and clustering key columns will be ``$ck0..$ckN``. This is because
+  the in-sstable schema doesn't contain key column names.
+  If the table-name wasn't provided with ``--table``, the table name will be
+  ``my_table``.
+
+Chose the output format with ``--output-format``. Text is similar to
+`CQLSH <https://opensource.docs.scylladb.com/stable/cql/cqlsh.html>_` text
+output, while json is similar to ``SELECT JSON`` output.
+Default output format is text.
+
+This operation needs a temporary directory to write files to -- as it sets up a
+``cql_test_env``. By default it will create this in ``/tmp``, this can be changed
+with ``--temp-dir``. This temporary directory is removed up on exit.
+
+Examples
+~~~~~~~~
+
+Select everything from a table:
+
+.. code-block:: console
+
+    $ scylla sstable query --system-schema /path/to/data/system_schema/keyspaces-*/*-big-Data.db
+     keyspace_name                 | durable_writes | replication
+    -------------------------------+----------------+-------------------------------------------------------------------------------------
+            system_replicated_keys |           true |                         ({class : org.apache.cassandra.locator.EverywhereStrategy})
+                       system_auth |           true |   ({class : org.apache.cassandra.locator.SimpleStrategy}, {replication_factor : 1})
+                     system_schema |           true |                              ({class : org.apache.cassandra.locator.LocalStrategy})
+                system_distributed |           true |   ({class : org.apache.cassandra.locator.SimpleStrategy}, {replication_factor : 3})
+                            system |           true |                              ({class : org.apache.cassandra.locator.LocalStrategy})
+                                ks |           true | ({class : org.apache.cassandra.locator.NetworkTopologyStrategy}, {datacenter1 : 1})
+                     system_traces |           true |   ({class : org.apache.cassandra.locator.SimpleStrategy}, {replication_factor : 2})
+     system_distributed_everywhere |           true |                         ({class : org.apache.cassandra.locator.EverywhereStrategy})
+
+Select everything from a single SSTable, use the JSON output (filtered through `jq <https://jqlang.github.io/jq/>_` for better readability):
+
+.. code-block:: console
+
+    $ scylla sstable query --system-schema --output-format=json /path/to/data/system_schema/keyspaces-*/me-3gm7_127s_3ndxs28xt4llzxwqz6-big-Data.db | jq
+    [
+      {
+        "keyspace_name": "system_schema",
+        "durable_writes": true,
+        "replication": {
+          "class": "org.apache.cassandra.locator.LocalStrategy"
+        }
+      },
+      {
+        "keyspace_name": "system",
+        "durable_writes": true,
+        "replication": {
+          "class": "org.apache.cassandra.locator.LocalStrategy"
+        }
+      }
+    ]
+
+Select a specific field in a specific partition using the command-line:
+
+.. code-block:: console
+
+    $ scylla sstable query --system-schema --select "replication" --where "keyspace_name='ks'" ./scylla-workdir/data/system_schema/keyspaces-*/*-Data.db
+     replication
+    -------------------------------------------------------------------------------------
+     ({class : org.apache.cassandra.locator.NetworkTopologyStrategy}, {datacenter1 : 1})
+
+Select a specific field in a specific partition using ``--query-file``:
+
+.. code-block:: console
+
+    $ echo "SELECT replication FROM scylla_sstable.keyspaces WHERE keyspace_name='ks';" > query.cql
+    $ scylla sstable query --system-schema --query-file=./query.cql ./scylla-workdir/data/system_schema/keyspaces-*/*-Data.db
+     replication
+    -------------------------------------------------------------------------------------
+     ({class : org.apache.cassandra.locator.NetworkTopologyStrategy}, {datacenter1 : 1})
+
+
 script
 ^^^^^^
 

@@ -498,66 +498,69 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
 namespace {
 struct to_json_string_visitor {
     bytes_view bv;
-    sstring operator()(const reversed_type_impl& t) { return to_json_string(*t.underlying_type(), bv); }
-    template <typename T> sstring operator()(const integer_type_impl<T>& t) { return to_sstring(compose_value(t, bv)); }
-    template <typename T> sstring operator()(const floating_type_impl<T>& t) {
+    value_and_type operator()(const reversed_type_impl& t) { return to_json_value(*t.underlying_type(), bv); }
+    template <typename T> value_and_type operator()(const integer_type_impl<T>& t) { return {.value = to_sstring(compose_value(t, bv)), .type = rjson::type::kNumberType}; }
+    template <typename T> value_and_type operator()(const floating_type_impl<T>& t) {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
         auto v = t.deserialize(bv);
         T d = value_cast<T>(v);
         if (std::isnan(d) || std::isinf(d)) {
-            return "null";
+            return {.value = "null", .type = rjson::type::kNullType};
         }
-        return to_sstring(d);
+        return {.value = to_sstring(d), .type = rjson::type::kNumberType};
     }
-    sstring operator()(const uuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const inet_addr_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
-    sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(timestamp_to_json_string(t, bv)); }
-    sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const set_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const list_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const tuple_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const user_type_impl& t) { return to_json_string_aux(t, bv); }
-    sstring operator()(const simple_date_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const time_type_impl& t) { return quote_json_string(t.to_string(bv)); }
-    sstring operator()(const empty_type_impl& t) { return "null"; }
-    sstring operator()(const duration_type_impl& t) {
+    value_and_type operator()(const uuid_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const inet_addr_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const string_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const bytes_type_impl& t) { return {.value = quote_json_string("0x" + t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const boolean_type_impl& t) {
+        const auto val = t.to_string(bv);
+        return {.value = val, .type = val == "true" ? rjson::type::kTrueType : rjson::type::kFalseType};
+    }
+    value_and_type operator()(const timestamp_date_base_class& t) { return {.value = quote_json_string(timestamp_to_json_string(t, bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const timeuuid_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const map_type_impl& t) { return {.value = to_json_string_aux(t, bv), .type = rjson::type::kObjectType}; }
+    value_and_type operator()(const set_type_impl& t) { return {.value = to_json_string_aux(t, bv), .type = rjson::type::kArrayType}; }
+    value_and_type operator()(const list_type_impl& t) { return {.value = to_json_string_aux(t, bv), .type = rjson::type::kArrayType}; }
+    value_and_type operator()(const tuple_type_impl& t) { return {.value = to_json_string_aux(t, bv), .type = rjson::type::kArrayType}; }
+    value_and_type operator()(const user_type_impl& t) { return {.value = to_json_string_aux(t, bv), .type = rjson::type::kObjectType}; }
+    value_and_type operator()(const simple_date_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const time_type_impl& t) { return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType}; }
+    value_and_type operator()(const empty_type_impl& t) { return {.value = "null", .type = rjson::type::kNullType}; }
+    value_and_type operator()(const duration_type_impl& t) {
         auto v = t.deserialize(bv);
         if (v.is_null()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
-        return quote_json_string(t.to_string(bv));
+        return {.value = quote_json_string(t.to_string(bv)), .type = rjson::type::kStringType};
     }
-    sstring operator()(const counter_type_impl& t) {
+    value_and_type operator()(const counter_type_impl& t) {
         // It will be called only from cql3 layer while processing query results.
-        return to_json_string(*counter_cell_view::total_value_type(), bv);
+        return {.value = to_json_string(*counter_cell_view::total_value_type(), bv), .type = rjson::type::kNumberType};
     }
-    sstring operator()(const decimal_type_impl& t) {
+    value_and_type operator()(const decimal_type_impl& t) {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
         auto v = t.deserialize(bv);
-        return value_cast<big_decimal>(v).to_string();
+        return {.value = value_cast<big_decimal>(v).to_string(), .type = rjson::type::kNumberType};
     }
-    sstring operator()(const varint_type_impl& t) {
+    value_and_type operator()(const varint_type_impl& t) {
         if (bv.empty()) {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
         auto v = t.deserialize(bv);
-        return value_cast<utils::multiprecision_int>(v).str();
+        return {.value = value_cast<utils::multiprecision_int>(v).str(), .type = rjson::type::kNumberType};
     }
 };
 }
 
-sstring to_json_string(const abstract_type& t, bytes_view bv) {
+value_and_type to_json_value(const abstract_type& t, bytes_view bv) {
     return visit(t, to_json_string_visitor{bv});
 }
 
-sstring to_json_string(const abstract_type& t, const managed_bytes_view& mbv) {
+value_and_type to_json_value(const abstract_type& t, const managed_bytes_view& mbv) {
     return visit(t, to_json_string_visitor{linearized(mbv)});
 }

@@ -31,8 +31,8 @@ tmpdir::sweeper::~sweeper() {
     }
 }
 
-tmpdir::tmpdir()
-    : _path(fs::temp_directory_path() / fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()))) {
+tmpdir::tmpdir(fs::path tmp_dir_path)
+    : _path(tmp_dir_path / fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()))) {
     fs::create_directories(_path);
 }
 

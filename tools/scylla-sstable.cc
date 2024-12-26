@@ -16,12 +16,14 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/http/short_streams.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/queue.hh>
 
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
+#include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
@@ -33,6 +35,8 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
+#include "replica/schema_describe_helper.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
 #include "tools/load_system_tablets.hh"
 #include "tools/lua_sstable_consumer.hh"
@@ -2750,6 +2754,242 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
     }
 }
 
+void print_query_results_text(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    struct column_values {
+        size_t max_size{0};
+        sstring header_format;
+        sstring row_format;
+        std::vector<sstring> values;
+
+        void add(sstring value) {
+            max_size = std::max(max_size, value.size());
+            values.push_back(std::move(value));
+        }
+    };
+
+    std::vector<column_values> columns;
+    columns.resize(column_metadata.size());
+
+    for (size_t i = 0; i < column_metadata.size(); ++i) {
+        columns[i].add(column_metadata[i]->name->text());
+    }
+
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (row[i]) {
+                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
+            } else {
+                columns[i].add("");
+            }
+        }
+    }
+
+    std::vector<sstring> separators(columns.size(), sstring());
+    for (size_t i = 0; i < columns.size(); ++i) {
+        auto& col_values = columns[i];
+        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
+        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
+        for (size_t c = 0; c < col_values.max_size; ++c) {
+            separators[i] += "-";
+        }
+    }
+
+    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
+        std::vector<sstring> row;
+        row.reserve(columns.size());
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
+            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
+        }
+        fmt::print("{}\n", fmt::join(row, "|"));
+        if (!r) {
+            fmt::print("-{}-\n", fmt::join(separators, "-+-"));
+        }
+    }
+}
+
+void print_query_results_json(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    rjson::streaming_writer writer(std::cout);
+
+    writer.StartArray();
+    for (const auto& row : result.result_set().rows()) {
+        writer.StartObject();
+        for (size_t i = 0; i < row.size(); ++i) {
+            writer.Key(column_metadata[i]->name->text());
+            if (!row[i]) {
+                writer.Null();
+            }
+            const auto value_and_type = to_json_value(*column_metadata[i]->type, *row[i]);
+            writer.RawValue(value_and_type.value, value_and_type.type);
+        }
+        writer.EndObject();
+    }
+    writer.EndArray();
+}
+
+class query_operation_result_visitor : public cql_transport::messages::result_message::visitor {
+    output_format _output_format;
+private:
+    [[noreturn]] void throw_on_unexpected_message(const char* message_kind) {
+        throw std::runtime_error(std::format("unexpected result message, expected rows, got {}", message_kind));
+    }
+public:
+    query_operation_result_visitor(output_format of) : _output_format(of) { }
+    virtual void visit(const cql_transport::messages::result_message::void_message&) override { throw_on_unexpected_message("void_message"); }
+    virtual void visit(const cql_transport::messages::result_message::set_keyspace&) override { throw_on_unexpected_message("set_keyspace"); }
+    virtual void visit(const cql_transport::messages::result_message::prepared::cql&) override { throw_on_unexpected_message("prepared::cql"); }
+    virtual void visit(const cql_transport::messages::result_message::schema_change&) override { throw_on_unexpected_message("schema_change"); }
+    virtual void visit(const cql_transport::messages::result_message::bounce_to_shard&) override { throw_on_unexpected_message("bounce_to_shard"); }
+    virtual void visit(const cql_transport::messages::result_message::exception&) override { throw_on_unexpected_message("exception"); }
+
+    virtual void visit(const cql_transport::messages::result_message::rows& rows) override {
+        const auto& result = rows.rs();
+        switch (_output_format) {
+            case output_format::text:
+                print_query_results_text(result);
+                break;
+            case output_format::json:
+                print_query_results_json(result);
+                break;
+        }
+    }
+};
+
+void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sstable_manager, const bpo::variables_map& vm) {
+    if (vm.contains("query-file") && (vm.contains("select") || vm.contains("where") || vm.contains("allow-filtering"))) {
+        throw std::invalid_argument("cannot provide both --query-file and --select|--where|--allow-filtering");
+    }
+
+    if (smp::count > 1) {
+        // Assuming smp==1 allows simplifying the code below.
+        throw std::runtime_error("query operation cannot run with --smp > 1");
+    }
+
+    cql_test_init_configurables init_cfg{};
+    if (vm.contains("temp-dir")) {
+        init_cfg.tmp_dir_path = vm["temp-dir"].as<sstring>();
+    }
+
+    const auto format = get_output_format_from_options(vm, output_format::text);
+
+    do_with_cql_env_noreentrant_in_thread([&] (cql_test_env& env) mutable -> future<> {
+        auto& db = env.local_db();
+
+        const auto keyspace_name = "scylla_sstable";
+        co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
+        auto& keyspace = db.find_keyspace(keyspace_name);
+
+        // Clone and modify the schema:
+        // * Change keyspace name to scylla_sstable
+        // * Generate a new ID
+        // * Drop all properties
+        //
+        // This will help avoid conflicts when querying sstables of system-tables
+        // and allows cql_test_env to work with a simple config (no EAR setup).
+        auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+        for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
+            for (const auto& col : sstable_schema->columns(col_kind)) {
+                builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
+
+                // Register any user types, so they are known by the time we create the table.
+                if (col.type->is_user_type()) {
+                    keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
+                }
+            }
+        }
+        auto schema = builder.build();
+
+        const auto table_name = schema->cf_name();
+
+        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
+
+        const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+        const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+        sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
+                original_schema_description.create_statement.value(),
+                schema_description.create_statement.value(),
+                sstable_schema->ks_name(),
+                keyspace_name,
+                sstable_schema->id(),
+                schema->id());
+
+        co_await env.execute_cql(schema_description.create_statement.value());
+
+        auto& table = db.find_column_family(keyspace_name, table_name);
+
+        // We don't want to register the sstables with the table object,
+        // to avoid any attempt to compact/split/merge/rewrite them.
+        // Also, they were created with a foreign stable-manager (not part of
+        // cql_test_env).
+        // Use the virtual reader facility to isolate the sstables from
+        // cql-test-env.
+        table.set_virtual_reader(mutation_source([&] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr tr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) -> mutation_reader {
+            return make_combined_reader(
+                    schema,
+                    permit,
+                    sstables |
+                            std::views::transform([&] (const sstables::shared_sstable& sst) {
+                                    return sst->make_reader(schema, permit, range, slice, tr, fwd_sm, fwd_mr);
+                            }) |
+                            std::ranges::to<std::vector<mutation_reader>>(),
+                    fwd_sm,
+                    fwd_mr);
+        }));
+
+        sstring query;
+        if (vm.contains("query-file")) {
+            auto file = co_await open_file_dma(vm["query-file"].as<sstring>(), open_flags::ro);
+            auto fstream = make_file_input_stream(file);
+            query = co_await util::read_entire_stream_contiguous(fstream);
+        } else {
+            query = "SELECT ";
+
+            if (vm.contains("select")) {
+                query += seastar::format("{} ", fmt::join(vm["select"].as<std::vector<sstring>>(), ","));
+            } else {
+                query += "* ";
+            }
+
+            query += seastar::format("FROM {}.{} ", keyspace_name, table_name);
+
+            if (vm.contains("where")) {
+                query += seastar::format("WHERE {}", fmt::join(vm["where"].as<std::vector<sstring>>(), " AND "));
+            }
+
+            if (vm.contains("allow-filtering")) {
+                query += " ALLOW FILTERING";
+            }
+        }
+
+        sst_log.debug("query_operation(): running query {}", query);
+
+        try {
+            const auto result = co_await env.execute_cql(query);
+            result->throw_if_exception();
+
+            query_operation_result_visitor visitor{format};
+            result->accept(visitor);
+        } catch (exceptions::keyspace_not_defined_exception&) {
+            throw std::runtime_error(seastar::format("Failed to run query '{}': bad keyspace. Remember to replace the original keyspace with 'scylla_sstable'", query));
+        }
+    }, {}, init_cfg);
+}
+
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -3027,6 +3267,47 @@ for more information on this operation, including the API documentation.
                 typed_option<>("vnodes", "assume that tokens are distributed with vnodes"),
             }},
             shard_of_operation},
+/* query */
+    {{"query",
+            "Run a query on the content of the sstable(s)",
+R"(
+The query is run on the combined content of all input sstables.
+
+By default, the following query is run: SELECT * FROM $table.
+Basic query customization is possible with command-line parameters, change the
+selected fields with --select, constrain the query with --where and add
+filtering with --allow-filtering.
+More advanced queries are possible by writing them into a file and passing the
+file to --query-file.
+When writing queries by hand, there are some things to keep in in mind:
+* The keyspace of the table is changed to scylla_sstable. This is to avoid any
+  collisions in case the sstables belong to a system keyspace.
+* If the schema is read from the sstable itself, partition key columns will be
+  $pk0..$pkN and clustering key columns will be $ck0..$ckN. This is because the
+  in-sstable schema doesn't contain key column names.
+  If the table-name wasn't provided with --table, the table name will be
+  my_table.
+
+Chose the output format with --output-format. Text is similar to CQLSH text
+output, while json is similar to SELECT JSON output.
+Default output format is text.
+
+This operation needs a temporary directory to write files to -- as it sets up a
+cql_test_env. By default it will create this in /tmp, this can be changed with
+--temp-dir. This temporary directory is removed up on exit.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#query
+for more information on this operation, including usage examples.
+)",
+            {
+                typed_option<std::vector<sstring>>("select", "select these columns, use multiple --select to select multiple columns; default: *"),
+                typed_option<std::vector<sstring>>("where", "restrict the query with simple restrictions, use multiple --where to provide multiple restrictions, they will be combined with AND, default: no restriction"),
+                typed_option<>("allow-filtering", "add ALLOW FILTERING to the query"),
+                typed_option<sstring>("query-file", "execute the query from the file, the file is expected to contain a single query"),
+                typed_option<std::string>("output-format", "text", "the output-format, one of (text, json)"),
+                typed_option<sstring>("temp-dir", "temporary directory to use (in case /tmp is not available)"),
+            }},
+            query_operation},
 };
 
 } // anonymous namespace
