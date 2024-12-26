@@ -269,7 +269,7 @@ SEASTAR_TEST_CASE(test_loading_cache_update_config) {
             loading_cache.get_ptr(i, loader).discard_result().get();
         }
 
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 2);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return loading_cache.size(); }, 2);
     });
 }
 
@@ -345,14 +345,14 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
         // Check unprivileged section eviction
         BOOST_REQUIRE(loading_cache.size() == 1);
         sleep(20ms).get();
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return loading_cache.size(); }, 0);
 
         // Check privileged section eviction
         loading_cache.get_ptr(0, loader).discard_result().get();
         BOOST_REQUIRE(loading_cache.find(0) != nullptr);
 
         sleep(20ms).get();
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return loading_cache.size(); }, 0);
     });
 }
 
@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_reset_on_sync_op) {
         }
 
         sleep(30ms).get();
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return loading_cache.size(); }, 0);
     });
 }
 
@@ -505,8 +505,8 @@ SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged) {
         }
 
         // Make sure that the value we touched twice is eventually evicted
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(-1), nullptr);
-        REQUIRE_EVENTUALLY_EQUAL(loading_cache.size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<utils::loading_cache<int, sstring, 1>::value_ptr>([&] { return loading_cache.find(-1); }, nullptr);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return loading_cache.size(); }, 0);
     });
 }
 
