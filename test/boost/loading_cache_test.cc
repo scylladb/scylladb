@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 #include "utils/loading_shared_values.hh"
 #include "utils/loading_cache.hh"
+#include <chrono>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/thread.hh>
@@ -43,51 +44,16 @@ static int rand_int(int max) {
 
 static const sstring test_file_name = "loading_cache_test.txt";
 static const sstring test_string = "1";
-static bool file_prepared = false;
 static constexpr int num_loaders = 1000;
 
 static thread_local int load_count;
-static const tmpdir& get_tmpdir() {
-    static thread_local tmpdir tmp;
-    return tmp;
-}
-
-static future<> prepare() {
-    if (file_prepared) {
-        return make_ready_future<>();
-    }
-
-    return open_file_dma((get_tmpdir().path() / test_file_name.c_str()).c_str(), open_flags::create | open_flags::wo).then([] (file f) {
-        return do_with(std::move(f), [] (file& f) {
-            auto size = test_string.size() + 1;
-            auto aligned_size = align_up(size, f.disk_write_dma_alignment());
-            auto buf = allocate_aligned_buffer<char>(aligned_size, f.disk_write_dma_alignment());
-            auto wbuf = buf.get();
-            std::copy_n(test_string.c_str(), size, wbuf);
-            return f.dma_write(0, wbuf, aligned_size).then([aligned_size, buf = std::move(buf)] (size_t s) {
-                BOOST_REQUIRE_EQUAL(s, aligned_size);
-                file_prepared = true;
-            }).finally([&f] () mutable {
-                return f.close();
-            });
-        });
-    });
-}
 
 static future<sstring> loader(const int& k) {
-    return open_file_dma((get_tmpdir().path() / test_file_name.c_str()).c_str(), open_flags::ro).then([] (file f) -> future<sstring> {
-        return do_with(std::move(f), [] (file& f) -> future<sstring> {
-            auto size = align_up(test_string.size() + 1, f.disk_read_dma_alignment());
-            return f.dma_read_exactly<char>(0, size).then([] (auto buf) {
-                sstring str(buf.get());
-                BOOST_REQUIRE_EQUAL(str, test_string);
-                ++load_count;
-                return make_ready_future<sstring>(std::move(str));
-            }).finally([&f] () mutable {
-                return f.close();
-            });
-        });
-    });
+    testlog.debug("loader: start: load_count={}", load_count);
+    co_await sleep(tests::random::get_int(1, 5) * 1ms);
+    ++load_count;
+    testlog.debug("loader: done: load_count={}", load_count);
+    co_return test_string;
 }
 
 SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_same_key) {
@@ -96,8 +62,6 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_same_key) {
         load_count = 0;
         utils::loading_shared_values<int, sstring> shared_values;
         std::list<typename utils::loading_shared_values<int, sstring>::entry_ptr> anchors_list;
-
-        prepare().get();
 
         std::fill(ivec.begin(), ivec.end(), 0);
 
@@ -121,8 +85,6 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_different_keys) {
         utils::loading_shared_values<int, sstring> shared_values;
         std::list<typename utils::loading_shared_values<int, sstring>::entry_ptr> anchors_list;
 
-        prepare().get();
-
         std::iota(ivec.begin(), ivec.end(), 0);
 
         parallel_for_each(ivec, [&] (int& k) {
@@ -144,8 +106,6 @@ SEASTAR_TEST_CASE(test_loading_shared_values_rehash) {
         load_count = 0;
         utils::loading_shared_values<int, sstring> shared_values;
         std::list<typename utils::loading_shared_values<int, sstring>::entry_ptr> anchors_list;
-
-        prepare().get();
 
         std::iota(ivec.begin(), ivec.end(), 0);
 
@@ -177,8 +137,6 @@ SEASTAR_TEST_CASE(test_loading_shared_values_parallel_loading_explicit_eviction)
         utils::loading_shared_values<int, sstring> shared_values;
         std::vector<typename utils::loading_shared_values<int, sstring>::entry_ptr> anchors_vec(num_loaders);
 
-        prepare().get();
-
         std::iota(ivec.begin(), ivec.end(), 0);
 
         parallel_for_each(ivec, [&] (int& k) {
@@ -201,8 +159,6 @@ SEASTAR_TEST_CASE(test_loading_cache_disable_and_enable) {
         load_count = 0;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 1h, 50ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         loading_cache.get(0).discard_result().get();
         loading_cache.get(0).discard_result().get();
@@ -233,8 +189,6 @@ SEASTAR_TEST_CASE(test_loading_cache_reset) {
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
-        prepare().get();
-
         for (int i = 0; i < num_loaders; ++i) {
             loading_cache.get_ptr(i, loader).discard_result().get();
         }
@@ -252,8 +206,6 @@ SEASTAR_TEST_CASE(test_loading_cache_update_config) {
         using namespace std::chrono;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 1h, 1h}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         for (int i = 0; i < num_loaders; ++i) {
             loading_cache.get_ptr(i, loader).discard_result().get();
@@ -281,8 +233,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
-        prepare().get();
-
         std::fill(ivec.begin(), ivec.end(), 0);
 
         parallel_for_each(ivec, [&] (int& k) {
@@ -301,8 +251,6 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_key) {
     utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
     auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
-    prepare().get();
-
     loading_cache.get_ptr(0, loader).discard_result().get();
     BOOST_REQUIRE_EQUAL(load_count, 1);
     BOOST_REQUIRE(loading_cache.find(0) != nullptr);
@@ -318,8 +266,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
         load_count = 0;
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         std::iota(ivec.begin(), ivec.end(), 0);
 
@@ -337,8 +283,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
         using namespace std::chrono;
         utils::loading_cache<int, sstring, 1> loading_cache(num_loaders, 20ms, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         loading_cache.get_ptr(0, loader).discard_result().get();
 
@@ -361,8 +305,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_reset_on_sync_op) {
         using namespace std::chrono;
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 30ms, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         loading_cache.get_ptr(0, loader).discard_result().get();
         auto vp = loading_cache.find(0);
@@ -395,8 +337,6 @@ SEASTAR_TEST_CASE(test_loading_cache_move_item_to_mru_list_front_on_sync_op) {
         utils::loading_cache<int, sstring> loading_cache(2, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
-        prepare().get();
-
         for (int i = 0; i < 2; ++i) {
             loading_cache.get_ptr(i, loader).discard_result().get();
         }
@@ -421,7 +361,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_privileged_gen) {
         load_count = 0;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 100ms, 20ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-        prepare().get();
         // Push the entry into the privileged section. Make sure it's being reloaded.
         loading_cache.get_ptr(0).discard_result().get();
         loading_cache.get_ptr(0).discard_result().get();
@@ -436,7 +375,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading_unprivileged) {
         load_count = 0;
         utils::loading_cache<int, sstring, 1, utils::loading_cache_reload_enabled::yes> loading_cache({num_loaders, 100ms, 20ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-        prepare().get();
         // Load one entry into the unprivileged section.
         // Make sure it's reloaded.
         loading_cache.get_ptr(0).discard_result().get();
@@ -451,8 +389,6 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
         load_count = 0;
         utils::loading_cache<int, sstring> loading_cache(1, 1s, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         for (int i = 0; i < num_loaders; ++i) {
             loading_cache.get_ptr(i % 2, loader).discard_result().get();
@@ -469,8 +405,6 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction_unprivileged_first) {
         load_count = 0;
         utils::loading_cache<int, sstring, 1> loading_cache(4, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         // Touch the value with the key "-1" twice
         loading_cache.get_ptr(-1, loader).discard_result().get();
@@ -493,8 +427,6 @@ SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged) {
         load_count = 0;
         utils::loading_cache<int, sstring, 1> loading_cache(4, 10ms, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         // Touch the value with the key "-1" twice
         loading_cache.get_ptr(-1, loader).discard_result().get();
@@ -526,8 +458,6 @@ SEASTAR_TEST_CASE(test_loading_cache_eviction_unprivileged_minimum_size) {
         using namespace std::chrono;
         utils::loading_cache<int, sstring, 1> loading_cache(50, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         // Add 49 elements to privileged section
         for (int i = 0; i < 49; i++) {
@@ -673,8 +603,6 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
         load_count = 0;
         utils::loading_cache<int, sstring, 0, utils::loading_cache_reload_enabled::yes> loading_cache({1, 100ms, 10ms}, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
-
-        prepare().get();
 
         auto curr_time = lowres_clock::now();
         int i = 0;
