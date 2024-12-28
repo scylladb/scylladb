@@ -97,6 +97,7 @@ public:
     }
 #endif
     std::vector<data_type> get_type_parameters(bool multicell=true);
+    std::tuple<data_type, size_t> get_vector_parameters();
     std::tuple<sstring, bytes, std::vector<bytes>, std::vector<data_type>> get_user_type_parameters();
     data_type do_parse(bool multicell = true);
 
