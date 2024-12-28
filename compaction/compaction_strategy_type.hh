@@ -17,6 +17,8 @@ enum class compaction_strategy_type {
     size_tiered,
     leveled,
     time_window,
+
+    unsupported_in_memory   // Unused, for backward compatibility only
 };
 
 enum class reshape_mode { strict, relaxed };

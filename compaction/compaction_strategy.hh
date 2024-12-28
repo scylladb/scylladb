@@ -69,6 +69,8 @@ public:
             return "LeveledCompactionStrategy";
         case compaction_strategy_type::time_window:
             return "TimeWindowCompactionStrategy";
+        case compaction_strategy_type::unsupported_in_memory:
+            return "InMemoryCompactionStrategy";
         default:
             throw std::runtime_error("Invalid Compaction Strategy");
         }
@@ -85,6 +87,8 @@ public:
             return compaction_strategy_type::leveled;
         } else if (short_name == "TimeWindowCompactionStrategy") {
             return compaction_strategy_type::time_window;
+        } else if (short_name == "InMemoryCompactionStrategy") {
+            return compaction_strategy_type::unsupported_in_memory;
         } else {
             throw exceptions::configuration_exception(format("Unable to find compaction strategy class '{}'", name));
         }

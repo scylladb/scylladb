@@ -31,6 +31,7 @@
 #include "utils/to_string.hh"
 
 logging::logger leveled_manifest::logger("LeveledManifest");
+logging::logger compaction_strategy_logger("CompactionStrategy");
 
 using namespace sstables;
 
@@ -755,6 +756,13 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         break;
     case compaction_strategy_type::time_window:
         impl = ::make_shared<time_window_compaction_strategy>(options);
+        break;
+    case compaction_strategy_type::unsupported_in_memory:
+        compaction_strategy_logger.warn(
+                "{} is no longer supported. Defaulting to {}.",
+                compaction_strategy::name(compaction_strategy_type::unsupported_in_memory),
+                compaction_strategy::name(compaction_strategy_type::null));
+        impl = ::make_shared<null_compaction_strategy>();
         break;
     default:
         throw std::runtime_error("strategy not supported");
