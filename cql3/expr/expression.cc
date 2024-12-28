@@ -811,6 +811,10 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                     out = fmt::format_to(out, "}}");
                     return;
                 }
+                case collection_constructor::style_type::vector: {
+                    out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
+                    return;
+                }
                 }
                 on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(cc.style)));
             },
@@ -1495,6 +1499,22 @@ static cql3::raw_value evaluate_list(const collection_constructor& collection,
     return raw_value::make_value(std::move(collection_bytes));
 }
 
+static cql3::raw_value evaluate_vector(const collection_constructor& vector, const evaluation_inputs& inputs) {
+    std::vector<managed_bytes> vector_elements;
+    vector_elements.reserve(vector.elements.size());
+
+    for (const expression& element : vector.elements) {
+        cql3::raw_value elem_val = evaluate(element, inputs);
+        if (elem_val.is_null()) {
+            throw exceptions::invalid_request_exception("null is not supported inside vectors");
+        }
+        vector_elements.emplace_back(std::move(elem_val).to_managed_bytes());
+    }
+
+    managed_bytes vector_bytes = vector_type_impl::build_value_fragmented(std::move(vector_elements), vector.type->value_length_if_fixed());
+    return raw_value::make_value(std::move(vector_bytes));
+}
+
 static cql3::raw_value evaluate_set(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const set_type_impl& stype = dynamic_cast<const set_type_impl&>(collection.type->without_reversed());
     std::set<managed_bytes, serialized_compare> evaluated_elements(stype.get_elements_type()->as_less_comparator());
@@ -1579,6 +1599,9 @@ static cql3::raw_value do_evaluate(const collection_constructor& collection, con
 
         case collection_constructor::style_type::map:
             return evaluate_map(collection, inputs);
+
+        case collection_constructor::style_type::vector:
+            return evaluate_vector(collection, inputs);
     }
     std::abort();
 }

@@ -20,6 +20,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "types/vector.hh"
 #include "types/user.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "utils/like_matcher.hh"
@@ -494,6 +495,85 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
 
 static
 lw_shared_ptr<column_specification>
+vector_value_spec_of(const column_specification& column) {
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("value({})", *column.name), true),
+            dynamic_cast<const vector_type_impl&>(column.type->without_reversed()).get_elements_type());
+}
+
+static
+void
+vector_validate_assignable_to(const collection_constructor& c, data_dictionary::database db, const sstring keyspace, const schema* schema_opt, const column_specification& receiver) {
+    auto vt = dynamic_pointer_cast<const vector_type_impl>(receiver.type->underlying_type());
+    if (!vt) {
+        throw exceptions::invalid_request_exception(format("Invalid vector type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
+    }
+
+    size_t expected_size = vt->get_dimension();
+    if (!expected_size) {
+        throw exceptions::invalid_request_exception(format("Invalid vector type literal for {}: type {} expects at least one element",
+                                                            *receiver.name, receiver.type->as_cql3_type()));
+    }
+    size_t received_size = c.elements.size();
+    if (expected_size != received_size) {
+        throw exceptions::invalid_request_exception(format("Invalid vector literal for {}: type {} expects {:d} elements but got {:d}",
+                                                            *receiver.name, receiver.type->as_cql3_type(), expected_size, received_size));
+    }
+
+    auto&& value_spec = vector_value_spec_of(receiver);
+    for (auto& e : c.elements) {
+        if (!is_assignable(test_assignment(e, db, keyspace, schema_opt, *value_spec))) {
+            throw exceptions::invalid_request_exception(format("Invalid vector literal for {}: value {} is not of type {}",
+                    *receiver.name, e, value_spec->type->as_cql3_type()));
+        }
+    }
+}
+
+static
+assignment_testable::test_result
+vector_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+    // If there is no elements, we can't say it's an exact match (an empty vector if fundamentally polymorphic).
+    if (c.elements.empty()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+
+    auto&& value_spec = vector_value_spec_of(receiver);
+    return test_assignment_all(c.elements, db, keyspace, schema_opt, *value_spec);
+}
+
+static
+std::optional<expression>
+vector_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    vector_validate_assignable_to(c, db, keyspace, schema_opt, *receiver);
+
+    auto&& value_spec = vector_value_spec_of(*receiver);
+    std::vector<expression> values;
+    values.reserve(c.elements.size());
+    bool all_terminal = true;
+    for (auto& e : c.elements) {
+        expression elem = prepare_expression(e, db, keyspace, schema_opt, value_spec);
+
+        if (!is<constant>(elem)) {
+            all_terminal = false;
+        }
+        values.push_back(std::move(elem));
+    }
+
+    // Here we convert from list_or_vector to vector style, as we know that we received a vector type.
+    collection_constructor value {
+        .style = collection_constructor::style_type::vector,
+        .elements = std::move(values),
+        .type = receiver->type
+    };
+    if (all_terminal) {
+        return constant(evaluate(value, query_options::DEFAULT), value.type);
+    } else {
+        return value;
+    }
+}
+
+static
+lw_shared_ptr<column_specification>
 component_spec_of(const column_specification& column, size_t component) {
     return make_lw_shared<column_specification>(
             column.ks_name,
@@ -624,7 +704,7 @@ untyped_constant_test_assignment(const untyped_constant& uc, data_dictionary::da
 {
     bool uc_is_null = uc.partial_type == untyped_constant::type_class::null;
     auto receiver_type = receiver.type->as_cql3_type();
-    if ((receiver_type.is_collection() || receiver_type.is_user_type()) && !uc_is_null) {
+    if ((receiver_type.is_collection() || receiver_type.is_user_type() || receiver_type.is_vector()) && !uc_is_null) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
     if (!receiver_type.is_native()) {
@@ -1243,6 +1323,8 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, schema_opt, receiver);
+            case collection_constructor::style_type::vector:
+                on_internal_error(expr_logger, "vector style type found during prepare, should have been introduced post-prepare");
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
@@ -1318,6 +1400,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
             case collection_constructor::style_type::list: return list_test_assignment(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::set: return set_test_assignment(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::map: return map_test_assignment(c, db, keyspace, schema_opt, receiver);
+            case collection_constructor::style_type::vector:
+                on_internal_error(expr_logger, "vector style type found in test_assignment, should have been introduced post-prepare");
             }
             on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
         },
