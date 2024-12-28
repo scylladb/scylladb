@@ -72,4 +72,6 @@ CQL Limits
      - Number of keys: 65535 (2^16-1)
    * - Blob size
      - 2 GB ( less than 1 MB is recommended)
+   * - Dimension of a vector
+     - 16000 (according to OpenSearch limitations)
  

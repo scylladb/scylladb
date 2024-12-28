@@ -62,9 +62,9 @@ JSON Encoding of ScyllaDB Data Types
 
 Where possible, ScyllaDB will represent and accept data types in their native ``JSON`` representation. ScyllaDB will
 also accept string representations matching the CQL literal format for all single-field types. For example, floats,
-ints, UUIDs, and dates can be represented by CQL literal strings. However, compound types, such as collections, tuples,
-and user-defined types, must be represented by native ``JSON`` collections (maps and lists) or a JSON-encoded string
-representation of the collection.
+ints, UUIDs, and dates can be represented by CQL literal strings. However, compound types, such as collections, tuples, 
+vectors, and user-defined types, must be represented by native ``JSON`` collections (maps and lists) or a JSON-encoded 
+string representation of the collection.
 
 The following table describes the encodings that ScyllaDB will accept in ``INSERT JSON`` values (and ``fromJson()``
 arguments) as well as the format ScyllaDB will use when returning data for ``SELECT JSON`` statements (and
@@ -101,6 +101,7 @@ arguments) as well as the format ScyllaDB will use when returning data for ``SEL
  ``varchar``     string                   string          Uses JSON's ``\u`` character escape
  ``varint``      integer, string          integer         Variable length; may overflow 32 or 64 bit integers in
                                                           client-side decoder
+ ``vector``      list, string             list            Uses JSON's native list representation
 =============== ======================== =============== ==============================================================
 
 The fromJson() Function
