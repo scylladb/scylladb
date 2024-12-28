@@ -318,7 +318,7 @@ constant make_int_int_map_const(const std::vector<std::pair<int32_t, int32_t>>& 
 }
 
 collection_constructor make_list_constructor(std::vector<expression> elements, data_type elements_type) {
-    return collection_constructor{.style = collection_constructor::style_type::list,
+    return collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                   .elements = std::move(elements),
                                   .type = list_type_impl::get_instance(elements_type, true)};
 }

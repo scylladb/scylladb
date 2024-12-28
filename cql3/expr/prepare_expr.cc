@@ -438,10 +438,6 @@ list_validate_assignable_to(const collection_constructor& c, data_dictionary::da
 static
 assignment_testable::test_result
 list_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
-    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
-        return assignment_testable::test_result::NOT_ASSIGNABLE;
-    }
-
     // If there is no elements, we can't say it's an exact match (an empty list if fundamentally polymorphic).
     if (c.elements.empty()) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
@@ -455,10 +451,6 @@ list_test_assignment(const collection_constructor& c, data_dictionary::database 
 static
 std::optional<expression>
 list_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
-    if (!receiver) {
-        // TODO: It is possible to infer the type of a list from the types of the key/value pairs
-        return std::nullopt;
-    }
     list_validate_assignable_to(c, db, keyspace, schema_opt, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -482,7 +474,7 @@ list_prepare_expression(const collection_constructor& c, data_dictionary::databa
         values.push_back(std::move(elem));
     }
     collection_constructor value {
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = std::move(values),
         .type = receiver->type
     };
@@ -569,6 +561,34 @@ vector_prepare_expression(const collection_constructor& c, data_dictionary::data
         return constant(evaluate(value, query_options::DEFAULT), value.type);
     } else {
         return value;
+    }
+}
+
+static
+assignment_testable::test_result
+list_or_vector_test_assignment(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+    if (dynamic_pointer_cast<const vector_type_impl>(receiver.type)) {
+        return vector_test_assignment(c, db, keyspace, schema_opt, receiver);
+    } else if (dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
+        return list_test_assignment(c, db, keyspace, schema_opt, receiver);
+    } else {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
+}
+
+static
+std::optional<expression>
+list_or_vector_prepare_expression(const collection_constructor& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    if (!receiver) {
+        // TODO: It is possible to infer the type of a list or vector from the types of the key/value pairs
+        return std::nullopt;
+    }
+
+    // We do not check if the receiver is a list because it is checked later in the list_prepare_expression.
+    if (receiver->type->is_vector()) {
+        return vector_prepare_expression(c, db, keyspace, schema_opt, receiver);
+    } else {
+        return list_prepare_expression(c, db, keyspace, schema_opt, receiver);
     }
 }
 
@@ -1320,7 +1340,7 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         },
         [&] (const collection_constructor& c) -> std::optional<expression> {
             switch (c.style) {
-            case collection_constructor::style_type::list: return list_prepare_expression(c, db, keyspace, schema_opt, receiver);
+            case collection_constructor::style_type::list_or_vector: return list_or_vector_prepare_expression(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::set: return set_prepare_expression(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::map: return map_prepare_expression(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::vector:
@@ -1397,7 +1417,7 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         },
         [&] (const collection_constructor& c) -> test_result {
             switch (c.style) {
-            case collection_constructor::style_type::list: return list_test_assignment(c, db, keyspace, schema_opt, receiver);
+            case collection_constructor::style_type::list_or_vector: return list_or_vector_test_assignment(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::set: return set_test_assignment(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::map: return map_test_assignment(c, db, keyspace, schema_opt, receiver);
             case collection_constructor::style_type::vector:

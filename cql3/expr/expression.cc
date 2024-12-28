@@ -786,7 +786,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
-                case collection_constructor::style_type::list: {
+                case collection_constructor::style_type::list_or_vector: {
                     out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
                     return;
                 }
@@ -1591,7 +1591,7 @@ static cql3::raw_value do_evaluate(const collection_constructor& collection, con
     }
 
     switch (collection.style) {
-        case collection_constructor::style_type::list:
+        case collection_constructor::style_type::list_or_vector:
             return evaluate_list(collection, inputs);
 
         case collection_constructor::style_type::set:

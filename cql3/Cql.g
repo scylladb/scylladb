@@ -1621,7 +1621,7 @@ collectionLiteral returns [uexpression value]
 	@init{ std::vector<expression> l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
-      ']' { $value = collection_constructor{collection_constructor::style_type::list, std::move(l)}; }
+      ']' { $value = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
     | '{' t=term v=setOrMapLiteral[t] { $value = std::move(v); } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
@@ -1765,7 +1765,7 @@ subscriptExpr returns [uexpression e]
     ;
 
 singleColumnInValuesOrMarkerExpr returns [uexpression e]
-    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list, std::move(values)}; }
+    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(values)}; }
     | m=marker { e = std::move(m); }
     ;
 
@@ -1843,7 +1843,7 @@ relation returns [uexpression e]
     | name=cident K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
         collection_constructor {
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = std::move(in_values)
         }); }
     | name=cident K_NOT K_IN marker1=marker
@@ -1851,7 +1851,7 @@ relation returns [uexpression e]
     | name=cident K_NOT K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
         collection_constructor {
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = std::move(in_values)
         }); }
     | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
@@ -1865,7 +1865,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::vector<expression>()
                     }
                   );
@@ -1884,7 +1884,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::move(literals)
                     }
                   );
@@ -1895,7 +1895,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::move(markers)
                     }
                   );

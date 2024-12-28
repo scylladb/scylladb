@@ -417,7 +417,7 @@ struct tuple_constructor {
 // For example: "[1, 2, ?]", "{5, 6, 7}", {1: 2, 3: 4}"
 // During preparation collection constructors with constant values are converted to expr::constant.
 struct collection_constructor {
-    enum class style_type { list, set, map, vector };
+    enum class style_type { list_or_vector, set, map, vector };
     style_type style;
 
     // For map constructors, elements is a list of key-pair tuples.
