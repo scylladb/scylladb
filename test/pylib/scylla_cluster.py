@@ -1285,6 +1285,7 @@ class ScyllaClusterManager:
         self.runner = aiohttp.web.AppRunner(app)
         self.tasks_history = dict()
         self.server_broken_event = asyncio.Event()
+        self.server_broken_reason = ""
 
     def repr_tasks_history(self):
         out = "Cluster_history"
@@ -1370,7 +1371,7 @@ class ScyllaClusterManager:
                 @wraps(handler)
                 async def inner_wrapper(request):
                     if blockable and self.server_broken_event.is_set():
-                        raise Exception("ScyllaClusterManager BROKEN, Previous test broke ScyllaClusterManager server")
+                        raise Exception(f"ScyllaClusterManager BROKEN, Previous test broke ScyllaClusterManager server, server_broken_reason: {self.server_broken_reason}")
                     self.logger.info("[ScyllaClusterManager][%s] %s", asyncio.current_task().get_name(), request.url)
                     self.tasks_history[asyncio.current_task()] = request
                     return await handler(request)
@@ -1490,11 +1491,12 @@ class ScyllaClusterManager:
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
 
-        return {"cluster_str":cluster_str, "server_broken":self.server_broken_event.is_set()}
+        return {"cluster_str":cluster_str, "server_broken":self.server_broken_event.is_set(), "message": self.server_broken_reason }
 
     def break_manager(self, reason, test):
         # make ScyllaClusterManager not operatable from client side
-        self.logger.error(" %s, test case {test} BROKE ScyllaClusterManager", reason)
+        self.server_broken_reason = f"{reason}, test case {test} BROKE ScyllaClusterManager"
+        self.logger.error(self.server_broken_reason)
         self.server_broken_event.set()
 
     async def _mark_dirty(self, _request) -> None:
@@ -1541,7 +1543,6 @@ class ScyllaClusterManager:
 
     async def _cluster_server_add(self, request) -> dict[str, object]:
         """Add a new server."""
-
         assert self.cluster
 
         data = await request.json()
