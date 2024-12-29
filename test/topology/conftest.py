@@ -217,7 +217,7 @@ async def manager(request, manager_internal, record_property, build_mode):
     cluster_status = await manager_client.after_test(test_case_name, not failed)
     await manager_client.stop()  # Stop client session and close driver after each test
     if cluster_status["server_broken"]:
-        pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken")
+        pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken, server_broken_reason: {cluster_status["message"]}")
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
