@@ -229,7 +229,7 @@ if __name__ == '__main__':
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
     run('udevadm settle', shell=True, check=True)
-    run(f'mkfs.xfs -b size={block_size} {fsdev} -K', shell=True, check=True)
+    run(f'mkfs.xfs -b size={block_size} {fsdev} -K -m rmapbt=0 -m reflink=0', shell=True, check=True)
     run('udevadm settle', shell=True, check=True)
 
     if is_debian_variant():
