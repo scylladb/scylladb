@@ -246,6 +246,7 @@ class TestSuite(ABC):
                     break
         except asyncio.CancelledError:
             test.is_cancelled = True
+            raise
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(test.failed)
@@ -372,7 +373,8 @@ class BoostTestSuite(UnitTestSuite):
 
     def _generate_cache(self) -> None:
         # Apply combined test only for test/boost
-        if self.name != 'boost':
+        exe_path = pathlib.Path(self.mode, "test", self.name, 'combined_tests')
+        if self.name != 'boost' or not exe_path.exists():
             return
         exe = path_to(self.mode, "test", self.name, 'combined_tests')
         res = subprocess.run(
