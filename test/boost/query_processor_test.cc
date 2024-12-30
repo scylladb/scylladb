@@ -184,8 +184,8 @@ std::unordered_map<sstring, uint64_t> get_query_metrics() {
     const auto values = all_metrics->values[distance(cbegin(all_metadata), qp_group)];
     std::vector<sstring> labels;
     for (const auto& metric : qp_group->metrics) {
-        const auto found = metric.id.labels().find("consistency_level");
-        BOOST_REQUIRE(found != metric.id.labels().cend());
+        const auto found = metric.labels().find("consistency_level");
+        BOOST_REQUIRE(found != metric.labels().cend());
         labels.push_back(found->second);
     }
     BOOST_REQUIRE(values.size() == level_count);
