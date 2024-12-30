@@ -356,7 +356,7 @@ public:
     // refresh_mutation_source must be called when there are changes to data source
     // structures but logical state of data is not changed (e.g. when state for a
     // new tablet replica is allocated).
-    virtual future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) = 0;
+    virtual void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) = 0;
 
     virtual compaction_group& compaction_group_for_token(dht::token token) const noexcept = 0;
     virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;

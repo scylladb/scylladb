@@ -693,7 +693,7 @@ public:
         return make_ready_future<>();
     }
 
-    future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override { return make_ready_future(); }
+    void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override {}
 
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
         return get_compaction_group();
@@ -739,6 +739,7 @@ class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
     const locator::tablet_map* _tablet_map;
+    future<> _stop_fut = make_ready_future();
     // Every table replica that completes split work will load the seq number from tablet metadata into its local
     // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
     // current split, and not a previously revoked (stale) decision.
@@ -764,12 +765,12 @@ private:
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
     // that were previously split.
-    future<> handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
     // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
     // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
     // are merged into a new storage group with id (X >> 1).
-    future<> handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
     // group, but they're not merged yet into one, since the merge completion handler happens
@@ -835,10 +836,11 @@ public:
 
     future<> stop() override {
         _merge_completion_event.signal();
-        return std::exchange(_merge_completion_fiber, make_ready_future<>());
+        return when_all(std::exchange(_merge_completion_fiber, make_ready_future<>()),
+                std::exchange(_stop_fut, make_ready_future())).discard_result();
     }
 
-    future<> update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
+    void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const noexcept override;
     utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override;
@@ -2484,7 +2486,7 @@ locator::table_load_stats table::table_load_stats(std::function<bool(const locat
     return _sg_manager->table_load_stats(std::move(tablet_filter));
 }
 
-future<> tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -2507,7 +2509,6 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     }
 
     // Stop the released main compaction groups asynchronously
-    future<> stop_fut = make_ready_future<>();
     for (auto& [id, sg] : _storage_groups) {
         if (!sg->split_unready_groups_are_empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
@@ -2519,7 +2520,7 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
       for (auto cg_ptr : sg->split_unready_groups()) {
         auto f = cg_ptr->stop("tablet split");
         if (!f.available() || f.failed()) [[unlikely]] {
-            stop_fut = stop_fut.then([f = std::move(f), cg_ptr = std::move(cg_ptr)] () mutable {
+            _stop_fut = _stop_fut.then([f = std::move(f), cg_ptr = std::move(cg_ptr)] () mutable {
                 return std::move(f).handle_exception([cg_ptr = std::move(cg_ptr)] (std::exception_ptr ex) {
                     tlogger.warn("Failed to stop compaction group: {}.  Ignored", std::move(ex));
                 });
@@ -2542,8 +2543,6 @@ future<> tablet_storage_group_manager::handle_tablet_split_completion(const loca
     }
 
     _storage_groups = std::move(new_storage_groups);
-
-    return stop_fut;
 }
 
 future<> tablet_storage_group_manager::merge_completion_fiber() {
@@ -2574,7 +2573,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
     }
 }
 
-future<> tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -2623,10 +2622,9 @@ future<> tablet_storage_group_manager::handle_tablet_merge_completion(const loca
     }
     _storage_groups = std::move(new_storage_groups);
     _merge_completion_event.signal();
-    return make_ready_future<>();
 }
 
-future<> tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
+void tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
 
@@ -2635,13 +2633,11 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
     if (new_tablet_count > old_tablet_count) {
         tlogger.info0("Detected tablet split for table {}.{}, increasing from {} to {} tablets",
                         schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
-        co_await handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
-        co_return;
+        handle_tablet_split_completion(*old_tablet_map, *new_tablet_map);
     } else if (new_tablet_count < old_tablet_count) {
         tlogger.info0("Detected tablet merge for table {}.{}, decreasing from {} to {} tablets",
                       schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
-        co_await handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
-        co_return;
+        handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
     }
 
     // Allocate storage group if tablet is migrating in.
@@ -2682,10 +2678,9 @@ future<> tablet_storage_group_manager::update_effective_replication_map(const lo
     if (tablet_migrating_in) {
         refresh_mutation_source();
     }
-    co_return;
 }
 
-future<> table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     auto refresh_mutation_source = [this] {
@@ -2694,7 +2689,7 @@ future<> table::update_effective_replication_map(locator::effective_replication_
     };
 
     if (uses_tablets()) {
-        co_await _sg_manager->update_effective_replication_map(*_erm, refresh_mutation_source);
+        _sg_manager->update_effective_replication_map(*_erm, refresh_mutation_source);
     }
     if (old_erm) {
         old_erm->invalidate();

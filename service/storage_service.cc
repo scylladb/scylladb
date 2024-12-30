@@ -3051,7 +3051,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms;
     pending_table_erms.resize(smp::count);
+    pending_view_erms.resize(smp::count);
 
     std::unordered_set<session_id> open_sessions;
 
@@ -3120,7 +3122,11 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 } else {
                     erm = pending_effective_replication_maps[this_shard_id()][table->schema()->ks_name()];
                 }
-                pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
+                if (table->schema()->is_view()) {
+                    pending_view_erms[this_shard_id()].emplace(id, std::move(erm));
+                } else {
+                    pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
+                }
             });
         });
     } catch (...) {
@@ -3134,9 +3140,12 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 auto tmptr = std::move(pending_token_metadata_ptr[this_shard_id()]);
                 auto erms = std::move(pending_effective_replication_maps[this_shard_id()]);
                 auto table_erms = std::move(pending_table_erms[this_shard_id()]);
+                auto view_erms = std::move(pending_view_erms[this_shard_id()]);
 
                 co_await utils::clear_gently(erms);
                 co_await utils::clear_gently(tmptr);
+                co_await utils::clear_gently(table_erms);
+                co_await utils::clear_gently(view_erms);
             });
         } catch (...) {
             slogger.warn("Failure to reset pending token_metadata in cleanup path: {}. Ignored.", std::current_exception());
@@ -3159,25 +3168,30 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             }
 
             auto& table_erms = pending_table_erms[this_shard_id()];
+            auto& view_erms = pending_view_erms[this_shard_id()];
             for (auto it = table_erms.begin(); it != table_erms.end(); ) {
+                co_await coroutine::maybe_yield();
+                // Update base/views effective_replication_maps atomically.
                 auto& cf = db.find_column_family(it->first);
-                co_await cf.update_effective_replication_map(std::move(it->second));
-                co_await utils::get_local_injector().inject("delay_after_erm_update", [&cf, &ss] (auto& handler) -> future<> {
-                    auto& ss_ = ss;
-                    const auto ks_name = handler.get("ks_name");
-                    const auto cf_name = handler.get("cf_name");
-                    SCYLLA_ASSERT(ks_name);
-                    SCYLLA_ASSERT(cf_name);
-                    if (cf.schema()->ks_name() != *ks_name || cf.schema()->cf_name() != *cf_name) {
-                        co_return;
+                cf.update_effective_replication_map(std::move(it->second));
+                for (const auto& view_ptr : cf.views()) {
+                    const auto& view_id = view_ptr->id();
+                    auto view_it = view_erms.find(view_id);
+                    if (view_it == view_erms.end()) {
+                        throw std::runtime_error(format("Could not find pending effective_replication_map for view {}.{} id={}", view_ptr->ks_name(), view_ptr->cf_name(), view_id));
                     }
-
-                    co_await sleep_abortable(std::chrono::seconds{5}, ss_._abort_source);
-                });
+                    auto& view = db.find_column_family(view_id);
+                    view.update_effective_replication_map(std::move(view_it->second));
+                    view_erms.erase(view_it);
+                }
                 if (cf.uses_tablets()) {
                     register_tablet_split_candidate(it->first);
                 }
                 it = table_erms.erase(it);
+            }
+
+            if (!view_erms.empty()) {
+                throw std::runtime_error(fmt::format("Found orphaned pending effective_replication_maps for the following views: {}", std::views::keys(view_erms)));
             }
 
             auto& session_mgr = get_topology_session_manager();
