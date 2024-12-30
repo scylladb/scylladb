@@ -789,45 +789,11 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     co_await update_fence_version(_topology_state_machine._topology.fence_version);
 
-    // We don't load gossiper endpoint states in storage_service::join_cluster
-    // if raft_topology_change_enabled(). On the other hand gossiper is still needed
-    // even in case of raft_topology_change_enabled() mode, since it still contains part
-    // of the cluster state. To work correctly, the gossiper needs to know the current
-    // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
-    // will be up to date and reachable at the time of restart.
-    const auto tmptr = get_token_metadata_ptr();
-    for (const auto& node : tmptr->get_topology().get_nodes()) {
-        const auto& host_id = node.get().host_id();
-        const auto& ep = node.get().endpoint();
-        if (is_me(host_id)) {
-            continue;
-        }
-        if (ep == inet_address{}) {
-            continue;
-        }
-        auto permit = co_await _gossiper.lock_endpoint(ep, gms::null_permit_id);
-        // Add the endpoint if it doesn't exist yet in gossip
-        // since it is not loaded in join_cluster in the
-        // raft_topology_change_enabled() case.
-        if (!_gossiper.get_endpoint_state_ptr(ep)) {
-            gms::loaded_endpoint_state st;
-            st.endpoint = ep;
-            st.tokens = tmptr->get_tokens(host_id) | std::ranges::to<std::unordered_set<dht::token>>();
-            st.opt_dc_rack = node.get().dc_rack();
-            // Save tokens, not needed for raft topology management, but needed by legacy
-            // Also ip -> id mapping is needed for address map recreation on reboot
-            if (node.get().is_this_node() && !st.tokens.empty()) {
-                st.opt_status = gms::versioned_value::normal(st.tokens);
-            }
-            co_await _gossiper.add_saved_endpoint(host_id, std::move(st), permit.id());
-        }
-    }
-
     // As soon as a node joins token_metadata.topology we
     // need to drop all its rpc connections with ignored_topology flag.
     {
         std::vector<future<>> futures;
-        tmptr->get_topology().for_each_node([&](const locator::node& n) {
+        get_token_metadata_ptr()->get_topology().for_each_node([&](const locator::node& n) {
             const auto ep = n.endpoint();
             if (ep != inet_address{} && !saved_tmpr->get_topology().has_endpoint(ep)) {
                 futures.push_back(remove_rpc_client_with_ignored_topology(ep, n.host_id()));
