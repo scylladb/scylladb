@@ -11,7 +11,6 @@
 #include "size_tiered_compaction_strategy.hh"
 #include "cql3/statements/property_definitions.hh"
 
-#include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/algorithm.hpp>
 
 namespace sstables {
@@ -241,7 +240,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
     // ratio is greater than threshold.
     // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for
     // tombstone purge, i.e. less likely to shadow even older data.
-    for (auto&& sstables : buckets | boost::adaptors::reversed) {
+    for (auto&& sstables : buckets | std::views::reverse) {
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
         auto e = boost::range::remove_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
             return !worth_dropping_tombstones(sst, compaction_time, table_s);

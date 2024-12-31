@@ -21,7 +21,6 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
@@ -4525,7 +4524,7 @@ operation_func get_operation_function(const operation& op) noexcept {
     name.pop_back();
 
     // Check suboperations.
-    for (auto n : name | boost::adaptors::reversed) {
+    for (auto n : name | std::views::reverse) {
         action = action.suboperation_funcs.at(n);
     }
 

@@ -8,7 +8,6 @@
 
 #include "cql3/util.hh"
 #include "utils/assert.hh"
-#include <boost/range/adaptor/reversed.hpp>
 #include <chrono>
 
 #include <seastar/core/sleep.hh>
@@ -325,7 +324,7 @@ future<> service_level_controller::update_effective_service_levels_cache() {
     // role1 in `sorted` vector.
     // That's why if we iterate over the vector in reversed order, we will visit the roles from the bottom
     // and we can use already calculated effective service levels for all of the subroles.
-    for (auto& role: sorted | boost::adaptors::reversed) {
+    for (auto& role: sorted | std::views::reverse) {
         std::optional<service_level_options> sl_options;
 
         if (auto sl_name_it = attributes.find(role); sl_name_it != attributes.end()) {
