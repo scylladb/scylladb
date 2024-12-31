@@ -13,7 +13,6 @@
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
 #include <boost/range/irange.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include "sstables/version.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
