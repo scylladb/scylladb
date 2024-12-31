@@ -8,8 +8,7 @@
 
 #include <seastar/core/bitops.hh>
 #include <seastar/core/align.hh>
-#include <boost/range/adaptor/reversed.hpp>
-#include <boost/range/irange.hpp>
+#include <ranges>
 
 #include "utils/dynamic_bitset.hh"
 #include "seastarx.hh"
@@ -43,7 +42,7 @@ void dynamic_bitset::clear(size_t n) noexcept {
 size_t dynamic_bitset::find_first_set() const noexcept
 {
     size_t pos = 0;
-    for (auto& vv : _bits | boost::adaptors::reversed) {
+    for (auto& vv : _bits | std::views::reverse) {
         auto v = vv[pos];
         pos *= bits_per_int;
         if (v) {
@@ -94,7 +93,7 @@ size_t dynamic_bitset::find_next_set(size_t n) const noexcept
 size_t dynamic_bitset::find_last_set() const noexcept
 {
     size_t pos = 0;
-    for (auto& vv : _bits | boost::adaptors::reversed) {
+    for (auto& vv : _bits | std::views::reverse) {
         auto v = vv[pos];
         pos *= bits_per_int;
         if (v) {

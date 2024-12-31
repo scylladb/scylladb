@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/assert.hh"
 #include "utils/allocation_strategy.hh"
+#include <boost/range/algorithm/equal.hpp>
 #include <seastar/util/variant_utils.hh>
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
@@ -386,7 +386,7 @@ void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, 
 }
 
 void range_tombstone_list::reverter::revert() noexcept {
-    for (auto&& rt : _ops | boost::adaptors::reversed) {
+    for (auto&& rt : _ops | std::views::reverse) {
         seastar::visit(rt, [this] (auto& op) {
             op.undo(_s, _dst);
         });
