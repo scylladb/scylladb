@@ -225,7 +225,7 @@ Options:
 sub-option                             type  description
 ===================================== ====== =============================================
 ``'enabled'``                          bool  Whether or not to enable tablets for a keyspace
-``'initial'``                          int   The number of tablets to start with
+``'initial'``                          int   The number of tablets to start with (deprecated)
 ===================================== ====== =============================================
 
 .. scylladb_include_flag:: tablets-default.rst
@@ -246,6 +246,8 @@ An example that creates a keyspace with 2048 tablets per table::
         'initial': 2048
     };
 
+Note that the ``initial`` tablets option was deprecated.
+Please use :ref:`Per-table tablet hints <cql-tablet-hints-options>` instead.
 
 See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
 
