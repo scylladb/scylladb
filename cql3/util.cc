@@ -8,8 +8,6 @@
 #include "util.hh"
 #include "cql3/expr/expr-utils.hh"
 
-#include <boost/algorithm/string/join.hpp>
-
 #ifdef DEBUG
 
 #include <ucontext.h>

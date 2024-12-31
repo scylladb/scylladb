@@ -7,7 +7,6 @@
  */
 
 #include "utils/assert.hh"
-#include <boost/algorithm/string/join.hpp>
 #include <fmt/chrono.h>
 #include <lua.hpp>
 #include <seastar/core/fstream.hh>

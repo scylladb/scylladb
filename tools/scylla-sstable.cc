@@ -7,7 +7,6 @@
  */
 
 #include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <filesystem>
 #include <set>

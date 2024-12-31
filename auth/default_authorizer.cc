@@ -16,7 +16,6 @@ extern "C" {
 #include <unistd.h>
 }
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>

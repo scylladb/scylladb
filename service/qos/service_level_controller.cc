@@ -8,7 +8,6 @@
 
 #include "cql3/util.hh"
 #include "utils/assert.hh"
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <chrono>
 
@@ -824,7 +823,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     
 
     auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
-    auto col_names_str = boost::algorithm::join(col_names, ", ");
+    auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));
     sstring val_binders_str = "?";
     for (size_t i = 1; i < col_names.size(); ++i) {
         val_binders_str += ", ?";
@@ -844,7 +843,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
         }
 
         auto muts = co_await qp.get_mutations_internal(
-            format("INSERT INTO {}.{} ({}) VALUES ({})",
+            seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
                 db::system_keyspace::NAME,
                 db::system_keyspace::SERVICE_LEVELS_V2,
                 col_names_str,
