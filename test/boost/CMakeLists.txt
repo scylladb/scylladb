@@ -1,5 +1,7 @@
 add_scylla_test(UUID_test
   KIND BOOST)
+add_scylla_test(advanced_rpc_compressor_test
+  KIND SEASTAR)
 add_scylla_test(allocation_strategy_test
   KIND BOOST)
 add_scylla_test(alternator_unit_test
@@ -67,6 +69,8 @@ add_scylla_test(cql_auth_syntax_test
   LIBRARIES cql3)
 add_scylla_test(crc_test
   KIND BOOST)
+add_scylla_test(dict_trainer_test
+  KIND SEASTAR)
 add_scylla_test(dirty_memory_manager_test
   KIND SEASTAR)
 add_scylla_test(double_decker_test
@@ -179,6 +183,8 @@ add_scylla_test(result_utils_test
   KIND SEASTAR)
 add_scylla_test(reusable_buffer_test
   KIND SEASTAR)
+add_scylla_test(reservoir_sampling_test
+  KIND BOOST)
 add_scylla_test(rust_test
   KIND BOOST
   LIBRARIES inc)
@@ -225,6 +231,11 @@ add_scylla_test(sstable_test
   KIND SEASTAR)
 add_scylla_test(stall_free_test
   KIND SEASTAR)
+add_scylla_test(stream_compressor_test
+  KIND BOOST
+  LIBRARIES
+    Seastar::seastar_testing
+    utils)
 add_scylla_test(string_format_test
   KIND BOOST)
 add_scylla_test(summary_test

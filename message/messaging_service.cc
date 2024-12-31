@@ -141,11 +141,42 @@ using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using namespace std::chrono_literals;
 
-static rpc::lz4_fragmented_compressor::factory lz4_fragmented_compressor_factory;
-static rpc::lz4_compressor::factory lz4_compressor_factory;
-static rpc::multi_algo_compressor_factory compressor_factory {
-    &lz4_fragmented_compressor_factory,
-    &lz4_compressor_factory,
+class messaging_service::compressor_factory_wrapper {
+    struct advanced_rpc_compressor_factory : rpc::compressor::factory {
+        utils::walltime_compressor_tracker& _tracker;
+        advanced_rpc_compressor_factory(utils::walltime_compressor_tracker& tracker)
+            : _tracker(tracker)
+        {}
+        const sstring& supported() const override {
+            return _tracker.supported();
+        }
+        std::unique_ptr<rpc::compressor> negotiate(sstring feature, bool is_server, std::function<future<>()> send_empty_frame) const override {
+            return _tracker.negotiate(std::move(feature), is_server, std::move(send_empty_frame));
+        }
+        std::unique_ptr<rpc::compressor> negotiate(sstring feature, bool is_server) const override {
+            assert(false && "negotiate() without send_empty_frame shouldn't happen");
+            return nullptr;
+        }
+    };
+    rpc::lz4_fragmented_compressor::factory _lz4_fragmented_compressor_factory;
+    rpc::lz4_compressor::factory _lz4_compressor_factory;
+    advanced_rpc_compressor_factory _arcf;
+    rpc::multi_algo_compressor_factory _multi_factory;
+public:
+    compressor_factory_wrapper(decltype(advanced_rpc_compressor_factory::_tracker) t, bool enable_advanced)
+        : _arcf(t)
+        , _multi_factory(enable_advanced ? rpc::multi_algo_compressor_factory{
+            &_arcf,
+            &_lz4_fragmented_compressor_factory,
+            &_lz4_compressor_factory,
+        } : rpc::multi_algo_compressor_factory{
+            &_lz4_fragmented_compressor_factory,
+            &_lz4_compressor_factory,
+        })
+    {}
+    seastar::rpc::compressor::factory& get_factory() {
+        return _multi_factory;
+    }
 };
 
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
@@ -238,9 +269,16 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service, gms::gossip_address_map& address_map)
+messaging_service::messaging_service(
+    locator::host_id id,
+    gms::inet_address ip,
+    uint16_t port,
+    gms::feature_service& feature_service,
+    gms::gossip_address_map& address_map,
+    utils::walltime_compressor_tracker& wct)
     : messaging_service(config{std::move(id), ip, ip, port},
-                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr, feature_service, address_map)
+                        scheduling_config{{{{}, "$default"}}, {}, {}},
+                        nullptr, feature_service, address_map, wct)
 {}
 
 static
@@ -339,7 +377,7 @@ void messaging_service::do_start_listen() {
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     rpc::server_options so;
     if (_cfg.compress != compress_what::none) {
-        so.compressor_factory = &compressor_factory;
+        so.compressor_factory = &_compressor_factory_wrapper->get_factory();
     }
     so.load_balancing_algorithm = server_socket::load_balancing_algorithm::port;
 
@@ -429,7 +467,7 @@ void messaging_service::do_start_listen() {
 }
 
 messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service,
-                                     gms::gossip_address_map& address_map)
+                                     gms::gossip_address_map& address_map, utils::walltime_compressor_tracker& arct)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
@@ -438,6 +476,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
     , _feature_service(feature_service)
+    , _compressor_factory_wrapper(std::make_unique<compressor_factory_wrapper>(arct, _cfg.enable_advanced_rpc_compression))
     , _address_map(address_map)
 {
     _rpc->set_logger(&rpc_logger);
@@ -962,7 +1001,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
     opts.keepalive = std::optional<net::tcp_keepalive_params>({60s, 60s, 10});
     if (must_compress) {
-        opts.compressor_factory = &compressor_factory;
+        opts.compressor_factory = &_compressor_factory_wrapper->get_factory();
     }
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;

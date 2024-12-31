@@ -24,6 +24,7 @@
 #include "service/maintenance_mode.hh"
 #include "gms/gossip_address_map.hh"
 #include "tasks/types.hh"
+#include "utils/advanced_rpc_compressor.hh"
 
 #include <list>
 #include <vector>
@@ -241,6 +242,7 @@ public:
     struct rpc_protocol_client_wrapper;
     struct rpc_protocol_server_wrapper;
     struct shard_info;
+    struct compressor_factory_wrapper;
 
     using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
@@ -297,6 +299,7 @@ public:
         uint16_t ssl_port = 0;
         encrypt_what encrypt = encrypt_what::none;
         compress_what compress = compress_what::none;
+        bool enable_advanced_rpc_compression = false;
         tcp_nodelay_what tcp_nodelay = tcp_nodelay_what::all;
         bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
@@ -350,6 +353,7 @@ private:
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
     gms::feature_service& _feature_service;
+    std::unique_ptr<compressor_factory_wrapper> _compressor_factory_wrapper;
 
     struct connection_ref;
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
@@ -365,8 +369,10 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
-    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>, gms::feature_service& feature_service, gms::gossip_address_map& address_map);
+    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port,
+                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>,
+                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&);
     ~messaging_service();
 
     future<> start();

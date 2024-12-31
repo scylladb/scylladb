@@ -179,6 +179,13 @@ const config_type config_type_for<db::config::hinted_handoff_enabled_type> = con
 template <>
 const config_type config_type_for<std::vector<db::config::error_injection_at_startup>> = config_type("error injection list", error_injection_list_to_json);
 
+template <>
+const config_type config_type_for<enum_option<utils::dict_training_loop::when>> = config_type(
+        "dictionary training conditions", printable_to_json<enum_option<utils::dict_training_loop::when>>);
+
+template <>
+const config_type config_type_for<utils::advanced_rpc_compressor::tracker::algo_config> = config_type(
+        "advanced rpc compressor config", printable_vector_to_json<enum_option<compression_algorithm>>);
 }
 
 namespace YAML {
@@ -309,6 +316,41 @@ struct convert<db::config::error_injection_at_startup> {
         } else {
             return false;
         }
+    }
+};
+
+
+template <>
+class convert<enum_option<utils::dict_training_loop::when>> {
+public:
+    static bool decode(const Node& node, enum_option<utils::dict_training_loop::when>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<utils::compression_algorithm>> {
+public:
+    static bool decode(const Node& node, enum_option<utils::compression_algorithm>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
     }
 };
 
@@ -776,9 +818,42 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the receiving socket buffer size in bytes for inter-node calls.")
     , internode_compression(this, "internode_compression", value_status::Used, "none",
         "Controls whether traffic between nodes is compressed. The valid values are:\n"
-        "* all: All traffic is compressed.\n"
-        "* dc: Traffic between data centers is compressed.\n"
-        "* none: No compression.")
+        "\tall: All traffic is compressed.\n"
+        "\tdc : Traffic between data centers is compressed.\n"
+        "\tnone : No compression.")
+    , internode_compression_zstd_max_cpu_fraction(this, "internode_compression_zstd_max_cpu_fraction", liveness::LiveUpdate, value_status::Used, 0.000,
+        "ZSTD compression of RPC will consume at most this fraction of each internode_compression_zstd_quota_refresh_period_ms time slice.\n"
+        "If you wish to try out zstd for RPC compression, 0.05 is a reasonable starting point.")
+    , internode_compression_zstd_cpu_quota_refresh_period_ms(this, "internode_compression_zstd_cpu_quota_refresh_period_ms", liveness::LiveUpdate, value_status::Used, 20,
+        "Advanced. ZSTD compression of RPC will consume at most internode_compression_zstd_max_cpu_fraction (plus one message) of in each time slice of this length.")
+    , internode_compression_zstd_max_longterm_cpu_fraction(this, "internode_compression_zstd_max_longterm_cpu_fraction", liveness::LiveUpdate, value_status::Used, 1.000,
+        "ZSTD compression of RPC will consume at most this fraction of each internode_compression_zstd_longterm_cpu_quota_refresh_period_ms time slice.")
+    , internode_compression_zstd_longterm_cpu_quota_refresh_period_ms(this, "internode_compression_zstd_longterm_cpu_quota_refresh_period_ms", liveness::LiveUpdate, value_status::Used, 10000,
+        "Advanced. ZSTD compression of RPC will consume at most internode_compression_zstd_max_longterm_cpu_fraction (plus one message) of in each time slice of this length.")
+    , internode_compression_zstd_min_message_size(this, "internode_compression_zstd_min_message_size", liveness::LiveUpdate, value_status::Used, 0,
+        "Minimum RPC message size which can be compressed with ZSTD. Messages smaller than this threshold will always be compressed with LZ4. "
+        "ZSTD has high per-message overhead, and might be a bad choice for small messages. This knob allows for some experimentation with that. ")
+    , internode_compression_zstd_max_message_size(this, "internode_compression_zstd_max_message_size", liveness::LiveUpdate, value_status::Used, std::numeric_limits<uint32_t>::max(),
+        "Maximum RPC message size which can be compressed with ZSTD. RPC messages might be large, but they are always compressed at once. This might cause reactor stalls. "
+        "If this happens, this option can be used to make the stalls less severe.")
+    , internode_compression_checksumming(this, "internode_compression_checksumming", liveness::LiveUpdate, value_status::Used, true,
+        "Computes and checks checksums for compressed RPC frames. This is a paranoid precaution against corruption bugs in the compression protocol.")
+    , internode_compression_algorithms(this, "internode_compression_algorithms", liveness::LiveUpdate, value_status::Used,
+            { utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4, },
+        "Specifies RPC compression algorithms supported by this node. ")
+    , internode_compression_enable_advanced(this, "internode_compression_enable_advanced", liveness::MustRestart, value_status::Used, false,
+        "Enables the new implementation of RPC compression. If disabled, Scylla will fall back to the old implementation.")
+    , rpc_dict_training_when(this, "rpc_dict_training_when", liveness::LiveUpdate, value_status::Used, utils::dict_training_loop::when::type::NEVER,
+        "Specifies when RPC compression dictionary training is performed by this node.\n"
+        "* `never` disables it unconditionally.\n"
+        "* `when_leader` enables it only whenever the node is the Raft leader.\n"
+        "* `always` (not recommended) enables it unconditionally.\n"
+        "\n"
+        "Training shouldn't be enabled on more than one node at a time, because overly-frequent dictionary announcements might indefinitely delay nodes from agreeing on a new dictionary.")
+    , rpc_dict_training_min_time_seconds(this, "rpc_dict_training_min_time_seconds", liveness::LiveUpdate, value_status::Used, 3600,
+        "Specifies the minimum duration of RPC compression dictionary training.")
+    , rpc_dict_training_min_bytes(this, "rpc_dict_training_min_bytes", liveness::LiveUpdate, value_status::Used, 1'000'000'000,
+        "Specifies the minimum volume of RPC compression dictionary training.")
     , inter_dc_tcp_nodelay(this, "inter_dc_tcp_nodelay", value_status::Used, false,
         "Enable or disable tcp_nodelay for inter-data center communication. When disabled larger, but fewer, network packets are sent. This reduces overhead from the TCP protocol itself. However, if cross data-center responses are blocked, it will increase latency.")
     , streaming_socket_timeout_in_ms(this, "streaming_socket_timeout_in_ms", value_status::Unused, 0,

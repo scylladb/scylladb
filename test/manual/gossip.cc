@@ -58,6 +58,7 @@ int main(int ac, char ** av) {
 
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
+            sharded<utils::walltime_compressor_tracker> compressor_tracker;
             sharded<gms::feature_service> feature_service;
             sharded<gms::gossip_address_map> gossip_address_map;
             sharded<netw::messaging_service> messaging;
@@ -71,13 +72,16 @@ int main(int ac, char ** av) {
             tm_cfg.topo_cfg.this_cql_address = my_address;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
+            compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
+            auto stop_compressor_tracker = deferred_stop(compressor_tracker);
 
             auto cfg = gms::feature_config_from_db_config(db::config(), {});
             feature_service.start(cfg).get();
 
             gossip_address_map.start().get();
 
-            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service), std::ref(gossip_address_map)).get();
+            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service),
+                            std::ref(gossip_address_map), std::ref(compressor_tracker)).get();
             auto stop_messaging = deferred_stop(messaging);
 
             gms::gossip_config gcfg;

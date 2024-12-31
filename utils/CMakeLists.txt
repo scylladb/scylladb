@@ -5,6 +5,8 @@ add_library(utils STATIC)
 target_sources(utils
   PRIVATE
     UUID_gen.cc
+    advanced_rpc_compressor.cc
+    alien_worker.cc
     arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
     arch/powerpc/crc32-vpmsum/crc32.S
     array-search.cc
@@ -16,6 +18,7 @@ target_sources(utils
     buffer_input_stream.cc
     build_id.cc
     config_file.cc
+    dict_trainer.cc
     directories.cc
     disk-error-handler.cc
     dynamic_bitset.cc
@@ -46,6 +49,7 @@ target_sources(utils
     utf8.cc
     uuid.cc
     aws_sigv4.cc
+    stream_compressor.cc
     s3/aws_error.cc
     s3/client.cc
     s3/retry_strategy.cc)

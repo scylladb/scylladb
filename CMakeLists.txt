@@ -153,6 +153,7 @@ find_package(RapidJSON REQUIRED)
 find_package(xxHash REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
+find_package(lz4 REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
@@ -220,7 +221,10 @@ target_link_libraries(scylla-main
     Seastar::seastar
     Snappy::snappy
     systemd
-    ZLIB::ZLIB)
+    ZLIB::ZLIB
+    lz4::lz4_static
+    zstd::zstd_static
+)
 
 option(Scylla_CHECK_HEADERS
   "Add check-headers target for checking the self-containness of headers")

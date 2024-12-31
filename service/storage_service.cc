@@ -175,7 +175,9 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<qos::service_level_controller>& sl_controller,
     topology_state_machine& topology_state_machine,
     tasks::task_manager& tm,
-    gms::gossip_address_map& address_map)
+    gms::gossip_address_map& address_map,
+    std::function<future<void>()> compression_dictionary_updated_callback
+    )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -207,6 +209,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _cdc_gens(cdc_gens)
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
+        , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
@@ -916,6 +919,11 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 future<> storage_service::update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache, qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
+}
+
+future<> storage_service::compression_dictionary_updated_callback() {
+    assert(this_shard_id() == 0);
+    return _compression_dictionary_updated_callback();
 }
 
 // Moves the coroutine lambda onto the heap and extends its
@@ -7003,6 +7011,9 @@ void storage_service::init_messaging_service() {
             if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
                 if (ss._feature_service.view_build_status_on_group0) {
                     additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
+                }
+                if (ss._feature_service.compression_dicts) {
+                    additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
             }
 

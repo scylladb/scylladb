@@ -193,13 +193,17 @@ int main(int ac, char ** av) {
             sharded<locator::shared_token_metadata> token_metadata;
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
             auto stop_tm = deferred_stop(token_metadata);
+            seastar::sharded<utils::walltime_compressor_tracker> compressor_tracker;
+            compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
+            auto stop_compressor_tracker = deferred_stop(compressor_tracker);
             seastar::sharded<gms::feature_service> feature_service;
             auto cfg = gms::feature_config_from_db_config(db::config(), {});
             feature_service.start(cfg).get();
             seastar::sharded<gms::gossip_address_map> gossip_address_map;
             gossip_address_map.start().get();
             seastar::sharded<netw::messaging_service> messaging;
-            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service), std::ref(gossip_address_map)).get();
+            messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service),
+                            std::ref(gossip_address_map), std::ref(compressor_tracker)).get();
             auto stop_messaging = deferred_stop(messaging);
             seastar::sharded<tester> testers;
             testers.start(std::ref(messaging)).get();

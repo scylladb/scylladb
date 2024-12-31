@@ -46,6 +46,7 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "utils/shared_dict.hh"
 #include "replica/database.hh"
 
 #include <unordered_map>
@@ -94,7 +95,8 @@ namespace {
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
             system_keyspace::ROLE_PERMISSIONS,
-            system_keyspace::v3::CDC_LOCAL
+            system_keyspace::v3::CDC_LOCAL,
+            system_keyspace::DICTS
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -118,6 +120,7 @@ namespace {
                 system_keyspace::ROLE_MEMBERS,
                 system_keyspace::ROLE_ATTRIBUTES,
                 system_keyspace::ROLE_PERMISSIONS,
+                system_keyspace::DICTS,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -1554,6 +1557,20 @@ schema_ptr system_keyspace::legacy::aggregates() {
     return schema;
 }
 
+schema_ptr system_keyspace::dicts() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, DICTS);
+        return schema_builder(NAME, DICTS, std::make_optional(id))
+                .with_column("name", utf8_type, column_kind::partition_key)
+                .with_column("timestamp", timestamp_type)
+                .with_column("origin", uuid_type)
+                .with_column("data", bytes_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
     auto msg = co_await execute_cql(format("SELECT host_id, cluster_name FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
@@ -2296,6 +2313,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
+                    dicts(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -3437,6 +3455,49 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_topology
     }
 
     co_return m;
+}
+
+future<mutation> system_keyspace::get_insert_dict_mutation(
+    bytes data,
+    locator::host_id host_id,
+    db_clock::time_point dict_ts,
+    api::timestamp_type write_ts
+) const {
+    const char* dict_name = "general";
+    slogger.debug("Publishing new compression dictionary: {} {} {}", dict_name, dict_ts, host_id);
+
+    static sstring insert_new = format("INSERT INTO {}.{} (name, timestamp, origin, data) VALUES (?, ?, ?, ?);", NAME, DICTS);
+    auto muts = co_await _qp.get_mutations_internal(insert_new, internal_system_query_state(), write_ts, {
+        data_value(dict_name),
+        data_value(dict_ts),
+        data_value(host_id.uuid()),
+        data_value(std::move(data)),
+    });
+    if (muts.size() != 1) {
+        on_internal_error(slogger, "Expected to prepare a single mutation, but got multiple.");
+    }
+    co_return std::move(muts[0]);
+}
+
+future<utils::shared_dict> system_keyspace::query_dict() const {
+    static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    auto result_set = co_await _qp.execute_internal(
+        query, db::consistency_level::ONE, internal_system_query_state(), {"general"}, cql3::query_processor::cache_internal::yes);
+    if (!result_set->empty()) {
+        auto &&row = result_set->one();
+        auto content = row.get_as<bytes>("data");
+        auto timestamp = row.get_as<db_clock::time_point>("timestamp").time_since_epoch().count();
+        auto origin = row.get_as<utils::UUID>("origin");
+        const int zstd_compression_level = 1;
+        co_return utils::shared_dict(
+            std::as_bytes(std::span(content)),
+            timestamp,
+            origin,
+            zstd_compression_level
+        );
+    } else {
+        co_return utils::shared_dict();
+    }
 }
 
 sstring system_keyspace_name() {

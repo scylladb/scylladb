@@ -113,6 +113,10 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "gms/gossip_address_map.hh"
+#include "utils/alien_worker.hh"
+#include "utils/advanced_rpc_compressor.hh"
+#include "utils/shared_dict.hh"
+#include "message/dictionary_service.hh"
 
 #include <boost/algorithm/string/join.hpp>
 
@@ -775,6 +779,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
 
+    // This worker wasn't designed to be used from multiple threads.
+    // If you are attempting to do that, make sure you know what you are doing.
+    // (It uses a std::mutex-based queue under the hood, so it may cause
+    // performance problems under contention).
+    //
+    // Note: we are creating this thread before app.run so that it doesn't
+    // inherit Seastar's CPU affinity masks. We want this thread to be free
+    // to migrate between CPUs; we think that's what makes the most sense.
+    auto rpc_dict_training_worker = utils::alien_worker(startlog, 19);
+
     return app.run(ac, av, [&] () -> future<int> {
 
         auto&& opts = app.configuration();
@@ -803,7 +817,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -1432,6 +1446,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               return make_ready_future<>();
           }).get();
 
+            utils::dict_sampler dict_sampler;
+            auto arct_cfg = [&] {
+                return utils::advanced_rpc_compressor::tracker::config{
+                    .zstd_min_msg_size = cfg->internode_compression_zstd_min_message_size,
+                    .zstd_max_msg_size = cfg->internode_compression_zstd_max_message_size,
+                    .zstd_quota_fraction = cfg->internode_compression_zstd_max_cpu_fraction,
+                    .zstd_quota_refresh_ms = cfg->internode_compression_zstd_cpu_quota_refresh_period_ms,
+                    .zstd_longterm_quota_fraction = cfg->internode_compression_zstd_max_longterm_cpu_fraction,
+                    .zstd_longterm_quota_refresh_ms = cfg->internode_compression_zstd_longterm_cpu_quota_refresh_period_ms,
+                    .algo_config = cfg->internode_compression_algorithms,
+                    .register_metrics = cfg->internode_compression_enable_advanced(),
+                    .checksumming = cfg->internode_compression_checksumming,
+                };
+            };
+            static sharded<utils::walltime_compressor_tracker> compressor_tracker;
+            compressor_tracker.start(arct_cfg).get();
+            auto stop_compressor_tracker = defer_verbose_shutdown("compressor_tracker", [] { compressor_tracker.stop().get(); });
+            compressor_tracker.local().attach_to_dict_sampler(&dict_sampler);
+
             netw::messaging_service::config mscfg;
 
             mscfg.id = host_id;
@@ -1464,6 +1497,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             } else if (compress_what == "dc") {
                 mscfg.compress = netw::messaging_service::compress_what::dc;
             }
+            mscfg.enable_advanced_rpc_compression = cfg->internode_compression_enable_advanced();
 
             if (encrypt == "all") {
                 mscfg.encrypt = netw::messaging_service::encrypt_what::all;
@@ -1500,7 +1534,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             // Delay listening messaging_service until gossip message handlers are registered
-            messaging.start(mscfg, scfg, creds, std::ref(feature_service), std::ref(gossip_address_map)).get();
+            messaging.start(mscfg, scfg, creds, std::ref(feature_service), std::ref(gossip_address_map), std::ref(compressor_tracker)).get();
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
@@ -1640,6 +1674,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tsm.stop().get();
             });
 
+            auto compression_dict_updated_callback = [] () -> future<> {
+                auto dict = co_await sys_ks.local().query_dict();
+                co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+            };
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1648,7 +1687,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
-                std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map)).get();
+                std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
+                compression_dict_updated_callback
+            ).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -2058,6 +2099,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);
             }).get();
+
+            dictionary_service dict_service(
+                dict_sampler,
+                sys_ks.local(),
+                rpc_dict_training_worker,
+                group0_client,
+                group0_service,
+                stop_signal.as_local_abort_source(),
+                feature_service.local(),
+                dictionary_service::config{
+                    .our_host_id = host_id,
+                    .rpc_dict_training_min_time_seconds = cfg->rpc_dict_training_min_time_seconds,
+                    .rpc_dict_training_min_bytes = cfg->rpc_dict_training_min_bytes,
+                    .rpc_dict_training_when = cfg->rpc_dict_training_when,
+                }
+            );
+            auto stop_dict_service = defer_verbose_shutdown("dictionary training", [&] {
+                dict_service.stop().get();
+            });
 
             supervisor::notify("starting tracing");
             tracing.invoke_on_all(&tracing::tracing::start, std::ref(qp), std::ref(mm)).get();

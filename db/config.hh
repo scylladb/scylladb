@@ -25,6 +25,8 @@
 #include "utils/updateable_value.hh"
 #include "utils/s3/creds.hh"
 #include "utils/error_injection.hh"
+#include "utils/dict_trainer.hh"
+#include "utils/advanced_rpc_compressor.hh"
 
 namespace seastar {
 class file;
@@ -278,6 +280,18 @@ public:
     named_value<uint32_t> internode_send_buff_size_in_bytes;
     named_value<uint32_t> internode_recv_buff_size_in_bytes;
     named_value<sstring> internode_compression;
+    named_value<float> internode_compression_zstd_max_cpu_fraction;
+    named_value<uint32_t> internode_compression_zstd_cpu_quota_refresh_period_ms;
+    named_value<float> internode_compression_zstd_max_longterm_cpu_fraction;
+    named_value<uint32_t> internode_compression_zstd_longterm_cpu_quota_refresh_period_ms;
+    named_value<uint32_t> internode_compression_zstd_min_message_size;
+    named_value<uint32_t> internode_compression_zstd_max_message_size;
+    named_value<bool> internode_compression_checksumming;
+    named_value<utils::advanced_rpc_compressor::tracker::algo_config> internode_compression_algorithms;
+    named_value<bool> internode_compression_enable_advanced;
+    named_value<enum_option<utils::dict_training_loop::when>> rpc_dict_training_when;
+    named_value<uint32_t> rpc_dict_training_min_time_seconds;
+    named_value<uint64_t> rpc_dict_training_min_bytes;
     named_value<bool> inter_dc_tcp_nodelay;
     named_value<uint32_t> streaming_socket_timeout_in_ms;
     named_value<bool> start_native_transport;
