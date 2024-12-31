@@ -116,7 +116,7 @@ list_service_level_statement::execute(query_processor& qp,
                             utf8_type->decompose(sl_name),
                             d(slo.timeout),
                             workload,
-                            dd(slo.shares)};  
+                            dd(slo.shares)};
                     if (_describe_all) {
                         row.push_back(utf8_type->decompose(
                                 fmt::format("{:.2f}%", 100.0f * get_shares_value(slo.shares) / sum_of_shares)
