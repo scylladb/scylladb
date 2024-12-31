@@ -65,6 +65,7 @@ View read_collection_value_nonnull(View& in) {
 class listlike_partial_deserializing_iterator {
 public:
     using iterator_category = std::input_iterator_tag;
+    using iterator_concept = std::input_iterator_tag;
     using value_type = managed_bytes_view;
     using difference_type = std::ptrdiff_t;
     using pointer = managed_bytes_view_opt*;
@@ -84,6 +85,7 @@ private:
             : _remain(0) {
     }
 public:
+    listlike_partial_deserializing_iterator() = default;
     managed_bytes_view_opt operator*() const { return _cur; }
     listlike_partial_deserializing_iterator& operator++() {
         --_remain;
