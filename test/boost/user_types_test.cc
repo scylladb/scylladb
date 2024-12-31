@@ -20,7 +20,6 @@
 #include "db/config.hh"
 
 #include <fmt/ranges.h>
-#include <boost/algorithm/string/join.hpp>
 
 BOOST_AUTO_TEST_SUITE(user_types_test)
 

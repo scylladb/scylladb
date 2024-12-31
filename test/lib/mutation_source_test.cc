@@ -27,7 +27,6 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
