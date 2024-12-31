@@ -7,7 +7,6 @@
  */
 
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/reversed.hpp>

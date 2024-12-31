@@ -14,7 +14,6 @@
 #include "auth/service.hh"
 
 #include <algorithm>
-#include <boost/algorithm/string/join.hpp>
 #include <chrono>
 
 #include <seastar/core/future-util.hh>
@@ -875,7 +874,6 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             for (const auto& col : schema->all_columns()) {
                 col_names.push_back(col.name_as_cql_string());
             }
-            auto col_names_str = boost::algorithm::join(col_names, ", ");
             sstring val_binders_str = "?";
             for (size_t i = 1; i < col_names.size(); ++i) {
                 val_binders_str += ", ?";
@@ -891,10 +889,10 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                     }
                 }
                 auto muts = co_await qp.get_mutations_internal(
-                        format("INSERT INTO {}.{} ({}) VALUES ({})",
+                        seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
                                 db::system_keyspace::NAME,
                                 cf_name,
-                                col_names_str,
+                                fmt::join(col_names, ", "),
                                 val_binders_str),
                         internal_distributed_query_state(),
                         ts,

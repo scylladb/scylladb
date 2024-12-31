@@ -12,7 +12,6 @@
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
 #include "raft_group_registry.hh"
-#include <boost/algorithm/string/join.hpp>
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
@@ -589,7 +588,7 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     if (!_guard) {
         on_internal_error(logger, "group0_batch: trying to announce without guard");
     }
-    auto description = boost::algorithm::join(_descriptions, "; ");
+    auto description = fmt::to_string(fmt::join(_descriptions, "; "));
     // common case, don't bother with generators as we would have only 1-2 mutations,
     // when producer expects substantial number or size of mutations it should use generator
     if (_generators.size() == 0) {

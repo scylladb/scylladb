@@ -15,7 +15,6 @@
 #include <iterator>
 #include <unordered_map>
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
@@ -148,7 +147,7 @@ resource::resource(functions_resource_t, std::string_view keyspace, std::string_
 }
 
 sstring resource::name() const {
-    return boost::algorithm::join(_parts, "/");
+    return fmt::to_string(fmt::join(_parts, "/"));
 }
 
 std::optional<resource> resource::parent() const {

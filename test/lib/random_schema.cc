@@ -8,7 +8,6 @@
 
 #include <algorithm>
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/algorithm/unique.hpp>
 
 #include <seastar/coroutine/maybe_yield.hh>
@@ -1016,22 +1015,22 @@ sstring random_schema::cql() const {
         std::move(cols.begin(), cols.end(), std::back_inserter(col_specs));
     }
 
-    sstring primary_key;
+    std::string primary_key;
     auto partition_column_names = column_names(_schema, column_kind::partition_key);
     auto clustering_key_names = column_names(_schema, column_kind::clustering_key);
     if (!clustering_key_names.empty()) {
-        primary_key = format("({}), {}", boost::algorithm::join(partition_column_names, ", "), boost::algorithm::join(clustering_key_names, ", "));
+        primary_key = fmt::format("({}), {}", fmt::join(partition_column_names, ", "), fmt::join(clustering_key_names, ", "));
     } else {
-        primary_key = format("{}", boost::algorithm::join(partition_column_names, ", "));
+        primary_key = fmt::format("{}", fmt::join(partition_column_names, ", "));
     }
 
     // FIXME include the clustering column orderings
-    return format(
+    return seastar::format(
             "{}\nCREATE TABLE {}.{} (\n\t{}\n\tPRIMARY KEY ({}))",
             udts_str,
             _schema->ks_name(),
             _schema->cf_name(),
-            boost::algorithm::join(col_specs, ",\n\t"),
+            fmt::join(col_specs, ",\n\t"),
             primary_key);
 }
 
