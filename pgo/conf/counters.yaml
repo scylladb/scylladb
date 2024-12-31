@@ -1,0 +1,13 @@
+DROP KEYSPACE IF EXISTS counters;
+
+CREATE KEYSPACE IF NOT EXISTS counters
+WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': '3'};
+
+CREATE TABLE IF NOT EXISTS counters.counter1 (
+                key blob PRIMARY KEY,
+                "C0" counter,
+                "C1" counter,
+                "C2" counter,
+                "C3" counter,
+                "C4" counter
+            );

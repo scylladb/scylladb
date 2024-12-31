@@ -22,6 +22,8 @@ if(DEFINED CMAKE_BUILD_TYPE)
     endif()
 endif(DEFINED CMAKE_BUILD_TYPE)
 
+option(Scylla_ENABLE_LTO "Turn on link-time optimization for the 'release' mode." ON)
+
 include(mode.common)
 get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(is_multi_config)
@@ -42,6 +44,7 @@ else()
 endif()
 
 include(limit_jobs)
+
 # Configure Seastar compile options to align with Scylla
 set(CMAKE_CXX_STANDARD "23" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
@@ -102,13 +105,17 @@ endif()
 
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
 
+if(Scylla_ENABLE_LTO)
+    list(APPEND absl_cxx_flags $<$<CONFIG:RelWithDebInfo>:${CMAKE_CXX_COMPILE_OPTIONS_IPO};-ffat-lto-objects>)
+endif()
+
 find_package(Sanitizers QUIET)
-set(sanitizer_cxx_flags
+list(APPEND absl_cxx_flags
     $<$<CONFIG:Debug,Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_COMPILE_OPTIONS>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_COMPILE_OPTIONS>>)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(ABSL_GCC_FLAGS ${sanitizer_cxx_flags})
+    list(APPEND ABSL_GCC_FLAGS ${absl_cxx_flags})
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set(ABSL_LLVM_FLAGS ${sanitizer_cxx_flags})
+    list(APPEND ABSL_LLVM_FLAGS ${absl_cxx_flags})
 endif()
 set(ABSL_DEFAULT_LINKOPTS
     $<$<CONFIG:Debug,Sanitize>:$<TARGET_PROPERTY:Sanitizers::address,INTERFACE_LINK_LIBRARIES>;$<TARGET_PROPERTY:Sanitizers::undefined_behavior,INTERFACE_LINK_LIBRARIES>>)
@@ -285,7 +292,7 @@ add_version_library(scylla_version
 
 add_executable(scylla
   main.cc)
-target_link_libraries(scylla PRIVATE
+set(scylla_libs
     scylla-main
     api
     auth
@@ -320,6 +327,15 @@ target_link_libraries(scylla PRIVATE
     transport
     types
     utils)
+target_link_libraries(scylla PRIVATE
+    ${scylla_libs})
+
+if(Scylla_ENABLE_LTO)
+  include(enable_lto)
+  foreach(target scylla ${scylla_libs})
+    enable_lto(${target})
+  endforeach()
+endif()
 
 target_link_libraries(scylla PRIVATE
     Seastar::seastar
@@ -338,4 +354,8 @@ add_dependencies(compiler-training
 
 if(Scylla_DIST)
   add_subdirectory(dist)
+endif()
+
+if(Scylla_BUILD_INSTRUMENTED)
+  add_subdirectory(pgo)
 endif()
