@@ -336,6 +336,11 @@ schema_ptr scylla_tables(schema_features features) {
             // In this case, for non-system tables, `version` is null and `schema::version()` will be a hash.
             sb.with_column("committed_by_group0", boolean_type);
         }
+
+        // It is safe to add the `tablets` column unconditionally,
+        // since it is written to only after the cluster feature is enabled.
+        sb.with_column("tablets", map_type_impl::get_instance(utf8_type, utf8_type, false));
+
         sb.with_hash_version();
         s = sb.build();
     }
@@ -1733,6 +1738,19 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
         auto& cdef = *scylla_tables()->get_column_definition("partitioner");
         m.set_clustered_cell(ckey, cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
+    // A table will have engaged tablet options
+    // only after they were set by CREATE TABLE or ALTER TABLE,
+    // Meaning the cluster feature is enabled, so it is safe to write
+    // to this columns.
+    if (table->has_tablet_options()) {
+        auto& map = table->raw_tablet_options();
+        auto& cdef = *scylla_tables()->get_column_definition("tablets");
+        if (map.empty()) {
+            m.set_clustered_cell(ckey, cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+        } else {
+            m.set_clustered_cell(ckey, cdef, make_map_mutation(map, cdef, timestamp));
+        }
+    }
     // In-memory tables are deprecated since scylla-2024.1.0
     // FIXME: delete the column when there's no live version supporting it anymore.
     // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
@@ -2154,6 +2172,19 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 }
 
+static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, schema_builder& builder, const query::result_set_row& table_row) {
+    auto in_mem = table_row.get<bool>("in_memory");
+    auto in_mem_enabled = in_mem.value_or(false);
+    if (in_mem_enabled) {
+        slogger.warn("Support for in_memory tables has been deprecated.");
+    }
+    builder.set_in_memory(in_mem_enabled);
+    if (auto opt_map = get_map<sstring, sstring>(table_row, "tablets")) {
+        auto tablet_options = db::tablet_options(*opt_map);
+        builder.set_tablet_options(tablet_options.to_map());
+    }
+}
+
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
 {
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
@@ -2208,13 +2239,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (sm.scylla_tables()) {
         table_rs = query::result_set(*sm.scylla_tables());
         if (!table_rs.empty()) {
-            query::result_set_row table_row = table_rs.row(0);
-            auto in_mem = table_row.get<bool>("in_memory");
-            auto in_mem_enabled = in_mem.value_or(false);
-            if (in_mem_enabled) {
-                slogger.warn("Support for in_memory tables has been deprecated.");
-            }
-            builder.set_in_memory(in_mem_enabled);
+            prepare_builder_from_scylla_tables_row(ctxt, builder, table_rs.row(0));
         }
     }
     v3_columns columns(std::move(column_defs), is_dense, is_compound);
@@ -2444,6 +2469,13 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
 
     schema_builder builder{ks_name, cf_name, id};
     prepare_builder_from_table_row(ctxt, builder, row);
+
+    if (sm.scylla_tables()) {
+        table_rs = query::result_set(*sm.scylla_tables());
+        if (!table_rs.empty()) {
+            prepare_builder_from_scylla_tables_row(ctxt, builder, table_rs.row(0));
+        }
+    }
 
     auto computed_columns = get_computed_columns(sm);
     auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);

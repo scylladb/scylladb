@@ -55,6 +55,11 @@ keyspace::is_internal() const {
     return _ops->is_internal(*this);
 }
 
+bool
+keyspace::uses_tablets() const {
+    return metadata()->uses_tablets();
+}
+
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
     return _ops->get_replication_strategy(*this);

@@ -18,12 +18,14 @@
 
 namespace data_dictionary {
 class database;
+class keyspace;
 }
 
 class tombstone_gc_options;
 
 namespace db {
 class extensions;
+class tablet_options;
 }
 namespace cdc {
 class options;
@@ -60,6 +62,8 @@ public:
     static const sstring COMPACTION_STRATEGY_CLASS_KEY;
     static const sstring COMPACTION_ENABLED_KEY;
 
+    static const sstring KW_TABLETS;
+
     // FIXME: In origin the following consts are in CFMetaData.
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
@@ -70,6 +74,7 @@ public:
 
 private:
     mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
+    static data_dictionary::keyspace find_keyspace(const data_dictionary::database db, std::string_view ks_name);
 public:
     std::optional<sstables::compaction_strategy_type> get_compaction_strategy_class() const;
 
@@ -103,6 +108,7 @@ public:
     int32_t get_paxos_grace_seconds() const;
     std::optional<table_id> get_id() const;
     bool get_synchronous_updates_flag() const;
+    std::optional<db::tablet_options::map_type> get_tablet_options() const;
 
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;

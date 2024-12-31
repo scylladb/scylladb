@@ -147,6 +147,7 @@ CREATE TABLE ks.t_scylla_cdc_log (
     AND comment = 'CDC log for ks.t'
     AND compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '60', 'compaction_window_unit': 'MINUTES', 'expired_sstable_check_frequency_seconds': '1800'}
     AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+    AND tablets = {'expected_data_size_in_gb': '250', 'min_per_shard_tablet_count': '0.8', 'min_tablet_count': '1'}
     AND crc_check_chance = 1
     AND default_time_to_live = 0
     AND gc_grace_seconds = 0

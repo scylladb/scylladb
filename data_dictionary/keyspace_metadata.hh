@@ -65,6 +65,9 @@ public:
     std::optional<unsigned> initial_tablets() const {
         return _initial_tablets;
     }
+    bool uses_tablets() const noexcept {
+        return _initial_tablets.has_value();
+    }
     const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
         return _cf_meta_data;
     }

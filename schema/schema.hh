@@ -30,6 +30,7 @@
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "db/tablet_options.hh"
 #include "schema_fwd.hh"
 
 namespace dht {
@@ -567,6 +568,7 @@ private:
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::static_sharder> _sharder;
         bool _in_memory = false;
+        std::optional<std::map<sstring, sstring>> _tablet_options;
         std::optional<raw_view_info> _view_info;
     };
     raw_schema _raw;
@@ -741,6 +743,12 @@ public:
     const ::caching_options& caching_options() const {
         return _raw._caching_options;
     }
+
+    // Returns true iff the _tablet_options are initialized.
+    // They may still be empty, e.g. after ALTER TABLE.
+    bool has_tablet_options() const noexcept;
+    db::tablet_options tablet_options() const;
+    const db::tablet_options::map_type& raw_tablet_options() const noexcept;
 
     static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;
