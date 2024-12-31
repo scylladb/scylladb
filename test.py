@@ -1540,7 +1540,7 @@ def parse_cmd_line() -> argparse.Namespace:
             # [1/1] List configured modes
             # debug release dev
             args.modes = re.sub(r'.* List configured modes\n(.*)\n', r'\1',
-                                out, 1, re.DOTALL).split("\n")[-1].split(' ')
+                                out, count=1, flags=re.DOTALL).split("\n")[-1].split(' ')
         except Exception:
             print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
             raise
