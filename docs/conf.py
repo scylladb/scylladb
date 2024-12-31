@@ -11,12 +11,15 @@ sys.path.insert(0, os.path.abspath('./_ext'))
 sys.path.insert(0, os.path.abspath(".."))
 
 # -- Global variables
+FLAG = os.getenv('FLAG', 'manual')
 
+# Set the project name
+PROJECT = "ScyllaDB Manual"
 # Set the base URL for the documentation site.
-BASE_URL = 'https://opensource.docs.scylladb.com'
+BASE_URL = 'https://docs.scylladb.com/manual'
 # Build documentation for the following tags and branches.
 TAGS = []
-BRANCHES = ["master", "branch-5.1", "branch-5.2", "branch-5.4", "branch-6.0", "branch-6.1", "branch-6.2"]
+BRANCHES = ["master", "branch-6.2"]
 # Set the latest version. 
 LATEST_VERSION = "branch-6.2"
 # Set which versions are not released yet.
@@ -24,6 +27,21 @@ UNSTABLE_VERSIONS = ["master"]
 # Set which versions are deprecated.
 DEPRECATED_VERSIONS = [""]
 
+if FLAG == 'opensource':
+    # Set the project name
+    PROJECT = "ScyllaDB Open Source"
+    # Set the base URL for the documentation site.
+    BASE_URL = 'https://opensource.docs.scylladb.com'
+    # Build documentation for the following tags and branches.
+    TAGS = []
+    BRANCHES = ["master", "branch-5.1", "branch-5.2", "branch-5.4", "branch-6.0", "branch-6.1", "branch-6.2"]
+    # Set the latest version. 
+    LATEST_VERSION = "branch-6.2"
+    # Set which versions are not released yet.
+    UNSTABLE_VERSIONS = ["master"]
+    # Set which versions are deprecated.
+    DEPRECATED_VERSIONS = [""]
+    
 # -- General configuration
 
 # Add any Sphinx extension module names here, as strings.
@@ -55,7 +73,7 @@ source_suffix = ['.rst']
 master_doc = "index"
 
 # General information about the project.
-project = "ScyllaDB Open Source"
+project = PROJECT
 copyright = str(date.today().year) + ", ScyllaDB. All rights reserved."
 author = u"ScyllaDB Project Contributors"
 
