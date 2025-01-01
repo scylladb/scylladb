@@ -8,5 +8,5 @@
    Configuration Parameters </reference/configuration-parameters>
    Glossary </reference/glossary>
    Limits </reference/limits>
-   API Reference (BETA) </reference/api-reference>
-   Metrics (BETA) </reference/metrics>
+   API Reference </reference/api-reference>
+   Metrics </reference/metrics>
