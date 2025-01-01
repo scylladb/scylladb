@@ -1,5 +1,5 @@
 ==============
-Metrics (BETA)
+Metrics
 ==============
 
 .. scylladb_metrics::
