@@ -1194,6 +1194,7 @@ map_type_impl::deserialize(View in) const {
     return make_value(std::move(m));
 }
 template data_value map_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value map_type_impl::deserialize<>(managed_bytes_view) const;
 
 template <FragmentedView View>
 static void validate_aux(const map_type_impl& t, View v) {
