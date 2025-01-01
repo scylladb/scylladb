@@ -189,6 +189,7 @@ public:
     std::vector<bytes> current_clustering_key;
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
+    const query_options* _options;
 private:
     const gc_clock::time_point _now;
 public:
@@ -244,6 +245,7 @@ public:
     };
 
     result_set_builder(const selection& s, gc_clock::time_point now,
+                       const query_options* options = nullptr,
                        std::vector<size_t> group_by_cell_indices = {},
                        uint64_t limit = std::numeric_limits<uint64_t>::max(),
                        uint64_t per_partition_limit = std::numeric_limits<uint64_t>::max());
