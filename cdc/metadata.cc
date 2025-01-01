@@ -186,7 +186,7 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     }
 
     auto ts = to_ts(tp);
-    auto emplaced = _gens.emplace(to_ts(tp), std::nullopt).second;
+    auto [it, emplaced] = _gens.emplace(to_ts(tp), std::nullopt);
 
     if (_last_stream_timestamp != api::missing_timestamp) {
         auto last_correct_gen = gen_used_at(_last_stream_timestamp);
@@ -201,5 +201,5 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
         }
     }
 
-    return emplaced;
+    return !it->second;
 }
