@@ -428,20 +428,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     };
 
-    auto get_used_ips = [&, used_ips = std::optional<std::unordered_set<inet_address>>{}]() mutable
-            -> const std::unordered_set<inet_address>&
-    {
-        if (!used_ips) {
-            used_ips.emplace();
-            for (const auto& [sid, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
-                if (const auto used_ip = am.find(locator::host_id{sid.uuid()})) {
-                    used_ips->insert(*used_ip);
-                }
-            }
-        }
-        return *used_ips;
-    };
-
     using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
     auto get_host_id_to_ip_map = [&, map = std::optional<host_id_to_ip_map_t>{}]() mutable -> future<const host_id_to_ip_map_t*> {
         if (!map.has_value()) {
@@ -464,7 +450,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     auto remove_ip = [&](inet_address ip, locator::host_id host_id, bool notify) -> future<> {
         sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(ip));
 
-        if (_gossiper.get_endpoint_state_ptr(ip) && !get_used_ips().contains(ip)) {
+        if (const auto ep = _gossiper.get_endpoint_state_ptr(ip); ep && ep->get_host_id() == host_id) {
             co_await _gossiper.force_remove_endpoint(ip, gms::null_permit_id);
             if (notify) {
                 nodes_to_notify.left.push_back({ip, host_id});
