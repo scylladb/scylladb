@@ -14,7 +14,9 @@ class composite_abort_source {
 public:
     void add(abort_source& as) {
         as.check();
-        auto sub = as.subscribe([this]() noexcept { _as.request_abort(); });
+        auto sub = as.subscribe([this] (const std::optional<std::exception_ptr>& ex_opt) noexcept {
+            _as.request_abort_ex(ex_opt.value_or(std::make_exception_ptr(abort_requested_exception{})));
+        });
         SCYLLA_ASSERT(sub);
         _subscriptions.push_back(std::move(*sub));
     }
