@@ -167,7 +167,7 @@ void lz4_cstream::resetFast() noexcept {
 }
 
 // When new data arrives in `in`, we copy an arbitrary amount of it to `_buf`,
-// (the amount is arbirary, but it has to fit contiguously in `_buf`),
+// (the amount is arbitrary, but it has to fit contiguously in `_buf`),
 // compress the new block from `_buf` to `_lz4_scratch`,
 // then we copy everything from `_lz4_scratch` to `out`.
 // Repeat until `in` is empty.
@@ -182,7 +182,7 @@ size_t lz4_cstream::compress(ZSTD_outBuffer* out, ZSTD_inBuffer* in, ZSTD_EndDir
             _buf_pos = 0;
         }
         // We will compress the biggest prefix of `in` that fits contiguously inside `buf`.
-        // In principle, this is sligthly suboptimal -- ideally, if `in` is smaller than the contiguous space in `buf`,
+        // In principle, this is slightly suboptimal -- ideally, if `in` is smaller than the contiguous space in `buf`,
         // we should only copy `in` to `buf` and wait with the compressor call until future `in`s
         // fill the contiguous space entirely, or `end` is `ZSTD_e_flush` or `ZSTD_e_end`.
         // But for streaming LZ4 it doesn't really make a difference.

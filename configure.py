@@ -1737,7 +1737,7 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
         # Absolute path (in case of the initial profile) or path
         # beginning with $builddir (in case of generated profiles),
         # for use in ninja dependency rules.
-        # Using absoulte paths only would work too, but we use
+        # Using absolute paths only would work too, but we use
         # $builddir for consistency with all other ninja targets.
         profile_target = None
         # Absolute path to the profile, for use in compiler flags.

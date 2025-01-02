@@ -132,7 +132,7 @@ class lz4_cstream final : public stream_compressor {
     // has a matching decompression call with decompressor's _buf as target,
     // with the same length and offset in _buf.
     std::vector<char> _buf;
-    // The current position in the ringbuffer _buf. New input will be appened at this position.
+    // The current position in the ringbuffer _buf. New input will be appended at this position.
     size_t _buf_pos = 0;
     // This pair describes the compressed data in `_lz4_scratch`, which is pending output.
     // We have to copy it out before we can compress new data to the scratch buffer.
@@ -147,7 +147,7 @@ public:
     void reset() noexcept override;
     void resetFast() noexcept;
     // When new data arrives in `in`, we copy an arbitrary amount of it to `_buf`,
-    // (the amount is arbirary, but it has to fit contiguously in `_buf`),
+    // (the amount is arbitrary, but it has to fit contiguously in `_buf`),
     // compress the new block from `_buf` to `_lz4_scratch`,
     // then we copy everything from `_lz4_scratch` to `out`.
     // Repeat until `in` is empty.

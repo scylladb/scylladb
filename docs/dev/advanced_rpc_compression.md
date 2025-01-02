@@ -248,14 +248,14 @@ one copy of each dictionary, on shard 0, kept alive by foreign shared pointers.
 
 Likewise, we keep only a single compressor and a single decompressor for each algorithm,
 and whenever a connection needs to use it, it plugs the correct dictionary in. 
-Switching dictionaries should be cheaper than keeping mulitple copies of the compressors.
+Switching dictionaries should be cheaper than keeping multiple copies of the compressors.
 
 ### Wire protocol details
 
 This section describes the layout of a compressed frame produced by `advanced_rpc_compressor::compress()`.
 
 The compression algorithm is selected on per-message basis.
-(Rationale: this allows the sender to weaken the compression unilaterally if it doens't have the resources for the "normal" algorithm.)
+(Rationale: this allows the sender to weaken the compression unilaterally if it doesn't have the resources for the "normal" algorithm.)
 The 7 least significant bits of byte 0 of each compressed message
 contain an enum value describing the compression algorithm used for this message.
 
