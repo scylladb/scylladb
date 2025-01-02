@@ -5,67 +5,228 @@ The cassandra-stress tool is used for benchmarking and load testing both ScyllaD
 
 This documentation focuses on user mode as this allows the testing of your actual schema.
 
+
+Installation
+============
+
+The latest version of `cassandra-stress` at the time of writing this document is **3.17.0**. Please check the latest version on the `GitHub releases page <https://github.com/scylladb/cassandra-stress/releases>`_
+
+There are multiple ways to install `cassandra-stress` provided by ScyllaDB. Choose the method that best suits your environment.
+
+1. **Use Docker Image (Official Way)**
+2. **Download Prebuilt Binaries**
+3. **Build from Source**
+4. **Build Docker Image from Source**
+
+Use Docker Image (Official Way)
+-------------------------------
+
+The recommended and official way to use `cassandra-stress` is through the Docker image provided by ScyllaDB. This ensures a consistent and ready-to-use environment.
+
+You can pull the latest Docker image from Docker Hub:
+
+.. code-block:: shell
+
+   docker pull scylladb/cassandra-stress:latest
+
+The `latest` tag is always paired with the version tag on GitHub, such as **3.17.0**. To check all available tags, visit:
+
+`Docker Hub Cassandra-Stress Tags <https://hub.docker.com/r/scylladb/cassandra-stress/tags>`_
+
+Once downloaded, you can run `cassandra-stress` directly:
+
+.. code-block:: shell
+
+   docker run --rm scylladb/cassandra-stress <commands>
+
+
+If you need to use a specific version, replace `latest` with the desired version tag:
+
+
+.. code-block:: shell
+
+   docker pull scylladb/cassandra-stress:3.17.0
+   docker run --rm scylladb/cassandra-stress:3.17.0 <commands>
+
+
+Performance Penatly
+-------------------
+
+When running in a Docker container, you might experience a performance penalty due to the containerization overhead. To mitigate this, you can use the **--network=host** option to run the container in the host network namespace. This option allows the container to share the host's network stack, which can improve performance.
+**--security-opt seccomp=unconfined** allow unrestricted system calls inside the container.
+
+
+.. code-block:: shell
+
+   docker run --rm --network=host --security-opt seccomp=unconfined scylladb/cassandra-stress <commands>
+
+
+Download Prebuilt Binaries
+---------------------------
+
+You can download the prebuilt binaries directly from our GitHub releases.
+
+**Prerequisite**: Ensure that Java Runtime Environment (JRE) version 11 or newer is installed on your system.
+
+**Using `curl`:**
+
+.. code-block:: shell
+
+   curl -LO https://github.com/scylladb/cassandra-stress/releases/download/v3.17.0/cassandra-stress-3.17.0-bin.tar.gz
+   curl -LO https://github.com/scylladb/cassandra-stress/releases/download/v3.17.0/cassandra-stress-3.17.0-bin.tar.gz.sha256
+
+**Using `wget`:**
+
+.. code-block:: shell
+
+   wget https://github.com/scylladb/cassandra-stress/releases/download/v3.17.0/cassandra-stress-3.17.0-bin.tar.gz
+   wget https://github.com/scylladb/cassandra-stress/releases/download/v3.17.0/cassandra-stress-3.17.0-bin.tar.gz.sha256
+
+**Verify the download using `sha256sum`:**
+
+   .. code-block:: shell
+
+      sha256sum -c cassandra-stress-3.17.0-bin.tar.gz.sha256
+
+If the verification is successful, you will see:
+
+   .. code-block:: text
+
+      cassandra-stress-3.17.0-bin.tar.gz: OK
+
+**Running Cassandra-Stress**:
+
+After extracting the binaries, you can run `cassandra-stress` directly:
+
+.. code-block:: shell
+
+   ./tools/bin/cassandra-stress <commands>
+
+
+Build from Source
+-----------------
+
+To build `cassandra-stress` from source, ensure you have the following prerequisites installed:
+- **Java JDK**: Version 11 or newer
+- **Apache Ant**: Build tool
+
+Follow these steps:
+
+1. Clone the repository:
+
+   .. code-block:: shell
+
+      git clone --depth=1 https://github.com/scylladb/cassandra-stress.git
+
+2. Checkout the specific version (3.17.0):
+
+   .. code-block:: shell
+
+      cd cassandra-stress
+      git checkout tags/3.17.0
+
+3. Build the binaries using Apache Ant:
+
+   .. code-block:: shell
+
+      ant -Drelease=true artifacts
+
+4. Running Cassandra-Stress:
+
+   .. code-block:: shell
+
+      ./tools/bin/cassandra-stress <commands>
+
+The compiled binaries will be located in the `build` directory.
+
+Build Docker Image from Source
+------------------------------
+
+If you prefer a Dockerized build, follow these steps:
+
+1. Clone the repository:
+
+   .. code-block:: shell
+
+      git clone --depth=1 https://github.com/scylladb/cassandra-stress.git
+
+2. Build the Docker image:
+
+   .. code-block:: shell
+
+      cd cassandra-stress
+      docker build -t cassandra-stress --compress .
+
+Once built, you can run the image locally using:
+
+.. code-block:: shell
+
+   docker run --rm cassandra-stress <commands>
+
+
 Usage
------ 
+-----
 
 There are several operation types:
 
 * write-only, read-only, and mixed workloads of standard data
 * write-only and read-only workloads for counter columns
 * user configured workloads, running custom queries on custom schemas
-* The syntax is cassandra-stress <command> [options]. If you want more information on a given command or options, just run cassandra-stress help 
+* The syntax is cassandra-stress <command> [options]. If you want more information on a given command or options, just run cassandra-stress help
 
 Commands:
 
-read: Multiple concurrent reads - the cluster must first be populated by a write test.
+1. **read**: Multiple concurrent reads - the cluster must first be populated by a write test.
 
-write: Multiple concurrent writes against the cluster.
+2. **write**: Multiple concurrent writes against the cluster.
 
-mixed: Interleaving of any basic commands, with configurable ratio and distribution - the cluster must first be populated by a write test.
+3. **mixed**: Interleaving of any basic commands, with configurable ratio and distribution - the cluster must first be populated by a write test.
 
-counter_write: Multiple concurrent updates of counters.
+4. **counter_write**: Multiple concurrent updates of counters.
 
-counter_read: Multiple concurrent reads of counters. The cluster must first be populated by a counterwrite test.
+5. **counter_read**: Multiple concurrent reads of counters. The cluster must first be populated by a counterwrite test.
 
-user: Interleaving of user provided queries, with configurable ratio and distribution.
+6. **user**: Interleaving of user provided queries, with configurable ratio and distribution.
 
-help: Print help for a command or option.
+7. **help**: Print help for a command or option.
 
-print: Inspect the output of a distribution definition.
+8. **print**: Inspect the output of a distribution definition.
 
-legacy: Legacy support mode.
+9. **legacy**: Legacy support mode.
 
 Primary Options:
+----------------
 
--pop: Population distribution and intra-partition visit order.
+- **-pop**: Population distribution and intra-partition visit order.
 
--insert: Insert specific options relating to various methods for batching and splitting partition updates.
+- **-insert**: Insert specific options relating to various methods for batching and splitting partition updates.
 
--col: Column details such as size and count distribution, data generator, names, comparator and if super columns should be used.
+- **-col**: Column details such as size and count distribution, data generator, names, comparator and if super columns should be used.
 
--rate: Thread count, rate limit or automatic mode (default is auto).
+- **-rate**: Thread count, rate limit or automatic mode (default is auto).
 
--mode: CQL with options.
+- **-mode**: CQL with options.
 
--errors: How to handle errors when encountered during stress.
+- **-errors**: How to handle errors when encountered during stress.
 
--sample: Specify the number of samples to collect for measuring latency.
+- **-sample**: Specify the number of samples to collect for measuring latency.
 
--schema: Replication settings, compression, compaction, etc.
+- **-schema**: Replication settings, compression, compaction, etc.
 
--node: Nodes to connect to.
+- **-node**: Nodes to connect to.
 
--log: Where to log progress to, and the interval at which to do it.
+- **-log**: Where to log progress to, and the interval at which to do it.
 
--transport: Custom transport factories.
+- **-transport**: Custom transport factories.
 
--port: The port to connect to cassandra nodes on.
+- **-port**: The port to connect to cassandra nodes on.
 
--sendto: Specify a stress server to send this command to.
+- **-sendto**: Specify a stress server to send this command to.
 
--graph: Graph recorded metrics.
+- **-graph**: Graph recorded metrics.
 
--tokenrange: Token range settings.
+- **-tokenrange**: Token range settings.
+
 
 User mode
 ---------
@@ -272,6 +433,3 @@ Use the transport option:
 
 
 .. include:: /rst_include/apache-copyrights.rst
-
-
-
