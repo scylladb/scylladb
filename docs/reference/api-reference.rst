@@ -1,6 +1,6 @@
 :exclude-doctools:
 
-API Reference (BETA)
+API Reference
 ====================
 
 .. scylladb_swagger_inc::

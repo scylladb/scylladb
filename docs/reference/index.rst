@@ -13,6 +13,6 @@ Reference
 * :doc:`Configuration Parameters </reference/configuration-parameters>` - ScyllaDB properties configurable in the ``scylla.yaml`` configuration file.
 * :doc:`Glossary </reference/glossary>` - ScyllaDB-related terms and definitions.
 * :doc:`Limits </reference/limits>`
-* :doc:`API Reference (BETA) </reference/api-reference>`
-* :doc:`Metrics (BETA) </reference/metrics>`
+* :doc:`API Reference </reference/api-reference>`
+* :doc:`Metrics </reference/metrics>`
 * .. scylladb_include_flag:: enterprise-vs-oss-matrix-link.rst
