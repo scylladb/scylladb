@@ -75,6 +75,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
     for r in rows:
         assert r.c == r.pk
 
+
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
@@ -310,6 +311,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
     # The tablet move should have evicted the cached reader.
     assert all(map(lambda x: x == 0, [get_querier_cache_population(server) for server in servers]))
 
+
 # Reproducer for https://github.com/scylladb/scylladb/issues/19052
 #   1) table A has N tablets and views
 #   2) migration starts for a tablet of A from node 1 to 2.
@@ -424,11 +426,13 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'test_n'").one()
     assert res is None
 
+
 @pytest.mark.asyncio
 async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
     cfg = {"enable_tablets": True, "force_gossip_topology_changes": True}
     with pytest.raises(Exception, match="Failed to add server"):
         await manager.server_add(config=cfg)
+
 
 @pytest.mark.asyncio
 async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
@@ -446,6 +450,7 @@ async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerCli
         with pytest.raises(SyntaxException, match=expected):
             ks_name = unique_name()
             await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
+
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -500,6 +505,7 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     # Verify that the view has the expected number of rows
     rows = await cql.run_async("SELECT c from test.mv1")
     assert len(list(rows)) == num_of_rows
+
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -575,6 +581,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
     rows = await cql.run_async("SELECT c from test.mv1")
     assert len(list(rows)) == expected_num_of_rows
 
+
 @pytest.mark.asyncio
 async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     """
@@ -629,6 +636,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table test.test"
     await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 @pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21826")
@@ -670,6 +678,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
     replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
     await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
@@ -702,6 +711,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
     logger.info(f"Replacing {node_to_remove} with a new node")
     replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
     await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': f'rack1'})
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
