@@ -38,7 +38,7 @@ protected:
 public:
     /// Calculate the minimum tablet_count for a table, given the target_tablet_size, the per-table hints,
     /// the network topology, and the configured replication factors.
-    virtual size_t calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const = 0;
+    virtual future<size_t> calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const = 0;
 
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.

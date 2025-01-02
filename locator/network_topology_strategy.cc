@@ -303,7 +303,7 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 //    initial_tablets = max(nr_shards_in(dc) / RF_in(dc) for dc in datacenters)
 //
 
-static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf, double min_per_shard_tablet_count = 0) {
+static future<unsigned> calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf, double min_per_shard_tablet_count = 0) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
     std::unordered_map<sstring, unsigned> shards_per_dc_map;
     tm->for_each_token_owner([&] (const node& node) {
@@ -324,10 +324,10 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, token_m
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
-    return initial_tablets;
+    co_return initial_tablets;
 }
 
-size_t network_topology_strategy::calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
+future<size_t> network_topology_strategy::calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
     size_t tablet_count = get_initial_tablets();
     const auto& tablet_options = s->tablet_options();
     if (tablet_options.min_tablet_count) {
@@ -340,20 +340,20 @@ size_t network_topology_strategy::calculate_min_tablet_count(schema_ptr s, token
         tablet_count = std::max<size_t>(tablet_count, calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor, tablet_options.min_per_shard_tablet_count.value()));
     }
     if (tablet_count == 0) {
-        tablet_count = calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale.value_or(1);
+        tablet_count = co_await calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale.value_or(1);
     }
-    return tablet_count;
+    co_return tablet_count;
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
-    size_t tablet_count = calculate_min_tablet_count(s, tm, target_tablet_size, initial_scale);
+    size_t tablet_count = co_await calculate_min_tablet_count(s, tm, target_tablet_size, initial_scale);
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
         tablet_count = aligned_tablet_count;
     }
 
-    return reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {

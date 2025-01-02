@@ -1108,7 +1108,7 @@ public:
 
             auto [s, rs] = get_schema_and_rs(table);
             size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
-                rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, initial_scale));
+                co_await rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, initial_scale));
 
             resize_load.update(table, std::move(size_desc));
             lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
