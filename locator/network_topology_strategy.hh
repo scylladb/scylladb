@@ -29,7 +29,7 @@ public:
         return _rep_factor;
     }
 
-    size_t get_replication_factor(const sstring& dc) const {
+    size_t get_replication_factor(const sstring& dc) const override {
         auto dc_factor = _dc_rep_factor.find(dc);
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
     }

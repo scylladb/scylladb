@@ -2531,6 +2531,61 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
+    do_with_cql_env_thread([] (auto& e) {
+        auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
+
+        topology_builder topo(e);
+
+        std::vector<endpoint_dc_rack> racks = {
+            topo.rack(),
+            topo.start_new_dc(),
+        };
+
+        std::vector<host_id> hosts;
+        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
+        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
+        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
+
+        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
+        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
+
+        auto ks_name1 = add_keyspace(e, {{racks[0].dc, 3}});
+        auto ks_name2 = add_keyspace(e, {{racks[1].dc, 2}});
+
+        // table1 overflows per-shard goal in dc1, should be scaled down.
+        // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
+        // which will be scaled down by a factor of 0.5 to achieve 100 tablets/shard, giving
+        // 200 tablets, scaled up to the nearest power of 2, which is 256.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 200}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        // table2 has 64 tablets/shard in dc2, should not be scaled down.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 64}}", ks_name2)).get();
+        auto table2 = e.local_db().find_schema(ks_name2, "table2")->id();
+
+        rebalance_tablets(e);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
+
+            load_sketch load(tm);
+            load.populate().get();
+
+            for (auto h: hosts) {
+                auto l = load.get_shard_minmax(h);
+                testlog.info("Load on host {}: min={}, max={}", h, l.min(), l.max());
+                BOOST_REQUIRE_LE(l.max(), 2 * per_shard_goal);
+            }
+        }
+    }, tablet_cql_test_config()).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
