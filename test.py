@@ -1135,8 +1135,13 @@ class PythonTest(Test):
         try:
             cluster.before_test(self.uname)
             prepare_cql = self.suite.cfg.get("prepare_cql", None)
-            if prepare_cql:
-                next(iter(cluster.running.values())).control_connection.execute(prepare_cql)
+            if prepare_cql and not hasattr(cluster, 'prepare_cql_executed'):
+                cc = next(iter(cluster.running.values())).control_connection
+                if not isinstance(prepare_cql, collections.abc.Iterable):
+                    prepare_cql = [prepare_cql]
+                for stmt in prepare_cql:
+                    cc.execute(stmt)
+                cluster.prepare_cql_executed = True
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True

@@ -2127,6 +2127,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_SERVICE_LEVELS
         | K_ATTACHED
         | K_FOR
+        | K_SHARES
         | K_GROUP
         | K_TIMEOUT
         | K_SERVICE
@@ -2335,6 +2336,7 @@ K_SERVICE: S E R V I C E;
 K_LEVEL: L E V E L;
 K_LEVELS: L E V E L S;
 K_EFFECTIVE: E F F E C T I V E;
+K_SHARES: S H A R E S;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 

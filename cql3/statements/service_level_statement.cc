@@ -7,6 +7,8 @@
  */
 
 #include "service_level_statement.hh"
+#include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 
@@ -26,6 +28,12 @@ future<> service_level_statement::check_access(query_processor& qp, const servic
 
 bool service_level_statement::needs_guard(query_processor&, service::query_state& state) const {
     return state.get_service_level_controller().is_v2();
+}
+
+void service_level_statement::validate_shares_option(const query_processor& qp, const qos::service_level_options& slo) const {
+    if (!std::holds_alternative<qos::service_level_options::unset_marker>(slo.shares) && !qp.proxy().features().workload_prioritization) {
+        throw exceptions::invalid_request_exception("`shares` option can only be used when the cluster is fully upgraded to enterprise");
+    }
 }
 
 }

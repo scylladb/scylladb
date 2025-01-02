@@ -68,7 +68,7 @@ def pytest_collection_modifyitems(config, items):
 # from the appropriate system table, but can't do it with Alternator (because
 # we don't know yet the secret key!), so we need to do it with CQL.
 @cache
-def get_valid_alternator_role(url):
+def get_valid_alternator_role(url, role='cassandra'):
     from cassandra.cluster import Cluster
     from cassandra.auth import PlainTextAuthProvider
     auth_provider = PlainTextAuthProvider(
@@ -85,7 +85,6 @@ def get_valid_alternator_role(url):
                 # We could have looked for any role/salted_hash pair, but we
                 # already know a role "cassandra" exists (we just used it to
                 # connect to CQL!), so let's just use that role.
-                role = 'cassandra'
                 salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
                 if salted_hash is None:
                     break
@@ -129,7 +128,7 @@ def dynamodb(request):
             region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
 
-def new_dynamodb_session(request, dynamodb):
+def new_dynamodb_session(request, dynamodb, user='cassandra', password='secret_pass'):
     ses = boto3.Session()
     host = urlparse(dynamodb.meta.client._endpoint.host)
     conf = botocore.client.Config(parameter_validation=False)
@@ -137,7 +136,7 @@ def new_dynamodb_session(request, dynamodb):
         return boto3.resource('dynamodb', config=conf)
     if host.hostname == 'localhost':
         conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
-    user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host)
+    user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
     return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
         region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
         config=conf)

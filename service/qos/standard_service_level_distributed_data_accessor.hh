@@ -19,8 +19,7 @@ namespace db {
     class system_distributed_keyspace;
 }
 namespace qos {
-class standard_service_level_distributed_data_accessor : public service_level_controller::service_level_distributed_data_accessor,
-         public ::enable_shared_from_this<standard_service_level_distributed_data_accessor> {
+class standard_service_level_distributed_data_accessor : public service_level_controller::service_level_distributed_data_accessor {
 private:
     db::system_distributed_keyspace& _sys_dist_ks;
 public:

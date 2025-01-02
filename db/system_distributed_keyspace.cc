@@ -13,6 +13,7 @@
 #include "replica/database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
 #include "schema/schema_builder.hh"
 #include "timeout_config.hh"
 #include "types/types.hh"
@@ -21,6 +22,8 @@
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
+
 #include "service/migration_manager.hh"
 #include "locator/host_id.hh"
 
@@ -152,8 +155,14 @@ static const sstring CDC_TIMESTAMPS_KEY = "timestamps";
 schema_ptr service_levels() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
+        auto builder = schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
                 .with_column("service_level", utf8_type, column_kind::partition_key)
+                .with_column("shares", int32_type);
+        if (utils::get_local_injector().is_enabled("service_levels_v1_table_without_shares")) {
+            builder.remove_column("shares");
+        }
+
+        return builder
                 .with_hash_version()
                 .build();
     }();
@@ -207,9 +216,12 @@ system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& 
         , _sp(sp) {
 }
 
-static thread_local std::pair<std::string_view, data_type> new_columns[] {
-    {"timeout", duration_type},
-    {"workload_type", utf8_type}
+static std::vector<std::pair<std::string_view, data_type>> new_service_levels_columns(bool workload_prioritization_enabled) {
+    std::vector<std::pair<std::string_view, data_type>> new_columns {{"timeout", duration_type}, {"workload_type", utf8_type}};
+    if (workload_prioritization_enabled) {
+        new_columns.push_back({"shares", int32_type});
+    }
+    return new_columns;
 };
 
 static schema_ptr get_current_service_levels(data_dictionary::database db) {
@@ -218,11 +230,11 @@ static schema_ptr get_current_service_levels(data_dictionary::database db) {
             : service_levels();
 }
 
-static schema_ptr get_updated_service_levels(data_dictionary::database db) {
+static schema_ptr get_updated_service_levels(data_dictionary::database db, bool workload_prioritization_enabled) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto schema = get_current_service_levels(db);
     schema_builder b(schema);
-    for (const auto& col : new_columns) {
+    for (const auto& col : new_service_levels_columns(workload_prioritization_enabled)) {
         auto& [col_name, col_type] = col;
         bytes options_name = to_bytes(col_name.data());
         if (schema->get_column_definition(options_name)) {
@@ -234,20 +246,20 @@ static schema_ptr get_updated_service_levels(data_dictionary::database db) {
     return b.build();
 }
 
-future<> system_distributed_keyspace::start() {
+future<> system_distributed_keyspace::create_tables(std::vector<schema_ptr> tables) {
     if (this_shard_id() != 0) {
         _started = true;
         co_return;
     }
 
     auto db = _sp.data_dictionary();
-    auto tables = ensured_tables();
 
     while (true) {
         // Check if there is any work to do before taking the group 0 guard.
+        bool workload_prioritization_enabled = _sp.features().workload_prioritization;
         bool keyspaces_setup = db.has_keyspace(NAME) && db.has_keyspace(NAME_EVERYWHERE);
         bool tables_setup = std::all_of(tables.begin(), tables.end(), [db] (schema_ptr t) { return db.has_schema(t->ks_name(), t->cf_name()); } );
-        bool service_levels_up_to_date = get_current_service_levels(db)->equal_columns(*get_updated_service_levels(db));
+        bool service_levels_up_to_date = get_current_service_levels(db)->equal_columns(*get_updated_service_levels(db, workload_prioritization_enabled));
         if (keyspaces_setup && tables_setup && service_levels_up_to_date) {
             dlogger.info("system_distributed(_everywhere) keyspaces and tables are up-to-date. Not creating");
             _started = true;
@@ -287,12 +299,12 @@ future<> system_distributed_keyspace::start() {
         // Get mutations for creating and updating tables.
         auto num_keyspace_mutations = mutations.size();
         co_await coroutine::parallel_for_each(ensured_tables(),
-                [this, &mutations, db, ts, sd_ksm, sde_ksm] (auto&& table) -> future<> {
+                [this, &mutations, db, ts, sd_ksm, sde_ksm, workload_prioritization_enabled] (auto&& table) -> future<> {
             auto ksm = table->ks_name() == NAME ? sd_ksm : sde_ksm;
 
             // Ensure that the service_levels table contains new columns.
             if (table->cf_name() == SERVICE_LEVELS) {
-                table = get_updated_service_levels(db);
+                table = get_updated_service_levels(db, workload_prioritization_enabled);
             }
 
             if (!db.has_schema(table->ks_name(), table->cf_name())) {
@@ -323,6 +335,24 @@ future<> system_distributed_keyspace::start() {
         _started = true;
         co_return;
     }
+}
+
+ future<> system_distributed_keyspace::start_workload_prioritization() {
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+    if (_qp.db().features().workload_prioritization) {
+       co_await create_tables({get_updated_service_levels(_qp.db(), true)});
+    }
+}
+
+future<> system_distributed_keyspace::start() {
+    if (this_shard_id() != 0) {
+        _started = true;
+        co_return;
+    }
+
+    co_await create_tables(ensured_tables());
 }
 
 future<> system_distributed_keyspace::stop() {
@@ -740,6 +770,13 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     co_return res;
 }
 
+bool system_distributed_keyspace::workload_prioritization_tables_exists() {
+    auto wp_table = get_updated_service_levels(_qp.db(), true);
+    auto table = _qp.db().try_find_table(NAME, wp_table->cf_name());
+
+    return table && table->schema()->equal_columns(*wp_table);
+}
+
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels(qos::query_context ctx) const {
     return qos::get_service_levels(_qp, NAME, SERVICE_LEVELS, db::consistency_level::ONE, ctx);
 }
@@ -766,6 +803,19 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
             },
         }, tv);
     };
+    auto to_data_value_g = [&] <typename T> (const std::variant<qos::service_level_options::unset_marker, qos::service_level_options::delete_marker, T>& v) {
+        return std::visit(overloaded_functor {
+            [&] (const qos::service_level_options::unset_marker&) {
+                return data_value::make_null(data_type_for<T>());
+            },
+            [&] (const qos::service_level_options::delete_marker&) {
+                return data_value::make_null(data_type_for<T>());
+            },
+            [&] (const T& v) {
+                return data_value(v);
+            },
+        }, v);
+    };
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
             ? data_value::make_null(utf8_type)
             : data_value(qos::service_level_options::to_string(slo.workload));
@@ -775,6 +825,11 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
                 {to_data_value(slo.timeout),
                     workload,
                     service_level_name},
+                cql3::query_processor::cache_internal::no);
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET shares = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
+                db::consistency_level::ONE,
+                internal_distributed_query_state(),
+                {to_data_value_g(slo.shares), service_level_name},
                 cql3::query_processor::cache_internal::no);
 }
 

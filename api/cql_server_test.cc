@@ -26,21 +26,24 @@ struct connection_sl_params : public json::json_base {
     json::json_element<sstring> _role_name;
     json::json_element<sstring> _workload_type;
     json::json_element<sstring> _timeout;
+    json::json_element<sstring> _scheduling_group;
 
-    connection_sl_params(const sstring& role_name, const sstring& workload_type, const sstring& timeout) {
+    connection_sl_params(const sstring& role_name, const sstring& workload_type, const sstring& timeout, const sstring& scheduling_group) {
         _role_name = role_name;
         _workload_type = workload_type;
         _timeout = timeout;
+        _scheduling_group = scheduling_group;
         register_params();
     }
 
     connection_sl_params(const connection_sl_params& params)
-        : connection_sl_params(params._role_name(), params._workload_type(), params._timeout()) {}
+        : connection_sl_params(params._role_name(), params._workload_type(), params._timeout(), params._scheduling_group()) {}
 
     void register_params() {
         add(&_role_name, "role_name");
         add(&_workload_type, "workload_type");
         add(&_timeout, "timeout");
+        add(&_scheduling_group, "scheduling_group");
     }    
 };
 
@@ -54,7 +57,8 @@ void set_cql_server_test(http_context& ctx, seastar::httpd::routes& r, cql_trans
             return connection_sl_params(
                     std::move(params.role_name), 
                     sstring(qos::service_level_options::to_string(params.workload_type)), 
-                    to_string(cql_duration(months_counter{0}, days_counter{0}, nanoseconds_counter{nanos})));
+                    to_string(cql_duration(months_counter{0}, days_counter{0}, nanoseconds_counter{nanos})),
+                    std::move(params.scheduling_group_name));
         });
         co_return result;
     });

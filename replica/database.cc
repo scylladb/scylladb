@@ -67,6 +67,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "timeout_config.hh"
 #include "tombstone_gc.hh"
+#include "service/qos/service_level_controller.hh"
 
 #include "replica/data_dictionary_impl.hh"
 #include "replica/global_table_ptr.hh"
@@ -220,14 +221,8 @@ void database::setup_scylla_memory_diagnostics_producer() {
         writeln("Replica:\n");
 
         writeln("  Read Concurrency Semaphores:\n");
-        const std::pair<const char*, reader_concurrency_semaphore&> semaphores[] = {
-                {"user", _read_concurrency_sem},
-                {"streaming", _streaming_concurrency_sem},
-                {"system", _system_read_concurrency_sem},
-                {"compaction", _compaction_concurrency_sem},
-                {"view update", _view_update_read_concurrency_sem},
-        };
-        for (const auto& [name, sem] : semaphores) {
+
+        static auto semaphore_dump = [&writeln] (const sstring& name, const reader_concurrency_semaphore& sem) {
             const auto initial_res = sem.initial_resources();
             const auto available_res = sem.available_resources();
             if (sem.is_unlimited()) {
@@ -245,7 +240,17 @@ void database::setup_scylla_memory_diagnostics_producer() {
                         utils::to_hr_size(initial_res.memory),
                         sem.get_stats().waiters);
             }
-        }
+        };
+
+        semaphore_dump("streaming", _streaming_concurrency_sem);
+        semaphore_dump("system", _system_read_concurrency_sem);
+        semaphore_dump("compaction", _compaction_concurrency_sem);
+        _reader_concurrency_semaphores_group.foreach_semaphore([] (scheduling_group sg, reader_concurrency_semaphore& sem) {
+             semaphore_dump(sg.name(), sem);
+        });
+        _view_update_read_concurrency_semaphores_group.foreach_semaphore([] (scheduling_group sg, reader_concurrency_semaphore& sem) {
+             semaphore_dump(sg.name(), sem);
+        });
 
         writeln("  Execution Stages:\n");
         const std::pair<const char*, inheriting_execution_stage::stats> execution_stage_summaries[] = {
@@ -311,6 +316,42 @@ public:
     }
 };
 
+reader_concurrency_semaphore&
+database::read_concurrency_sem() {
+    reader_concurrency_semaphore* sem = _reader_concurrency_semaphores_group.get_or_null(current_scheduling_group());
+    if (!sem) {
+        // this line is commented out, however we shouldn't get here because it means that a user query or even worse,
+        // some random query was triggered from an unanticipated scheduling groups and this violates the isolation we are trying to achieve.
+        // It is commented out for two reasons:
+        // 1. So we will be able to ease into this new system, first testing functionality and effect and only then mix in exceptions and asserts.
+        // 2. So the series containing those changes will be backportable without causing too harsh regressions (aborts) on one hand and without forcing
+        //    extensive changes on the other hand.
+        // Follow Up: uncomment this line and run extensive testing. Handle every case of abort.
+        // seastar::on_internal_error(dblog, format("Tried to run a user query in a wrong scheduling group (scheduling group: '{}')", current_scheduling_group().name()));
+        sem = _reader_concurrency_semaphores_group.get_or_null(_default_read_concurrency_group);
+        if (!sem) {
+            // If we got here - the initialization went very wrong and we can't do anything about it.
+            // This can only happen if someone touched the initialization code which is assumed to initialize at least
+            // this default semaphore.
+            seastar::on_internal_error(dblog, "Default read concurrency semaphore wasn't found, something probably went wrong during database::start");
+        }
+    }
+    return *sem;
+}
+
+// With same concerns as read_concurrency_sem().
+reader_concurrency_semaphore&
+database::view_update_read_concurrency_sem() {
+    reader_concurrency_semaphore* sem = _view_update_read_concurrency_semaphores_group.get_or_null(current_scheduling_group());
+    if (!sem) {
+        sem = _view_update_read_concurrency_semaphores_group.get_or_null(_default_read_concurrency_group);
+        if (!sem) {
+            seastar::on_internal_error(dblog, "Default view update read concurrency semaphore wasn't found, something probably went wrong during database::start");
+        }
+    }
+    return *sem;
+}
+
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
         compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, const abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
@@ -329,15 +370,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         }
         return backlog;
     }))
-    , _read_concurrency_sem(
-        utils::updateable_value<int>(max_count_concurrent_reads),
-        max_memory_concurrent_reads(),
-        "user",
-        max_inactive_queue_length(),
-        _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_cpu_concurrency,
-        reader_concurrency_semaphore::register_metrics::yes)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -360,15 +392,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             reader_concurrency_semaphore::register_metrics::yes)
-    , _view_update_read_concurrency_sem(
-            utils::updateable_value<int>(max_count_concurrent_view_update_reads),
+    , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
-            "view_update",
+            utils::updateable_value<int>(max_count_concurrent_view_update_reads),
             max_inactive_view_update_queue_length(),
             _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
-            reader_concurrency_semaphore::register_metrics::yes)
+            "view_update")
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
@@ -392,6 +423,10 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _feat(feat)
     , _shared_token_metadata(stm)
     , _lang_manager(langm)
+    , _reader_concurrency_semaphores_group(max_memory_concurrent_reads(), max_count_concurrent_reads, max_inactive_queue_length(),
+        _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
+        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        _cfg.reader_concurrency_semaphore_cpu_concurrency)
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
@@ -484,6 +519,12 @@ void backlog_controller::update_controller(float shares) {
 namespace replica {
 
 static const metrics::label class_label("class");
+
+
+auto
+database::sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member) {
+    return _reader_concurrency_semaphores_group.sum_read_concurrency_sem_var([&] (reader_concurrency_semaphore& rcs) { return std::invoke(stats_member, rcs.get_stats()); });
+}
 
 void
 database::setup_metrics() {
@@ -1605,7 +1646,7 @@ query::max_result_size database::get_query_max_result_size() const {
 
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     switch (classify_request(_dbcfg)) {
-        case request_class::user: return _read_concurrency_sem;
+        case request_class::user: return read_concurrency_sem();
         case request_class::system: return _system_read_concurrency_sem;
         case request_class::maintenance: return _streaming_concurrency_sem;
     }
@@ -1634,9 +1675,15 @@ future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_ra
 }
 
 future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
-    for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem, &_view_update_read_concurrency_sem}) {
+    for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
         co_await func(*sem);
     }
+    co_await _reader_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
+        co_await func(sem);
+    });
+    co_await _view_update_read_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
+        co_await func(sem);
+    });
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
@@ -1935,7 +1982,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), _view_update_read_concurrency_sem));
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), view_update_read_concurrency_sem()));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2182,7 +2229,54 @@ void database::revert_initial_system_read_concurrency_boost() {
     dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
-future<> database::start() {
+future<> database::start(sharded<qos::service_level_controller>& sl_controller) {
+    sl_controller.local().register_subscriber(this);
+    _unsubscribe_qos_configuration_change = [this, &sl_controller] () {
+        return sl_controller.local().unregister_subscriber(this);
+    };
+    qos::service_level default_service_level = sl_controller.local().get_service_level(qos::service_level_controller::default_service_level_name);
+    int32_t default_shares = 1000;
+    if (int32_t* default_shares_p = std::get_if<int32_t>(&(default_service_level.slo.shares))) {
+        default_shares = *default_shares_p;
+    } else {
+        on_internal_error(dblog, "The default service_level should always contain shares value");
+    }
+
+    // The former _dbcfg.statement_scheduling_group and the later can be the same group, so we want
+    // the later to be the accurate one.
+    _default_read_concurrency_group = default_service_level.sg;
+    _reader_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
+    _view_update_read_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
+
+    // lets insert the statement scheduling group only if we haven't reused it in sl_controller,
+    // but it shouldn't happen
+    if (!_reader_concurrency_semaphores_group.get_or_null(_dbcfg.statement_scheduling_group)) {
+        // This is super ugly, we need to either force the database to use system scheduling group for non-user queries
+        // or, if we have user queries running on this scheduling group make it's definition more robust (what runs in it).
+        // Another ugly thing here is that we have to have a pre-existing knowladge about the shares ammount this group was
+        // built with. I think we should have a followup that makes this more robust.
+        _reader_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
+        _view_update_read_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
+    }
+
+    // This will wait for the semaphores to be given some memory.
+    // We need this since the below statements (get_distributed_service_levels in particular) will need
+    // to run queries and for this they will need to admit some memory.
+    co_await _reader_concurrency_semaphores_group.wait_adjust_complete();
+    co_await _view_update_read_concurrency_semaphores_group.wait_adjust_complete();
+
+    auto service_levels = co_await sl_controller.local().get_distributed_service_levels(qos::query_context::group0);
+    for (auto&& service_level_record : service_levels) {
+        auto service_level = sl_controller.local().get_service_level(service_level_record.first);
+        if (service_level.slo.shares_name && *service_level.slo.shares_name != qos::service_level_controller::default_service_level_name) {
+            // We know slo.shares is valid becuse we know that slo.shares_name is valid
+            _reader_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
+            _view_update_read_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
+        }
+    }
+
+    co_await _reader_concurrency_semaphores_group.adjust();
+    co_await _view_update_read_concurrency_semaphores_group.adjust();
     _large_data_handler->start();
     // We need the compaction manager ready early so we can reshard.
     _compaction_manager.enable();
@@ -2215,10 +2309,12 @@ future<> database::shutdown() {
 }
 
 future<> database::stop() {
+    if (_unsubscribe_qos_configuration_change) {
+        co_await std::exchange(_unsubscribe_qos_configuration_change, {})();
+    }
     if (!_shutdown) {
         co_await shutdown();
     }
-
     // try to ensure that CL has done disk flushing
     if (_commitlog) {
         dblog.info("Shutting down commitlog");
@@ -2250,11 +2346,11 @@ future<> database::stop() {
     dblog.info("Stopping querier cache");
     co_await _querier_cache.stop();
     dblog.info("Stopping concurrency semaphores");
-    co_await _read_concurrency_sem.stop();
+    co_await _reader_concurrency_semaphores_group.stop();
+    co_await _view_update_read_concurrency_semaphores_group.stop();
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();
-    co_await _view_update_read_concurrency_sem.stop();
     dblog.info("Joining memtable update action");
     co_await _update_memtable_flush_static_shares_action.join();
 }
@@ -3029,3 +3125,41 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
 }
 
 } // namespace replica
+
+namespace replica {
+
+/** This callback is going to be called just before the service level is available **/
+future<> database::on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    if (auto shares_p = std::get_if<int32_t>(&slo.shares)) {
+        _reader_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
+        _view_update_read_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
+        // the call to add_or_update_read_concurrency_sem will take the semaphore until the adjustment
+        // is completed, we need to wait for the operation to complete.
+        co_await _reader_concurrency_semaphores_group.wait_adjust_complete();
+        co_await _view_update_read_concurrency_semaphores_group.wait_adjust_complete();
+    }
+}
+/** This callback is going to be called just after the service level is removed **/
+future<> database::on_after_service_level_remove(qos::service_level_info sl_info) {
+    co_await _reader_concurrency_semaphores_group.remove(sl_info.sg);
+    co_await _view_update_read_concurrency_semaphores_group.remove(sl_info.sg);
+}
+/** This callback is going to be called just before the service level is changed **/
+future<> database::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after,
+        qos::service_level_info sl_info) {
+    if (auto shares_p = std::get_if<int32_t>(&slo_after.shares)) {
+        _reader_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
+        _view_update_read_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
+        // the call to add_or_update_read_concurrency_sem will take the semaphore until the adjustment
+        // is completed, we need to wait for the operation to complete.
+        co_await _reader_concurrency_semaphores_group.wait_adjust_complete();
+        co_await _view_update_read_concurrency_semaphores_group.wait_adjust_complete();
+    }
+}
+
+future<>
+database::on_effective_service_levels_cache_reloaded() {
+    co_return;
+}
+
+}

@@ -53,6 +53,20 @@ static bytes_opt decompose_timeout (const qos::service_level_options::timeout_ty
     }, duration);
 };
 
+static bytes_opt decompose_shares(const qos::service_level_options::shares_type& shares) {
+    return std::visit(overloaded_functor{
+        [&] (const qos::service_level_options::unset_marker&) {
+            return bytes_opt();
+        },
+        [&] (const qos::service_level_options::delete_marker&) {
+            return bytes_opt();
+        },
+        [&] (const int32_t& s) -> bytes_opt {
+            return utf8_type->decompose(fmt::format("{}", s));
+        },
+    }, shares);
+};
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 list_effective_service_level_statement::execute(query_processor& qp, service::query_state& state, const query_options&, std::optional<service::group0_guard>) const {
     static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
@@ -83,6 +97,11 @@ list_effective_service_level_statement::execute(query_processor& qp, service::qu
         utf8_type->decompose("timeout"),
         utf8_type->decompose(slo->effective_names->timeout),
         decompose_timeout(slo->timeout)
+    });
+    rs->add_row({
+        utf8_type->decompose("shares"),
+        utf8_type->decompose(slo->effective_names->shares),
+        decompose_shares(slo->shares)
     });
 
     auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));

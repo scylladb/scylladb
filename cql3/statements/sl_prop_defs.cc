@@ -17,7 +17,7 @@ namespace statements {
 
 void sl_prop_defs::validate() {
     static std::set<sstring> timeout_props {
-        "timeout", "workload_type"
+        "timeout", "workload_type",  sstring(KW_SHARES),
     };
     auto get_duration = [&] (const std::optional<sstring>& repr) -> qos::service_level_options::timeout_type {
         if (!repr) {
@@ -42,6 +42,7 @@ void sl_prop_defs::validate() {
 
     property_definitions::validate(timeout_props);
     _slo.timeout = get_duration(get_simple("timeout"));
+
     auto workload_string_opt = get_simple("workload_type");
     if (workload_string_opt) {
         auto workload = qos::service_level_options::parse_workload_type(*workload_string_opt);
@@ -54,6 +55,15 @@ void sl_prop_defs::validate() {
         if (_slo.workload == qos::service_level_options::workload_type::unspecified) {
             _slo.workload = qos::service_level_options::workload_type::delete_marker;
         }
+    }
+
+    if (has_property(KW_SHARES)) {
+        auto shares = get_int(KW_SHARES, SHARES_DEFAULT_VAL);
+        if ((shares < SHARES_MIN_VAL) || (shares > SHARES_MAX_VAL )) {
+            throw exceptions::syntax_exception(format("'SHARES' can only take values of {}-{} (given {})",
+                    SHARES_MIN_VAL, SHARES_MAX_VAL, shares));
+        }
+        _slo.shares = shares;
     }
 }
 

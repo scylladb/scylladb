@@ -42,6 +42,7 @@ set(swagger_files
   api-doc/messaging_service.json
   api-doc/metrics.json
   api-doc/raft.json
+  api-doc/service_levels.json
   api-doc/storage_proxy.json
   api-doc/storage_service.json
   api-doc/stream_manager.json
@@ -82,6 +83,7 @@ target_sources(api
     lsa.cc
     messaging_service.cc
     raft.cc
+    service_levels.cc
     storage_proxy.cc
     storage_service.cc
     stream_manager.cc

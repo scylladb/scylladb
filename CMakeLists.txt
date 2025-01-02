@@ -95,7 +95,7 @@ else()
     set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_IO_URING ON CACHE BOOL "" FORCE)
-    set(Seastar_SCHEDULING_GROUPS_COUNT 16 CACHE STRING "" FORCE)
+    set(Seastar_SCHEDULING_GROUPS_COUNT 19 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
     add_subdirectory(seastar)
     target_compile_definitions (seastar
@@ -199,6 +199,7 @@ target_sources(scylla-main
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
+    reader_concurrency_semaphore_group.cc
     row_cache.cc
     schema_mutations.cc
     serializer.cc

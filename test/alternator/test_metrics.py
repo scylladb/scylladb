@@ -95,13 +95,13 @@ def get_metric(metrics, name, requested_labels=None, the_metrics=None):
 # of the specified metrics. Helps reduce the amount of code duplication
 # below.
 @contextmanager
-def check_increases_metric(metrics, metric_names):
+def check_increases_metric(metrics, metric_names, requested_labels=None):
     the_metrics = get_metrics(metrics)
-    saved_metrics = { x: get_metric(metrics, x, None, the_metrics) for x in metric_names }
+    saved_metrics = { x: get_metric(metrics, x, requested_labels, the_metrics) for x in metric_names }
     yield
     the_metrics = get_metrics(metrics)
     for n in metric_names:
-        assert saved_metrics[n] < get_metric(metrics, n, None, the_metrics), f'metric {n} did not increase'
+        assert saved_metrics[n] < get_metric(metrics, n, requested_labels, the_metrics), f'metric {n} did not increase'
 
 @contextmanager
 def check_increases_metric_exact(metrics, metric_name, increase_value):

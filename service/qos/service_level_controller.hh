@@ -50,12 +50,14 @@ namespace qos {
 struct service_level {
      service_level_options slo;
      bool is_static = false;
+     scheduling_group sg;
 
      service_level() = default;
 
-     service_level(service_level_options slo, bool is_static)
+     service_level(service_level_options slo, bool is_static, scheduling_group sg)
             : slo(std::move(slo))
             , is_static(is_static)
+            , sg(sg)
      {}
 };
 
@@ -68,7 +70,8 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
  *      1. Global controller which is responsible for all of the data and plumbing
  *      manipulation.
  *      2. Local controllers that act upon the data and facilitates execution in
- *      the service level context
+ *      the service level context: i.e functions in their service level's
+ *      scheduling group and io operations with their correct io priority.
  *
  *  Definitions:
  *  service level - User creates service level with some parameters (timeout/workload type).
@@ -99,6 +102,8 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
  */
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
+    static inline const int32_t default_shares = 1000;
+
     class service_level_distributed_data_accessor {
     public:
         virtual future<qos::service_levels_info> get_service_levels(qos::query_context ctx = qos::query_context::unspecified) const = 0;
@@ -116,8 +121,7 @@ public:
 private:
     struct global_controller_data {
         service_levels_info  static_configurations{};
-        int schedg_group_cnt = 0;
-        int io_priority_cnt = 0;
+        std::deque<scheduling_group> deleted_scheduling_groups{};
         service_level_options default_service_level_config;
         // The below future is used to serialize work so no reordering can occur.
         // This is needed so for example: delete(x), add(x) will not reverse yielding
@@ -127,6 +131,13 @@ private:
         future<> distributed_data_update = make_ready_future();
         abort_source dist_data_update_aborter;
         abort_source group0_aborter;
+        scheduling_group default_sg;
+        bool destroy_default_sg;
+        // a counter for making unique temp scheduling groups names
+        int unique_group_counter;
+        // A flag that indicates that we exhausted all of our scheduling groups
+        // and we can't create new ones.
+        bool scheduling_groups_exhausted = false;
     };
 
     std::unique_ptr<global_controller_data> _global_controller_db;
@@ -137,6 +148,9 @@ private:
     std::map<sstring, service_level> _service_levels_db;
     // role name -> effective service_level_options 
     std::map<sstring, service_level_options> _effective_service_levels_db;
+    // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
+    std::set<sstring> _effectively_dropped_sls;
+    std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
@@ -147,7 +161,8 @@ private:
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     void do_abort() noexcept;
 public:
-    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config);
+    service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
+            scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
@@ -190,6 +205,69 @@ public:
     future<> stop();
 
     void abort_group0_operations();
+
+    /**
+     * this is an executor of a function with arguments under a service level
+     * that corresponds to a given user.
+     * @param usr - the user for determining the service level
+     * @param func - the function to be executed
+     * @return a future that is resolved when the function's operation is resolved
+     * (if it returns a future). or a ready future containing the returned value
+     * from the function/
+     */
+    template <typename Func, typename Ret = std::invoke_result_t<Func>>
+    requires std::invocable<Func>
+    futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& usr, Func&& func) {
+        if (usr && usr->name) {
+            return find_effective_service_level(*usr->name).then([this, func = std::move(func)] (std::optional<service_level_options> opts) mutable {
+                auto& service_level_name = (opts && opts->shares_name) ? *opts->shares_name : default_service_level_name;
+                return with_service_level(service_level_name, std::move(func));
+            });
+        } else {
+            return with_service_level(default_service_level_name, std::move(func));
+        }
+    }
+
+    /**
+     * this is an executor of a function with arguments under a specific
+     * service level.
+     * @param service_level_name
+     * @param func - the function to be executed
+     * @param args - the arguments to  pass to the function.
+     * @return a future that is resolved when the function's operation is resolved
+     * (if it returns a future). or a ready future containing the returned value
+     * from the function/
+     */
+    template <typename Func, typename Ret = std::invoke_result_t<Func>>
+    requires std::invocable<Func>
+    futurize_t<Ret> with_service_level(sstring service_level_name, Func&& func) {
+        service_level& sl = get_service_level(service_level_name);
+        return with_scheduling_group(sl.sg, std::move(func));
+    }
+
+    /**
+     * @return the default service level scheduling group (see service_level_controller::initialize).
+     */
+    scheduling_group get_default_scheduling_group();
+    /**
+     * Get the scheduling group for a specific service level.
+     * @param service_level_name - the service level which it's scheduling group
+     * should be returned.
+     * @return if the service level exists the service level's scheduling group. else
+     * get_scheduling_group("default")
+     */
+    scheduling_group get_scheduling_group(sstring service_level_name);
+    /**
+     * Get the scheduling group of a specific user
+     * @param user - the user for determining the service level
+     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
+     */
+    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+    /**
+     * @return the name of the currently active service level if such exists or an empty
+     * optional if no active service level.
+     */
+    std::optional<sstring> get_active_service_level();
 
     /**
      * Start legacy update loop if RAFT_SERVICE_LEVELS_CHANGE feature is not enabled yet 
@@ -332,6 +410,10 @@ private:
         alter
     };
 
+    /** Validate that we can handle an addition of another service level
+     *  Must be called from on the global controller
+     */
+    future<bool> validate_before_service_level_add();
     future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc);
 
     future<std::vector<cql3::description>> describe_created_service_levels() const;

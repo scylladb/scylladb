@@ -1157,6 +1157,7 @@ schema_ptr system_keyspace::service_levels_v2() {
                 .with_column("service_level", utf8_type, column_kind::partition_key)
                 .with_column("timeout", duration_type)
                 .with_column("workload_type", utf8_type)
+                .with_column("shares", int32_type)
                 .with_hash_version()
                 .build();
     }();

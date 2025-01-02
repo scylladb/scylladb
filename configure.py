@@ -1160,6 +1160,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/topology_coordinator.cc',
                 'node_ops/node_ops_ctl.cc',
                 'node_ops/task_manager_module.cc',
+                'reader_concurrency_semaphore_group.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
@@ -1214,6 +1215,8 @@ api = ['api/api.cc',
        Json2Code('api/api-doc/raft.json'),
        Json2Code('api/api-doc/cql_server_test.json'),
        'api/cql_server_test.cc',
+       'api/service_levels.cc',
+       Json2Code('api/api-doc/service_levels.json'),
        ]
 
 alternator = [
@@ -1871,7 +1874,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
+        '-DSeastar_SCHEDULING_GROUPS_COUNT=19',
         '-DSeastar_IO_URING=ON',
     ]
 
