@@ -46,6 +46,7 @@
 #include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "seastarx.hh"
+#include "utils/labels.hh"
 
 // STD.
 #include <algorithm>
