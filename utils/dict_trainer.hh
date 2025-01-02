@@ -60,7 +60,7 @@ public:
     //
     // If the abort source is triggered before the min_sampling_bytes threshold is met,
     // the sampling will be canceled and the returned future will resolve to the aborting exception.
-    // In reasonable use cases, min_sampling_duration should be abortable withe the same abort source.
+    // In reasonable use cases, min_sampling_duration should be abortable with the same abort source.
     seastar::future<std::vector<page_type>> sample(request, seastar::abort_source&);
 
     // When in the sampling phase, this will feed the data to the sampler.
