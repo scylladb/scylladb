@@ -6783,6 +6783,13 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
                 co_return result;
             }
 
+            if (replaced_it->second.datacenter != params.datacenter || replaced_it->second.rack != params.rack) {
+                result.result = join_node_request_result::rejected{
+                    .reason = fmt::format("Cannot replace node in {}/{} with node in {}/{}", replaced_it->second.datacenter, replaced_it->second.rack, params.datacenter, params.rack),
+                };
+                co_return result;
+            }
+
             auto is_zero_token = params.num_tokens == 0 && params.tokens_string.empty();
             if (replaced_it->second.ring.value().tokens.empty() && !is_zero_token) {
                 result.result = join_node_request_result::rejected{
