@@ -1569,6 +1569,18 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
+    ss::set_tablets_per_shard_goal.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto value = validate_int(req->get_query_param("value"));
+        if (value > std::numeric_limits<int32_t>::max()) {
+            throw httpd::bad_param_exception("The value is too large");
+        }
+        if (value < 0) {
+            throw httpd::bad_param_exception("The value must be non-negative");
+        }
+        co_await ss.local().set_tablets_per_shard_goal(value);
+        co_return json_void();
+    });
+
     ss::quiesce_topology.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         co_await ss.local().await_topology_quiesced();
         co_return json_void();
@@ -1666,6 +1678,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::del_tablet_replica.unset(r);
     ss::repair_tablet.unset(r);
     ss::tablet_balancing_enable.unset(r);
+    ss::set_tablets_per_shard_goal.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
 }
