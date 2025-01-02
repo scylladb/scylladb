@@ -106,30 +106,27 @@ JAVA_HOME: ContextVar[Optional[str]] = ContextVar('JAVA_HOME')
 
 async def configure_java() -> None:
     """
-    cassandra-stress can only deal with Java 8 or Java 11
+    cassandra-stress can only deal with Java 11
     """
     version_output = (await bash("java -version", stderr=asyncio.subprocess.PIPE))[2]
-    assert type(version_output) == bytes
+    assert isinstance(version_output, bytes)
     version_first_line = version_output.decode().split(sep='\n')[0]
     config_logger.info(f"First line of java -version: {version_first_line}")
-    if re.search(r'version.*1\.8\.0', version_first_line):
-        config_logger.info(f"Default Java version recognized as Java 8. Proceeding with the default.")
+    version = 11
+    if re.search(rf'version.*{version}\.[0-9]+\.[0-9]+', version_first_line):
+        config_logger.info(f"Default Java version recognized as Java {version}. Proceeding with the default.")
         JAVA_HOME.set(None)
-    elif re.search(r'version.*11\.[0-9]+\.[0-9]+', version_first_line):
-        config_logger.info(f"Default Java version recognized as Java 11. Proceeding with the default.")
-        JAVA_HOME.set(None)
-    else:
-        config_logger.info(f"Default Java version recognized as neither Java 8 nor Java 11.")
-        if os.path.exists(java_8_path := '/usr/lib/jvm/java-1.8.0'):
-            config_logger.warning(f"{java_8_path} found. Choosing it as JAVA_HOME.")
-            JAVA_HOME.set(java_8_path)
-        elif os.path.exists(java_11_path := '/usr/lib/jvm/java-11'):
-            config_logger.warning(f"{java_11_path} found. Choosing it as JAVA_HOME.")
-            JAVA_HOME.set(java_11_path)
-        else:
-            error = "Failed to find a suitable Java version. Java 8 or Java 11 is required."
-            config_logger.error(error)
-            raise RuntimeError(error)
+        return
+
+    config_logger.info(f"Default Java version is not recognized as Java {version}.")
+    if os.path.exists(java_path := f'/usr/lib/jvm/java-{version}'):
+        config_logger.warning(f"{java_path} found. Choosing it as JAVA_HOME.")
+        JAVA_HOME.set(java_path)
+        return
+
+    error = f"Failed to find a suitable Java version. Java {version} is required."
+    config_logger.error(error)
+    raise RuntimeError(error)
 
 ################################################################################
 # Child process utilities
