@@ -188,6 +188,10 @@ struct topology {
     // When false, tablet load balancer will not try to rebalance tablets.
     bool tablet_balancing_enabled = true;
 
+    // Tablet allocator will try to keep at most this number of tablet replicas per shard.
+    // Will go into tablet_map::_tablets_per_shard_goal.
+    uint64_t tablets_per_shard_goal = 0;
+
     // The set of nodes that should be considered dead during topology operations
     std::unordered_set<raft::server_id> ignored_nodes;
 

@@ -789,6 +789,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
         tablets->set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+        tablets->set_tablets_per_shard_goal(_topology_state_machine._topology.tablets_per_shard_goal);
         tmptr->set_tablets(std::move(*tablets));
 
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -5404,6 +5405,7 @@ future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_ch
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         }
         tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+        tmptr->tablets().set_tablets_per_shard_goal(_topology_state_machine._topology.tablets_per_shard_goal);
     }, acquire_merge_lock::no);
 }
 
@@ -6669,6 +6671,45 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     while (_topology_state_machine._topology.is_busy()) {
         rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
         co_await _topology_state_machine.event.when();
+    }
+}
+
+future<> storage_service::set_tablets_per_shard_goal(uint32_t count) {
+    auto holder = _async_gate.hold();
+
+    if (count == 0) {
+        count = locator::tablet_metadata::default_tablets_per_shard_goal;
+    }
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.set_tablets_per_shard_goal(count);
+        });
+    }
+
+    if (!_feature_service.tablets_per_shard_goal) {
+        throw std::runtime_error("The TABLETS_PER_SHARD_GOAL feature is not enabled on the cluster yet");
+    }
+
+    while (true) {
+        group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        std::vector<canonical_mutation> updates;
+        updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+            .set_tablets_per_shard_goal(count)
+            .build()));
+
+        sstring reason = format("Setting tablets per shard goal to {}", count);
+        rtlogger.info("{}", reason);
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            rtlogger.debug("set_tablets_per_shard_goal(): concurrent modification");
+        }
     }
 }
 

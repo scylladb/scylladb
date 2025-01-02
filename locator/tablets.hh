@@ -546,6 +546,8 @@ private:
 /// Copy constructor can be invoked across shards.
 class tablet_metadata {
 public:
+    static const uint32_t default_tablets_per_shard_goal = 100;
+
     // We want both immutability and cheap updates, so we should use
     // hierarchical data structure with shared pointers and copy-on-write.
     //
@@ -560,8 +562,13 @@ private:
 
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
+
+    // Tablet allocator will try to keep tablet replicas per shard below that number.
+    // We don't want to overload a single shard with too many compaction groups.
+    uint32_t _tablets_per_shard_goal = default_tablets_per_shard_goal;
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
+    uint32_t tablets_per_shard_goal() const { return _tablets_per_shard_goal; }
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
@@ -577,6 +584,7 @@ public:
     tablet_metadata& operator=(tablet_metadata&&) = default;
 
     void set_balancing_enabled(bool value) { _balancing_enabled = value; }
+    void set_tablets_per_shard_goal(uint32_t value) { _tablets_per_shard_goal = value; }
     void set_tablet_map(table_id, tablet_map);
     void drop_tablet_map(table_id);
 

@@ -148,6 +148,7 @@ public:
 
     gms::feature tablet_repair_scheduler { *this, "TABLET_REPAIR_SCHEDULER"sv };
     gms::feature tablet_merge { *this, "TABLET_MERGE"sv };
+    gms::feature tablets_per_shard_goal { *this, "TABLETS_PER_SHARD_GOAL"sv };
 
     gms::feature tablet_migration_virtual_task { *this, "TABLET_MIGRATION_VIRTUAL_TASK"sv };
 

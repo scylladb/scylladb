@@ -112,6 +112,7 @@ public:
     topology_mutation_builder& set_fence_version(topology::version_t);
     topology_mutation_builder& set_session(session_id);
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
+    topology_mutation_builder& set_tablets_per_shard_goal(uint32_t);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
