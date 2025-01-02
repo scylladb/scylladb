@@ -32,6 +32,7 @@
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "schema_fwd.hh"
+#include "exceptions/exceptions.hh"
 
 namespace dht {
 
@@ -202,6 +203,10 @@ public:
         } else if (str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
             t = type::PERCENTILE;
             v = convert(percentile) / 100;
+            if  (v <= 0.0 || v >= 1.0) {
+                throw exceptions::configuration_exception(
+                    format("Invalid value {} for PERCENTILE option 'speculative_retry': must be between (0.0 and 100.0)", str));
+            }
         } else {
             throw std::invalid_argument(format("cannot convert {} to speculative_retry\n", str));
         }
