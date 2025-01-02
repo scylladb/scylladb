@@ -449,8 +449,7 @@ selector returns [shared_ptr<raw_selector> s]
     : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(std::move(us), alias); }
     ;
 
-unaliasedSelector returns [uexpression s]
-    @init { uexpression tmp; }
+unaliasedSelector returns [uexpression tmp]
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
@@ -463,7 +462,6 @@ unaliasedSelector returns [uexpression s]
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
        | '[' sub=term ']' { tmp = subscript{std::move(tmp), std::move(sub)}; }
        )*
-    { $s = tmp; }
     ;
 
 selectionFunctionArgs returns [std::vector<expression> a]
