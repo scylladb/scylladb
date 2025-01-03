@@ -72,20 +72,14 @@ def check_regular_task_status(task: TaskStatus, expected_state: str, expected_ty
 
 async def check_bootstrap_tasks_tree(tm: TaskManagerClient, module_name: str, servers: list[ServerInfo],
                           previous_vts: list[TaskID] = []) -> tuple[list[ServerInfo], list[TaskID]]:
-    virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, len(servers))
-
-    # No streaming task for first node bootstrap.
-    bootstrap_with_streaming = [status.id for status in virtual_tasks if status.children_ids]
-    assert len(bootstrap_with_streaming) == len(virtual_tasks) - 1, "All but one tasks should have children"
+    # Bootstrap of the first node is omitted.
+    virtual_tasks = await get_new_virtual_tasks_statuses(tm, module_name, servers, previous_vts, len(servers) - 1)
 
     for virtual_task in virtual_tasks:
-        if virtual_task.id in bootstrap_with_streaming:
-            check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
+        check_virtual_task_status(virtual_task, "done", "bootstrap", 1)
 
-            child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
-            check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
-        else:
-            check_virtual_task_status(virtual_task, "done", "bootstrap", 0)
+        child = await tm.get_task_status(virtual_task.children_ids[0]["node"], virtual_task.children_ids[0]["task_id"])
+        check_regular_task_status(child, "done", "bootstrap: streaming", "node", virtual_task.id, 0)
 
     return (servers, [vt.id for vt in virtual_tasks])
 
@@ -208,6 +202,13 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
 
     servers = [await manager.server_add() for _ in range(3)]
     assert module_name in await tm.list_modules(servers[0].ip_addr), "node_ops module wasn't registered"
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({1}, {1});")
+    await cql.run_async(f"TRUNCATE test.test;")
+
 
     servers, vt_ids = await check_bootstrap_tasks_tree(tm, module_name, servers)
     servers, vt_ids = await check_replace_tasks_tree(manager, tm, module_name, servers, vt_ids)
