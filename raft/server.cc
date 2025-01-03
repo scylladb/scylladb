@@ -13,6 +13,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/join.hpp>
+#include <boost/lexical_cast.hpp>
 #include <map>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
