@@ -536,9 +536,10 @@ size_t repair::task_manager_module::nr_running_repair_jobs() {
 }
 
 future<bool> repair::task_manager_module::is_aborted(const tasks::task_id& uuid, shard_id shard) {
-    return smp::submit_to(shard, [&] () {
-        auto it = get_local_tasks().find(uuid);
-        return it != get_local_tasks().end() && it->second->abort_requested();
+    return get_task_manager().container().invoke_on(shard, [name = get_name(), uuid] (tasks::task_manager& tm) {
+        auto module = tm.find_module(name);
+        auto it = module->get_local_tasks().find(uuid);
+        return it != module->get_local_tasks().end() && it->second->abort_requested();
     });
 }
 
