@@ -17,9 +17,9 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
-
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include "network_topology_strategy.hh"
 
 namespace locator {
 
@@ -561,6 +561,18 @@ vnode_effective_replication_map::factory_key vnode_effective_replication_map::ma
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
 
+
+size_t vnode_effective_replication_map::get_replication_factor([[maybe_unused]] dht::token id, const seastar::sstring& datacenter) const {
+    const auto& replication_strategy = get_replication_strategy();
+
+    if (replication_strategy.get_type() == replication_strategy_type::network_topology) {
+        const network_topology_strategy* nrs = static_cast<const network_topology_strategy*>(&replication_strategy);
+        return nrs->get_replication_factor(datacenter);
+    }
+
+    return get_replication_factor(id);
+}
+
 future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     // lookup key on local shard
     auto key = vnode_effective_replication_map::make_factory_key(rs, tmptr);
@@ -580,7 +592,7 @@ future<vnode_effective_replication_map_ptr> effective_replication_map_factory::c
     });
     mutable_vnode_effective_replication_map_ptr new_erm;
     if (ref_erm) {
-        auto rf = ref_erm->get_replication_factor();
+        auto rf = ref_erm->get_schema_replication_factor();
         auto local_data = co_await ref_erm->clone_data_gently();
         new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
             std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), std::move(local_data->dirty_endpoints), rf);

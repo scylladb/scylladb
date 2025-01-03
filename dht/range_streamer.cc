@@ -63,7 +63,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
         if (!found_source) {
             auto& ks = _db.local().find_keyspace(keyspace);
-            auto rf = ks.get_vnode_effective_replication_map()->get_replication_factor();
+            auto rf = ks.get_vnode_effective_replication_map()->get_schema_replication_factor();
             // When a replacing node replaces a dead node with keyspace of RF
             // 1, it is expected that replacing node could not find a peer node
             // that contains data to stream from.
@@ -152,7 +152,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                 std::unordered_set<locator::host_id> new_endpoints(it->second.begin(), it->second.end());
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
-                if (old_endpoints.size() == erm->get_replication_factor()) {
+                if (old_endpoints.size() == erm->get_schema_replication_factor()) {
                     std::erase_if(old_endpoints,
                         [&new_endpoints] (locator::host_id ep) { return new_endpoints.contains(ep); });
                     if (old_endpoints.size() != 1) {
@@ -184,7 +184,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 }
 
 bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::vnode_effective_replication_map_ptr& erm) {
-    auto rf = erm->get_replication_factor();
+    auto rf = erm->get_schema_replication_factor();
     auto nr_nodes_in_ring = get_token_metadata().get_normal_token_owners().size();
     bool everywhere_topology = erm->get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF

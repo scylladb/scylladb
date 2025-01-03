@@ -519,6 +519,13 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const locator::repair_scheduler_config& repair_scheduler_config() const;
+
+    const tablet_replica_set& get_replicas_for_reading(tablet_id tablet) const;
+
+    const tablet_replica_set& get_replicas_for_writing(tablet_id tablet) const;
+
+    const tablet_replica* get_pending_replica(tablet_id tablet) const;
+
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
