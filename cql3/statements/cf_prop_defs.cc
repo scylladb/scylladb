@@ -154,6 +154,13 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         }
     }
 
+    if (get_simple(KW_CRC_CHECK_CHANCE)) {
+        const double crc_check_chance = get_double(KW_CRC_CHECK_CHANCE, 0.0/*not used*/);
+        if (crc_check_chance < 0.0 || crc_check_chance > 1.0) {
+            throw exceptions::configuration_exception(format("{} must be between 0.0 and 1.0.", KW_CRC_CHECK_CHANCE));
+        }
+    }
+
     auto memtable_flush_period = get_int(KW_MEMTABLE_FLUSH_PERIOD, DEFAULT_MEMTABLE_FLUSH_PERIOD);
     if (memtable_flush_period != 0 && memtable_flush_period < DEFAULT_MEMTABLE_FLUSH_PERIOD_MIN_VALUE) {
         throw exceptions::configuration_exception(format(
@@ -252,7 +259,8 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
     return &ext->get_options();
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
+void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name,
+        is_create_statement is_create) const {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -319,7 +327,19 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
 
     builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
+
     auto compression_options = get_compression_options();
+
+    if (has_property(KW_CRC_CHECK_CHANCE)) {
+        builder.set_crc_check_chance(get_double(KW_CRC_CHECK_CHANCE, builder.get_crc_check_chance()));
+    } else if (is_create == is_create_statement::yes) {
+        // We have to chose a default which is compatible with the historic de-facto value of this option:
+        // * for compressed sstables, the checksums was always checked, so the default is 1.0 if compression is used.
+        // * for uncompressed sstables, the checksums was never checked, so the default is 0.0 if compression is not used.
+        // Note that the way to disable compression is to specify an empty options map, so this is what we check for.
+        builder.set_crc_check_chance((compression_options && compression_options->empty()) ? 0.0 : 1.0);
+    }
+
     if (compression_options) {
         builder.set_compressor_params(compression_parameters(*compression_options));
     }
@@ -377,6 +397,12 @@ std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_s
         return sstables::compaction_strategy::type(strategy->second);
     }
     return std::nullopt;
+}
+
+void cf_prop_defs::maybe_add_warning_for_deprecated_crc_check_chance_in_compression(std::vector<sstring>& warnings) const {
+    if (const auto co = get_compression_options(); co && co->contains(compression_parameters::CRC_CHECK_CHANCE)) {
+        warnings.push_back(fmt::format("{} is now a table-level option, it is deprecated as a compression option", compression_parameters::CRC_CHECK_CHANCE));
+    }
 }
 
 }
