@@ -11,8 +11,6 @@
 #include "service/raft/group0_state_machine.hh"
 #include "service/storage_proxy.hh"
 
-#include <boost/range/algorithm/transform.hpp>
-
 namespace service {
 
 /**
