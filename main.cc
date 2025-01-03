@@ -118,8 +118,6 @@
 #include "utils/shared_dict.hh"
 #include "message/dictionary_service.hh"
 
-#include <boost/algorithm/string/join.hpp>
-
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
@@ -533,8 +531,9 @@ std::string format_parsed_options(const std::vector<bpo::option>& opts) {
                 return opt.string_key;
             }
 
-            return (opt.string_key.empty() ?  "(positional) " : fmt::format("{}: ", opt.string_key)) +
-                        boost::algorithm::join(opt.value, " ");
+            return fmt::format("{}{}",
+                opt.string_key.empty() ?  "(positional) " : fmt::format("{}: ", opt.string_key),
+                fmt::join(opt.value, " "));
         }), ", ")
     );
 }
