@@ -5,6 +5,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/iterator_range_core.hpp>
 #include <memory>
 #include <utility>
 
