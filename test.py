@@ -373,7 +373,7 @@ class BoostTestSuite(UnitTestSuite):
 
     def _generate_cache(self) -> None:
         # Apply combined test only for test/boost
-        exe_path = pathlib.Path(self.mode, "test", self.name, 'combined_tests')
+        exe_path = pathlib.Path("build", self.mode, "test", self.name, 'combined_tests')
         if self.name != 'boost' or not exe_path.exists():
             return
         exe = path_to(self.mode, "test", self.name, 'combined_tests')
