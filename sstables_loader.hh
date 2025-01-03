@@ -29,6 +29,24 @@ class view_builder;
 }
 }
 
+struct stream_progress {
+    float total = 0.;
+    float completed = 0.;
+
+    virtual ~stream_progress() = default;
+
+    void start(float amount) {
+        assert(amount >= 0);
+        total = amount;
+    }
+    virtual void advance(float amount) {
+        // we should not move backward
+        assert(amount >= 0);
+        completed += amount;
+        assert(completed <= total);
+    }
+};
+
 // The handler of the 'storage_service/load_new_ss_tables' endpoint which, in
 // turn, is the target of the 'nodetool refresh' command.
 // Gets sstables from the upload directory and makes them available in the
@@ -60,7 +78,7 @@ private:
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
             bool primary_replica_only, bool unlink_sstables, stream_scope scope,
-            std::function<void(unsigned)> on_streamed);
+            shared_ptr<stream_progress> progress);
 
 public:
     sstables_loader(sharded<replica::database>& db,
