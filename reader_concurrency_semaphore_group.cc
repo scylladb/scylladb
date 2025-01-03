@@ -8,7 +8,7 @@
 
 #include "reader_concurrency_semaphore_group.hh"
 
-// Calling adjust is serialized since 2 adjustments can't happen simultaneosly,
+// Calling adjust is serialized since 2 adjustments can't happen simultaneously,
 // if they did the behaviour would be undefined.
 future<> reader_concurrency_semaphore_group::adjust() {
     return with_semaphore(_operations_serializer, 1, [this] () {

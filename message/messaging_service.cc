@@ -785,8 +785,8 @@ messaging_service::get_rpc_client_idx(messaging_verb verb) {
     // 2. We are running in a scheduling group that is not assigned to one of the
     // static tenants (e.g $system)
     // If this scheduling group is of one of the system's static statement tenants we
-    // whould have caught it in the loop above.
-    // The other posibility is that we are running in a scheduling group belongs to
+    // would have caught it in the loop above.
+    // The other possibility is that we are running in a scheduling group belongs to
     // a service level, maybe a deleted one, this is why it is possible that we will
     // not find the service level name.
 
@@ -852,8 +852,8 @@ messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolatio
 
     // We first check if this is a statement isolation cookie - if it is, we will search for the
     // appropriate service level in the service_level_controller since in can be that
-    // _scheduling_info_for_connection_index is not yet updated (drop readd case for example)
-    // in the future we will only fall back here for new service levels that havn't been referenced
+    // _scheduling_info_for_connection_index is not yet updated (drop read case for example)
+    // in the future we will only fall back here for new service levels that haven't been referenced
     // before.
     // It is safe to assume that an unknown connection type can be rejected since a connection
     // with an unknown purpose on the inbound side is useless.
@@ -910,9 +910,9 @@ messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolatio
         // create a new service level (internally), it will naturally catch up eventually and by creating it here we prevent
         // an rpc connection for a valid service level to permanently get stuck in the default service level scheduling group.
         // If we can't create the service level (we already have too many service levels), we will reject the connection by returning
-        // an exeptional future.
+        // an exceptional future.
         qos::service_level_options slo;
-        // We put here the minimal ammount of shares for this service level to be functional. When the node catches up it will
+        // We put here the minimal amount of shares for this service level to be functional. When the node catches up it will
         // be either deleted or the number of shares and other configuration options will be updated.
         slo.shares.emplace<int32_t>(1000);
         slo.shares_name.emplace(service_level_name);

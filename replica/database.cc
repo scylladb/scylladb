@@ -2253,7 +2253,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller) 
     if (!_reader_concurrency_semaphores_group.get_or_null(_dbcfg.statement_scheduling_group)) {
         // This is super ugly, we need to either force the database to use system scheduling group for non-user queries
         // or, if we have user queries running on this scheduling group make it's definition more robust (what runs in it).
-        // Another ugly thing here is that we have to have a pre-existing knowladge about the shares ammount this group was
+        // Another ugly thing here is that we have to have a pre-existing knowledge about the shares amount this group was
         // built with. I think we should have a followup that makes this more robust.
         _reader_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
         _view_update_read_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
@@ -2269,7 +2269,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller) 
     for (auto&& service_level_record : service_levels) {
         auto service_level = sl_controller.local().get_service_level(service_level_record.first);
         if (service_level.slo.shares_name && *service_level.slo.shares_name != qos::service_level_controller::default_service_level_name) {
-            // We know slo.shares is valid becuse we know that slo.shares_name is valid
+            // We know slo.shares is valid because we know that slo.shares_name is valid
             _reader_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
             _view_update_read_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
         }
