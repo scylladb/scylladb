@@ -16,13 +16,13 @@
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_fragment_v2.hh"
 
-#include <boost/range/iterator_range.hpp>
+#include <ranges>
 
 // Utility for in-order checking of overlap with position ranges.
 class clustering_ranges_walker {
     const schema& _schema;
     const query::clustering_row_ranges& _ranges;
-    boost::iterator_range<query::clustering_row_ranges::const_iterator> _current_range;
+    std::ranges::subrange<query::clustering_row_ranges::const_iterator> _current_range;
     bool _in_current; // next position is known to be >= _current_start
     bool _past_current; // next position is known to be >= _current_end
     bool _using_clustering_range; // Whether current range comes from _current_range
@@ -40,7 +40,7 @@ private:
             if (!_current_range) {
                 return false;
             }
-            _current_range.advance_begin(1);
+            _current_range.advance(1);
         }
         ++_change_counter;
         _using_clustering_range = true;
