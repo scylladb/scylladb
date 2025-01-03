@@ -865,6 +865,8 @@ public:
 
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
+    // For tests only.
+    void set_schema(schema_ptr, std::function<void()>);
     db::commitlog* commitlog() const;
     const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);

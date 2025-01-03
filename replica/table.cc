@@ -3211,6 +3211,11 @@ void table::set_schema(schema_ptr s) {
     }
 }
 
+void table::set_schema(schema_ptr s, std::function<void()> callback) {
+    _flush_timer.set_callback(std::move(callback));
+    set_schema(std::move(s));
+}
+
 static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
     return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
         return e->id() == v->id();

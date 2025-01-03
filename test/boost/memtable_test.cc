@@ -1028,6 +1028,45 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         t.apply(m);
         BOOST_REQUIRE_EQUAL(t.sstables_count(), 0); // add mutation and check there are no sstables for this table
 
+        bool called = false;
+
+        // change schema to set memtable flush period
+        // we use small value in this test but it is impossible to set the period less than 60000ms using ALTER TABLE construction
+        schema_builder b(t.schema());
+        b.set_memtable_flush_period(200);
+        schema_ptr s2 = b.build();
+        t.set_schema(s2, [&called] () { called = true; });
+
+        sleep(500ms).get(); // wait until memtable will be flushed at least once
+
+        BOOST_ASSERT(called);
+    }, db_config);
+}
+
+SEASTAR_TEST_CASE(memtable_flush_period_eventually_flushed) {
+    auto db_config = make_shared<db::config>();
+    db_config->enable_cache.set(false);
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        // Create table and insert some data
+        char const* ks_name = "keyspace_name";
+        char const* table_name = "table_name";
+        env.execute_cql(format("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}};", ks_name)).get();
+        env.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, id int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
+
+        replica::database& db = env.local_db();
+        replica::table& t = db.find_column_family(ks_name, table_name);
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        auto s1 = t.schema();
+
+        dht::decorated_key pk = dht::decorate_key(*s1, partition_key::from_single_value(*s1, serialized(1)));
+        clustering_key ck = clustering_key::from_single_value(*s1, serialized(2));
+
+        mutation m = mutation(s1, pk);
+        m.set_clustered_cell(ck, to_bytes("id"), data_value(3), api::new_timestamp());
+        t.apply(m);
+        BOOST_REQUIRE_EQUAL(t.sstables_count(), 0); // add mutation and check there are no sstables for this table
+
         // change schema to set memtable flush period
         // we use small value in this test but it is impossible to set the period less than 60000ms using ALTER TABLE construction
         schema_builder b(t.schema());
@@ -1035,7 +1074,9 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         schema_ptr s2 = b.build();
         t.set_schema(s2);
 
-        sleep(500ms).get(); // wait until memtable will be flushed at least once
+        while (t.sstables_count() == 0) {
+            sleep(500ms).get();
+        }
 
         BOOST_REQUIRE_EQUAL(t.sstables_count(), 1); // check sstable exists after flush
 
