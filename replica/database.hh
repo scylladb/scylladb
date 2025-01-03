@@ -25,7 +25,6 @@
 #include <unordered_map>
 #include <set>
 #include <boost/functional/hash.hpp>
-#include <boost/range/algorithm/find.hpp>
 #include <optional>
 #include <string.h>
 #include "types/types.hh"
@@ -240,7 +239,7 @@ public:
     // # 8904 - this method is akin to std::set::erase(key_type), not
     // erase(iterator). Should be tolerant against non-existing.
     void erase(const shared_memtable& element) noexcept {
-        auto i = boost::range::find(_memtables, element);
+        auto i = std::ranges::find(_memtables, element);
         if (i != _memtables.end()) {
             _memtables.erase(i);
         }
