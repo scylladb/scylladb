@@ -2128,7 +2128,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
                     // restoring its voter state on the recovery path.
                     if (node.rs->state == node_state::removing) {
-                        co_await _group0.make_nonvoter(node.id, _as);
+                        co_await _group0.set_voter_status(node.id, can_vote::no, _as);
                     }
 
                     // If we decommission a node when the number of nodes is even, we make it a non-voter early.
@@ -2145,7 +2145,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                          "giving up leadership");
                             co_await step_down_as_nonvoter();
                         } else {
-                            co_await _group0.make_nonvoter(node.id, _as);
+                            co_await _group0.set_voter_status(node.id, can_vote::no, _as);
                         }
                     }
                 }
@@ -2153,7 +2153,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // We make a replaced node a non-voter early, just like a removed node.
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
-                        co_await _group0.make_nonvoter(replaced_node_id, _as);
+                        co_await _group0.set_voter_status(replaced_node_id, can_vote::no, _as);
                     }
                 }
                 utils::get_local_injector().inject("crash_coordinator_before_stream", [] { abort(); });
