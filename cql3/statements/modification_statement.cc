@@ -30,6 +30,8 @@
 #include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
+#include <boost/lexical_cast.hpp>
+
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
 
