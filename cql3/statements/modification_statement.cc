@@ -564,7 +564,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     auto meta = get_prepare_context();
     auto statement = prepare_statement(db, meta, stats);
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(std::move(statement), meta, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
@@ -679,6 +679,10 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
         }
         stmt.build_cas_result_set_metadata();
     }
+}
+
+audit::statement_category modification_statement::category() const {
+    return audit::statement_category::DML;
 }
 
 }  // namespace raw

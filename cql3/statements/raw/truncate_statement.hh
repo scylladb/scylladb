@@ -32,6 +32,8 @@ public:
     truncate_statement(cf_name name, std::unique_ptr<attributes::raw> attrs);
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+
+    virtual audit::statement_category category() const override;
 };
 
 } // namespace raw

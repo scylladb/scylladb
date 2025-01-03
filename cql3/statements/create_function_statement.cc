@@ -44,8 +44,18 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
         std::move(return_type), _called_on_null_input, std::move(*ctx));
 }
 
+audit::statement_category
+create_function_statement::category() const {
+    return audit::statement_category::DDL;
+}
+
+audit::audit_info_ptr
+create_function_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), sstring(), sstring());
+}
+
 std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_function_statement>(*this));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>

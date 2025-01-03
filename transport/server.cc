@@ -605,6 +605,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _server(server)
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
+    , _current_scheduling_group(default_scheduling_group())
 {
     _shedding_timer.set_callback([this] {
         clogger.debug("Shedding all incoming requests due to overload");
@@ -640,6 +641,7 @@ client_data cql_server::connection::make_client_data() const {
     } else if (_authenticating) {
         cd.connection_stage = client_connection_stage::authenticating;
     }
+    cd.scheduling_group_name = _current_scheduling_group.name();
     return cd;
 }
 
@@ -933,22 +935,33 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_return res;
 }
 
+void cql_server::connection::update_scheduling_group() {
+    switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+        auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
+        _current_scheduling_group = shg;
+        co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
+    });
+}
+
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
     auto buf = in.read_raw_bytes_view(in.bytes_left());
     auto challenge = sasl_challenge->evaluate_response(buf);
     if (sasl_challenge->is_complete()) {
-        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](auth::authenticated_user user) mutable {
-            client_state.set_login(std::move(user));
-            auto f = client_state.check_user_can_login();
-            f = f.then([&client_state] {
-                return client_state.maybe_update_per_service_level_params();
-            });
-            return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
-                _authenticating = false;
-                _ready = true;
-                return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
+        return sasl_challenge->get_authenticated_user().then_wrapped([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](future<auth::authenticated_user> f) mutable {
+            bool failed = f.failed();
+            return audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), failed).then(
+                    [this, stream, challenge = std::move(challenge), &client_state, sasl_challenge, ff = std::move(f), trace_state = std::move(trace_state)] () mutable {
+                client_state.set_login(ff.get());
+                update_scheduling_group();
+                auto f = client_state.check_user_can_login();
+                f = f.then([&client_state] {
+                    return client_state.maybe_update_per_service_level_params();
+                });
+                return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
+                    return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
+                });
             });
         });
     }
@@ -2053,6 +2066,13 @@ future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
     co_return ret;
 }
 
+future<> cql_server::update_connections_scheduling_group() {
+    return for_each_gently([] (generic_server::connection& conn) {
+        connection& cql_conn = dynamic_cast<connection&>(conn);
+        cql_conn.update_scheduling_group();
+    });
+}
+
 future<> cql_server::update_connections_service_level_params() {
     if (!_sl_controller.is_v2()) {
         // Auto update of connections' service level params requires
@@ -2071,6 +2091,7 @@ future<> cql_server::update_connections_service_level_params() {
                 cs.update_per_service_level_params(*slo);
             }
         }
+        cql_conn.update_scheduling_group();
     });
 }
 
@@ -2084,7 +2105,7 @@ future<std::vector<connection_service_level_params>> cql_server::get_connections
                 ? (user->name ? *(user->name) : "ANONYMOUS") 
                 : "UNAUTHENTICATED";
 
-        sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type());
+        sl_params.emplace_back(std::move(role_name), client_state.get_timeout_config(), client_state.get_workload_type(), cql_conn.get_scheduling_group().name());
     });
     co_return sl_params;
 }

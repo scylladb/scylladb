@@ -36,6 +36,7 @@
 #include "tasks.hh"
 #include "raft.hh"
 #include "gms/gossip_address_map.hh"
+#include "service_levels.hh"
 
 logging::logger apilog("api");
 
@@ -357,6 +358,12 @@ future<> unset_server_cql_server_test(http_context& ctx) {
 }
 
 #endif
+
+future<> set_server_service_levels(http_context &ctx, cql_transport::controller& ctl, sharded<cql3::query_processor>& qp) {
+    return register_api(ctx, "service_levels", "The service levels API", [&ctl, &qp] (http_context& ctx, routes& r) {
+        set_service_levels(ctx, r, ctl, qp);
+    });
+}
 
 future<> set_server_tasks_compaction_module(http_context& ctx, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& snap_ctl) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);

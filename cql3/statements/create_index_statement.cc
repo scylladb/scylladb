@@ -395,7 +395,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 std::unique_ptr<cql3::statements::prepared_statement>
 create_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     _cql_stats = &stats;
-    return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_index_statement>(*this));
 }
 
 index_metadata create_index_statement::make_index_metadata(const std::vector<::shared_ptr<index_target>>& targets,

@@ -26,7 +26,7 @@ alter_service_level_statement::alter_service_level_statement(sstring service_lev
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_service_level_statement::prepare(
         data_dictionary::database db, cql_stats &stats) {
-    return std::make_unique<prepared_statement>(::make_shared<alter_service_level_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_service_level_statement>(*this));
 }
 
 future<> alter_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
@@ -38,6 +38,7 @@ alter_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &, std::optional<service::group0_guard> guard) const {
     service::group0_batch mc{std::move(guard)};
+    validate_shares_option(qp, _slo);
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);
     qos::service_level_options slo = _slo.replace_defaults(sl.slo);
     auto& slc = state.get_service_level_controller();

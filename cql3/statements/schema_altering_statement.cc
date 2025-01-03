@@ -92,6 +92,10 @@ future<std::tuple<::shared_ptr<schema_altering_statement::event_t>, cql3::cql_wa
     co_return std::make_tuple(ret, cql_warnings);
 }
 
+audit::statement_category schema_altering_statement::category() const {
+    return audit::statement_category::DDL;
+}
+
 }
 
 }

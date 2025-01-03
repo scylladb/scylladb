@@ -87,6 +87,8 @@ public:
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
+    const std::vector<single_statement>& statements() const { return _statements; }
+
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     virtual uint32_t get_bound_terms() const override;

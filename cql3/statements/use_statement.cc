@@ -38,7 +38,12 @@ use_statement::use_statement(sstring keyspace)
 
 std::unique_ptr<prepared_statement> use_statement::prepare(data_dictionary::database db, cql_stats& stats)
 {
-    return std::make_unique<prepared_statement>(::make_shared<cql3::statements::use_statement>(_keyspace));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<cql3::statements::use_statement>(_keyspace));
+}
+
+audit::statement_category use_statement::category() const {
+    // It's not obvious why USE is a DML but that's how Origin classifies it.
+    return audit::statement_category::DML;
 }
 
 }

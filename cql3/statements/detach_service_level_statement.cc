@@ -29,7 +29,7 @@ bool detach_service_level_statement::needs_guard(query_processor& qp, service::q
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::detach_service_level_statement::prepare(
         data_dictionary::database db, cql_stats &stats) {
-    return std::make_unique<prepared_statement>(::make_shared<detach_service_level_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<detach_service_level_statement>(*this));
 }
 
 future<> detach_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {

@@ -157,6 +157,7 @@ public:
     gms::feature address_nodes_by_host_ids { *this, "ADDRESS_NODES_BY_HOST_IDS"sv };
 
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
+    gms::feature workload_prioritization { *this, "WORKLOAD_PRIORITIZATION"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
