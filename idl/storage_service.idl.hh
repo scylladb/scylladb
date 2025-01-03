@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "service/tablet_operation.hh"
+
 namespace locator {
 
 struct tablet_id final {
@@ -59,10 +61,14 @@ struct raft_snapshot_pull_params {
     std::vector<table_id> tables;
 };
 
+struct tablet_operation_repair_result {
+    gc_clock::time_point repair_time;
+};
+
 verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, service::raft_topology_cmd) -> service::raft_topology_cmd_result;
 verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_snapshot_pull_params) -> service::raft_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
-verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id);
+verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id) -> service::tablet_operation_repair_result;
 }
