@@ -95,6 +95,10 @@ public:
         return _inactive_pending_work +
             std::ranges::fold_left(_monitors | std::views::values | std::views::transform(std::mem_fn(&read_monitor::pending_work)), uint64_t(0), std::plus());
     }
+
+    bool is_sstable_tracked(const sstables::shared_sstable& sst) const {
+        return _monitors.contains(sst);
+    }
 };
 
 view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy, abort_source& as)
@@ -190,6 +194,7 @@ future<> view_update_generator::start() {
                 try {
                     inject_failure("view_update_generator_collect_consumed_sstables");
                     _progress_tracker->on_sstables_deregistration(sstables);
+                    _sstables_deregistered_cond.signal();
                     // collect all staging sstables to move in a map, grouped by table.
                     std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_to_move[t]));
                 } catch (...) {
@@ -482,6 +487,15 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
     if (err) {
         std::rethrow_exception(err);
     }
+}
+
+future<> view_update_generator::wait_until_sstables_are_processed(const std::vector<sstables::shared_sstable>& sstables) {
+    // wait until none of the sstables are being tracked in progress tracker
+    return _sstables_deregistered_cond.wait([sstables = std::move(sstables), this] {
+        return std::ranges::none_of(sstables, [this] (const sstables::shared_sstable& sst) {
+            return _progress_tracker->is_sstable_tracked(sst);
+        });
+    });
 }
 
 }

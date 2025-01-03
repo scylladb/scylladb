@@ -66,6 +66,10 @@ public:
         return make_ready_future();
     }
 
+    virtual future<> wait_for_view_update_done() override {
+        return make_ready_future();
+    }
+
     virtual mutation_fragment_queue& queue() override {
         return _queue;
     }
