@@ -9,8 +9,7 @@
 
 #include <algorithm>
 #include <random>
-
-#include <boost/range/algorithm/generate.hpp>
+#include <ranges>
 #include <iostream>
 
 #include <seastar/testing/random.hh>
@@ -140,7 +139,7 @@ inline bool get_bool() {
 
 inline bytes get_bytes(size_t n) {
     bytes b(bytes::initialized_later(), n);
-    boost::generate(b, [] { return get_int<bytes::value_type>(); });
+    std::ranges::generate(b, [] { return get_int<bytes::value_type>(); });
     return b;
 }
 
@@ -151,7 +150,7 @@ inline bytes get_bytes() {
 template <typename RandomEngine>
 inline sstring get_sstring(size_t n, RandomEngine& engine) {
     sstring str = uninitialized_string(n);
-    boost::generate(str, [&engine] { return get_int<sstring::value_type>('a', 'z', engine); });
+    std::ranges::generate(str, [&engine] { return get_int<sstring::value_type>('a', 'z', engine); });
     return str;
 }
 
