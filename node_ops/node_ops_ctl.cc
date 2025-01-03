@@ -18,6 +18,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "idl/node_ops.dist.hh"
 
+#include <boost/range/algorithm/find.hpp>
+
 static logging::logger nlogger("node_ops");
 
 node_ops_ctl::node_ops_ctl(const service::storage_service& ss_, node_ops_cmd cmd, locator::host_id id, gms::inet_address ep, node_ops_id uuid)
