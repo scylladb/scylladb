@@ -58,10 +58,22 @@ public:
         return { _gate };
     }
 
+    future<> close() noexcept {
+        return _gate->close();
+    }
+
+    bool is_closed() const noexcept {
+        return _gate->is_closed();
+    }
+
     // Starts a new phase and waits for all operations started in any of the earlier phases.
     // It is fine to start multiple awaits in parallel.
     // Cannot fail.
     future<> advance_and_await() noexcept {
+        if (!operations_in_progress()) {
+            ++_phase;
+            return make_ready_future();
+        }
         auto new_gate = [] {
             seastar::memory::scoped_critical_alloc_section _;
             return make_lw_shared<gate>();
