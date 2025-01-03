@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
-from test.topology_tasks.task_manager_types import TaskID, TaskStats, TaskStatus
+from test.topology_custom.tasks.task_manager_types import TaskID, TaskStats, TaskStatus
 from test.pylib.internal_types import IPAddress
 from test.pylib.rest_client import ScyllaRESTAPIClient
 

@@ -262,8 +262,10 @@ class TestSuite(ABC):
         return []
 
     def build_test_list(self) -> List[str]:
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
-                self.suite_path.glob(self.pattern)]
+        path = self.suite_path
+        # Search the test dir recursively
+        tests = path.rglob(self.pattern)
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in tests]
 
     async def add_test_list(self) -> None:
         options = self.options
