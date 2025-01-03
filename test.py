@@ -93,14 +93,8 @@ def path_to(mode, *components):
     build_dir = 'build'
     if os.path.exists(os.path.join(build_dir, 'build.ninja')):
         *dir_components, basename = components
-        exe_path = os.path.join(build_dir, *dir_components, all_modes[mode], basename)
-    else:
-        exe_path = os.path.join(build_dir, mode, *components)
-    if not os.access(exe_path, os.F_OK):
-        raise FileNotFoundError(f"{exe_path} does not exist.")
-    elif not os.access(exe_path, os.X_OK):
-        raise PermissionError(f"{exe_path} is not executable.")
-    return exe_path
+        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    return os.path.join(build_dir, mode, *components)
 
 
 def ninja(target):
@@ -487,6 +481,10 @@ class PythonTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        if not os.access(self.scylla_exe, os.F_OK):
+            raise FileNotFoundError(f"{self.scylla_exe} does not exist.")
+        if not os.access(self.scylla_exe, os.X_OK):
+            raise PermissionError(f"{self.scylla_exe} is not executable.")
         self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
             self.scylla_env.update(coverage.env(self.scylla_exe, distinct_id=self.name))
