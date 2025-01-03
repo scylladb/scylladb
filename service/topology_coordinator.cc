@@ -1286,8 +1286,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
+        const auto& tables_waiting_for_resize_finalization = plan.resize_plan().finalize_resize;
         for (const tablet_migration_info& mig : plan.migrations()) {
             co_await coroutine::maybe_yield();
+            if (tables_waiting_for_resize_finalization.contains(mig.tablet.table)) {
+                // do not schedule migration for tables waiting for resize finalization
+                rtlogger.warn("Table waiting for resize finalization, ignoring migration: {}", mig);
+                continue;
+            }
             generate_migration_update(out, guard, mig);
         }
 
@@ -1617,11 +1623,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 on_internal_error(rtlogger, "should_preempt_balancing() retook the guard");
             }
         }
-        if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
-            if (!drain || plan.has_nodes_to_drain()) {
-                co_await generate_migration_updates(updates, guard, plan);
-            }
+
+        auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
+        if (!preempt && (!drain || plan.has_nodes_to_drain())) {
+            co_await generate_migration_updates(updates, guard, plan);
         }
 
         // The updates have to be executed under the same guard which was used to read tablet metadata
@@ -1665,6 +1670,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_return;
         }
 
+        // generate updates for resize finalizations
+        if (!plan.resize_plan().finalize_resize.empty() && !utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
+            // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
+            // of token metadata will complete before we update topology.
+            guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+            co_await generate_resize_finalization_updates(updates, guard, get_token_metadata_ptr(), plan.resize_plan().finalize_resize);
+        }
+
         if (drain) {
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
@@ -1682,6 +1695,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
+    future<> generate_resize_finalization_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::token_metadata_ptr tm,
+            const std::unordered_set<table_id>& resized_table_ids) {
+        out.reserve(out.size() + resized_table_ids.size() * 2 + 1);
+
+        for (auto& table_id : resized_table_ids) {
+            auto s = _db.find_schema(table_id);
+            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+            out.emplace_back(co_await replica::tablet_map_to_mutation(
+                new_tablet_map,
+                table_id,
+                s->ks_name(),
+                s->cf_name(),
+                guard.write_timestamp(),
+                _db.features()));
+
+            // Clears the resize decision for a table.
+            generate_resize_update(out, guard, table_id, locator::resize_decision{});
+        }
+
+        rtlogger.debug("Finished generating tablet resize finalization updates");
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
@@ -1691,22 +1726,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
 
         std::vector<canonical_mutation> updates;
-        updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
-
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
-            auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
-            updates.emplace_back(co_await replica::tablet_map_to_mutation(
-                new_tablet_map,
-                table_id,
-                s->ks_name(),
-                s->cf_name(),
-                guard.write_timestamp(),
-                _db.features()));
-
-            // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
-        }
+        co_await generate_resize_finalization_updates(updates, guard, tm, plan.resize_plan().finalize_resize);
 
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
@@ -2762,9 +2782,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet resize finalization path.
-    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
-
     future<locator::load_stats> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
@@ -2863,10 +2880,9 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     co_await generate_migration_updates(updates, guard, plan);
 
-    // We only want to consider transitioning into tablet resize finalization path, if there's no other work
-    // to be done (e.g. start migration or/and emit split decision).
-    if (updates.empty()) {
-        co_return co_await maybe_start_tablet_resize_finalization(std::move(guard), plan.resize_plan());
+    // Transition to tablet_migration iff migration work is pending or a tablet resize needs finalization.
+    if (updates.empty() && plan.resize_plan().finalize_resize.empty()) {
+        co_return false;
     }
 
     updates.emplace_back(
@@ -2876,26 +2892,6 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
-    co_return true;
-}
-
-future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
-    if (plan.finalize_resize.empty()) {
-        co_return false;
-    }
-    if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
-        co_return false;
-    }
-
-    std::vector<canonical_mutation> updates;
-
-    updates.emplace_back(
-        topology_mutation_builder(guard.write_timestamp())
-            .set_transition_state(topology::transition_state::tablet_resize_finalization)
-            .set_version(_topo_sm._topology.version + 1)
-            .build());
-
-    co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
     co_return true;
 }
 
