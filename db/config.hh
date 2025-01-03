@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include <boost/program_options/options_description.hpp>
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
@@ -27,6 +26,12 @@
 #include "utils/error_injection.hh"
 #include "utils/dict_trainer.hh"
 #include "utils/advanced_rpc_compressor.hh"
+
+namespace boost::program_options {
+
+class options_description_easy_init;
+
+}
 
 namespace seastar {
 class file;
