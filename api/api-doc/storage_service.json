@@ -2926,6 +2926,29 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/tablets_per_shard_goal",
+         "operations":[
+            {
+               "nickname":"set_tablets_per_shard_goal",
+               "method":"POST",
+               "summary":"Sets tablet count per shard goal",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"value",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/quiesce_topology",
          "operations":[
             {
