@@ -10,7 +10,6 @@
 
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"

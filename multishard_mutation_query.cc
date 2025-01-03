@@ -19,8 +19,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 
-#include <boost/range/adaptor/reversed.hpp>
-
 #include <fmt/ostream.h>
 
 logging::logger mmq_log("multishard_mutation_query");

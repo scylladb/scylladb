@@ -20,7 +20,6 @@
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include <iostream>
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
@@ -521,7 +520,7 @@ static sstring toc_filename(const sstring& dir, schema_ptr schema, sstables::gen
 }
 
 future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation) {
-    for (auto v : boost::adaptors::reverse(all_sstable_versions)) {
+    for (auto v : std::views::reverse(all_sstable_versions)) {
         if (co_await file_exists(toc_filename(dir, schema, generation, v))) {
             co_return co_await reusable_sst(schema, dir, generation, v);
         }

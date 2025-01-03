@@ -13,8 +13,6 @@
 #include <malloc.h>
 #include <boost/regex.hpp>
 #include <filesystem>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <exception>
