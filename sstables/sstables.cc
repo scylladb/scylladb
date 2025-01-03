@@ -83,6 +83,8 @@
 #include "release.hh"
 #include "utils/build_id.hh"
 
+#include <boost/lexical_cast.hpp>
+
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
 

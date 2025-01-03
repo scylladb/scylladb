@@ -10,6 +10,7 @@
 
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/json/json_elements.hh>

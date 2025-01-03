@@ -60,6 +60,7 @@
 #include <ftw.h>
 #include <unistd.h>
 #include <boost/icl/interval_map.hpp>
+#include <boost/lexical_cast.hpp>
 #include "test/lib/test_services.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"

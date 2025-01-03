@@ -36,6 +36,8 @@
 #include "utils/hashing.hh"
 #include "utils/hashers.hh"
 
+#include <boost/lexical_cast.hpp>
+
 constexpr int32_t schema::NAME_LENGTH;
 
 extern logging::logger dblog;

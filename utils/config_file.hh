@@ -14,8 +14,6 @@
 #include <unordered_map>
 #include <string_view>
 
-#include <boost/program_options/options_description.hpp>
-
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/util/log.hh>
@@ -27,6 +25,13 @@
 namespace seastar { class file; }
 namespace seastar::json { class json_return_type; }
 namespace YAML { class Node; }
+
+namespace boost::program_options {
+
+class options_description;
+class options_description_easy_init;
+
+}
 
 namespace utils {
 
