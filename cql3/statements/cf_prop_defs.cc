@@ -20,6 +20,7 @@
 #include "tombstone_gc.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "db/table_hints_extension.hh"
 #include "utils/bloom_calculations.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -250,6 +251,16 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
 
     auto ext = dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second);
     return &ext->get_options();
+}
+
+const db::table_hints* cf_prop_defs::get_table_hints(const schema::extensions_map& schema_exts) const {
+    auto it = schema_exts.find(db::table_hints_extension::NAME);
+    if (it == schema_exts.end()) {
+        return nullptr;
+    }
+
+    auto ext = dynamic_pointer_cast<db::table_hints_extension>(it->second);
+    return &ext->get_hints();
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {

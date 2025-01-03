@@ -323,3 +323,33 @@ def test_alter_tablet_keyspace_rf(cql, this_dc):
             change_dc_rf(10)  # increase RF by 2+ should fail
         with pytest.raises(InvalidRequest):
             change_dc_rf(0)  # decrease RF by 2+ should fail
+
+
+def test_tablet_hints(cql, skip_without_tablets):
+    def describe_table(cql, table):
+        return cql.execute(f"DESC TABLE {table}").one().create_statement
+
+    ksdef = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'enabled': false};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        hints = "hints = {'min_tablet_count': '100'}"
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, c int", extra=f"WITH {hints}") as table:
+            assert hints in describe_table(cql, table)
+            # ALTER TABLE for other options does not affect existing hints
+            cql.execute(f"ALTER TABLE {table} WITH gc_grace_seconds = 42")
+            assert hints in describe_table(cql, table)
+            # Resetting hints to an empty map drops all hints
+            hints = "hints = {}"
+            cql.execute(f"ALTER TABLE {table} WITH {hints}")
+            assert hints in describe_table(cql, table)
+            # New hints can be added by ALTER TABLE
+            hints = "hints = {'expected_data_size_in_gb': '50', 'hot_table': 'true'}"
+            cql.execute(f"ALTER TABLE {table} WITH {hints}")
+            assert hints in describe_table(cql, table)
+            # hints with zero values are dropped
+            hints = "hints = {'expected_data_size_in_gb': '0', 'hot_table': 'true'}"
+            cql.execute(f"ALTER TABLE {table} WITH {hints}")
+            assert "hints = {'hot_table': 'true'}" in describe_table(cql, table)
+            # hints are set as a whole, replacing the previously set hints
+            hints = "hints = {'min_per_shard_tablet_count': '1'}"
+            cql.execute(f"ALTER TABLE {table} WITH {hints}")
+            assert hints in describe_table(cql, table)

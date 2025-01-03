@@ -183,11 +183,20 @@ def test_desc_scylla_keyspace(scylla_only, cql, random_seed):
 
 # Test that `DESC TABLE {tbl}` contains appropriate create statement for table
 # This test compares the content of `system_schema.tables` and `system_schema.columns` tables.
-def test_desc_table(cql, test_keyspace, random_seed, has_tablets):
+@pytest.mark.parametrize("with_table_hints", [False, True])
+def test_desc_table(cql, test_keyspace, random_seed, has_tablets, with_table_hints:bool):
     if has_tablets:  # issue #18180
         global counter_table_chance
         counter_table_chance = 0
-    with new_random_table(cql, test_keyspace) as tbl:
+    table_hints = {}
+    if with_table_hints:
+        table_hints = {
+            'min_tablet_count': '100',
+            'min_per_shard_tablet_count': '10',
+            'expected_data_size_in_gb': '50',
+            'hot_table': 'true',
+        }
+    with new_random_table(cql, test_keyspace, hints=table_hints) as tbl:
         desc = cql.execute(f"DESC TABLE {tbl}")
         desc_stmt = desc.one().create_statement
 
@@ -195,7 +204,11 @@ def test_desc_table(cql, test_keyspace, random_seed, has_tablets):
         new_desc_stmt = desc_stmt.replace(tbl, new_tbl)
 
         try:
-            cql.execute(new_desc_stmt)
+            try:
+                cql.execute(new_desc_stmt)
+            except Exception as e:
+                print(f"{new_desc_stmt=}: {e}")
+                raise
             tbl_row = cql.execute(f"""
                 SELECT keyspace_name, bloom_filter_fp_chance, caching,
                 comment, compaction, compression, crc_check_chance,
@@ -216,7 +229,7 @@ def test_desc_table(cql, test_keyspace, random_seed, has_tablets):
                 FROM system_schema.tables
                 WHERE keyspace_name='{test_keyspace}' AND table_name='{get_name(new_tbl)}'
             """).one()
-            assert tbl_row == new_tbl_row
+            assert tbl_row == new_tbl_row, f"\nold {tbl_row=}\n{new_tbl_row=}"
 
             col_rows = cql.execute(f"""
                 SELECT keyspace_name, column_name, clustering_order, column_name_bytes,
@@ -1280,7 +1293,7 @@ def new_random_keyspace(cql):
 # UDTs that can be used to create the table. The function uses `new_test_table`
 # from util.py, so it can be used in a "with", as:
 #   with new_random_table(cql, test_keyspace) as table:
-def new_random_table(cql, keyspace, udts=[]):
+def new_random_table(cql, keyspace, udts=[], hints={}):
     pk_n = random.randrange(1, max_pk)
     ck_n = random.randrange(max_ck)
     regular_n = random.randrange(1, max_regular)
@@ -1348,6 +1361,8 @@ def new_random_table(cql, keyspace, udts=[]):
         # Extra properties which ScyllaDB supports but Cassandra doesn't
         extras["paxos_grace_seconds"] = random.randrange(1000, 100000)
         extras["tombstone_gc"] = f"{{'mode': 'timeout', 'propagation_delay_in_seconds': '{random.randrange(100, 100000)}'}}"
+        if hints:
+            extras["hints"] = str(hints)
 
     extra_options = [f"{k} = {v}" for (k, v) in extras.items()]
     extra_str = " AND ".join(extra_options)

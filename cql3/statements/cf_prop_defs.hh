@@ -81,6 +81,7 @@ public:
     std::optional<caching_options> get_caching_options() const;
     const tombstone_gc_options* get_tombstone_gc_options(const schema::extensions_map&) const;
     const db::per_partition_rate_limit_options* get_per_partition_rate_limit_options(const schema::extensions_map&) const;
+    const db::table_hints* get_table_hints(const schema::extensions_map&) const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
