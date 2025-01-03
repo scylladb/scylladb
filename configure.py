@@ -1352,6 +1352,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/cql_assertions.cc',
     'test/lib/result_set_assertions.cc',
     'test/lib/mutation_source_test.cc',
+    'test/lib/mutation_assertions.cc',
     'test/lib/sstable_utils.cc',
     'test/lib/data_model.cc',
     'test/lib/exception_utils.cc',
