@@ -42,11 +42,15 @@ public:
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
     std::vector<table_id> get_table_ids() const;
-    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica);
+    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica, size_t& tablet_count);
 };
 
 class task_manager_module : public tasks::task_manager::module {
+private:
+    service::storage_service& _ss;
 public:
-    task_manager_module(tasks::task_manager& tm) noexcept;
+    task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept;
+
+    std::set<gms::inet_address> get_nodes() const noexcept override;
 };
 }
