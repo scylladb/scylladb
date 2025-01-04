@@ -2056,9 +2056,9 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
                 builder.set_compaction_strategy(sstables::compaction_strategy::type(i->second));
                 map.erase(i);
             } catch (const exceptions::configuration_exception& e) {
-                // If compaction strategy class isn't supported, fallback to size tiered.
-                slogger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
-                builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+                // If compaction strategy class isn't supported, fallback to incremental.
+                slogger.warn("Falling back to incremental compaction strategy after the problem: {}", e.what());
+                builder.set_compaction_strategy(sstables::compaction_strategy_type::incremental);
             }
         }
         if (map.contains("max_threshold")) {

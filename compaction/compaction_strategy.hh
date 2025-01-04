@@ -17,6 +17,7 @@
 
 struct mutation_source_metadata;
 class compaction_backlog_tracker;
+extern logging::logger compaction_strategy_logger;
 
 using namespace compaction;
 
@@ -69,6 +70,8 @@ public:
             return "LeveledCompactionStrategy";
         case compaction_strategy_type::time_window:
             return "TimeWindowCompactionStrategy";
+        case compaction_strategy_type::incremental:
+            return "IncrementalCompactionStrategy";
         default:
             throw std::runtime_error("Invalid Compaction Strategy");
         }
@@ -85,6 +88,8 @@ public:
             return compaction_strategy_type::leveled;
         } else if (short_name == "TimeWindowCompactionStrategy") {
             return compaction_strategy_type::time_window;
+        } else if (short_name == "IncrementalCompactionStrategy") {
+            return compaction_strategy_type::incremental;
         } else {
             throw exceptions::configuration_exception(format("Unable to find compaction strategy class '{}'", name));
         }

@@ -99,7 +99,7 @@ Time-window Compaction Strategy (TWCS)  50%          70%
 Incremental Compaction Strategy (ICS)   70%          80%
 ======================================  ===========  ============
 
-Use the default ICS  unless you'll have a clear understanding that another strategy is better for your use case. More on :doc:`choosing a Compaction Strategy </architecture/compaction/compaction-strategies>`.
+Use the default ICS unless you'll have a clear understanding that another strategy is better for your use case. More on :doc:`choosing a Compaction Strategy </architecture/compaction/compaction-strategies>`.
 In order to maintain a high level of service availability, keep 50% to 20% free disk space at all times!
 
 .. _system-requirements-network:

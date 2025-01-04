@@ -41,6 +41,7 @@ Knowledge Base
   * :doc:`Increase Cache to Avoid Non-paged Queries </kb/increase-permission-cache>` - How to increase the ``permissions_cache_max_entries`` setting.
   * :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`
   * :doc:`Facts about TTL, Compaction, and gc_grace_seconds <ttl-facts>`
+  * :doc:`Efficient Tombstone Garbage Collection in ICS <garbage-collection-ics>`
 
   **Note**: The KB article for social readers has been *removed*. Instead, please look at lessons on `ScyllaDB University <https://university.scylladb.com/>`_ or the `Care Pet example <https://care-pet.docs.scylladb.com/master/>`_
 
