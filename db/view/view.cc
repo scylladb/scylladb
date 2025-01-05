@@ -2052,8 +2052,8 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         co_await barrier.arrive_and_wait();
         units.return_all();
 
-        co_await calculate_shard_build_step(vbi);
         _mnotifier.register_listener(this);
+        co_await calculate_shard_build_step(vbi);
         _current_step = _base_to_build_step.begin();
         // Waited on indirectly in stop().
         (void)_build_step.trigger();
