@@ -2694,14 +2694,14 @@ future<> storage_service::on_change(gms::inet_address endpoint, const gms::appli
     const auto host_id = _gossiper.get_host_id(endpoint);
     const auto& tm = get_token_metadata();
     const auto* node = tm.get_topology().find_node(host_id);
-    // The check node->endpoint() == endpoint is needed when a node changes
+    // The check peers[host_id] == endpoint is needed when a node changes
     // its IP - on_change can be called by the gossiper for old IP as part
     // of its removal, after handle_state_normal has already been called for
     // the new one. Without the check, the do_update_system_peers_table call
     // overwrites the IP back to its old value.
     // In essence, the code under the 'if' should fire if the given IP belongs
     // to a cluster member.
-    if (node && node->is_member() && node->endpoint() == endpoint) {
+    if (node && node->is_member() && (co_await get_ip_from_peers_table(host_id)) == endpoint) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
             if (auto info = get_peer_info_for_update(endpoint, states)) {
