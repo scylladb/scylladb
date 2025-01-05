@@ -251,7 +251,6 @@ public:
 
     // Returns true if a node with given host_id is found
     bool has_node(host_id id) const noexcept;
-    bool has_node(inet_address id) const noexcept;
 
     /**
      * Stores current DC/rack assignment for ep
@@ -264,11 +263,6 @@ public:
                                        std::optional<shard_id> shard_count = std::nullopt);
 
     bool remove_endpoint(locator::host_id ep);
-
-    /**
-     * Returns true iff contains given endpoint.
-     */
-    bool has_endpoint(inet_address) const;
 
     const std::unordered_map<sstring,
                            std::unordered_set<host_id>>&

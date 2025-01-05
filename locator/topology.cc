@@ -544,17 +544,6 @@ bool topology::has_node(host_id id) const noexcept {
     return bool(node);
 }
 
-bool topology::has_node(inet_address ep) const noexcept {
-    auto node = find_node(ep);
-    tlogger.trace("topology[{}]: has_node: endpoint={}: node={}", fmt::ptr(this), ep, node_printer(node));
-    return bool(node);
-}
-
-bool topology::has_endpoint(inet_address ep) const
-{
-    return has_node(ep);
-}
-
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
     if (can_sort_by_proximity()) {
         do_sort_by_proximity(address, addresses);
