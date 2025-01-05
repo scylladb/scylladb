@@ -239,13 +239,6 @@ public:
     /** Return the unique host ID for an end-point. */
     host_id get_host_id(inet_address endpoint) const;
 
-    /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
-
-    /** Return the end-point for a unique host ID or nullopt if not found. */
-    std::optional<inet_address> get_endpoint_for_host_id_if_known(locator::host_id host_id) const;
-
-    /** Return the end-point for a unique host ID */
     inet_address get_endpoint_for_host_id(locator::host_id host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */

@@ -153,12 +153,6 @@ public:
     /** Return the unique host ID for an end-point. */
     host_id get_host_id(inet_address endpoint) const;
 
-    /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
-
-    /** Return the end-point for a unique host ID or nullopt if not found.*/
-    std::optional<inet_address> get_endpoint_for_host_id_if_known(host_id) const;
-
     /** Return the end-point for a unique host ID.*/
     inet_address get_endpoint_for_host_id(host_id) const;
 
@@ -540,22 +534,6 @@ host_id token_metadata_impl::get_host_id(inet_address endpoint) const {
         return node->host_id();
     } else {
         on_internal_error(tlogger, format("host_id for endpoint {} is not found", endpoint));
-    }
-}
-
-std::optional<host_id> token_metadata_impl::get_host_id_if_known(inet_address endpoint) const {
-    if (const auto* node = _topology.find_node(endpoint)) [[likely]] {
-        return node->host_id();
-    } else {
-        return std::nullopt;
-    }
-}
-
-std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id_if_known(host_id host_id) const {
-    if (const auto* node = _topology.find_node(host_id)) [[likely]] {
-        return node->endpoint();
-    } else {
-        return std::nullopt;
     }
 }
 
@@ -1040,16 +1018,6 @@ token_metadata::update_host_id(const host_id& host_id, inet_address endpoint) {
 host_id
 token_metadata::get_host_id(inet_address endpoint) const {
     return _impl->get_host_id(endpoint);
-}
-
-std::optional<host_id>
-token_metadata::get_host_id_if_known(inet_address endpoint) const {
-    return _impl->get_host_id_if_known(endpoint);
-}
-
-std::optional<token_metadata::inet_address>
-token_metadata::get_endpoint_for_host_id_if_known(host_id host_id) const {
-    return _impl->get_endpoint_for_host_id_if_known(host_id);
 }
 
 token_metadata::inet_address
