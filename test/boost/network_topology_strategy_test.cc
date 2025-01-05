@@ -304,7 +304,7 @@ void simple_test() {
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -412,7 +412,7 @@ void heavy_origin_test() {
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(tokens[endpoint], id);
         }
     }).get();
@@ -484,7 +484,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             for (const auto& [ring_point, endpoint, id] : ring_points) {
                 std::unordered_set<token> tokens;
                 tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-                topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+                topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
                 tm.update_host_id(id, endpoint);
                 co_await tm.update_normal_tokens(std::move(tokens), id);
             }
@@ -576,7 +576,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
@@ -865,12 +865,11 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
-    unsigned i = 0;
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_or_update_endpoint(node, inet_address((127u << 24) | ++i), endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
+        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
     }
 }
 
@@ -1145,21 +1144,15 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     const node* n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
-    n1 = stm.get()->get_topology().find_node(ip1);
-    BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
-    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
     const node* n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(n2);
-    n2 = stm.get()->get_topology().find_node(ip2);
-    BOOST_REQUIRE(n2);
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
-    BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
     BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
 
     // Local node cannot be removed
@@ -1172,8 +1165,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
-    n1 = stm.get()->get_topology().find_node(ip1);
-    BOOST_REQUIRE(n1);
 
     // Removing node with no local node
 
@@ -1184,22 +1175,19 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     n2 = stm.get()->get_topology().find_node(host2);
     BOOST_REQUIRE(!n2);
-    n2 = stm.get()->get_topology().find_node(ip2);
-    BOOST_REQUIRE(!n2);
 
     // Repopulate after clear_gently()
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         co_await tm.clear_gently();
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host1, ip1); // this_node added last on purpose
+        tm.update_topology(host2, std::nullopt, std::nullopt);
+        tm.update_topology(host1, std::nullopt, std::nullopt); // this_node added last on purpose
     }).get();
 
     n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
-    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
@@ -1207,21 +1195,19 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(n2);
     BOOST_REQUIRE(!bool(n2->is_this_node()));
     BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
-    BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
     BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
 
     // get_location() should pick up endpoint_dc_rack from node info
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         co_await tm.clear_gently();
-        tm.get_topology().add_or_update_endpoint(host1, ip1, ip1_dc_rack_v2, node::state::being_decommissioned);
+        tm.get_topology().add_or_update_endpoint(host1, ip1_dc_rack_v2, node::state::being_decommissioned);
     }).get();
 
     n1 = stm.get()->get_topology().find_node(host1);
     BOOST_REQUIRE(n1);
     BOOST_REQUIRE(bool(n1->is_this_node()));
     BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
-    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
     BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack_v2);
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack_v2);
 }

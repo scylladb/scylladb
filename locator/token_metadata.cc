@@ -116,7 +116,7 @@ public:
     }
 
     void update_topology(host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
-        _topology.add_or_update_endpoint(id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+        _topology.add_or_update_endpoint(id, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
 
     /**
@@ -140,15 +140,6 @@ public:
     }
 
     void debug_show() const;
-
-    /**
-     * Store an end-point to host ID mapping.  Each ID must be unique, and
-     * cannot be changed after the fact.
-     *
-     * @param hostId
-     * @param endpoint
-     */
-    void update_host_id(const host_id& host_id, inet_address endpoint);
 
     /** @return a copy of host id set for read-only operations */
     std::unordered_set<host_id> get_host_ids() const;
@@ -514,10 +505,6 @@ void token_metadata_impl::debug_show() const {
         }
     });
     reporter->arm_periodic(std::chrono::seconds(1));
-}
-
-void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
-    _topology.add_or_update_endpoint(host_id, endpoint);
 }
 
 std::unordered_set<host_id> token_metadata_impl::get_host_ids() const {
@@ -964,7 +951,7 @@ token_metadata::debug_show() const {
 
 void
 token_metadata::update_host_id(const host_id& host_id, inet_address endpoint) {
-    _impl->update_host_id(host_id, endpoint);
+    // Do nothing for now. Remove later.
 }
 
 std::unordered_set<host_id>

@@ -55,10 +55,9 @@ thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
     .rack = locator::production_snitch_base::default_rack,
 };
 
-node::node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, shard_id shard_count, this_node is_this_node, node::idx_type idx)
+node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, this_node is_this_node, node::idx_type idx)
     : _topology(topology)
     , _host_id(id)
-    , _endpoint(endpoint)
     , _dc_rack(std::move(dc_rack))
     , _state(state)
     , _shard_count(std::move(shard_count))
@@ -66,12 +65,12 @@ node::node(const locator::topology* topology, locator::host_id id, inet_address 
     , _idx(idx)
 {}
 
-node_holder node::make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, shard_id shard_count, node::this_node is_this_node, node::idx_type idx) {
-    return std::make_unique<node>(topology, std::move(id), std::move(endpoint), std::move(dc_rack), std::move(state), shard_count, is_this_node, idx);
+node_holder node::make(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, node::this_node is_this_node, node::idx_type idx) {
+    return std::make_unique<node>(topology, std::move(id), std::move(dc_rack), std::move(state), shard_count, is_this_node, idx);
 }
 
 node_holder node::clone() const {
-    return make(nullptr, host_id(), endpoint(), dc_rack(), get_state(), get_shard_count(), is_this_node());
+    return make(nullptr, host_id(), dc_rack(), get_state(), get_shard_count(), is_this_node());
 }
 
 std::string node::to_string(node::state s) {
@@ -95,7 +94,6 @@ future<> topology::clear_gently() noexcept {
     _datacenters.clear();
     _dc_rack_nodes.clear();
     _dc_nodes.clear();
-    _nodes_by_endpoint.clear();
     _nodes_by_host_id.clear();
     co_await utils::clear_gently(_nodes);
 }
@@ -116,7 +114,7 @@ topology::topology(config cfg)
 {
     tlogger.trace("topology[{}]: constructing using config: endpoint={} id={} dc={} rack={}", fmt::ptr(this),
             cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
-    add_node(cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack, node::state::none);
+    add_node(cfg.this_host_id, cfg.local_dc_rack, node::state::none);
 }
 
 topology::topology(topology&& o) noexcept
@@ -125,7 +123,6 @@ topology::topology(topology&& o) noexcept
     , _this_node(std::exchange(o._this_node, nullptr))
     , _nodes(std::move(o._nodes))
     , _nodes_by_host_id(std::move(o._nodes_by_host_id))
-    , _nodes_by_endpoint(std::move(o._nodes_by_endpoint))
     , _dc_nodes(std::move(o._dc_nodes))
     , _dc_rack_nodes(std::move(o._dc_rack_nodes))
     , _dc_endpoints(std::move(o._dc_endpoints))
@@ -171,7 +168,7 @@ void topology::set_host_id_cfg(host_id this_host_id) {
     tlogger.trace("topology[{}]: set host id to {}", fmt::ptr(this), this_host_id);
 
     _cfg.this_host_id = this_host_id;
-    add_or_update_endpoint(this_host_id, _cfg.this_endpoint);
+    add_or_update_endpoint(this_host_id);
 }
 
 future<topology> topology::clone_gently() const {
@@ -188,21 +185,15 @@ future<topology> topology::clone_gently() const {
     co_return ret;
 }
 
-const node& topology::add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
+const node& topology::add_node(host_id id, const endpoint_dc_rack& dr, node::state state, shard_id shard_count) {
     if (dr.dc.empty() || dr.rack.empty()) {
         on_internal_error(tlogger, "Node must have valid dc and rack");
     }
-    return add_node(node::make(this, id, ep, dr, state, shard_count));
+    return add_node(node::make(this, id, dr, state, shard_count));
 }
 
 bool topology::is_configured_this_node(const node& n) const {
-    if (_cfg.this_host_id && n.host_id()) { // Selection by host_id
-        return _cfg.this_host_id == n.host_id();
-    }
-    if (_cfg.this_endpoint != inet_address()) { // Selection by endpoint
-        return _cfg.this_endpoint == n.endpoint();
-    }
-    return false; // No selection;
+    return _cfg.this_host_id == n.host_id();
 }
 
 const node& topology::add_node(node_holder nptr) {
@@ -245,10 +236,9 @@ const node& topology::add_node(node_holder nptr) {
     return *node;
 }
 
-void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
-    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(&node),
+void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
+    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(&node),
         opt_id ? format("{}", *opt_id) : "unchanged",
-        opt_ep ? format("{}", *opt_ep) : "unchanged",
         opt_dr ? format("{}", opt_dr->dc) : "unchanged",
         opt_dr ? format("{}", opt_dr->rack) : "unchanged",
         opt_st ? format("{}", *opt_st) : "unchanged",
@@ -270,16 +260,6 @@ void topology::update_node(node& node, std::optional<host_id> opt_id, std::optio
             changed = true;
         } else {
             opt_id.reset();
-        }
-    }
-    if (opt_ep) {
-        if (*opt_ep != node.endpoint()) {
-            if (*opt_ep == inet_address{}) {
-                on_internal_error(tlogger, seastar::format("Updating node endpoint to null is disallowed: {}: new endpoint={}", node_printer(&node), *opt_ep));
-            }
-            changed = true;
-        } else {
-            opt_ep.reset();
         }
     }
     if (opt_dr) {
@@ -311,9 +291,6 @@ void topology::update_node(node& node, std::optional<host_id> opt_id, std::optio
     try {
         if (opt_id) {
             node._host_id = *opt_id;
-        }
-        if (opt_ep) {
-            node._endpoint = *opt_ep;
         }
         if (opt_dr) {
             node._dc_rack = std::move(*opt_dr);
@@ -359,32 +336,6 @@ void topology::index_node(const node& node) {
     auto [nit, inserted_host_id] = _nodes_by_host_id.emplace(node.host_id(), std::cref(node));
     if (!inserted_host_id) {
         on_internal_error(tlogger, seastar::format("topology[{}]: {}: node already exists", fmt::ptr(this), node_printer(&node)));
-    }
-    if (node.endpoint() != inet_address{}) {
-        auto eit = _nodes_by_endpoint.find(node.endpoint());
-        if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second.get().get_state() == node::state::none && eit->second.get().is_this_node()) {
-                // eit->second is default entry created for local node and it is replaced by existing node with the same ip
-                // it means this node is going to replace the existing node with the same ip, but it does not know it yet
-                // map ip to the old node
-                _nodes_by_endpoint.erase(node.endpoint());
-            } else if (eit->second.get().get_state() == node::state::replacing && node.get_state() == node::state::being_replaced) {
-                // replace-with-same-ip, map ip to the old node
-                _nodes_by_endpoint.erase(node.endpoint());
-            } else if (eit->second.get().get_state() == node::state::being_replaced && node.get_state() == node::state::replacing) {
-                // replace-with-same-ip, map ip to the old node, do nothing if it's already the case
-            } else if (eit->second.get().is_leaving() || eit->second.get().left()) {
-                _nodes_by_endpoint.erase(node.endpoint());
-            } else if (!node.is_leaving() && !node.left()) {
-                if (node.host_id()) {
-                    _nodes_by_host_id.erase(node.host_id());
-                }
-                on_internal_error(tlogger, seastar::format("topology[{}]: {}: node endpoint already mapped to {}", fmt::ptr(this), node_printer(&node), node_printer(&eit->second.get())));
-            }
-        }
-        if (!node.left() && !node.is_none()) {
-            _nodes_by_endpoint.try_emplace(node.endpoint(), std::cref(node));
-        }
     }
 
     // We keep location of left nodes because they may still appear in tablet replica sets
@@ -442,10 +393,6 @@ void topology::unindex_node(const node& node) {
     if (host_it != _nodes_by_host_id.end() && host_it->second == node) {
         _nodes_by_host_id.erase(host_it);
     }
-    auto ep_it = _nodes_by_endpoint.find(node.endpoint());
-    if (ep_it != _nodes_by_endpoint.end() && ep_it->second.get() == node) {
-        _nodes_by_endpoint.erase(ep_it);
-    }
     if (_this_node == &node) {
         _this_node = nullptr;
     }
@@ -484,16 +431,6 @@ node* topology::find_node(host_id id) noexcept {
     return make_mutable(const_cast<const topology*>(this)->find_node(id));
 }
 
-// Finds a node by its endpoint
-// Returns nullptr if not found
-const node* topology::find_node(const inet_address& ep) const noexcept {
-    auto it = _nodes_by_endpoint.find(ep);
-    if (it != _nodes_by_endpoint.end()) {
-        return &it->second.get();
-    }
-    return nullptr;
-}
-
 // Finds a node by its index
 // Returns nullptr if not found
 const node* topology::find_node(node::idx_type idx) const noexcept {
@@ -503,23 +440,19 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
     return _nodes.at(idx).get();
 }
 
-const node& topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
+const node& topology::add_or_update_endpoint(host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
 {
-    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
-        id, opt_ep, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
+        id, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
         lazy_backtrace());
 
     auto* n = find_node(id);
     if (n) {
-        update_node(*n, std::nullopt, opt_ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
-        return *n;
-    } else if (opt_ep && (n = make_mutable(find_node(*opt_ep)))) {
-        update_node(*n, id, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+        update_node(*n, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
         return *n;
     }
 
     return add_node(id,
-                    opt_ep.value_or(inet_address{}),
                     opt_dr.value_or(endpoint_dc_rack::default_location),
                     opt_st.value_or(node::state::none),
                     shard_count.value_or(0));

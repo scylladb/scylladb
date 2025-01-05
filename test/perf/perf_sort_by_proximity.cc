@@ -53,7 +53,6 @@ struct sort_by_proximity_topology {
                         auto id = locator::host_id{utils::UUID(0, i)};
                         nodes[dc][rack].emplace_back(id);
                         topology.add_or_update_endpoint(id,
-                                gms::inet_address((127u << 24) | i),
                                 locator::endpoint_dc_rack{format("dc{}", dc), format("rack{}", rack)},
                                 locator::node::state::normal);
                     }
