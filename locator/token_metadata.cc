@@ -22,7 +22,7 @@
 #include <seastar/core/smp.hh>
 #include "utils/assert.hh"
 #include "utils/stall_free.hh"
-
+#include "gms/gossiper.hh"
 namespace locator {
 
 static logging::logger tlogger("token_metadata");
@@ -1391,22 +1391,22 @@ host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) 
     }
 }
 
-host_id host_id_or_endpoint::resolve_id(const token_metadata& tm) const {
+host_id host_id_or_endpoint::resolve_id(const gms::gossiper& g) const {
     if (has_host_id()) {
         return id();
     }
-    auto opt_id = tm.get_host_id_if_known(endpoint());
-    if (!opt_id) {
+    try {
+        return g.get_host_id(endpoint());
+    } catch (...) {
         throw std::runtime_error(format("Host inet address {} not found in the cluster", endpoint()));
     }
-    return *opt_id;
 }
 
-gms::inet_address host_id_or_endpoint::resolve_endpoint(const token_metadata& tm) const {
+gms::inet_address host_id_or_endpoint::resolve_endpoint(const gms::gossiper& g) const {
     if (has_endpoint()) {
         return endpoint();
     }
-    auto endpoint_opt = tm.get_endpoint_for_host_id_if_known(id());
+    auto endpoint_opt = g.get_address_map().find(id());
     if (!endpoint_opt) {
         throw std::runtime_error(format("Host ID {} not found in the cluster", id()));
     }

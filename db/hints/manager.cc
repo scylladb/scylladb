@@ -594,9 +594,9 @@ future<> manager::change_host_filter(host_filter filter) {
                     // been created by mistake and they're invalid. The same for pre-host-ID hinted handoff
                     // -- hint directories representing host IDs are NOT valid.
                     if (hid_or_ep.has_host_id() && _uses_host_id) {
-                        return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*tmptr)});
+                        return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*_gossiper_anchor)});
                     } else if (hid_or_ep.has_endpoint() && !_uses_host_id) {
-                        return std::make_optional(pair_type{hid_or_ep.resolve_id(*tmptr), hid_or_ep.endpoint()});
+                        return std::make_optional(pair_type{hid_or_ep.resolve_id(*_gossiper_anchor), hid_or_ep.endpoint()});
                     } else {
                         return std::nullopt;
                     }
@@ -817,7 +817,7 @@ future<> manager::initialize_endpoint_managers() {
 
         const auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
             try {
-                return maybe_host_id_or_ep->resolve_id(*tmptr);
+                return maybe_host_id_or_ep->resolve_id(*_gossiper_anchor);
             } catch (...) {
                 return std::nullopt;
             }
@@ -869,7 +869,7 @@ future<> manager::migrate_ip_directories() {
                     continue;
                 }
 
-                const locator::host_id host_id = hid_or_ep.resolve_id(*tmptr);
+                const locator::host_id host_id = hid_or_ep.resolve_id(*_gossiper_anchor);
                 dirs_to_rename.push_back({.current_name = std::move(directory), .new_name = host_id.to_sstring()});
             } catch (...) {
                 // We cannot map the IP to the corresponding host ID either because

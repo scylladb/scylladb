@@ -4189,7 +4189,7 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
             }
 
             for (auto& hoep : ignore_nodes_params) {
-                ctl.ignore_nodes.insert(hoep.resolve_id(*tmptr));
+                ctl.ignore_nodes.insert(hoep.resolve_id(ss._gossiper));
             }
 
             if (!removed_from_token_ring) {

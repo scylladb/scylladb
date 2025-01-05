@@ -37,6 +37,10 @@ namespace replica {
 class keyspace;
 }
 
+namespace gms {
+class gossiper;
+}
+
 namespace locator {
 
 class abstract_replication_strategy;
@@ -75,8 +79,8 @@ struct host_id_or_endpoint {
 
     // Map the host_id to endpoint or vice verse, using the token_metadata.
     // Throws runtime error if failed to resolve.
-    host_id resolve_id(const token_metadata&) const;
-    gms::inet_address resolve_endpoint(const token_metadata&) const;
+    host_id resolve_id(const gms::gossiper&) const;
+    gms::inet_address resolve_endpoint(const gms::gossiper&) const;
 };
 
 using host_id_or_endpoint_list = std::vector<host_id_or_endpoint>;
