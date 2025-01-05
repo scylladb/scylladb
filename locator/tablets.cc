@@ -765,19 +765,6 @@ class tablet_effective_replication_map : public effective_replication_map {
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
 private:
-    inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
-        inet_address_vector_replica_set result;
-        result.reserve(replicas.size());
-        auto& topo = _tmptr->get_topology();
-        for (auto&& replica : replicas) {
-            auto* node = topo.find_node(replica.host);
-            if (node && !node->left()) {
-                result.emplace_back(node->endpoint());
-            }
-        }
-        return result;
-    }
-
     host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
         host_id_vector_replica_set result;
         result.reserve(replicas.size());
