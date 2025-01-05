@@ -307,11 +307,6 @@ public:
     std::set<locator::host_id> get_unreachable_host_ids() const;
 
     /**
-     * @return a list of unreachable token owners
-     */
-    std::set<inet_address> get_unreachable_token_owners() const;
-
-    /**
      * @return a list of unreachable nodes
      */
     std::set<locator::host_id> get_unreachable_nodes() const;

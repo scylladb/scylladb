@@ -471,7 +471,9 @@ public:
     }
 
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
-        if (!_gossiper.get_unreachable_token_owners().empty()) {
+        auto s = _sp.local_db().find_schema(keyspace, cfname);
+        auto erm_ptr = s->table().get_effective_replication_map();
+        if (!std::ranges::all_of(erm_ptr->get_token_metadata().get_normal_token_owners(), std::bind_front(&storage_proxy::is_alive, &_sp, std::cref(*erm_ptr)))) {
             slogger.info("Cannot perform truncate, some hosts are down");
             // Since the truncate operation is so aggressive and is typically only
             // invoked by an admin, for simplicity we require that all nodes are up
