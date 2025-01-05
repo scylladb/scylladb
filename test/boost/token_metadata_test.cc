@@ -300,7 +300,6 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     token_metadata->add_replacing_endpoint(e1_id1, e1_id2);
 
     auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
-    BOOST_REQUIRE_EQUAL(token_metadata->get_host_id(e1), e1_id1);
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
         host_id_vector_topology_change{e1_id2});
     BOOST_REQUIRE_EQUAL(erm->get_natural_replicas(dht::token::from_int64(1)),
