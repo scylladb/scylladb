@@ -604,6 +604,9 @@ private:
     future<std::unordered_multimap<dht::token_range, locator::host_id>> get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, locator::host_id endpoint);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
+
+    // Return ip of the peers table entry with given host id
+    future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 public:
 
     sstring get_release_version();

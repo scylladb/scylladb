@@ -909,7 +909,8 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
         locator::host_id id(utils::UUID(app_state_ptr->value()));
         rslog.debug("ip_address_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
 
-        auto prev_ip = _ss.get_token_metadata().get_endpoint_for_host_id_if_known(id);
+        // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
+        std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
         if (prev_ip == endpoint) {
             co_return;
         }
@@ -2645,6 +2646,14 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
         tmptr->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
     }
+}
+
+future<std::optional<gms::inet_address>> storage_service::get_ip_from_peers_table(locator::host_id id) {
+    auto peers = co_await _sys_ks.local().load_host_ids();
+    if (auto it = std::ranges::find_if(peers, [&id] (const auto& e) { return e.second == id; }); it != peers.end()) {
+        co_return it->first;
+    }
+    co_return std::nullopt;
 }
 
 future<> storage_service::on_change(gms::inet_address endpoint, const gms::application_state_map& states_, gms::permit_id pid) {
