@@ -75,7 +75,7 @@ void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::s
 void unset_storage_service(http_context& ctx, httpd::routes& r);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, httpd::routes& r);
-void set_view_builder(http_context& ctx, httpd::routes& r, sharded<db::view::view_builder>& vb);
+void set_view_builder(http_context& ctx, httpd::routes& r, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g);
 void unset_view_builder(http_context& ctx, httpd::routes& r);
 void set_repair(http_context& ctx, httpd::routes& r, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am);
 void unset_repair(http_context& ctx, httpd::routes& r);

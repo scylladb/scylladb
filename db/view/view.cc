@@ -2434,14 +2434,14 @@ future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(
 }
 
 future<std::unordered_map<sstring, sstring>>
-view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
+view_builder::view_build_statuses(sstring keyspace, sstring view_name, const gms::gossiper& gossiper) const {
     std::unordered_map<locator::host_id, sstring> status = co_await view_status(std::move(keyspace), std::move(view_name));
     std::unordered_map<sstring, sstring> status_map;
     const auto& topo = _db.get_token_metadata().get_topology();
     topo.for_each_node([&] (const locator::node& node) {
         auto it = status.find(node.host_id());
         auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
-        status_map.emplace(fmt::to_string(node.endpoint()), std::move(s));
+        status_map.emplace(fmt::to_string(gossiper.get_address_map().get(node.host_id())), std::move(s));
     });
     co_return status_map;
 }

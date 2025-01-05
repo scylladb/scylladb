@@ -100,7 +100,7 @@ future<> set_server_storage_service(http_context& ctx, sharded<service::storage_
 future<> unset_server_storage_service(http_context& ctx);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
 future<> unset_server_sstables_loader(http_context& ctx);
-future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb);
+future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g);
 future<> unset_server_view_builder(http_context& ctx);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am);
 future<> unset_server_repair(http_context& ctx);

@@ -2289,7 +2289,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm), utils::cross_shard_barrier()).get();
             }
 
-            api::set_server_view_builder(ctx, view_builder).get();
+            api::set_server_view_builder(ctx, view_builder, gossiper).get();
             auto stop_vb_api = defer_verbose_shutdown("view builder API", [&ctx] {
                 api::unset_server_view_builder(ctx).get();
             });

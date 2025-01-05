@@ -235,7 +235,7 @@ public:
     // For tests
     future<> wait_until_built(const sstring& ks_name, const sstring& view_name);
 
-    future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
+    future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name, const gms::gossiper& g) const;
 
     // Can only be called on shard-0
     future<> mark_existing_views_as_built();
