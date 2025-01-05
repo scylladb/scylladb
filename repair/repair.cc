@@ -2150,11 +2150,11 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                         return sync_nodes.contains(node);
                     }) | std::views::transform([&topology] (const auto& node) {
                         const auto& n = topology.get_node(node);
-                        return std::make_pair(n.host_id(), n.endpoint());
-                    }) | std::ranges::to<std::unordered_map>();
+                        return n.host_id();
+                    }) | std::ranges::to<std::vector>();
                 rlogger.debug("{}: keyspace={}, range={}, natural_enpoints={}, neighbors={}", op, keyspace_name, r, natural_eps, neighbors);
                 if (!neighbors.empty()) {
-                    range_sources[r] = repair_neighbors(neighbors);
+                    range_sources[r] = repair_neighbors(std::move(neighbors));
                     ++it;
                 } else {
                     // Skip the range with zero neighbors
