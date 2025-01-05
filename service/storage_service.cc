@@ -5278,10 +5278,11 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
         for (auto& r : replicas) {
             dht::endpoint_details details;
             const auto& node = topology.get_node(r.host);
+            const auto ip = _address_map.get(r.host);
             details._datacenter = node.dc_rack().dc;
             details._rack = node.dc_rack().rack;
-            details._host = node.endpoint();
-            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(node.endpoint()));
+            details._host = ip;
+            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(ip));
             tr._endpoints.push_back(fmt::to_string(details._host));
             tr._endpoint_details.push_back(std::move(details));
         }
