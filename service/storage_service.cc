@@ -7457,7 +7457,7 @@ future<> storage_service::wait_for_normal_state_handled_on_boot() {
     static auto fmt_nodes_with_statuses = [this] (const auto& eps) {
         return eps | std::views::transform([this] (const auto& ep) {
                     return ::format("({}, status={})", ep, _gossiper.get_gossip_status(ep));
-                }) | std::views::join_with(',');
+                });
     };
 
     slogger.info("Started waiting for normal state handlers to finish");
