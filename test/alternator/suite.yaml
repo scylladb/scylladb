@@ -1,10 +1,5 @@
 type: Python
 pool_size: 6
-prepare_cql:
-    - INSERT INTO system.roles (role, can_login, salted_hash) VALUES ('alternator_custom_sl', true, 'secret_pass')
-    - CREATE SERVICE LEVEL sl_alternator
-    - ATTACH SERVICE LEVEL sl_alternator TO alternator_custom_sl
-
 run_first:
     - test_streams
     - test_scan
