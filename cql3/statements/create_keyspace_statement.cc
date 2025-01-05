@@ -116,7 +116,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
                 "without tablets by adding AND TABLETS = {'enabled': false} "
                 "to the CREATE KEYSPACE statement.");
             if (ksm->initial_tablets().value()) {
-                warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet_hints instead.");
+                warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");
             }
         }
     } catch (const exceptions::already_exists_exception& e) {

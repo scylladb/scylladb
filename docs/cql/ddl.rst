@@ -247,7 +247,7 @@ An example that creates a keyspace with 2048 tablets per table::
     };
 
 Note that the ``initial`` tablets option was deprecated.
-Please use :ref:`Per-table tablet hints <cql-tablet-hints-options>` instead.
+Please use :ref:`Per-table tablet options <cql-per-table-tablet-options>` instead.
 
 See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
 
