@@ -780,9 +780,9 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     {
         std::vector<future<>> futures;
         get_token_metadata_ptr()->get_topology().for_each_node([&](const locator::node& n) {
-            const auto ep = n.endpoint();
-            if (ep != inet_address{} && !saved_tmpr->get_topology().has_endpoint(ep)) {
-                futures.push_back(remove_rpc_client_with_ignored_topology(ep, n.host_id()));
+            const auto ep = n.host_id();
+            if (auto ip_opt = _address_map.find(ep); ip_opt && !saved_tmpr->get_topology().has_node(ep)) {
+                futures.push_back(remove_rpc_client_with_ignored_topology(*ip_opt, n.host_id()));
             }
         });
         co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
