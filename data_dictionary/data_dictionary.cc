@@ -462,7 +462,11 @@ auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dicti
     fmt::format_to(ctx.out(), "KSMetaData{{name={}, strategyClass={}, strategyOptions={}, cfMetaData={}, durable_writes={}, tablets=",
             m.name(), m.strategy_name(), m.strategy_options(), m.cf_meta_data(), m.durable_writes());
     if (m.initial_tablets()) {
-        fmt::format_to(ctx.out(), "{{\"initial\":{}}}", m.initial_tablets().value());
+        if (auto initial_tablets = m.initial_tablets().value()) {
+            fmt::format_to(ctx.out(), "{{\"initial\":{}}}", initial_tablets);
+        } else {
+            fmt::format_to(ctx.out(), "{{\"enabled\":true}}");
+        }
     } else {
         fmt::format_to(ctx.out(), "{{\"enabled\":false}}");
     }
