@@ -1552,6 +1552,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             tmptr->update_topology(ri->host_id, std::move(ri->dc_rack), locator::node::state::being_replaced);
             co_await tmptr->update_normal_tokens(bootstrap_tokens, ri->host_id);
             tmptr->update_host_id(ri->host_id, *replace_address);
+            tmptr->add_replacing_endpoint(ri->host_id, tmptr->get_my_id());
 
             replaced_host_id = ri->host_id;
 
@@ -4417,7 +4418,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("removenode[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
+                    tmptr->add_leaving_endpoint(_gossiper.get_host_id(node));
                 }
                 return update_topology_change_info(tmptr, ::format("removenode {}", req.leaving_nodes));
             }).get();
@@ -4425,7 +4426,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                        tmptr->del_leaving_endpoint(tmptr->get_host_id(node));
+                        tmptr->del_leaving_endpoint(_gossiper.get_host_id(node));
                     }
                     return update_topology_change_info(tmptr, ::format("removenode {}", req.leaving_nodes));
                 });
@@ -4451,7 +4452,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     }).get();
                 } else {
                     slogger.info("removenode[{}]: Started to sync data for removing node={} using stream, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_stream(get_token_metadata().get_host_id(node), topo_guard, as).get();
+                    removenode_with_stream(_gossiper.get_host_id(node), topo_guard, as).get();
                 }
             }
         } else if (req.cmd == node_ops_cmd::removenode_abort) {
@@ -4467,7 +4468,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
-                    tmptr->add_leaving_endpoint(tmptr->get_host_id(node));
+                    tmptr->add_leaving_endpoint(_gossiper.get_host_id(node));
                 }
                 return update_topology_change_info(tmptr, ::format("decommission {}", req.leaving_nodes));
             }).get();
@@ -4544,8 +4545,13 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             }
             auto existing_node = req.replace_nodes.begin()->first;
             auto replacing_node = req.replace_nodes.begin()->second;
-            mutate_token_metadata([coordinator, coordinator_host_id, existing_node, replacing_node, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
-                const auto existing_node_id = tmptr->get_host_id(existing_node);
+            auto existing_node_id =  _sys_ks.local().load_host_ids().get()[existing_node];
+            mutate_token_metadata([coordinator, coordinator_host_id, existing_node, replacing_node, existing_node_id, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
+                if (is_me(*coordinator_host_id)) {
+                    // A coordinor already updated token metadata in join_topology()
+                    return make_ready_future<>();
+                }
+
                 const auto replacing_node_id = *coordinator_host_id;
                 slogger.info("replace[{}]: Added replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
                     req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
@@ -4566,9 +4572,12 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return make_ready_future<>();
             }).get();
             auto ignore_nodes = std::move(req.ignore_nodes);
-            node_ops_insert(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, coordinator_host_id, existing_node, replacing_node, req = std::move(req)] () mutable {
-                return mutate_token_metadata([this, coordinator, coordinator_host_id, existing_node, replacing_node, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
-                    const auto existing_node_id = tmptr->get_host_id(existing_node);
+            node_ops_insert(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, coordinator_host_id, existing_node, replacing_node, existing_node_id, req = std::move(req)] () mutable {
+                return mutate_token_metadata([this, coordinator, coordinator_host_id, existing_node, replacing_node, existing_node_id, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
+                    if (is_me(*coordinator_host_id)) {
+                        // No need to cancel replace operation on a node replacing node since it will be killed anyway
+                        return make_ready_future<>();
+                    }
                     const auto replacing_node_id = *coordinator_host_id;
                     slogger.info("replace[{}]: Removed replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
                         req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
