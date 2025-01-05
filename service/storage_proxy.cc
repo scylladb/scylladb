@@ -105,13 +105,13 @@ namespace {
 
 
 template<size_t N>
-utils::small_vector<locator::host_id, N> addr_vector_to_id(const locator::topology& topo, const utils::small_vector<gms::inet_address, N>& set) {
+utils::small_vector<locator::host_id, N> addr_vector_to_id(const gms::gossiper& g, const utils::small_vector<gms::inet_address, N>& set) {
     return set | std::views::transform([&] (gms::inet_address ip) {
-        auto* node = topo.find_node(ip);
-        if (!node) {
+        try {
+            return g.get_host_id(ip);
+        } catch (...) {
             on_internal_error(slogger, fmt::format("addr_vector_to_id cannot map {} to host id", ip));
         }
-        return node->host_id();
     }) | std::ranges::to<utils::small_vector<locator::host_id, N>>();
 }
 
@@ -587,7 +587,7 @@ private:
         }
 
         auto reply_to_host_id = reply_to_id ? *reply_to_id : _gossiper.get_host_id(reply_to);
-        auto forward_host_id = forward_id ? std::move(*forward_id) : addr_vector_to_id(_sp._shared_token_metadata.get()->get_topology(), forward);
+        auto forward_host_id = forward_id ? std::move(*forward_id) : addr_vector_to_id(_gossiper, forward);
 
         if (reply_to_id) {
             _gossiper.get_mutable_address_map().opt_add_entry(reply_to_host_id, reply_to);
