@@ -2633,7 +2633,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     const auto& tm = get_token_metadata();
     const auto host_id = state->get_host_id();
     slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, host_id, pid);
-    const auto* node = tm.get_topology().find_node(endpoint);
+    const auto* node = tm.get_topology().find_node(host_id);
     if (node && node->is_member()) {
         co_await notify_up(endpoint);
     } else if (raft_topology_change_enabled()) {
