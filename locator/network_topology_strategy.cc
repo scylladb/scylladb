@@ -235,7 +235,7 @@ public:
     }
 
     static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
-        auto dc_endpoints = tm.get_datacenter_token_owners_ips();
+        auto dc_endpoints = tm.get_datacenter_token_owners();
         auto endpoints_in = [&dc_endpoints](sstring dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
@@ -309,7 +309,7 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 
 static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
-    for (const auto& dc : tm->get_datacenter_token_owners_ips()) {
+    for (const auto& dc : tm->get_datacenter_token_owners()) {
         unsigned shards_in_dc = 0;
         unsigned rf_in_dc = 1;
 
