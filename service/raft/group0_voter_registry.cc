@@ -17,18 +17,41 @@
 
 namespace service {
 
+namespace {
+
 seastar::logger rvlogger("group0_voter_registry");
 
-group0_voter_registry::group0_voter_registry(std::unique_ptr<const raft_server_info_accessor> server_info_accessor,
-        std::unique_ptr<raft_voter_client> voter_client, std::optional<size_t> max_voters)
-    : _server_info_accessor(std::move(server_info_accessor))
-    , _voter_client(std::move(voter_client))
-    , _max_voters(max_voters.value_or(std::numeric_limits<size_t>::max())) {
-    SCYLLA_ASSERT(_server_info_accessor != nullptr);
-    SCYLLA_ASSERT(_voter_client != nullptr);
-}
+class group0_voter_registry_impl : public group0_voter_registry {
 
-future<> group0_voter_registry::update_voters(
+    std::unique_ptr<const raft_server_info_accessor> _server_info_accessor;
+    std::unique_ptr<raft_voter_client> _voter_client;
+
+    size_t _max_voters;
+
+    using nodes_rec_t = std::unordered_multimap<bool, raft::server_id>;
+    using nodes_map_t = std::unordered_map<sstring, nodes_rec_t>;
+
+public:
+    group0_voter_registry_impl(std::unique_ptr<const raft_server_info_accessor> server_info_accessor, std::unique_ptr<raft_voter_client> voter_client,
+            std::optional<size_t> max_voters)
+        : _server_info_accessor(std::move(server_info_accessor))
+        , _voter_client(std::move(voter_client))
+        , _max_voters(max_voters.value_or(std::numeric_limits<size_t>::max())) {
+        SCYLLA_ASSERT(_server_info_accessor != nullptr);
+        SCYLLA_ASSERT(_voter_client != nullptr);
+    }
+
+private:
+    future<> update_voters(
+            const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) override;
+
+    using voter_slots_t = std::unordered_map<sstring, size_t>;
+
+    [[nodiscard]] voter_slots_t distribute_voter_slots(nodes_map_t nodes) const;
+};
+
+
+future<> group0_voter_registry_impl::update_voters(
         const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) {
     std::unordered_set<raft::server_id> voters_add;
     std::unordered_set<raft::server_id> voters_del;
@@ -151,7 +174,7 @@ future<> group0_voter_registry::update_voters(
     co_await _voter_client->set_voters_status(voters_del, can_vote::no, as);
 }
 
-group0_voter_registry::voter_slots_t group0_voter_registry::distribute_voter_slots(nodes_map_t nodes) const {
+group0_voter_registry_impl::voter_slots_t group0_voter_registry_impl::distribute_voter_slots(nodes_map_t nodes) const {
     // Calculate the number of voter slots left for each DC
     voter_slots_t slots_left_per_dc;
 
@@ -224,6 +247,13 @@ group0_voter_registry::voter_slots_t group0_voter_registry::distribute_voter_slo
     }
 
     return slots_left_per_dc;
+}
+
+} // namespace
+
+group0_voter_registry::instance_ptr group0_voter_registry::create(std::unique_ptr<const raft_server_info_accessor> server_info_accessor,
+        std::unique_ptr<raft_voter_client> voter_client, std::optional<size_t> max_voters) {
+    return std::make_unique<group0_voter_registry_impl>(std::move(server_info_accessor), std::move(voter_client), max_voters);
 }
 
 } // namespace service

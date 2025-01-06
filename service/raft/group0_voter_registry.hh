@@ -88,23 +88,19 @@ public:
 // datacenters and racks.
 class group0_voter_registry {
 
-    std::unique_ptr<const raft_server_info_accessor> _server_info_accessor;
-    std::unique_ptr<raft_voter_client> _voter_client;
-
-    size_t _max_voters;
-
-    using nodes_rec_t = std::unordered_multimap<bool, raft::server_id>;
-    using nodes_map_t = std::unordered_map<sstring, nodes_rec_t>;
-
 public:
+    using instance_ptr = std::unique_ptr<group0_voter_registry>;
+
     // Create a new voter registry.
     //
     // The voter registry is created with the given server info accessor and voter client and becomes the owner of them.
     //
     // The max_voters parameter is used to set the maximum number of voters in the group 0. The default value is to
     // allow an unlimited number of voters.
-    group0_voter_registry(std::unique_ptr<const raft_server_info_accessor> server_info_accessor, std::unique_ptr<raft_voter_client> voter_client,
+    static instance_ptr create(std::unique_ptr<const raft_server_info_accessor> server_info_accessor, std::unique_ptr<raft_voter_client> voter_client,
             std::optional<size_t> max_voters = std::nullopt);
+
+    virtual ~group0_voter_registry() = default;
 
     // Refresh the current voters state.
     //
@@ -149,11 +145,8 @@ public:
     future<> remove_nodes(const std::unordered_set<raft::server_id>& nodes, abort_source& as);
 
 private:
-    future<> update_voters(const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as);
-
-    using voter_slots_t = std::unordered_map<sstring, size_t>;
-
-    [[nodiscard]] voter_slots_t distribute_voter_slots(nodes_map_t nodes) const;
+    virtual future<> update_voters(
+            const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) = 0;
 };
 
 inline future<> group0_voter_registry::refresh(abort_source& as) {

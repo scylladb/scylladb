@@ -76,7 +76,8 @@ public:
     }
 };
 
-std::tuple<service::group0_voter_registry, server_info_accessor*, raft_voter_client*> create_registry(std::optional<size_t> max_voters = std::nullopt) {
+std::tuple<service::group0_voter_registry::instance_ptr, server_info_accessor*, raft_voter_client*> create_registry(
+        std::optional<size_t> max_voters = std::nullopt) {
     auto info_accessor = std::make_unique<server_info_accessor>();
     auto voter_client = std::make_unique<raft_voter_client>();
 
@@ -85,7 +86,7 @@ std::tuple<service::group0_voter_registry, server_info_accessor*, raft_voter_cli
     auto* info_accessor_ptr = info_accessor.get();
     auto* voter_client_ptr = voter_client.get();
 
-    service::group0_voter_registry reg{std::move(info_accessor), std::move(voter_client), max_voters};
+    auto reg = service::group0_voter_registry::create(std::move(info_accessor), std::move(voter_client), max_voters);
 
     return {std::move(reg), info_accessor_ptr, voter_client_ptr};
 }
@@ -109,7 +110,7 @@ SEASTAR_TEST_CASE(single_node_is_selected_as_voter) {
 
     info_accessor->set_info(id, {.datacenter = "dc", .rack = "rack"});
 
-    co_await reg.insert_node(id, as);
+    co_await reg->insert_node(id, as);
 
     // Assert: The node has been selected as a voter.
 
@@ -135,7 +136,7 @@ SEASTAR_TEST_CASE(multiple_nodes_are_selected_as_voters) {
     info_accessor->set_info(ids[1], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: The nodes have been selected as voters.
 
@@ -157,7 +158,7 @@ SEASTAR_TEST_CASE(can_insert_empty_set_of_nodes) {
 
     // Act: Add an empty set of nodes.
 
-    co_await reg.insert_nodes({}, as);
+    co_await reg->insert_nodes({}, as);
 
     // Assert: There are no voters.
 
@@ -182,11 +183,11 @@ SEASTAR_TEST_CASE(single_node_is_removed_from_voters) {
     info_accessor->set_info(ids[1], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Act: Remove a single node.
 
-    co_await reg.remove_node(ids[0], as);
+    co_await reg->remove_node(ids[0], as);
 
     // Assert: The removed node is not amongst the voters.
 
@@ -213,11 +214,11 @@ SEASTAR_TEST_CASE(multiple_nodes_are_removed_from_voters) {
     info_accessor->set_info(ids[2], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Act: Remove multiple nodes.
 
-    co_await reg.remove_nodes({ids[0], ids[2]}, as);
+    co_await reg->remove_nodes({ids[0], ids[2]}, as);
 
     // Assert: The removed nodes are not amongst the voters.
 
@@ -237,7 +238,7 @@ SEASTAR_TEST_CASE(can_remove_empty_set_of_nodes) {
 
     // Act: Remove an empty set of nodes.
 
-    co_await reg.remove_nodes({}, as);
+    co_await reg->remove_nodes({}, as);
 
     // Assert: There are no voters.
 
@@ -267,7 +268,7 @@ SEASTAR_TEST_CASE(insert_limit_is_reached) {
     info_accessor->set_info(ids[3], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: There is just the "max_limit" voters - not all nodes were selected as voters.
 
@@ -299,14 +300,14 @@ SEASTAR_TEST_CASE(limit_kept_on_voter_removal) {
     BOOST_ASSERT(ids.size() > max_voters);
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Act: Remove one of the existing voters.
 
     const auto& voters = voter_client->voters();
 
     const auto voter_id = *voters.cbegin();
-    co_await reg.remove_node(voter_id, as);
+    co_await reg->remove_node(voter_id, as);
 
     // Assert: There is still the "max_limit" voters - another node has been selected as a voter.
 
@@ -332,7 +333,7 @@ SEASTAR_TEST_CASE(limit_is_kept_on_multiple_inserts) {
     info_accessor->set_info(initial_ids[1], {.datacenter = "dc", .rack = "rack"});
 
     const auto initial_ids_set = initial_ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(initial_ids_set, as);
+    co_await reg->insert_nodes(initial_ids_set, as);
 
     // Act: Add some other nodes.
 
@@ -342,7 +343,7 @@ SEASTAR_TEST_CASE(limit_is_kept_on_multiple_inserts) {
     info_accessor->set_info(ids[1], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: There is just the "max_limit" voters - not all nodes were selected as voters.
 
@@ -370,11 +371,11 @@ SEASTAR_TEST_CASE(limit_is_kept_on_removal_and_insert) {
     info_accessor->set_info(initial_ids[2], {.datacenter = "dc", .rack = "rack"});
 
     const auto initial_ids_set = initial_ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(initial_ids_set, as);
+    co_await reg->insert_nodes(initial_ids_set, as);
 
     // ... and remove one of the initial nodes.
 
-    co_await reg.remove_node(initial_ids[0], as);
+    co_await reg->remove_node(initial_ids[0], as);
 
     // Act: Add some other nodes.
 
@@ -384,7 +385,7 @@ SEASTAR_TEST_CASE(limit_is_kept_on_removal_and_insert) {
     info_accessor->set_info(ids[1], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: There is just the "max_limit" voters - not all nodes were selected as voters.
 
@@ -416,7 +417,7 @@ SEASTAR_TEST_CASE(voters_are_distributed_across_dcs) {
     info_accessor->set_info(ids[5], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: There is no duplicate DC across the voters (having 3 voters and 3 DCs).
 
@@ -450,7 +451,7 @@ SEASTAR_TEST_CASE(voters_are_distributed_across_dcs_across_multiple_inserts) {
     info_accessor->set_info(initial_ids[3], {.datacenter = "dc-2", .rack = "rack"});
 
     const auto initial_ids_set = initial_ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(initial_ids_set, as);
+    co_await reg->insert_nodes(initial_ids_set, as);
 
     // Act: Add another datacenter nodes.
 
@@ -460,7 +461,7 @@ SEASTAR_TEST_CASE(voters_are_distributed_across_dcs_across_multiple_inserts) {
     info_accessor->set_info(ids[1], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: There is no duplicate DC across the voters (having 3 voters and 3 DCs).
 
@@ -499,7 +500,7 @@ SEASTAR_TEST_CASE(voters_are_distributed_asymmetrically_across_two_dcs) {
     info_accessor->set_info(ids[5], {.datacenter = "dc-2", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: One of the two DCs has a larger number of voters (asymmetric) - we want to have the chance to survive
     //         a loss of one DC (the one with smaller number of voters).
@@ -536,7 +537,7 @@ SEASTAR_TEST_CASE(voters_match_node_count) {
     info_accessor->set_info(ids[3], {.datacenter = "dc-2", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: All nodes became voters (i.e. voter tokens allocated according to the existing nodes).
 
@@ -566,7 +567,7 @@ SEASTAR_TEST_CASE(dc_cannot_have_majority_of_voters) {
     info_accessor->set_info(ids[3], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: No DC has the majority of voters (i.e. all DCs only have 1 voter).
 
@@ -602,7 +603,7 @@ SEASTAR_TEST_CASE(dc_cannot_have_majority_of_voters_on_node_removal) {
     info_accessor->set_info(ids[4], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     const auto& voters = voter_client->voters();
 
@@ -611,7 +612,7 @@ SEASTAR_TEST_CASE(dc_cannot_have_majority_of_voters_on_node_removal) {
 
     // Act: Remove one voter node from DC-3.
 
-    co_await reg.remove_node(ids[4], as);
+    co_await reg->remove_node(ids[4], as);
 
     // Assert: No DC has the majority of voters (i.e. a voter has been removed from the DC-1 as well to avoid having majority).
 
@@ -645,14 +646,14 @@ SEASTAR_TEST_CASE(dc_voters_increased_on_node_addition) {
     info_accessor->set_info(initial_ids[3], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto initial_ids_set = initial_ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(initial_ids_set, as);
+    co_await reg->insert_nodes(initial_ids_set, as);
 
     // Act: Add another node to DC-3.
 
     const auto id = raft::server_id::create_random_id();
     info_accessor->set_info(id, {.datacenter = "dc-3", .rack = "rack"});
 
-    co_await reg.insert_node(id, as);
+    co_await reg->insert_node(id, as);
 
     // Assert: A voter has been added for both DC-3 and DC-1 (still no DC with a majority/tie).
 
@@ -691,11 +692,11 @@ SEASTAR_TEST_CASE(voters_distributed_as_two_dc_asymmetric_after_third_dc_removal
     info_accessor->set_info(ids[5], {.datacenter = "dc-3", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Act: Remove the DC-3 nodes.
 
-    co_await reg.remove_nodes({ids[4], ids[5]}, as);
+    co_await reg->remove_nodes({ids[4], ids[5]}, as);
 
     // Assert: All nodes became voters (i.e. voter tokens allocated according to the existing nodes),
     //         as when only having the two DCs to begin with.
@@ -728,7 +729,7 @@ SEASTAR_TEST_CASE(dead_nodes_cannot_become_voters) {
     info_accessor->set_dead(ids[1]);
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Assert: The dead node is not amongst the voters.
 
@@ -757,13 +758,13 @@ SEASTAR_TEST_CASE(dead_voters_are_removed_on_reload) {
     info_accessor->set_info(ids[2], {.datacenter = "dc", .rack = "rack"});
 
     const auto ids_set = ids | std::ranges::to<std::unordered_set>();
-    co_await reg.insert_nodes(ids_set, as);
+    co_await reg->insert_nodes(ids_set, as);
 
     // Act: Mark one of the nodes as dead and refresh the registry.
 
     info_accessor->set_dead(ids[1]);
 
-    co_await reg.refresh(as);
+    co_await reg->refresh(as);
 
     // Assert: The dead node is not amongst the voters.
 

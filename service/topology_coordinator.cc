@@ -3483,7 +3483,7 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service) {
 
-    group0_voter_registry voter_registry(
+    group0_voter_registry::instance_ptr voter_registry = group0_voter_registry::create(
             std::make_unique<group0_server_info_accessor>(topo_sm._topology, gossiper), std::make_unique<group0_voter_client>(group0));
 
     topology_coordinator coordinator{
@@ -3493,7 +3493,7 @@ future<> run_topology_coordinator(
             tablet_allocator,
             ring_delay,
             feature_service,
-            voter_registry};
+            *voter_registry};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);
