@@ -392,3 +392,38 @@ def xfail_tablets(request, has_tablets):
 def skip_tablets(has_tablets):
     if has_tablets:
         pytest.skip("Test may crash when Alternator tables use tablets")
+
+# Alternator tests normally use only the DynamoDB API. However, a few tests
+# need to use CQL to set up Scylla-only features such as service levels or
+# CQL-based RBAC (see test_service_levels.py and test_cql_rbac.py), and
+# the "cql" fixture enables using CQL.
+# If we're not testing Scylla, or the CQL port is not available on the same
+# IP address as the Alternator IP address, a test using this fixture will
+# be skipped with a message about the CQL API not being available.
+@pytest.fixture(scope="session")
+def cql(dynamodb):
+    from cassandra.auth import PlainTextAuthProvider
+    from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, NoHostAvailable
+    from cassandra.policies import RoundRobinPolicy
+    if is_aws(dynamodb):
+        pytest.skip('Scylla-only CQL API not supported by AWS')
+    url = dynamodb.meta.client._endpoint.host
+    host, = re.search(r'.*://([^:]*):', url).groups()
+    profile = ExecutionProfile(
+        load_balancing_policy=RoundRobinPolicy(),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL)
+    cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+        contact_points=[host],
+        port=9042,
+        protocol_version=4,
+        auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
+    )
+    try:
+        ret = cluster.connect()
+        # "BEGIN BATCH APPLY BATCH" is the closest to do-nothing I could find
+        ret.execute("BEGIN BATCH APPLY BATCH")
+    except NoHostAvailable:
+        pytest.skip('Could not connect to Scylla-only CQL API')
+    yield ret
+    cluster.shutdown()

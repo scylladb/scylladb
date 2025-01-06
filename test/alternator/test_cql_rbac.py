@@ -19,44 +19,11 @@ import time
 from contextlib import contextmanager
 from functools import cache
 
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, NoHostAvailable
-from cassandra.policies import RoundRobinPolicy
 import re
 
 from .util import is_aws, unique_table_name, random_string, new_test_table
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-
-# This file is all about testing RBAC as configured via CQL, so we need to
-# connect to CQL to set these tests up. The "cql" fixture below enables that.
-# If we're not testing Scylla, or the CQL port is not available on the same
-# IP address as the Alternator IP address, a test using this fixture will
-# be skipped with a message about the CQL API not being available.
-@pytest.fixture(scope="module")
-def cql(dynamodb):
-    if is_aws(dynamodb):
-        pytest.skip('Scylla-only CQL API not supported by AWS')
-    url = dynamodb.meta.client._endpoint.host
-    host, = re.search(r'.*://([^:]*):', url).groups()
-    profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL)
-    cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-        contact_points=[host],
-        port=9042,
-        protocol_version=4,
-        auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
-    )
-    try:
-        ret = cluster.connect()
-        # "BEGIN BATCH APPLY BATCH" is the closest to do-nothing I could find
-        ret.execute("BEGIN BATCH APPLY BATCH")
-    except NoHostAvailable:
-        pytest.skip('Could not connect to Scylla-only CQL API')
-    yield ret
-    cluster.shutdown()
 
 # new_role() is a context manager for temporarily creating a new role with
 # a unique name and returning its name and the secret key needed to connect
