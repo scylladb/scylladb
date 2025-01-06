@@ -43,7 +43,7 @@ A compaction strategy is what determines which of the SSTables will be compacted
 
 * `Size-tiered compaction strategy (STCS)`_ - (default setting) triggered when the system has enough similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification. 
-* :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - :label-tip:`ScyllaDB Enterprise` Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. If you are an Enterprise customer ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level. 
+* :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level.
 * `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
 
 How to Set a Compaction Strategy
@@ -115,8 +115,8 @@ Likewise, when :term:`bootstrapping<Bootstrap>` a new node, SSTables are streame
 
 .. _incremental-compaction-strategy-ics:
 
-Incremental Compaction Strategy (ICS) :label-tip:`ScyllaDB Enterprise`
-------------------------------------------------------------------------
+Incremental Compaction Strategy (ICS)
+-------------------------------------
 
 .. versionadded:: 2019.1.4
 

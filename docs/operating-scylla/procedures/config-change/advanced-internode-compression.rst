@@ -2,8 +2,6 @@
 Advanced Internode (RPC) Compression
 ==========================================
 
-:label-tip:`Available with the Premium plan`
-
 Internode (RPC) compression controls whether traffic between nodes is
 compressed. If enabled, it reduces network bandwidth usage.
 
