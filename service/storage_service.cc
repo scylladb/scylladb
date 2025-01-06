@@ -6082,7 +6082,9 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 ranges_per_endpoint[r.host].emplace_back(range);
             }
             streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
+            slogger.debug("Streaming for tablet migration of {} started table={}.{} range={}", tablet, table.schema()->ks_name(), table.schema()->cf_name(), range);
             co_await streamer->stream_async();
+            slogger.info("Streaming for tablet migration of {} finished table={}.{} range={}", tablet, table.schema()->ks_name(), table.schema()->cf_name(), range);
         }
 
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
