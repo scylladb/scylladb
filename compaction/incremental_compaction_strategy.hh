@@ -7,12 +7,7 @@
 #pragma once
 
 #include "compaction_strategy_impl.hh"
-#include "compaction.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include "size_tiered_compaction_strategy.hh"
 
 class incremental_backlog_tracker;
 
