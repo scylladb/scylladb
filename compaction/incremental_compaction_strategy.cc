@@ -11,6 +11,7 @@
 #include "compaction_manager.hh"
 #include "incremental_compaction_strategy.hh"
 #include "incremental_backlog_tracker.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/numeric.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
