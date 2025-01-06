@@ -8,17 +8,27 @@
 
 #include "group0_voter_registry.hh"
 
+#include <boost/multi_index_container.hpp>
+#include <boost/multi_index/composite_key.hpp>
+#include <boost/multi_index/hashed_index.hpp>
+#include <boost/multi_index/key.hpp>
+#include <boost/multi_index/ordered_index.hpp>
+#include <boost/multi_index/tag.hpp>
+
 #include <queue>
 
 #include <seastar/util/log.hh>
 
 #include "service/topology_state_machine.hh"
+#include "utils/hash.hh"
 
 namespace service {
 
 namespace {
 
 seastar::logger rvlogger("group0_voter_registry");
+
+namespace bmi = boost::multi_index;
 
 class group0_voter_registry_impl : public group0_voter_registry {
 
@@ -27,10 +37,22 @@ class group0_voter_registry_impl : public group0_voter_registry {
 
     size_t _max_voters;
 
-    size_t _nodes_count = 0;
+    struct node_record {
+        raft::server_id id;
+        sstring dc;
+        bool is_voter;
+    };
 
-    using dc_voters_t = std::unordered_multimap<bool, raft::server_id>;
-    std::unordered_map<sstring, dc_voters_t> _dc_voters;
+    struct by_id {};
+    struct by_dc {};
+
+    boost::multi_index_container<node_record,
+            bmi::indexed_by<
+                    // Primary index by the node id.
+                    bmi::hashed_unique<bmi::tag<by_id>, bmi::key<&node_record::id>, std::hash<raft::server_id>>,
+                    // Secondary index by the datacenter and voter status.
+                    bmi::ordered_non_unique<bmi::tag<by_dc>, bmi::composite_key<node_record, bmi::key<&node_record::dc>, bmi::key<&node_record::is_voter>>>>>
+            _nodes;
 
 public:
     group0_voter_registry_impl(const raft_server_info_accessor& server_info_accessor, raft_voter_client& voter_client, size_t max_voters)
@@ -75,17 +97,13 @@ future<> group0_voter_registry_impl::update_voters(
 
     // Consider all the new nodes non-voters first
     for (const auto& node : nodes_added) {
-        const auto& server_info = _server_info_accessor.find(node);
-        auto& voters = _dc_voters[server_info.datacenter];
-        const auto itr = std::find_if(voters.begin(), voters.end(), [node](const auto& voter) {
-            return voter.second == node;
-        });
-        if (itr != voters.end()) {
+        const auto itr = _nodes.find(node);
+        if (itr != _nodes.end()) {
             rvlogger.warn("Node {} to be added is already present in the raft voter registry", node);
             continue;
         }
-        _dc_voters[server_info.datacenter].emplace(false, node);
-        ++_nodes_count;
+        const auto& server_info = _server_info_accessor.find(node);
+        _nodes.emplace(node, server_info.datacenter, false);
     }
 
     // Handle the removed nodes
@@ -93,53 +111,47 @@ future<> group0_voter_registry_impl::update_voters(
         // Make sure the node is always marked a non-voter
         voters_del.emplace(node);
 
-        const auto& server_info = _server_info_accessor.find(node);
-        auto& voters = _dc_voters[server_info.datacenter];
-        const auto itr = std::find_if(voters.begin(), voters.end(), [node](const auto& voter) {
-            return voter.second == node;
-        });
-        if (itr == voters.end()) {
+        const auto itr = _nodes.find(node);
+        if (itr == _nodes.end()) {
             rvlogger.warn("Node {} to be removed not found in the raft voter registry", node);
             continue;
         }
-        voters.erase(itr);
-        --_nodes_count;
-
-        // Remove the DC if there are no nodes left
-        if (voters.empty()) {
-            _dc_voters.erase(server_info.datacenter);
-        }
+        _nodes.erase(itr);
     }
 
     // Distribute the available voter slots across the datacenters
     auto slots_left_per_dc = distribute_slots();
 
-    for (auto& [dc, voters] : _dc_voters) {
-        auto slots_left_dc = slots_left_per_dc[dc];
+    auto& nodes_by_dc = _nodes.get<by_dc>();
+
+    for (auto& [dc, slots_left_dc] : slots_left_per_dc) {
+        rvlogger.debug("DC: {}, voter slots: {}", dc, slots_left_dc);
 
         // Process the (pre-existing) voters first
         {
-            auto [itr, end] = voters.equal_range(true);
+            auto [itr, end] = nodes_by_dc.equal_range(std::make_tuple(dc, true));
             while (slots_left_dc && itr != end) {
                 --slots_left_dc;
                 ++itr;
             }
 
             // Switch the remaining voters to non-voters
-            const auto& removed_voters = std::ranges::subrange(itr, end) | std::ranges::views::values;
+            const auto& removed_voters = std::ranges::subrange(itr, end) | std::views::transform([](const auto& rec) {
+                return rec.id;
+            }) | std::ranges::to<std::unordered_set>();
             voters_del.insert(removed_voters.begin(), removed_voters.end());
 
-            const auto& removed_voters_as_set = removed_voters | std::ranges::views::transform([](const auto& node) {
-                return std::make_pair(false, node);
-            }) | std::ranges::to<std::unordered_multimap>();
-
-            voters.erase(itr, end);
-            voters.insert(removed_voters_as_set.begin(), removed_voters_as_set.end());
+            for (auto node : removed_voters) {
+                _nodes.modify(_nodes.find(node), [](auto& rec) {
+                    rvlogger.debug("Removing an existing voter: {}", rec.id);
+                    rec.is_voter = false;
+                });
+            }
         }
 
         // Process the non-voters
         {
-            const auto [beg, end] = voters.equal_range(false);
+            const auto [beg, end] = nodes_by_dc.equal_range(std::make_tuple(dc, false));
             auto itr = beg;
             while (slots_left_dc && itr != end) {
                 --slots_left_dc;
@@ -147,15 +159,17 @@ future<> group0_voter_registry_impl::update_voters(
             }
 
             // Switch the first non-voters to voters
-            const auto& added_voters = std::ranges::subrange(beg, itr) | std::ranges::views::values;
+            const auto& added_voters = std::ranges::subrange(beg, itr) | std::views::transform([](const auto& rec) {
+                return rec.id;
+            }) | std::ranges::to<std::unordered_set>();
             voters_add.insert(added_voters.begin(), added_voters.end());
 
-            const auto& added_voters_as_set = added_voters | std::ranges::views::transform([](const auto& node) {
-                return std::make_pair(true, node);
-            }) | std::ranges::to<std::unordered_multimap>();
-
-            voters.erase(beg, itr);
-            voters.insert(added_voters_as_set.begin(), added_voters_as_set.end());
+            for (auto node : added_voters) {
+                _nodes.modify(_nodes.find(node), [](auto& rec) {
+                    rvlogger.debug("Adding a new voter: {}", rec.id);
+                    rec.is_voter = true;
+                });
+            }
         }
     }
 
@@ -167,14 +181,14 @@ std::unordered_map<sstring, size_t> group0_voter_registry_impl::distribute_slots
     // Calculate the number of voter slots left for each DC
     std::unordered_map<sstring, size_t> slots_left_per_dc;
 
-    for (const auto& [dc, voters] : _dc_voters) {
-        slots_left_per_dc.emplace(dc, 0);
+    const auto& nodes_by_dc = _nodes.get<by_dc>();
+
+    for (const auto& rec : nodes_by_dc) {
+        slots_left_per_dc.emplace(rec.dc, 0);
     }
 
-    const auto dc_count = _dc_voters.size();
-
-    auto compare_priority_dc = [this](const sstring& dc1, const sstring& dc2) {
-        return _dc_voters[dc2].size() < _dc_voters[dc1].size();
+    auto compare_priority_dc = [&nodes_by_dc](const sstring& dc1, const sstring& dc2) {
+        return nodes_by_dc.count(dc2) < nodes_by_dc.count(dc1);
     };
 
     std::priority_queue<sstring, std::deque<sstring>, decltype(compare_priority_dc)> dc_by_priority(compare_priority_dc);
@@ -183,7 +197,9 @@ std::unordered_map<sstring, size_t> group0_voter_registry_impl::distribute_slots
         dc_by_priority.push(dc);
     }
 
-    auto slots_left = std::min(_max_voters, _nodes_count);
+    const auto dc_count = slots_left_per_dc.size();
+
+    auto slots_left = std::min(_max_voters, _nodes.size());
 
     const auto max_slots_per_dc = (dc_count > 2)
                                           // if the number of DCs is greater than 2, prevent any DC taking majority of voters
@@ -202,7 +218,7 @@ std::unordered_map<sstring, size_t> group0_voter_registry_impl::distribute_slots
         auto slots_per_dc = slots_left / dc_count_left;
 
         // Slots for a dc are capped by the number of nodes in the dc
-        slots_left_dc = std::min(slots_per_dc, _dc_voters[dc].size());
+        slots_left_dc = std::min(slots_per_dc, nodes_by_dc.count(dc));
         if (slots_left_dc > max_slots_per_dc) {
             // If the DC has reached the majority limit, we can't add more
             rvlogger.debug("Max voters reached for DC: {}, slots: {}", dc, slots_left_dc);
