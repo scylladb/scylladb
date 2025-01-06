@@ -31,7 +31,7 @@ The process above has several drawbacks; for example:
 Making Garbage Collection Efficient in ICS
 ---------------------------------------------
 
-As a remedy to the known problem described above, a new process was introduced to ScyllaDB with `this commit <https://github.com/scylladb/scylla-enterprise/commit/7d90911c5fb3fa891ad64a62147c3a6ca26d61b1>`_.
+As a remedy to the known problem described above, a new process was introduced to ScyllaDB with `this commit <https://github.com/scylladb/scylladb/commit/c97325436237516fcec97eeb1f283674ea1fef1c>`_.
 The process inherits the cross-tier compaction idea from SAG, but instead of using a space-amplification-based trigger, 
 it uses a tombstone-density trigger instead. It can co-exist with SAG, if enabled.
 
@@ -51,7 +51,7 @@ procedure.
 How to Use It
 ---------------
 
-ICS garbage collection is enabled by default starting from version 2021.1.9.
+ICS garbage collection is enabled by default.
 
 As in STCS, you can use the compaction options ``tombstone_threshold`` and ``tombstone_compaction_interval`` to tweak the behavior 
 of the GC process.
