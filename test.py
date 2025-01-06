@@ -389,12 +389,13 @@ class BoostTestSuite(UnitTestSuite):
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
-        exe = path_to(self.mode, "test", self.name, 'combined_tests')
+        exec_name = 'combined_tests'
+        exec_path = path_to(self.mode, "test", self.name, exec_name)
         # Apply combined test only for test/boost,
         # cache the tests only if the executable exists, so we can
         # run test.py with a partially built tree
-        if self.name == 'boost' and os.path.exists(exe):
-            self._generate_cache(exe, 'combined_tests')
+        if self.name == 'boost' and os.path.exists(exec_path):
+            self._generate_cache(exec_path, exec_name)
 
     async def create_test(self, shortname: str, casename: str, suite, args) -> None:
         fqname = os.path.join(self.mode, self.name, shortname)
