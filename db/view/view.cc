@@ -86,18 +86,9 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
 cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
     if (!_select_statement) {
         std::unique_ptr<cql3::statements::raw::select_statement> raw;
-        // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
-        // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
-        const column_definition* legacy_token_column = nullptr;
-        if (db.find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
-           if (!_schema.clustering_key_columns().empty()) {
-               legacy_token_column = &_schema.clustering_key_columns().front();
-           }
-        }
-
-        if (legacy_token_column || std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
-            auto real_columns = _schema.all_columns() | std::views::filter([legacy_token_column] (const column_definition& cdef) {
-                return &cdef != legacy_token_column && !cdef.is_computed();
+        if (std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
+            auto real_columns = _schema.all_columns() | std::views::filter([] (const column_definition& cdef) {
+                return !cdef.is_computed();
             });
             schema::columns_type columns = std::ranges::to<schema::columns_type>(std::move(real_columns));
             raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), columns);
