@@ -93,14 +93,8 @@ def path_to(mode, *components):
     build_dir = 'build'
     if os.path.exists(os.path.join(build_dir, 'build.ninja')):
         *dir_components, basename = components
-        exe_path = os.path.join(build_dir, *dir_components, all_modes[mode], basename)
-    else:
-        exe_path = os.path.join(build_dir, mode, *components)
-    if not os.access(exe_path, os.F_OK):
-        raise FileNotFoundError(f"{exe_path} does not exist.")
-    elif not os.access(exe_path, os.X_OK):
-        raise PermissionError(f"{exe_path} is not executable.")
-    return exe_path
+        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
+    return os.path.join(build_dir, mode, *components)
 
 
 def ninja(target):
@@ -371,14 +365,9 @@ class BoostTestSuite(UnitTestSuite):
 
     _exec_name_cache: Dict[str, str] = dict()
 
-    def _generate_cache(self) -> None:
-        # Apply combined test only for test/boost
-        exe_path = pathlib.Path(self.mode, "test", self.name, 'combined_tests')
-        if self.name != 'boost' or not exe_path.exists():
-            return
-        exe = path_to(self.mode, "test", self.name, 'combined_tests')
+    def _generate_cache(self, exec_path, exec_name) -> None:
         res = subprocess.run(
-                [exe, '--list_content'],
+                [exec_path, '--list_content'],
                 check=True,
                 capture_output=True,
                 env=dict(os.environ,
@@ -390,7 +379,7 @@ class BoostTestSuite(UnitTestSuite):
             if not line.startswith('    '):
                 testname = line.strip().rstrip('*')
                 fqname = os.path.join(self.mode, self.name, testname)
-                self._exec_name_cache[fqname] = 'combined_tests'
+                self._exec_name_cache[fqname] = exec_name
                 self._case_cache[fqname] = []
             else:
                 casename = line.strip().rstrip('*')
@@ -400,7 +389,12 @@ class BoostTestSuite(UnitTestSuite):
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
-        self._generate_cache()
+        exe = path_to(self.mode, "test", self.name, 'combined_tests')
+        # Apply combined test only for test/boost,
+        # cache the tests only if the executable exists, so we can
+        # run test.py with a partially built tree
+        if self.name == 'boost' and os.path.exists(exe):
+            self._generate_cache(exe, 'combined_tests')
 
     async def create_test(self, shortname: str, casename: str, suite, args) -> None:
         fqname = os.path.join(self.mode, self.name, shortname)
@@ -487,6 +481,10 @@ class PythonTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
+        if not os.access(self.scylla_exe, os.F_OK):
+            raise FileNotFoundError(f"{self.scylla_exe} does not exist.")
+        if not os.access(self.scylla_exe, os.X_OK):
+            raise PermissionError(f"{self.scylla_exe} is not executable.")
         self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
             self.scylla_env.update(coverage.env(self.scylla_exe, distinct_id=self.name))
