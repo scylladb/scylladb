@@ -257,8 +257,6 @@ The following options only apply to IncrementalCompactionStrategy:
 
 ``space_amplification_goal`` (default: null)
 
-:label-tip:`ScyllaDB Enterprise`
-
    .. versionadded:: 2020.1.6
 
    This is a threshold of the ratio of the sum of the sizes of the two largest tiers to the size of the largest tier,
