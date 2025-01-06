@@ -2932,7 +2932,7 @@ future<> storage_service::drain_on_shutdown() {
 void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
     _voter_client = std::make_unique<group0_voter_client>(group0);
-    _voter_registry = std::make_unique<group0_voter_registry>(_server_info_accessor, *_voter_client);
+    _voter_registry = group0_voter_registry::create(_server_info_accessor, *_voter_client);
 }
 
 future<> storage_service::init_address_map(gms::gossip_address_map& address_map) {
