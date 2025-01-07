@@ -227,15 +227,6 @@ public:
     const topology& get_topology() const;
     void debug_show() const;
 
-    /**
-     * Store an end-point to host ID mapping.  Each ID must be unique, and
-     * cannot be changed after the fact.
-     *
-     * @param hostId
-     * @param endpoint
-     */
-    void update_host_id(const locator::host_id& host_id, inet_address endpoint);
-
     /** Return the unique host ID for an end-point. */
     host_id get_host_id(inet_address endpoint) const;
 

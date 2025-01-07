@@ -949,11 +949,6 @@ token_metadata::debug_show() const {
     _impl->debug_show();
 }
 
-void
-token_metadata::update_host_id(const host_id& host_id, inet_address endpoint) {
-    // Do nothing for now. Remove later.
-}
-
 std::unordered_set<host_id>
 token_metadata::get_host_ids() const {
     return _impl->get_host_ids();

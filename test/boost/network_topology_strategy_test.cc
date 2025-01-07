@@ -485,7 +485,6 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 std::unordered_set<token> tokens;
                 tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
                 topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
-                tm.update_host_id(id, endpoint);
                 co_await tm.update_normal_tokens(std::move(tokens), id);
             }
         }).get();
@@ -577,7 +576,6 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
             topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
-            tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -1115,7 +1113,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     auto host1 = host_id(utils::make_random_uuid());
     auto host2 = host_id(utils::make_random_uuid());
-    auto host3 = host_id(utils::make_random_uuid());
 
     auto ip1_dc_rack = endpoint_dc_rack{ "dc1", "rack_ip1" };
     auto ip1_dc_rack_v2 = endpoint_dc_rack{ "dc1", "rack_ip1_v2" };
@@ -1134,8 +1131,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
     BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host1, ip1); // this_node added last on purpose
         // Need to move to non left or none state in order to be indexed by ip
         tm.update_topology(host1, {}, locator::node::state::normal);
         tm.update_topology(host2, {}, locator::node::state::normal);
@@ -1159,7 +1154,6 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.remove_endpoint(host1);
-        tm.update_host_id(host3, ip3);
         return make_ready_future<>();
     }).get();
 

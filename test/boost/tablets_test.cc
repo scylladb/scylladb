@@ -773,9 +773,6 @@ SEASTAR_TEST_CASE(test_get_shard) {
         tablet_id tid1(0);
 
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            tm.update_host_id(h1, ip1);
-            tm.update_host_id(h2, ip2);
-            tm.update_host_id(h3, ip3);
             tm.update_topology(h1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(h2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(h3, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
@@ -1515,9 +1512,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
     });
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
@@ -1616,9 +1610,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
     });
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
@@ -1707,9 +1698,6 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             const unsigned shard_count = 2;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
@@ -1807,10 +1795,6 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         const unsigned shard_count = 1;
 
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_host_id(host4, ip4);
             tm.update_topology(host1, dcrack, node::state::normal, shard_count);
             tm.update_topology(host2, dcrack, node::state::normal, shard_count);
             tm.update_topology(host3, dcrack, node::state::being_decommissioned, shard_count);
@@ -1877,10 +1861,6 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             const unsigned shard_count = 1;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_host_id(host4, ip4);
             tm.update_topology(host1, racks[0], node::state::normal, shard_count);
             tm.update_topology(host2, racks[1], node::state::normal, shard_count);
             tm.update_topology(host3, racks[0], node::state::normal, shard_count);
@@ -1984,10 +1964,6 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             const unsigned shard_count = 1;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
-            tm.update_host_id(host4, ip4);
             tm.update_topology(host1, racks[0], node::state::normal, shard_count);
             tm.update_topology(host2, racks[0], node::state::normal, shard_count);
             tm.update_topology(host3, racks[0], node::state::normal, shard_count);
@@ -2063,9 +2039,6 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             const unsigned shard_count = 2;
 
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned,
@@ -2122,9 +2095,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     });
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, 1);
         tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, 1);
         tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, 2);
@@ -2196,9 +2166,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     });
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, 1);
         tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, 1);
         tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, 2);
@@ -2263,10 +2230,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     });
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        tm.update_host_id(host1, ip1);
-        tm.update_host_id(host2, ip2);
-        tm.update_host_id(host3, ip3);
-        tm.update_host_id(host4, ip4);
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
         tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
@@ -2328,9 +2291,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
         });
 
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::being_decommissioned, 8);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, 1);
             tm.update_topology(host3, locator::endpoint_dc_rack::default_location, node::state::normal, 7);
@@ -2395,8 +2355,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         // host1 is loaded and host2 is empty, resulting in an imbalance.
         // host1's shard 0 is loaded and shard 1 is empty, resulting in intra-node imbalance.
         stm.mutate_token_metadata([&] (auto& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
@@ -2487,8 +2445,6 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
         });
 
         stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
@@ -2537,7 +2493,6 @@ SEASTAR_THREAD_TEST_CASE(test_plan_fails_when_removing_last_replica) {
         });
 
         stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
 
@@ -2589,9 +2544,6 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
         });
 
         stm.mutate_token_metadata([&] (locator::token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
-            tm.update_host_id(host3, ip3);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, locator::node::state::being_removed, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, locator::node::state::normal, shard_count);
             tm.update_topology(host3, locator::endpoint_dc_rack::default_location, locator::node::state::normal, shard_count);
@@ -2699,10 +2651,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
 
             int i = 0;
             for (auto h : hosts) {
-                auto ip = inet_address(format("192.168.0.{}", ++i));
                 auto shard_count = 2;
-                tm.update_host_id(h, ip);
-                auto rack = racks[i % racks.size()];
+                auto rack = racks[++i % racks.size()];
                 tm.update_topology(h, rack, node::state::normal, shard_count);
                 if (h != hosts[0]) {
                     // Leave the first host empty by making it invisible to allocation algorithm.
@@ -2871,13 +2821,11 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
 
         int i = 0;
         for (auto h : hosts) {
-            auto ip = inet_address(format("192.168.0.{}", ++i));
-            tm.update_host_id(h, ip);
-            auto rack = racks[i % racks.size()];
+            auto rack = racks[++i % racks.size()];
             hosts_by_rack[rack.rack].push_back(h);
             tm.update_topology(h, rack, node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(float(i) / hosts.size()))}, h);
-            testlog.debug("adding host {}, ip {}, rack {}, token {}", h, ip, rack.rack, token(tests::d2t(1. / hosts.size())));
+            testlog.debug("adding host {}, rack {}, token {}", h, rack.rack, token(tests::d2t(1. / hosts.size())));
         }
 
         tablet_map tmap(initial_tablets);
@@ -3056,8 +3004,6 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         });
 
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            tm.update_host_id(host1, ip1);
-            tm.update_host_id(host2, ip2);
             tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 2))}, host1);
@@ -3341,7 +3287,6 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
             std::unordered_set<token> tokens;
             tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
             topo.add_or_update_endpoint(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
-            tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -3362,7 +3307,6 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         for (size_t i = 0; i < test_config.ring_points.size(); ++i) {
             auto& [ring_point, endpoint, id] = test_config.ring_points[i];
-            tm.update_host_id(id, endpoint);
             tm.update_topology(id, make_endpoint_dc_rack(endpoint), node::state::normal, nodes_shard_count[i]);
         }
         return make_ready_future<>();
