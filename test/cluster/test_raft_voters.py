@@ -80,7 +80,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     # Act: Kill all nodes in dc1
 
     logging.info('Killing all nodes in dc1')
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in dc_servers[0]))
+    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in dc_servers[0]))
 
     # Assert: Verify that the majority has not been lost (we can change the topology)
 
