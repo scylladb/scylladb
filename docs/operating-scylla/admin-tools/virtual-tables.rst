@@ -11,5 +11,5 @@ ScyllaDB supports:
 * Virtual tables for retrieving system-level information, such as the cluster status, version-related information, etc. The range of information they can expose partially overlaps with the information you can obtain via :doc:`nodetool </operating-scylla/nodetool>` (unlike ``nodetool``, virtual tables permit remote access over CQL).
 * The virtual table for querying and updating configuration over CQL (the ``system.config`` table).
 
-See `Virtual tables in the system keyspace <https://github.com/scylladb/scylla/blob/branch-5.0/docs/design-notes/system_keyspace.md#virtual-tables-in-the-system-keyspace>`_ for the list of available virtual tables.
+See `Virtual tables in the system keyspace <https://github.com/scylladb/scylla/blob/master/docs/dev/system_keyspace.md#virtual-tables-in-the-system-keyspace>`_ for the list of available virtual tables.
 
