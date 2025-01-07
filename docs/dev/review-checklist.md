@@ -29,6 +29,17 @@ guidelines:
   introduces it.
 - Patches should be self-contained and do one thing.
 - Each patch should have a descriptive commit log.
+  The patch subject should have to following form: "module: changes".
+  The "module" is the module (usually a directory) that the changes apply
+  to. Multiple ones can be listed, concatenated with ",". If a patch
+  applies to the entire tree, use the "tree:" prefix.
+  In certain cases, the "module: " prefix can be omitted altogether, e.g.
+  when changing files in the root directory.
+  The "changes" is a short summary of the changes (similar to a title).
+  Avoid generic patch titles like: "sstables: fix the bug", instead make
+  it specific to the patch: "sstables: close file-descriptor on error".
+  Try to limit lines in the commit log to 72 chars width. This is not
+  always possible, especially for the subject line.
 - The patch description should not assume the reviewer is an
   expert in the matter. It should include enough context
   that a non-expert can understand, on their way to becoming
