@@ -40,7 +40,7 @@ sstring relations_to_where_clause(const expr::expression& e);
 
 expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d);
 
-sstring rename_column_in_where_clause(const std::string_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d);
+sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d);
 
 /// build a CQL "select" statement with the desired parameters.
 /// If select_all_columns==true, all columns are selected and the value of
