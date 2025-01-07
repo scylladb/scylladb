@@ -369,28 +369,30 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
             validate_column_rename(db, *s, *from, *to);
             cfm.rename_column(from->name(), to->name());
-
-            // If the view includes a renamed column, it must be renamed in
-            // the view table and the definition.
-            for (auto&& view : cf.views()) {
+        }
+        // If the view includes a renamed column, it must be renamed in
+        // the view table and the definition.
+        for (auto&& view : cf.views()) {
+            schema_builder builder(view);
+            std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> view_renames;
+            for (auto&& entry : _renames) {
+                auto from = entry.first->prepare_column_identifier(*s);
                 if (view->get_column_definition(from->name())) {
-                    schema_builder builder(view);
-
                     auto view_from = entry.first->prepare_column_identifier(*view);
                     auto view_to = entry.second->prepare_column_identifier(*view);
                     validate_column_rename(db, *view, *view_from, *view_to);
                     builder.rename_column(view_from->name(), view_to->name());
-
-                    auto new_where = util::rename_column_in_where_clause(
-                            view->view_info()->where_clause(),
-                            column_identifier::raw(view_from->text(), true),
-                            column_identifier::raw(view_to->text(), true),
-                            cql3::dialect{});
-                    builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
-                            view->view_info()->include_all_columns(), std::move(new_where));
-
-                    view_updates.push_back(view_ptr(builder.build()));
+                    view_renames.emplace_back(view_from, view_to);
                 }
+            }
+            if (!view_renames.empty()) {
+                auto new_where = util::rename_columns_in_where_clause(
+                        view->view_info()->where_clause(),
+                        view_renames,
+                        cql3::dialect{});
+                builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
+                        view->view_info()->include_all_columns(), std::move(new_where));
+                view_updates.push_back(view_ptr(builder.build()));
             }
         }
         break;
