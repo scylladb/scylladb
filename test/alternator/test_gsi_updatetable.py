@@ -12,58 +12,8 @@ import pytest
 import time
 from botocore.exceptions import ClientError
 from .util import random_string, full_scan, full_query, multiset, \
-    new_test_table
+    new_test_table, wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-
-# UpdateTable for creating a GSI is an asynchronous operation. The table's
-# TableStatus changes from ACTIVE to UPDATING for a short while, and then
-# goes back to ACTIVE, but the new GSI's IndexStatus appears as CREATING,
-# until eventually (in Amazon DynamoDB - it tests a *long* time...) it
-# becomes ACTIVE. During the CREATING phase, at some point the Backfilling
-# attribute also appears, until it eventually disappears. We need to wait
-# until all three markers indicate completion.
-# Unfortunately, while boto3 has a client.get_waiter('table_exists') to
-# wait for a table to exists, there is no such function to wait for an
-# index to come up, so we need to code it ourselves.
-def wait_for_gsi(table, gsi_name):
-    start_time = time.time()
-    # The timeout needs to be long because on Amazon DynamoDB, even on a
-    # a tiny table, it sometimes takes minutes.
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-        assert len(index_desc) == 1
-        index_status = index_desc[0]['IndexStatus']
-        if index_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        # When the index is ACTIVE, this must be after backfilling completed
-        assert not 'Backfilling' in index_desc[0]
-        return
-    raise AssertionError("wait_for_gsi did not complete")
-
-# Similarly to how wait_for_gsi() waits for a GSI to finish adding,
-# this function waits for a GSI to be finally deleted.
-def wait_for_gsi_gone(table, gsi_name):
-    start_time = time.time()
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        if 'GlobalSecondaryIndexes' in desc['Table']:
-            index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-            if len(index_desc) != 0:
-                index_status = index_desc[0]['IndexStatus']
-                time.sleep(0.1)
-                continue
-        return
-    raise AssertionError("wait_for_gsi_gone did not complete")
 
 # All tests in test_gsi.py involved creating a new table with a GSI up-front.
 # This test will be about creating a base table *without* a GSI, putting data
