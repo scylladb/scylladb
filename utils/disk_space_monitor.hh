@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <filesystem>
 
 #include <boost/signals2/connection.hpp>
@@ -18,7 +17,6 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
-#include <seastar/core/timer.hh>
 #include <seastar/util/optimized_optional.hh>
 
 #include "seastarx.hh"
