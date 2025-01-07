@@ -30,6 +30,7 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/load_sketch.hh"
+#include "locator/snitch_base.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"

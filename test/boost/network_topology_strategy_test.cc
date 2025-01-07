@@ -11,6 +11,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/types.hh"
+#include "locator/snitch_base.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/sequenced_set.hh"

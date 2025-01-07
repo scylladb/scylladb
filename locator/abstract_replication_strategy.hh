@@ -12,11 +12,9 @@
 #include <functional>
 #include <unordered_map>
 #include "gms/inet_address.hh"
-#include "locator/snitch_base.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/token-sharding.hh"
 #include "token_metadata.hh"
-#include "snitch_base.hh"
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
