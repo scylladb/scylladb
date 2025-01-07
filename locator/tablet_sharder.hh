@@ -11,7 +11,7 @@
 #include "dht/token-sharding.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
-#include "utils/to_string.hh"
+#include <fmt/std.h>
 
 namespace locator {
 

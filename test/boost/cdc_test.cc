@@ -14,6 +14,7 @@
 #include <string>
 #include <boost/range/adaptor/map.hpp>
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
