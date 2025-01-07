@@ -15,7 +15,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table
+from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -262,6 +262,15 @@ def test_gsi_describe(test_table_gsi_1):
 # tests in test_gsi_updatetable.py.
 # Reproduces #11471.
 def test_gsi_describe_indexstatus(test_table_gsi_1):
+    # In DynamoDB, a GSI created together with the table is always immediately
+    # ACTIVE, but this is not always true in Alternator: Although a new table
+    # is completely empty and its "view building" phase has nothing to do,
+    # this "nothing" can still take a short while (especially in debug builds)
+    # and in the mean time the test might see the CREATING state and be flaky.
+    # So let's wait_for_gsi() just to be sure the view building is over.
+    # Note that this makes the explicit IndexStatus check below redundant,
+    # because wait_for_gsi() already does it..
+    wait_for_gsi(test_table_gsi_1, 'hello')
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     gsis = desc['Table']['GlobalSecondaryIndexes']
     assert len(gsis) == 1
