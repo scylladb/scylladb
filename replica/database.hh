@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/when_all.hh>
 #include "utils/assert.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"

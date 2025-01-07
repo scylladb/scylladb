@@ -8,7 +8,6 @@
 
 #pragma once
 #include <type_traits>
-#include <seastar/util/concepts.hh>
 #include <compare>
 
 template <typename Func, typename T>

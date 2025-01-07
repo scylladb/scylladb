@@ -12,10 +12,7 @@
 #pragma once
 
 #include <limits>
-#include <seastar/core/preempt.hh>
 #include "utils/chunked_vector.hh"
-
-using namespace seastar;
 
 class large_bitset {
     using int_type = uint64_t;

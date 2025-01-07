@@ -11,7 +11,8 @@
 #include <boost/test/unit_test.hpp>
 #include "boost/icl/interval_map.hpp"
 #include <fmt/ranges.h>
-#include <unordered_set>
+#include <fmt/std.h>
+#include <fmt/ranges.h>
 
 #include "schema/schema_builder.hh"
 #include "locator/token_metadata.hh"

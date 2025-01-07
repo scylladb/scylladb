@@ -14,6 +14,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"

@@ -51,7 +51,6 @@
 #include <assert.h>
 
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/sstring.hh>
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 

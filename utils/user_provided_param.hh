@@ -10,7 +10,6 @@
 
 #include <fmt/format.h>
 
-#include <seastar/util/bool_class.hh>
 #include <seastar/core/sstring.hh>
 
 #include "enum_set.hh"

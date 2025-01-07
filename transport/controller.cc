@@ -13,6 +13,7 @@
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/unix_address.hh>
 #include <seastar/core/file-types.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"

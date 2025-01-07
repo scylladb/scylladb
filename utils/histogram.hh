@@ -12,7 +12,6 @@
 #include "latency.hh"
 #include <cmath>
 #include <seastar/core/timer.hh>
-#include <iosfwd>
 #include "seastarx.hh"
 #include "estimated_histogram.hh"
 

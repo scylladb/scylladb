@@ -11,9 +11,11 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include <boost/heap/binomial_heap.hpp>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/expiring_fifo.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/semaphore.hh>
+#include "db/timeout_clock.hh"
 #include "replica/database_fwd.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"

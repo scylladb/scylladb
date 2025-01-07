@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <seastar/core/when_all.hh>
 #include "list_users_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"

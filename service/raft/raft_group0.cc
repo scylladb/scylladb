@@ -33,6 +33,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/defer.hh>

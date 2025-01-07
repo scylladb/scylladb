@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <sys/types.h>
-#include <memory>
 
 /*
  * Computes CRC32 (gzip format, RFC 1952) of a compound bitstream M composed by

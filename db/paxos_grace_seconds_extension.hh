@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <seastar/core/on_internal_error.hh>
+
 #include "serializer.hh"
 #include "schema/schema.hh"
 #include "utils/log.hh"

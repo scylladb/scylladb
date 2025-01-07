@@ -9,18 +9,13 @@
 
 #pragma once
 
-#include <iterator>
-#include <boost/regex.hpp>
-
-#include <yaml-cpp/yaml.h>
 #include <boost/any.hpp>
+#include <boost/regex.hpp>
+#include <yaml-cpp/node/convert.h>
 
-#include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
 
 #include "config_file.hh"
-
-#include <seastar/json/json_elements.hh>
 
 namespace utils {
 

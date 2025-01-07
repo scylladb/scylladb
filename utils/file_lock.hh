@@ -9,7 +9,6 @@
 #pragma once
 
 #include <memory>
-#include <ostream>
 #include <filesystem>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>

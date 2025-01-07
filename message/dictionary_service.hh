@@ -1,4 +1,5 @@
 #include "locator/host_id.hh"
+#include "utils/enum_option.hh"
 #include "utils/updateable_value.hh"
 #include "utils/dict_trainer.hh"
 #include <any>

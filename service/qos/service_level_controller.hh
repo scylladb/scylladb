@@ -14,6 +14,8 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/with_scheduling_group.hh>
+
 #include "seastarx.hh"
 #include "auth/role_manager.hh"
 #include "auth/service.hh"

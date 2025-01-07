@@ -9,14 +9,10 @@
 #pragma once
 
 #include <exception>
-#include <typeinfo>
 #include <type_traits>
 #include <memory>
-#include <ostream>
 #include <variant>
 #include <seastar/core/future.hh>
-#include <seastar/core/distributed.hh>
-#include <seastar/util/log.hh>
 #include "utils/variant_element.hh"
 
 namespace utils {

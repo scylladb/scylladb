@@ -21,7 +21,6 @@
 #include <utility>
 #include <algorithm>
 #include <stdexcept>
-#include <ranges>
 
 namespace lsa {
 

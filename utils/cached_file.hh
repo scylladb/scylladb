@@ -19,7 +19,6 @@
 #include "utils/cached_file_stats.hh"
 
 #include <seastar/core/file.hh>
-#include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 using namespace seastar;

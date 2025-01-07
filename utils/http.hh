@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <seastar/core/coroutine.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/coroutine/all.hh>

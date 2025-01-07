@@ -17,6 +17,7 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread_cputime_clock.hh>
 #include <seastar/core/when_all.hh>

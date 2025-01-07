@@ -19,7 +19,6 @@
 
 #pragma once
 
-#include "utils/assert.hh"
 #include <string_view>
 
 namespace utils {

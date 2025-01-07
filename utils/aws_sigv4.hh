@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <gnutls/crypto.h>
 #include "db_clock.hh"
 
 // The declared below get_signature() method makes the Signature string for AWS

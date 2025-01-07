@@ -9,6 +9,7 @@
 #pragma once
 
 #include "utils/digest_algorithm.hh"
+#include "utils/hashing.hh"
 #include "utils/xx_hasher.hh"
 
 #include <type_traits>

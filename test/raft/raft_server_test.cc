@@ -1,3 +1,4 @@
+#include <fmt/std.h>
 #include "replication.hh"
 #include "utils/error_injection.hh"
 #include <seastar/util/defer.hh>

@@ -1,5 +1,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/pipe.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/log.hh>

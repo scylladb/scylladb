@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <fmt/format.h>
-#include <fmt/std.h>
+#include <fmt/core.h>
+#include <compare>
 
 template <> struct fmt::formatter<std::strong_ordering> : fmt::formatter<string_view> {
     auto format(std::strong_ordering, fmt::format_context& ctx) const -> decltype(ctx.out());

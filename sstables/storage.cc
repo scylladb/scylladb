@@ -15,6 +15,7 @@
 #include <exception>
 #include <stdexcept>
 #include <fmt/std.h>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>

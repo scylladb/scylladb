@@ -20,6 +20,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/json/json_elements.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/log-cli.hh>
 #include <seastar/net/tls.hh>

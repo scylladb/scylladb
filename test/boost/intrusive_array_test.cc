@@ -10,6 +10,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <fmt/core.h>
 
+#include "utils/allocation_strategy.hh"
 #include "utils/intrusive-array.hh"
 
 class element {

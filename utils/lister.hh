@@ -8,13 +8,9 @@
 
 #pragma once
 
-#include <unordered_set>
 #include <filesystem>
-#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/file.hh>
-#include <seastar/core/enum.hh>
 #include <seastar/core/queue.hh>
-#include <seastar/core/pipe.hh>
 #include <seastar/util/bool_class.hh>
 #include "enum_set.hh"
 #include "seastarx.hh"

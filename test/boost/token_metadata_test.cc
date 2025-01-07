@@ -13,7 +13,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
 #include "locator/everywhere_replication_strategy.hh"
-#include "utils/to_string.hh"
+#include <fmt/std.h>
 
 using namespace locator;
 

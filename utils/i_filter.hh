@@ -10,8 +10,7 @@
 #pragma once
 
 #include <memory>
-#include "bytes.hh"
-#include <memory>
+#include "bytes_fwd.hh"
 
 namespace utils {
 

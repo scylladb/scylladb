@@ -10,6 +10,7 @@
 
 #include <ranges>
 #include <compare>
+#include <seastar/core/on_internal_error.hh>
 #include "compound.hh"
 #include "schema/schema.hh"
 #include "sstables/version.hh"

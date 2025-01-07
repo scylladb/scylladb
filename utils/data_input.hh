@@ -9,7 +9,7 @@
 #ifndef UTILS_DATA_INPUT_HH_
 #define UTILS_DATA_INPUT_HH_
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include <seastar/net/byteorder.hh>
 #include <concepts>
 

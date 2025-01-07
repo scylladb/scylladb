@@ -7,6 +7,7 @@
  */
 
 #undef SEASTAR_TESTING_MAIN
+#include <fmt/std.h>
 #include "utils/to_string.hh"
 #include "replication.hh"
 

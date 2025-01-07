@@ -10,8 +10,8 @@
 //
 // Using slower but precise clock
 
+#include <fmt/std.h>
 #include "replication.hh"
-#include "utils/to_string.hh"
 
 #ifdef SEASTAR_DEBUG
 // Increase tick time to allow debug to process messages

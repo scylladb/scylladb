@@ -10,14 +10,10 @@
 
 #include <memory>
 #include <seastar/core/memory.hh>
-#include <seastar/core/condition-variable.hh>
-#include <seastar/core/smp.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/shared_future.hh>
-#include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
 #include "seastarx.hh"
-#include "db/timeout_clock.hh"
 #include "utils/assert.hh"
 #include "utils/entangled.hh"
 #include "utils/memory_limit_reached.hh"

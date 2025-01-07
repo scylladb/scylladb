@@ -19,6 +19,7 @@
 #include "service/state_id.hh"
 #include "version.hh"
 #include "cdc/generation_id.hh"
+#include <set>
 #include <unordered_set>
 
 namespace gms {

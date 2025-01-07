@@ -13,6 +13,7 @@
 #include "types/tuple.hh"
 
 #include <ranges>
+#include <set>
 
 class user_type_impl : public tuple_type_impl {
     using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>, bool>;

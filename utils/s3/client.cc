@@ -21,6 +21,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/sleep.hh>

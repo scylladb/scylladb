@@ -16,7 +16,9 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/noncopyable_function.hh>
+
 #include <variant>
 
 #include "auth/service.hh"

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/core/with_timeout.hh>
 #include <seastar/util/closeable.hh>
 #include "db/virtual_table.hh"
 #include "schema/schema.hh"

@@ -9,7 +9,6 @@
 #pragma once
 
 #include <memory>
-#include <ranges>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 

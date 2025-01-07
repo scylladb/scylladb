@@ -11,7 +11,7 @@
 #pragma once
 
 #include <cstdint>
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace utils {
 

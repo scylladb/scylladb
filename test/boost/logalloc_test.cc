@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 #include <algorithm>
+#include <deque>
 
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/format.hh>

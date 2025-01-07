@@ -11,6 +11,7 @@
 #include <boost/range/combine.hpp>
 #include <boost/test/tools/old/interface.hpp>
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 #include "test/lib/scylla_test_case.hh"
 
 #include "dht/token.hh"

@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <array>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 /**
  * This is a very fast, non-cryptographic hash suitable for general hash-based

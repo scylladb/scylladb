@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <ostream>
+#include <random>
 #include <ranges>
 #include <boost/lexical_cast.hpp>
 

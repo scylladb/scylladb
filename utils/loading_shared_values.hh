@@ -10,7 +10,6 @@
 
 #include "utils/assert.hh"
 #include <vector>
-#include <memory>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>

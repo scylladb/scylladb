@@ -9,7 +9,7 @@
 #pragma once
 
 #include <concepts>
-#include <memory>
+#include <cstddef>
 
 // A contiguous buffer of char objects which can be trimmed and
 // supports zero-copy sharing of its underlying memory.

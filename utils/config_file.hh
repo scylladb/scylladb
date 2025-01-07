@@ -10,14 +10,13 @@
 #pragma once
 
 #include <fmt/format.h>
-#include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <fmt/ostream.h>
 
 #include <unordered_map>
-#include <iosfwd>
 #include <string_view>
 
-#include <boost/program_options.hpp>
+#include <boost/program_options/options_description.hpp>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>

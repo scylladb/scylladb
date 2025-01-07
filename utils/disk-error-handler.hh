@@ -7,8 +7,8 @@
 
 #pragma once
 
-#include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
+#include <boost/signals2/signal_type.hpp>
 #include <type_traits>
 #include <concepts>
 

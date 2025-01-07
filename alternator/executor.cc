@@ -45,6 +45,7 @@
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>

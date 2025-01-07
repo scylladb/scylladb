@@ -9,9 +9,9 @@
 #pragma once
 
 #include <seastar/core/file.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/metrics.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/http/client.hh>
 #include <filesystem>

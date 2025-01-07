@@ -14,6 +14,7 @@
 #include <boost/algorithm/string.hpp>
 #include <string>
 #include <fmt/ostream.h>
+#include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
 #include "marshal_exception.hh"
 

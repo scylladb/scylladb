@@ -9,8 +9,8 @@
 #pragma once
 
 #include <boost/multiprecision/cpp_int.hpp>
-#include <iosfwd>
 #include <compare>
+#include <iosfwd>
 
 namespace utils {
 

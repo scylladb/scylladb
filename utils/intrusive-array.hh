@@ -8,12 +8,13 @@
 
 #pragma once
 
-#include <array>
 #include <cassert>
-#include <seastar/util/concepts.hh>
+#include <cstddef>
+#include <cstdlib>
+#include <limits>
+#include <utility>
 
 #include "utils/assert.hh"
-#include "utils/allocation_strategy.hh"
 #include "utils/collection-concepts.hh"
 
 template <typename T>

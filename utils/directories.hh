@@ -11,7 +11,7 @@
 #include <set>
 #include <vector>
 #include <seastar/core/future.hh>
-#include <seastar/core/smp.hh>
+#include <seastar/util/bool_class.hh>
 #include "utils/file_lock.hh"
 
 using namespace seastar;

@@ -10,6 +10,8 @@
 
 #include <algorithm>
 
+#include <seastar/core/when_all.hh>
+
 #include "types/map.hh"
 #include "auth/authentication_options.hh"
 #include "auth/service.hh"

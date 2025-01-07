@@ -11,8 +11,9 @@
 // Basic utilities which allow to start working with boost::outcome::result
 // in conjunction with our exception_container.
 
-#include <boost/outcome/success_failure.hpp>
-#include <boost/outcome/trait.hpp>
+#include <boost/outcome/bad_access.hpp>
+#include <boost/outcome/basic_result.hpp>
+#include <boost/outcome/config.hpp>
 #include <boost/outcome/policy/base.hpp>
 #include <boost/outcome/result.hpp>
 #include "utils/exception_container.hh"

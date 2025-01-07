@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <zlib.h>
 #include <libdeflate.h>
 #include "utils/gz/crc_combine.hh"

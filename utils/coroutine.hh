@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/future-util.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 #include "seastarx.hh"

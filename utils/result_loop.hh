@@ -10,9 +10,9 @@
 
 #include <iterator>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/coroutine/exception.hh>
-#include <seastar/coroutine/maybe_yield.hh>
 #include <type_traits>
 #include "utils/result.hh"
 

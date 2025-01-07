@@ -9,7 +9,6 @@
 #pragma once
 
 #include <type_traits>
-#include <seastar/util/concepts.hh>
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "utils/intrusive-array.hh"

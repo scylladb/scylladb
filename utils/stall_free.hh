@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <seastar/core/thread.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/do_with.hh>

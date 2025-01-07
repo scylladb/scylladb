@@ -16,6 +16,7 @@
 #endif
 
 #include <rapidjson/stream.h>
+#include <rapidjson/error/en.h>
 
 namespace rjson {
 

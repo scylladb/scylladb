@@ -10,7 +10,6 @@
 
 #include <concepts>
 #include <type_traits>
-#include "utils/assert.hh"
 #include "utils/result.hh"
 
 namespace utils {
