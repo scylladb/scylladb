@@ -14,6 +14,7 @@
 #include "utils/alien_worker.hh"
 #include "utils/shared_dict.hh"
 #include "utils/hashers.hh"
+#include "raft/raft.hh"
 #include <zdict.h>
 
 using namespace seastar;
@@ -152,6 +153,8 @@ seastar::future<> dict_training_loop::start(
             dict_trainer_logger.debug("dict_training_loop: publishing...");
             co_await emit(dict_data);
             dict_trainer_logger.debug("dict_training_loop: published...");
+        } catch (const raft::request_aborted&) {
+            dict_trainer_logger.debug("dict_training_loop: raft aborted while publishing");
         } catch (...) {
             if (_cancelled.abort_requested()) {
                 dict_trainer_logger.debug("dict_training_loop: cancelled");
