@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "gms/inet_address.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "streaming/stream_reason.hh"
