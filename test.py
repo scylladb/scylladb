@@ -1349,8 +1349,8 @@ class PythonTest(Test):
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
             status = await run_test(self, options, env=self.suite.scylla_env)
-            if self.shortname in self.suite.dirties_cluster:
-                cluster.is_dirty = True
+            # if self.shortname in self.suite.dirties_cluster:
+            cluster.is_dirty = True
             cluster.after_test(self.uname, status)
             self.is_after_test_ok = True
             self.success = status
