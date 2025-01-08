@@ -1109,6 +1109,89 @@ def test_authorization_failure(dynamodb, cql, metrics, test_table_s, enforce_aut
                 else:
                     assert new_auth_failures == saved_auth_failures
 
+# Some users looked for a metric which counts read and write activity and
+# that both CQL and Alternator operations increment, and found the metrics
+# scylla_storage_proxy_coordinator_{read,write}_latency_count. This is a
+# regression test to make sure that Alternator operations continue to
+# increment these metrics. We can modify or remove this test if we decide
+# one day that we don't really need these specific metrics.
+#
+# Because this metric is not per-table, we can't assert exactly how much
+# the metric increases after an operation - because there is always the
+# risk that some concurrent operation (e.g., the driver reads some system
+# table) can also increment the same metric. So we can only assert that
+# the metric increases - but not by how much.
+#
+# Note: a Scan operation does *not* increment read_latency_count. The code in
+# storage_proxy treats it not as a "read" but as a "range read" (referring to
+# a range of partitions, as opposed to a single partition), so it updates a
+# separate counter stats.range, but unlike stats.read it is not exposed
+# as a Prometheus metric, so we cannot test Scan in this test.
+def test_storage_proxy_coordinator_metrics(test_table_s, metrics):
+    read_count = 'scylla_storage_proxy_coordinator_read_latency_count'
+    write_count = 'scylla_storage_proxy_coordinator_write_latency_count'
+    p = random_string()
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.get_item(Key={'p': p})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.query(KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ConsistentRead=True)
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.put_item(Item={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.delete_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.update_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item(Item={'p': p})
+
+# Test that the per-table metrics scylla_column_family_read_latency_count and
+# scylla_column_family_write_latency_count are incremented for Alternator
+# operations. These are replica-level metrics (incremented in table::query()
+# and table::apply() on the shard that locally executes the operation), as
+# opposed to scylla_storage_proxy_coordinator_read_latency_count which is
+# incremented at the coordinator level. Because they are per-table (filtered
+# by cf=<table_name>), they allow exact-count assertions without interference
+# from concurrent operations on other tables.
+#
+# Note: unlike the coordinator metric, scylla_column_family_read_latency_count
+# IS incremented by Scan, because Scan goes through table::query() on the
+# replica regardless of being a range read at the coordinator level.
+def test_cf_read_write_latency_metrics(test_table_s, metrics):
+    read_count = 'scylla_column_family_read_latency_count'
+    write_count = 'scylla_column_family_write_latency_count'
+    p = random_string()
+    cf = {'cf': test_table_s.name}
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.get_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}})
+    with check_increases_metric_exact(metrics, read_count, [[1, cf]]):
+        test_table_s.query(KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ConsistentRead=True)
+    # Unlike scylla_storage_proxy_coordinator_read_latency_count, Scan also
+    # increments scylla_column_family_read_latency_count (via table::query()).
+    # A Scan may be split across multiple shards and generate multiple reads,
+    # so we only check it increases (not by how much), but do filter by cf.
+    with check_increases_metric(metrics, [read_count], cf):
+        test_table_s.scan(ConsistentRead=True, Limit=1)
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.put_item(Item={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.delete_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        test_table_s.update_item(Key={'p': p})
+    with check_increases_metric_exact(metrics, write_count, [[1, cf]]):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item(Item={'p': p})
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
 # reads_before_write, write_using_lwt, shard_bounce_for_lwt,
