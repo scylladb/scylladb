@@ -626,6 +626,13 @@ std::vector<mutation> prepare_new_keyspace_announcement(replica::database& db, l
     return db::schema_tables::make_create_keyspace_mutations(db.features().cluster_schema_features(), ksm, timestamp);
 }
 
+static
+future<> validate(schema_ptr schema) {
+    return do_for_each(schema->extensions(), [schema](auto & p) {
+        return p.second->validate(*schema);
+    });
+}
+
 static future<std::vector<mutation>> include_keyspace(
         storage_proxy& sp, const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
@@ -656,6 +663,7 @@ static future<std::vector<mutation>> do_prepare_new_column_family_announcement(s
 }
 
 future<std::vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp) {
+  return validate(cfm).then([&sp, cfm, timestamp] {
     try {
         auto& db = sp.get_db().local();
         auto ksm = db.find_keyspace(cfm->ks_name()).metadata();
@@ -663,6 +671,7 @@ future<std::vector<mutation>> prepare_new_column_family_announcement(storage_pro
     } catch (const replica::no_such_keyspace& e) {
         throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));
     }
+  });
 }
 
 future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations,
@@ -677,6 +686,7 @@ future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations
 future<std::vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,
         schema_ptr cfm, std::vector<view_ptr> view_updates, api::timestamp_type ts) {
     warn(unimplemented::cause::VALIDATION);
+    co_await validate(cfm);
     try {
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
@@ -826,6 +836,7 @@ future<std::vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, 
 }
 
 future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
+  return validate(view).then([&sp, view = std::move(view), ts] {
     auto& db = sp.local_db();
     try {
         auto keyspace = db.find_keyspace(view->ks_name()).metadata();
@@ -846,9 +857,11 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
         return make_exception_future<std::vector<mutation>>(
             exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
     }
+  });
 }
 
 future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
+    co_await validate(view);
     auto db = sp.data_dictionary();
     try {
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
