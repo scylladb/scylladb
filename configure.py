@@ -2004,7 +2004,6 @@ def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
         libs = f"-Wl,-rpath='{rpath}' {libs}"
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
-
     testing_libs = pkg_config(pc_file.replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
     return {'seastar_cflags': cflags,
             'seastar_libs': libs,
@@ -2027,6 +2026,8 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  '-lxxhash',
                  '-ldeflate',
                 ])
+
+args.user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
 
 if not args.staticboost:
     user_cflags += ' -DBOOST_ALL_DYN_LINK'
