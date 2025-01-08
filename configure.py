@@ -1123,6 +1123,19 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                 'querier.cc',
                 'mutation_writer/multishard_writer.cc',
+                'ent/encryption/encryption_config.cc',
+                'ent/encryption/encryption.cc',
+                'ent/encryption/symmetric_key.cc',
+                'ent/encryption/local_file_provider.cc',
+                'ent/encryption/replicated_key_provider.cc',
+                'ent/encryption/system_key.cc',
+                'ent/encryption/encrypted_file_impl.cc',
+                'ent/encryption/kmip_host.cc',
+                'ent/encryption/kmip_key_provider.cc',
+                'ent/encryption/kms_host.cc',
+                'ent/encryption/kms_key_provider.cc',
+                'ent/encryption/gcp_host.cc',
+                'ent/encryption/gcp_key_provider.cc',
                 'multishard_mutation_query.cc',
                 'reader_concurrency_semaphore.cc',
                 'sstables_loader.cc',
@@ -2000,7 +2013,7 @@ pkgs = ['libsystemd',
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy',
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy', '-lcrypto',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
@@ -2022,6 +2035,32 @@ user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 
+kmip_lib_ver = '1.9.2a';
+
+def kmiplib():
+    os_ids = get_os_ids()
+    for id in os_ids:
+        if id in { 'centos', 'fedora', 'rhel' }:
+            return 'rhel84'
+    print('Could not resolve libkmip.a for platform {}'.format(os_ids))
+    sys.exit(1)
+
+def target_cpu():
+    cpu, _, _ = subprocess.check_output([cxx, '-dumpmachine']).decode('utf-8').partition('-')
+    return cpu    
+
+def kmip_arch():
+    arch = target_cpu()
+    if arch == 'x86_64':
+        return '64'
+    return arch 
+
+kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
+kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
+libs += ' -lboost_filesystem'
+if os.path.exists(kmipc_lib):
+    libs += f' {kmipc_lib}'
+    user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = []
