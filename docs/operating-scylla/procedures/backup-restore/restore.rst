@@ -37,6 +37,10 @@ Repeat the following steps for each node in the cluster:
 
 .. note::
 
+   If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure Scylla Enterprise has the same keys used by Scylla to encrypt the data before starting the restore process.
+
+.. note::
+
       Best practise is **not** to restore :doc:`Materialized Views (MV) </features/materialized-views>` and :doc:`Secondary Indexes (SI) </features/secondary-indexes>` SSTables.
       It is recommended to:
 

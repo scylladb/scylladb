@@ -58,6 +58,9 @@ Glossary
     Keyspace
       A collection of tables with attributes which define how data is replicated on nodes. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
     
+    Key Management Interoperability Protocol (KMIP)
+      :abbr:`KMIP (Key Management Interoperability Protocol)` is a communication protocol that defines message formats for storing keys on a key management server (KMIP server). You can use a KMIP server to protect your keys when using Encryption at Rest. See :doc:`Encryption at Rest</operating-scylla/security/encryption-at-rest/>`.
+
     Leveled compaction strategy (LCS)
       :abbr:`LCS (Leveled compaction strategy)` uses small, fixed-size (by default 160 MB) SSTables divided into different levels. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 

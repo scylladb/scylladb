@@ -8,6 +8,8 @@
 * :doc:`cassandra-stress </operating-scylla/admin-tools/cassandra-stress/>` A tool for benchmarking and load testing a ScyllaDB and Cassandra clusters.
 * :doc:`SSTabledump </operating-scylla/admin-tools/sstabledump>`
 * :doc:`SSTableMetadata </operating-scylla/admin-tools/sstablemetadata>`
+* configuration_encryptor - :doc:`encrypt at rest </operating-scylla/security/encryption-at-rest>` sensitive scylla configuration entries using system key.
+* scylla local-file-key-generator - Generate a local file (system) key for :doc:`encryption at rest </operating-scylla/security/encryption-at-rest>`, with the provided length, Key algorithm, Algorithm block mode and Algorithm padding method.
 * `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb collectd/prometheus metrics.
 * :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run ScyllaDB in Developer Mode.
 * :doc:`perftune</operating-scylla/admin-tools/perftune>` - performance configuration.

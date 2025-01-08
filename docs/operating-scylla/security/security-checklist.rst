@@ -41,14 +41,16 @@ Configure ScyllaDB to use TLS/SSL for all the connections. Use TLS/SSL to encryp
 
 * :doc:`Encryption Data in Transit Node to Node </operating-scylla/security/node-node-encryption>`
 
-Encryption at Rest :label-tip:`ScyllaDB Enterprise`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Encryption at Rest is available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
+Encryption at Rest
+~~~~~~~~~~~~~~~~~~
+Encryption at Rest is available in a Scylla Enterprise 2019.1.1.
 
 Encryption at Rest protects the privacy of your user's data, reduces the risk of data breaches, and helps meet regulatory requirements. 
 In particular, it provides an additional level of protection for your data persisted in storage or backup.
 
-See `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ for details.
+See:
+
+* :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>`
 
 Reduce the Network Exposure
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
