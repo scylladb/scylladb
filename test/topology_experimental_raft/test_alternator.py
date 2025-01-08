@@ -62,19 +62,6 @@ def full_query(table, ConsistentRead=True, **kwargs):
 # implement an async wrapper to the boto3 functions ourselves (e.g., run them
 # in a separate thread) ourselves.
 
-@pytest.fixture(scope="module")
-async def alternator3(manager_internal):
-    """A fixture with a 3-node Alternator cluster that can be shared between
-       multiple tests. These test should not modify the cluster's topology,
-       and should each use unique table names and/or unique keys to avoid
-       being confused by other tests.
-       Returns the manager object and 3 boto3 resource objects for making
-       DynamoDB API requests to each of the nodes in the Alternator cluster.
-    """
-    manager = manager_internal()
-    servers = await manager.servers_add(3, config=alternator_config)
-    yield [manager] + [get_alternator(server.ip_addr) for server in servers]
-    await manager.stop()
 
 test_table_prefix = 'alternator_Test_'
 def unique_table_name():
@@ -87,7 +74,7 @@ def unique_table_name():
 unique_table_name.last_ms = 0
 
 
-async def test_alternator_ttl_scheduling_group(alternator3):
+async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
     """A reproducer for issue #18719: The expiration scans and deletions
        initiated by the Alternator TTL feature are supposed to run entirely in
        the "streaming" scheduling group. But because of a bug in inheritance
@@ -100,7 +87,8 @@ async def test_alternator_ttl_scheduling_group(alternator3):
        in the wrong scheduling group. We can assume this because we don't
        run multiple tests in parallel on the same cluster.
     """
-    manager, alternator, *_ = alternator3
+    servers = await manager.servers_add(3, config=alternator_config)
+    alternator = get_alternator(servers[0].ip_addr)
     table = alternator.create_table(TableName=unique_table_name(),
         BillingMode='PAY_PER_REQUEST',
         KeySchema=[
