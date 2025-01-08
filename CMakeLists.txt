@@ -195,6 +195,7 @@ target_sources(scylla-main
     querier.cc
     query.cc
     query_ranges_to_vnodes.cc
+    query_ranges_to_vnodes_async.cc
     query-result-set.cc
     tombstone_gc_options.cc
     tombstone_gc.cc

@@ -1442,7 +1442,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     }));
 }
 
-indexed_table_select_statement::partition_ranges_generator
+partition_ranges_generator
 indexed_table_select_statement::make_index_partition_ranges(query_processor& qp, service::query_state& state, const query_options& options) const
 {
     std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(cql3::query_options(options));

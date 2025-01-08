@@ -11,6 +11,8 @@
 #include "dht/i_partitioner_fwd.hh"
 #include "locator/token_range_splitter.hh"
 
+class query_ranges_to_vnodes_generator_async;
+
 class query_ranges_to_vnodes_generator {
     schema_ptr _s;
     dht::partition_range_vector _ranges;
@@ -18,6 +20,7 @@ class query_ranges_to_vnodes_generator {
     bool _local;
     std::unique_ptr<locator::token_range_splitter> _splitter;
     void process_one_range(size_t n, dht::partition_range_vector& ranges);
+    friend class query_ranges_to_vnodes_generator_async;
 public:
     query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;

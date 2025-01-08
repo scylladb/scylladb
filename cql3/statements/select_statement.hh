@@ -19,6 +19,7 @@
 #include "index/secondary_index_manager.hh"
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
+#include "query_ranges_to_vnodes_async.hh"
 
 namespace service {
     class client_state;
@@ -231,7 +232,6 @@ private:
 
     // Generator coroutine that yields partition range vectors obtained from the index view.
     // Relies on `find_index_partition_ranges()`.
-    using partition_ranges_generator = coroutine::experimental::generator<exceptions::coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>;
     partition_ranges_generator
     make_index_partition_ranges(
             query_processor& qp,
