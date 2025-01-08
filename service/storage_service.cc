@@ -4545,38 +4545,38 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             auto existing_node = req.replace_nodes.begin()->first;
             auto replacing_node = req.replace_nodes.begin()->second;
             mutate_token_metadata([coordinator, coordinator_host_id, existing_node, replacing_node, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
-                    const auto existing_node_id = tmptr->get_host_id(existing_node);
-                    const auto replacing_node_id = *coordinator_host_id;
-                    slogger.info("replace[{}]: Added replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
-                        req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
+                const auto existing_node_id = tmptr->get_host_id(existing_node);
+                const auto replacing_node_id = *coordinator_host_id;
+                slogger.info("replace[{}]: Added replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
+                    req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
 
-                    // In case of replace-with-same-ip we need to map both host_id-s
-                    // to the same IP. The locator::topology allows this specifically in case
-                    // where one node is being_replaced and another is replacing,
-                    // so here we adjust the state of the original node accordingly.
-                    // The host_id -> IP map works as usual, and IP -> host_id will map
-                    // IP to the being_replaced node - this is what is implied by the
-                    // current code. The IP will be placed in pending_endpoints and
-                    // excluded from normal_endpoints (maybe_remove_node_being_replaced function).
-                    // In handle_state_normal we'll remap the IP to the new host_id.
-                    tmptr->update_topology(existing_node_id, std::nullopt, locator::node::state::being_replaced);
-                    tmptr->update_topology(replacing_node_id, get_dc_rack_for(replacing_node_id), locator::node::state::replacing);
-                    tmptr->update_host_id(replacing_node_id, replacing_node);
-                    tmptr->add_replacing_endpoint(existing_node_id, replacing_node_id);
+                // In case of replace-with-same-ip we need to map both host_id-s
+                // to the same IP. The locator::topology allows this specifically in case
+                // where one node is being_replaced and another is replacing,
+                // so here we adjust the state of the original node accordingly.
+                // The host_id -> IP map works as usual, and IP -> host_id will map
+                // IP to the being_replaced node - this is what is implied by the
+                // current code. The IP will be placed in pending_endpoints and
+                // excluded from normal_endpoints (maybe_remove_node_being_replaced function).
+                // In handle_state_normal we'll remap the IP to the new host_id.
+                tmptr->update_topology(existing_node_id, std::nullopt, locator::node::state::being_replaced);
+                tmptr->update_topology(replacing_node_id, get_dc_rack_for(replacing_node_id), locator::node::state::replacing);
+                tmptr->update_host_id(replacing_node_id, replacing_node);
+                tmptr->add_replacing_endpoint(existing_node_id, replacing_node_id);
                 return make_ready_future<>();
             }).get();
             auto ignore_nodes = std::move(req.ignore_nodes);
             node_ops_insert(ops_uuid, coordinator, std::move(ignore_nodes), [this, coordinator, coordinator_host_id, existing_node, replacing_node, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, coordinator_host_id, existing_node, replacing_node, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
-                        const auto existing_node_id = tmptr->get_host_id(existing_node);
-                        const auto replacing_node_id = *coordinator_host_id;
-                        slogger.info("replace[{}]: Removed replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
-                            req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
+                    const auto existing_node_id = tmptr->get_host_id(existing_node);
+                    const auto replacing_node_id = *coordinator_host_id;
+                    slogger.info("replace[{}]: Removed replacing_node={}/{} to replace existing_node={}/{}, coordinator={}/{}",
+                        req.ops_uuid, replacing_node, replacing_node_id, existing_node, existing_node_id, coordinator, *coordinator_host_id);
 
-                        tmptr->del_replacing_endpoint(existing_node_id);
-                        const auto dc_rack = get_dc_rack_for(replacing_node_id);
-                        tmptr->update_topology(existing_node_id, dc_rack, locator::node::state::normal);
-                        tmptr->remove_endpoint(replacing_node_id);
+                    tmptr->del_replacing_endpoint(existing_node_id);
+                    const auto dc_rack = get_dc_rack_for(replacing_node_id);
+                    tmptr->update_topology(existing_node_id, dc_rack, locator::node::state::normal);
+                    tmptr->remove_endpoint(replacing_node_id);
                     return update_topology_change_info(tmptr, ::format("replace {}", req.replace_nodes));
                 });
             });
