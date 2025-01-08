@@ -239,7 +239,15 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         _max_version_seen = desc.version;
     }
 
-    auto sst = co_await load_sstable(desc, get_storage_options(), flags.sstable_open_config);
+    auto storage_opts = get_storage_options();
+    auto shards = co_await get_shards_for_this_sstable(desc, storage_opts, flags);
+    if (flags.sort_sstables_according_to_owner && shards.size() == 1 && shards[0] != this_shard_id()) {
+        // identified a remote unshared sstable
+        _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
+        co_return;
+    }
+
+    auto sst = co_await load_sstable(desc, storage_opts, flags.sstable_open_config);
     validate(sst, flags);
 
     if (flags.need_mutate_level) {
@@ -247,24 +255,17 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         co_await sst->mutate_sstable_level(0);
     }
 
-    if (!flags.sort_sstables_according_to_owner) {
-        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
-        _unsorted_sstables.push_back(std::move(sst));
-        co_return;
-    }
-
-    auto shards = sst->get_shards_for_this_sstable();
-    if (shards.size() == 1) {
-        if (shards[0] == this_shard_id()) {
+    if (flags.sort_sstables_according_to_owner) {
+        if (shards.size() == 1) {
             dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
             _unshared_local_sstables.push_back(std::move(sst));
         } else {
-            dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sst->get_filename(), shards[0]);
-            _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
+            dirlog.trace("{} identified as a shared SSTable, shards={}", sst->get_filename(), shards);
+            _shared_sstable_info.push_back(co_await sst->get_open_info());
         }
     } else {
-        dirlog.trace("{} identified as a shared SSTable, shards={}", sst->get_filename(), shards);
-        _shared_sstable_info.push_back(co_await sst->get_open_info());
+        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
+        _unsorted_sstables.push_back(std::move(sst));
     }
 }
 
