@@ -637,28 +637,32 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
     return cmd;
 }
 
-future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
+future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>, lw_shared_ptr<const service::pager::paging_state>>>>
 indexed_table_select_statement::do_execute_base_query(
         query_processor& qp,
-        dht::partition_range_vector&& partition_ranges,
+        partition_ranges_generator&& gen,
         service::query_state& state,
         const query_options& options,
-        gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
-    using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
-    auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
+        gc_clock::time_point now) const {
+    using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>, lw_shared_ptr<const service::pager::paging_state>>;
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-    uint32_t queried_ranges_count = partition_ranges.size();
     auto&& table = qp.proxy().local_db().find_column_family(_schema);
     auto erm = table.get_effective_replication_map();
-    query_ranges_to_vnodes_generator ranges_to_vnodes(erm->make_splitter(), _schema, std::move(partition_ranges));
+    query_ranges_to_vnodes_generator_async ranges_to_vnodes(erm->make_splitter(), _schema, gen);
+
+    // The generator may disable paging even if enabled by the user.
+    // This happens when it is known a priori that the result will contain at most one row.
+    // Prefetch a partition range vector to check.
+    co_await ranges_to_vnodes.prefetch();
+    bool is_paged = ranges_to_vnodes.get_paging_state() != nullptr;
+    auto cmd = prepare_command_for_base_query(qp, options, state, now, is_paged);
 
     struct base_query_state {
         query::result_merger merger;
-        query_ranges_to_vnodes_generator ranges_to_vnodes;
+        query_ranges_to_vnodes_generator_async ranges_to_vnodes;
         size_t concurrency = 1;
         size_t previous_result_size = 0;
-        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+        base_query_state(uint64_t row_limit, query_ranges_to_vnodes_generator_async&& ranges_to_vnodes_)
                 : merger(row_limit, query::max_partitions)
                 , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
@@ -671,8 +675,9 @@ indexed_table_select_statement::do_execute_base_query(
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
     }
 
-    const bool is_paged = bool(paging_state);
-    base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
+    // FIXME: https://github.com/scylladb/scylladb/issues/22158
+    uint64_t merger_row_limit = query::max_rows;
+    base_query_state query_state{merger_row_limit, std::move(ranges_to_vnodes)};
     {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
@@ -683,7 +688,10 @@ indexed_table_select_statement::do_execute_base_query(
         while (!is_short_read && !ranges_to_vnodes.empty() && !page_limit_reached) {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
-            dht::partition_range_vector prange = ranges_to_vnodes(concurrency);
+            std::optional<dht::partition_range_vector> prange = co_await ranges_to_vnodes(concurrency);
+            if (!prange) {
+                co_return ranges_to_vnodes.get_error();
+            }
             auto command = ::make_lw_shared<query::read_command>(*cmd);
             auto old_paging_state = options.get_paging_state();
             if (old_paging_state && concurrency == 1) {
@@ -697,14 +705,14 @@ indexed_table_select_statement::do_execute_base_query(
                     query::trim_clustering_row_ranges_to(*_schema, row_ranges, base_ck);
                     command->slice.set_range(*_schema, base_pk, row_ranges);
                 } else {
-                    // There is no clustering key in old_paging_state and/or no clustering key in 
+                    // There is no clustering key in old_paging_state and/or no clustering key in
                     // _schema, therefore read an entire partition (whole clustering range).
                     //
                     // The only exception to applying no restrictions on clustering key
                     // is a case when we have a secondary index on the first column
                     // of clustering key. In such a case we should not read the
                     // entire clustering range - only a range in which first column
-                    // of clustering key has the correct value. 
+                    // of clustering key has the correct value.
                     //
                     // This means that we should not set a open_ended_both_sides
                     // clustering range on base_pk, instead intersect it with
@@ -717,7 +725,7 @@ indexed_table_select_statement::do_execute_base_query(
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
-            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(*prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
             if (!rqr.has_value()) {
                 co_return std::move(rqr).as_failure();
             }
@@ -728,21 +736,20 @@ indexed_table_select_statement::do_execute_base_query(
             previous_result_size = qr.query_result->buf().size();
             merger(std::move(qr.query_result));
         }
-        co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd)));
+        co_return coordinator_result<value_type>(value_type(merger.get(), std::move(cmd), query_state.ranges_to_vnodes.get_paging_state()));
     }
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
 indexed_table_select_statement::execute_base_query(
         query_processor& qp,
-        dht::partition_range_vector&& partition_ranges,
+        partition_ranges_generator&& gen,
         service::query_state& state,
         const query_options& options,
-        gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
-    return do_execute_base_query(qp, std::move(partition_ranges), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
-        auto&& [result, cmd] = result_and_cmd;
+        gc_clock::time_point now) const {
+    return do_execute_base_query(qp, std::move(gen), state, options, now).then(wrap_result_to_error_message(
+            [this, &state, &options, now] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>, lw_shared_ptr<const service::pager::paging_state>> result_and_cmd_and_paging_state) {
+        auto&& [result, cmd, paging_state] = result_and_cmd_and_paging_state;
         return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
@@ -1216,16 +1223,12 @@ indexed_table_select_statement::do_execute(query_processor& qp,
 
             if (whole_partitions || partition_slices) {
                 tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys, aggregation query", _index.metadata().name());
-                auto result_partition_ranges_and_paging_state = co_await find_index_partition_ranges(qp, state, *internal_options);
-                if (result_partition_ranges_and_paging_state.has_error()) {
-                    co_return failed_result_to_result_message(std::move(result_partition_ranges_and_paging_state));
-                }
-                auto&& [partition_ranges, paging_state, _] = result_partition_ranges_and_paging_state.assume_value();
-                auto result_results_and_cmd = co_await do_execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, paging_state);
+                auto gen = make_index_partition_ranges(qp, state, *internal_options);
+                auto result_results_and_cmd = co_await do_execute_base_query(qp, std::move(gen), state, *internal_options, now);
                 if (result_results_and_cmd.has_error()) {
                     co_return failed_result_to_result_message(std::move(result_results_and_cmd));
                 }
-                auto&& [results, cmd] = result_results_and_cmd.assume_value();
+                auto&& [results, cmd, paging_state] = result_results_and_cmd.assume_value();
                 stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
             } else {
                 tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys, aggregation query", _index.metadata().name());
@@ -1254,14 +1257,8 @@ indexed_table_select_statement::do_execute(query_processor& qp,
         tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys", _index.metadata().name());
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>, size_t>> result = co_await find_index_partition_ranges(qp, state, options);
-        if (result.has_error()) {
-            co_return failed_result_to_result_message(std::move(result));
-        }
-        {
-            auto&& [partition_ranges, paging_state, _] = result.assume_value();
-            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, std::move(paging_state));
-        }
+        auto gen = make_index_partition_ranges(qp, state, options);
+        co_return co_await this->execute_base_query(qp, std::move(gen), state, options, now);
     } else {
         tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys", _index.metadata().name());
         // In this case, we need to retrieve a list of rows (not entire
