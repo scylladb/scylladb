@@ -80,6 +80,15 @@ add_scylla_test(duration_test
 add_scylla_test(dynamic_bitset_test
   KIND BOOST
   LIBRARIES utils)
+add_scylla_test(encrypted_file_test
+  KIND SEASTAR
+  LIBRARIES
+    encryption)
+add_scylla_test(encryption_at_rest_test
+  KIND SEASTAR
+  LIBRARIES
+    Boost::filesystem
+    encryption)
 add_scylla_test(enum_option_test
   KIND BOOST)
 add_scylla_test(enum_set_test
