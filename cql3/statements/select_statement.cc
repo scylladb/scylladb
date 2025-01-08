@@ -1442,6 +1442,50 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     }));
 }
 
+indexed_table_select_statement::partition_ranges_generator
+indexed_table_select_statement::make_index_partition_ranges(query_processor& qp, service::query_state& state, const query_options& options) const
+{
+    std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(cql3::query_options(options));
+    auto paging_state = options.get_paging_state();
+    int user_page_size = options.get_page_size();
+    // max internal page size
+    // Hardcoded to 2000 so that contiguous allocations from std::vector<partition_range> don't exceed 256 KiB (sizeof(dht::partition_range) == 120).
+    // Such vectors are returned by `find_index_partition_ranges()`.
+    int max_page_size = internal_paging_size / 5;
+    bool is_unpaged = user_page_size < 0;
+    int page_size = is_unpaged ? max_page_size : std::min(user_page_size, max_page_size);
+    int remaining_rows_for_paged = user_page_size;
+    internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state, page_size));
+    bool cont_loop;
+    do {
+        logger.trace("Generating new partition range vector from index view {}: page_size = {}, user_page_size = {}, remaining_rows_for_paged = {}",
+                _index.metadata().name(), page_size, user_page_size, remaining_rows_for_paged);
+        auto result = co_await find_index_partition_ranges(qp, state, *internal_options);
+        if (result.has_error()) {
+            co_yield std::move(result.error());
+            break;
+        }
+        auto&& [partition_ranges, paging_state, query_result_size] = result.assume_value();
+        if (!is_unpaged) {
+            remaining_rows_for_paged -= query_result_size;
+            page_size = remaining_rows_for_paged < page_size ? remaining_rows_for_paged : page_size;
+        }
+        cont_loop = paging_state && paging_state->get_remaining() > 0 && (is_unpaged || remaining_rows_for_paged > 0);
+        logger.trace("Obtained partition range vector from index view {}: size = {}, query_result_size = {}, has paging state = {}{}",
+                _index.metadata().name(),
+                partition_ranges.size(),
+                query_result_size,
+                bool(paging_state),
+                paging_state ? fmt::format(", remaining = {}", paging_state->get_remaining()) : "");
+        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr, page_size));
+        if (!is_unpaged) {
+            co_yield std::make_tuple(std::move(partition_ranges), paging_state);
+        } else {
+            co_yield std::make_tuple(std::move(partition_ranges), nullptr);
+        }
+    } while (cont_loop);
+}
+
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
 future<coordinator_result<std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>>>

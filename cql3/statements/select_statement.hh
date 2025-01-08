@@ -229,6 +229,15 @@ private:
                                                                     service::query_state& state,
                                                                     const query_options& options) const;
 
+    // Generator coroutine that yields partition range vectors obtained from the index view.
+    // Relies on `find_index_partition_ranges()`.
+    using partition_ranges_generator = coroutine::experimental::generator<exceptions::coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>;
+    partition_ranges_generator
+    make_index_partition_ranges(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options) const;
+
     future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_processor& qp,
                                                                 service::query_state& state,
                                                                 const query_options& options) const;
