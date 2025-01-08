@@ -1220,7 +1220,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                 if (result_partition_ranges_and_paging_state.has_error()) {
                     co_return failed_result_to_result_message(std::move(result_partition_ranges_and_paging_state));
                 }
-                auto&& [partition_ranges, paging_state] = result_partition_ranges_and_paging_state.assume_value();
+                auto&& [partition_ranges, paging_state, _] = result_partition_ranges_and_paging_state.assume_value();
                 auto result_results_and_cmd = co_await do_execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, paging_state);
                 if (result_results_and_cmd.has_error()) {
                     co_return failed_result_to_result_message(std::move(result_results_and_cmd));
@@ -1254,12 +1254,12 @@ indexed_table_select_statement::do_execute(query_processor& qp,
         tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys", _index.metadata().name());
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>> result = co_await find_index_partition_ranges(qp, state, options);
+        coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>, size_t>> result = co_await find_index_partition_ranges(qp, state, options);
         if (result.has_error()) {
             co_return failed_result_to_result_message(std::move(result));
         }
         {
-            auto&& [partition_ranges, paging_state] = result.assume_value();
+            auto&& [partition_ranges, paging_state, _] = result.assume_value();
             co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, std::move(paging_state));
         }
     } else {
@@ -1392,12 +1392,12 @@ indexed_table_select_statement::read_posting_list(query_processor& qp,
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>
+future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>, size_t>>>
 indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
                                              service::query_state& state,
                                              const query_options& options) const
 {
-    using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
+    using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>, size_t>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
@@ -1438,7 +1438,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
             partition_ranges.emplace_back(range);
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
-        return make_ready_future<coordinator_result<value_type>>(value_type(std::move(partition_ranges), std::move(paging_state)));
+        return make_ready_future<coordinator_result<value_type>>(value_type(std::move(partition_ranges), std::move(paging_state), rs.size()));
     }));
 }
 
