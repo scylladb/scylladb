@@ -1186,15 +1186,21 @@ class json_dumper {
     json_writer& _writer;
     sstables::sstable_version_types _version;
     std::function<std::string_view(const void* const)> _name_resolver;
+    std::function<sstring(const void* const, bytes_view)> _disk_string_converter;
+
+public:
+    static sstring default_disk_string_converter(const void* const, bytes_view value) {
+        return sstring(value.begin(), value.end());
+    }
 
 private:
-    void visit(int8_t val) { _writer.Int(val); }
-    void visit(uint8_t val) { _writer.Uint(val); }
-    void visit(int val) { _writer.Int(val); }
-    void visit(unsigned val) { _writer.Uint(val); }
-    void visit(int64_t val) { _writer.Int64(val); }
-    void visit(uint64_t val) { _writer.Uint64(val); }
-    void visit(double val) {
+    void visit(const void* const field, int8_t val) { _writer.Int(val); }
+    void visit(const void* const field, uint8_t val) { _writer.Uint(val); }
+    void visit(const void* const field, int val) { _writer.Int(val); }
+    void visit(const void* const field, unsigned val) { _writer.Uint(val); }
+    void visit(const void* const field, int64_t val) { _writer.Int64(val); }
+    void visit(const void* const field, uint64_t val) { _writer.Uint64(val); }
+    void visit(const void* const field, double val) {
         if (std::isnan(val)) {
             _writer.String("NaN");
         } else {
@@ -1203,42 +1209,42 @@ private:
     }
 
     template <typename Integer>
-    void visit(const sstables::disk_string<Integer>& val) {
-        _writer.String(disk_string_to_string(val));
+    void visit(const void* const field, const sstables::disk_string<Integer>& val) {
+        _writer.String(_disk_string_converter(field, val.value));
     }
 
     template <typename Contents>
-    void visit(const std::optional<Contents>& val) {
+    void visit(const void* const field, const std::optional<Contents>& val) {
         if (bool(val)) {
-            visit(*val);
+            visit(field, *val);
         } else {
             _writer.Null();
         }
     }
 
     template <typename Integer, typename T>
-    void visit(const sstables::disk_array<Integer, T>& val) {
+    void visit(const void* const field, const sstables::disk_array<Integer, T>& val) {
         _writer.StartArray();
         for (const auto& elem : val.elements) {
-            visit(elem);
+            visit(field, elem);
         }
         _writer.EndArray();
     }
 
-    void visit(const sstables::disk_string_vint_size& val) {
-        _writer.String(sstring(val.value.begin(), val.value.end()));
+    void visit(const void* const field, const sstables::disk_string_vint_size& val) {
+        _writer.String(_disk_string_converter(field, val.value));
     }
 
     template <typename T>
-    void visit(const sstables::disk_array_vint_size<T>& val) {
+    void visit(const void* const field, const sstables::disk_array_vint_size<T>& val) {
         _writer.StartArray();
         for (const auto& elem : val.elements) {
-            visit(elem);
+            visit(field, elem);
         }
         _writer.EndArray();
     }
 
-    void visit(const utils::estimated_histogram& val) {
+    void visit(const void* const field, const utils::estimated_histogram& val) {
         _writer.StartArray();
         for (size_t i = 0; i < val.buckets.size(); i++) {
             _writer.StartObject();
@@ -1251,7 +1257,7 @@ private:
         _writer.EndArray();
     }
 
-    void visit(const utils::streaming_histogram& val) {
+    void visit(const void* const field, const utils::streaming_histogram& val) {
         _writer.StartObject();
         for (const auto& [k, v] : val.bin) {
             _writer.Key(format("{}", k));
@@ -1260,7 +1266,7 @@ private:
         _writer.EndObject();
     }
 
-    void visit(const db::replay_position& val) {
+    void visit(const void* const field, const db::replay_position& val) {
         _writer.StartObject();
         _writer.Key("id");
         _writer.Uint64(val.id);
@@ -1269,30 +1275,30 @@ private:
         _writer.EndObject();
     }
 
-    void visit(const sstables::commitlog_interval& val) {
+    void visit(const void* const field, const sstables::commitlog_interval& val) {
         _writer.StartObject();
         _writer.Key("start");
-        visit(val.start);
+        visit(field, val.start);
         _writer.Key("end");
-        visit(val.end);
+        visit(field, val.end);
         _writer.EndObject();
     }
 
-    void visit(const utils::UUID& uuid) {
+    void visit(const void* const field, const utils::UUID& uuid) {
         _writer.String(fmt::to_string(uuid));
     }
 
     template <typename Tag>
-    void visit(const utils::tagged_uuid<Tag>& id) {
-        visit(id.uuid());
+    void visit(const void* const field, const utils::tagged_uuid<Tag>& id) {
+        visit(field, id.uuid());
     }
 
     template <typename Integer>
-    void visit(const sstables::vint<Integer>& val) {
-        visit(val.value);
+    void visit(const void* const field, const sstables::vint<Integer>& val) {
+        visit(field, val.value);
     }
 
-    void visit(const sstables::serialization_header::column_desc& val) {
+    void visit(const void* const field, const sstables::serialization_header::column_desc& val) {
         auto prev_name_resolver = std::exchange(_name_resolver, [&val] (const void* const field) {
             if (field == &val.name) { return "name"; }
             else if (field == &val.type_name) { return "type_name"; }
@@ -1306,28 +1312,34 @@ private:
         _name_resolver = std::move(prev_name_resolver);
     }
 
-    json_dumper(json_writer& writer, sstables::sstable_version_types version, std::function<std::string_view(const void* const)> name_resolver)
-        : _writer(writer), _version(version), _name_resolver(std::move(name_resolver)) {
+    json_dumper(json_writer& writer, sstables::sstable_version_types version, std::function<std::string_view(const void* const)> name_resolver,
+        std::function<sstring(const void* const, bytes_view string)> disk_string_converter)
+        : _writer(writer), _version(version), _name_resolver(std::move(name_resolver)), _disk_string_converter(std::move(disk_string_converter)) {
     }
 
 public:
     template <typename Arg1>
     void operator()(Arg1& arg1) {
         _writer.Key(_name_resolver(&arg1));
-        visit(arg1);
+        visit(&arg1, arg1);
     }
 
     template <typename Arg1, typename... Arg>
     void operator()(Arg1& arg1, Arg&... arg) {
         _writer.Key(_name_resolver(&arg1));
-        visit(arg1);
+        visit(&arg1, arg1);
         (*this)(arg...);
     }
 
     template <typename T>
-    static void dump(json_writer& writer, sstables::sstable_version_types version, const T& obj, std::string_view name,
-            std::function<std::string_view(const void* const)> name_resolver) {
-        json_dumper dumper(writer, version, std::move(name_resolver));
+    static void dump(
+            json_writer& writer,
+            sstables::sstable_version_types version,
+            const T& obj,
+            std::string_view name,
+            std::function<std::string_view(const void* const)> name_resolver,
+            std::function<sstring(const void* const, bytes_view string)> disk_string_converter = &json_dumper::default_disk_string_converter) {
+        json_dumper dumper(writer, version, std::move(name_resolver), std::move(disk_string_converter));
         writer.Key(name);
         writer.StartObject();
         const_cast<T&>(obj).describe_type(version, std::ref(dumper));
@@ -1375,6 +1387,11 @@ void dump_stats_metadata(json_writer& writer, sstables::sstable_version_types ve
         else if (field == &metadata.commitlog_intervals) { return "commitlog_intervals"; }
         else if (field == &metadata.originating_host_id) { return "originating_host_id"; }
         else { throw std::invalid_argument("invalid field offset"); }
+    }, [&metadata] (const void* const field, bytes_view value) {
+        if (field == &metadata.min_column_names || field == &metadata.max_column_names) {
+            return to_hex(value);
+        }
+        return json_dumper::default_disk_string_converter(field, value);
     });
 }
 

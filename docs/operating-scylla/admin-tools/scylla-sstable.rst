@@ -450,8 +450,8 @@ The content is dumped in JSON, using the following schema:
         "estimated_tombstone_drop_time": $STREAMING_HISTOGRAM,
         "sstable_level": Uint,
         "repaired_at": Uint64,
-        "min_column_names": [Uint, ...],
-        "max_column_names": [Uint, ...],
+        "min_column_names": [String, ...],
+        "max_column_names": [String, ...],
         "has_legacy_counter_shards": Bool,
         "columns_count": Int64, // >= MC only
         "rows_count": Int64, // >= MC only
