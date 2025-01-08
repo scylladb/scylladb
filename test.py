@@ -481,10 +481,6 @@ class PythonTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
-        if not os.access(self.scylla_exe, os.F_OK):
-            raise FileNotFoundError(f"{self.scylla_exe} does not exist.")
-        if not os.access(self.scylla_exe, os.X_OK):
-            raise PermissionError(f"{self.scylla_exe} is not executable.")
         self.scylla_env = dict(self.base_env)
         if self.mode == "coverage":
             self.scylla_env.update(coverage.env(self.scylla_exe, distinct_id=self.name))
@@ -586,6 +582,13 @@ class PythonTestSuite(TestSuite):
     async def add_test(self, shortname, casename) -> None:
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, casename, self)
         self.tests.append(test)
+
+    async def run(self, test: 'Test', options: argparse.Namespace):
+        if not os.access(self.scylla_exe, os.F_OK):
+            raise FileNotFoundError(f"{self.scylla_exe} does not exist.")
+        if not os.access(self.scylla_exe, os.X_OK):
+            raise PermissionError(f"{self.scylla_exe} is not executable.")
+        return await super().run(test, options)
 
 
 class CQLApprovalTestSuite(PythonTestSuite):
