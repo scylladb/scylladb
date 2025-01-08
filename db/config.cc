@@ -145,6 +145,9 @@ template <>
 const config_type config_type_for<std::vector<sstring>> = config_type("string list", value_to_json<std::vector<sstring>>);
 
 template <>
+const config_type config_type_for<std::unordered_map<sstring, std::unordered_map<sstring, sstring>>> = config_type("string map map", value_to_json<std::unordered_map<sstring, std::unordered_map<sstring, sstring>>>);
+
+template <>
 const config_type config_type_for<std::unordered_map<sstring, sstring>> = config_type("string map", value_to_json<std::unordered_map<sstring, sstring>>);
 
 template <>

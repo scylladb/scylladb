@@ -53,6 +53,21 @@ public:
 template <typename T>
 extern const config_type config_type_for;
 
+template<>
+extern const config_type config_type_for<uint32_t>;
+
+template<>
+extern const config_type config_type_for<sstring>;
+
+template<>
+extern const config_type config_type_for<bool>;
+
+template<>
+extern const config_type config_type_for<std::unordered_map<sstring, sstring>>;
+
+template<>
+extern const config_type config_type_for<std::unordered_map<sstring, std::unordered_map<sstring, sstring>>>;
+
 class config_file {
     static thread_local unsigned s_shard_id;
     struct any_value {
@@ -270,6 +285,8 @@ public:
 
     config_file(std::initializer_list<cfg_ref> = {});
     config_file(const config_file&) = delete;
+
+    virtual ~config_file() = default;
 
     void add(cfg_ref, std::unique_ptr<any_value> value);
     void add(std::initializer_list<cfg_ref>);
