@@ -1336,7 +1336,8 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
 
-scylla_tools = ['tools/read_mutation.cc',
+scylla_tools = ['tools/scylla-local-file-key-generator.cc',
+                'tools/read_mutation.cc',
                 'tools/scylla-types.cc',
                 'tools/scylla-sstable.cc',
                 'tools/scylla-nodetool.cc',
