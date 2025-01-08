@@ -3171,9 +3171,19 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         if (app_config.count("scylla-yaml-file")) {
             scylla_yaml_path = app_config["scylla-yaml-file"].as<sstring>();
             scylla_yaml_path_source = "user provided";
+        } else if (std::getenv("SCYLLA_CONF") || std::getenv("SCYLLA_HOME")) {
+            scylla_yaml_path = db::config::get_conf_sub("scylla.yaml").string();
+            scylla_yaml_path_source = "environment provided";
         } else {
             scylla_yaml_path = db::config::get_conf_sub("scylla.yaml").string();
-            scylla_yaml_path_source = "default";
+            scylla_yaml_path_source = "dev default";
+
+            // On production machines, the default of ./conf/scylla.yaml will not
+            // work, try /etc/scylla/scylla.yaml instead.
+            if (!file_exists(scylla_yaml_path).get()) {
+                scylla_yaml_path = "/etc/scylla/scylla.yaml";
+                scylla_yaml_path_source = "prod default";
+            }
         }
 
         if (file_exists(scylla_yaml_path).get()) {
