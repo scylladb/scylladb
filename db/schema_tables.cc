@@ -2457,7 +2457,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
  * View metadata serialization/deserialization.
  */
 
-view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)  {
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, schema_ptr base_schema, std::optional<table_schema_version> version)  {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     const query::result_set_row& row = table_rs.row(0);
 
@@ -2493,22 +2493,22 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
         builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
 
-    auto base_id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
-    auto base_name = row.get_nonnull<sstring>("base_table_name");
     auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
     auto where_clause = row.get_nonnull<sstring>("where_clause");
 
-    builder.with_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    builder.with_view_info(std::move(base_schema), include_all_columns, std::move(where_clause));
     return view_ptr(builder.build());
 }
 
 static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
+    auto id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
+    schema_ptr base_schema = proxy.local().local_db().find_schema(id);
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
     schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
     if (!sm.live()) {
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
-    co_return create_view_from_mutations(proxy, std::move(sm));
+    co_return create_view_from_mutations(proxy, std::move(sm), std::move(base_schema));
 }
 
 /**

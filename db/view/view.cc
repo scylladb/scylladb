@@ -79,9 +79,10 @@ static inline void inject_failure(std::string_view operation) {
             [operation] { throw std::runtime_error(std::string(operation)); });
 }
 
-view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
+view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema)
         : _schema(schema)
         , _raw(raw_view_info)
+        , _base_info(make_base_dependent_view_info(*base_schema))
         , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
