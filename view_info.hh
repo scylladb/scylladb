@@ -29,7 +29,7 @@ class view_info final {
     // partition key columns of the base, maybe in a different order.
     mutable bool _is_partition_key_permutation_of_base_partition_key;
 public:
-    view_info(const schema& schema, const raw_view_info& raw_view_info);
+    view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema);
 
     const raw_view_info& raw() const {
         return _raw;
@@ -77,7 +77,7 @@ public:
     /// by view_and_base. See with_base_info_snapshot().
     const db::view::base_info_ptr& base_info() const { return _base_info; }
     void set_base_info(db::view::base_info_ptr);
-    db::view::base_info_ptr make_base_dependent_view_info(const schema& base_schema) const;
+    db::view::base_info_ptr make_base_dependent_view_info(schema_ptr base_schema) const;
 
     friend bool operator==(const view_info& x, const view_info& y) {
         return x._raw == y._raw;

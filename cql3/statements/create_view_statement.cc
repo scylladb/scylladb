@@ -378,7 +378,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     }
 
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
-    builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
+    builder.with_view_info(schema, included.empty(), std::move(where_clause_text));
 
     return std::make_pair(view_ptr(builder.build()), std::move(warnings));
 }

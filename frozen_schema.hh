@@ -27,6 +27,6 @@ public:
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze(const db::schema_ctxt&) const;
+    schema_ptr unfreeze(const db::schema_ctxt&, std::optional<schema_ptr> base = std::nullopt) const;
     const bytes_ostream& representation() const;
 };

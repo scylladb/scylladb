@@ -959,7 +959,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     if (schema->is_view()) {
         try {
             auto base_schema = find_schema(schema->view_info()->base_id());
-            schema->view_info()->set_base_info(schema->view_info()->make_base_dependent_view_info(*base_schema));
+            schema->view_info()->set_base_info(schema->view_info()->make_base_dependent_view_info(base_schema));
         } catch (no_such_column_family&) {
             throw std::invalid_argument("The base table " + schema->view_info()->base_name() + " was already dropped");
         }
@@ -1012,7 +1012,7 @@ bool database::update_column_family(schema_ptr new_schema) {
     if (new_schema->is_view()) {
         try {
             auto base_schema = find_schema(new_schema->view_info()->base_id());
-            new_schema->view_info()->set_base_info(new_schema->view_info()->make_base_dependent_view_info(*base_schema));
+            new_schema->view_info()->set_base_info(new_schema->view_info()->make_base_dependent_view_info(base_schema));
         } catch (no_such_column_family&) {
             throw std::invalid_argument("The base table " + new_schema->view_info()->base_name() + " was already dropped");
         }

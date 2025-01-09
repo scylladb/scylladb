@@ -3220,7 +3220,7 @@ void table::set_schema(schema_ptr s) {
     _schema = std::move(s);
 
     for (auto&& v : _views) {
-        auto base_info = v->view_info()->make_base_dependent_view_info(*_schema);
+        auto base_info = v->view_info()->make_base_dependent_view_info(_schema);
         v->view_info()->set_base_info(base_info);
         if (v->registry_entry()) {
             v->registry_entry()->update_base_schema(_schema);

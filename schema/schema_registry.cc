@@ -234,13 +234,18 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
-        auto s = _frozen_schema->unfreeze(*_registry._ctxt);
+        schema_ptr s;
+        if (_base_schema) {
+            s = _frozen_schema->unfreeze(*_registry._ctxt, *_base_schema);
+        } else {
+            s = _frozen_schema->unfreeze(*_registry._ctxt);
+        }
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
         if (s->is_view()) {
             // We may encounter a no_such_column_family here, which means that the base table was deleted and we should fail the request
-            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(**_base_schema));
+            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*_base_schema));
         }
         _erase_timer.cancel();
         s->_registry_entry = this;
