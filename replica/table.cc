@@ -695,7 +695,7 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override {}
 
-    compaction_group& compaction_group_for_token(dht::token token) const noexcept override {
+    compaction_group& compaction_group_for_token(dht::token token) const override {
         return get_compaction_group();
     }
     utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override {
@@ -703,16 +703,16 @@ public:
         ret.push_back(&get_compaction_group());
         return ret;
     }
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept override {
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
         return get_compaction_group();
     }
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override {
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
         return get_compaction_group();
     }
     size_t log2_storage_groups() const override {
         return 0;
     }
-    storage_group& storage_group_for_token(dht::token token) const noexcept override {
+    storage_group& storage_group_for_token(dht::token token) const override {
         return *_single_sg;
     }
 
@@ -842,15 +842,15 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
 
-    compaction_group& compaction_group_for_token(dht::token token) const noexcept override;
+    compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override;
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept override;
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept override;
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
 
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
     }
-    storage_group& storage_group_for_token(dht::token token) const noexcept override {
+    storage_group& storage_group_for_token(dht::token token) const override {
         return storage_group_for_id(storage_group_of(token).first);
     }
 
@@ -1116,11 +1116,11 @@ std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
     return ret;
 }
 
-compaction_group* table::get_compaction_group(size_t id) const noexcept {
+compaction_group* table::get_compaction_group(size_t id) const {
     return storage_group_for_id(id).main_compaction_group().get();
 }
 
-storage_group& table::storage_group_for_token(dht::token token) const noexcept {
+storage_group& table::storage_group_for_token(dht::token token) const {
     return _sg_manager->storage_group_for_token(token);
 }
 
@@ -1128,13 +1128,13 @@ storage_group& table::storage_group_for_id(size_t i) const {
     return _sg_manager->storage_group_for_id(_schema, i);
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const noexcept {
+compaction_group& tablet_storage_group_manager::compaction_group_for_token(dht::token token) const {
     auto [idx, range_side] = storage_group_of(token);
     auto& sg = storage_group_for_id(idx);
     return *sg.select_compaction_group(range_side);
 }
 
-compaction_group& table::compaction_group_for_token(dht::token token) const noexcept {
+compaction_group& table::compaction_group_for_token(dht::token token) const {
     return _sg_manager->compaction_group_for_token(token);
 }
 
@@ -1165,15 +1165,15 @@ utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_rang
     return _sg_manager->compaction_groups_for_token_range(tr);
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
+compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept {
+compaction_group& table::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
     auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
     auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
 
@@ -1195,7 +1195,7 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
     }
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
     return _sg_manager->compaction_group_for_sstable(sst);
 }
 
