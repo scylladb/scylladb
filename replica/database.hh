@@ -600,19 +600,19 @@ private:
     future<> handle_tablet_split_completion(size_t old_tablet_count, const locator::tablet_map& new_tmap);
 
     // Select a storage group from a given token.
-    storage_group& storage_group_for_token(dht::token token) const noexcept;
+    storage_group& storage_group_for_token(dht::token token) const;
     storage_group& storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
-    compaction_group* get_compaction_group(size_t id) const noexcept;
+    compaction_group* get_compaction_group(size_t id) const;
     // Select a compaction group from a given token.
-    compaction_group& compaction_group_for_token(dht::token token) const noexcept;
+    compaction_group& compaction_group_for_token(dht::token token) const;
     // Return compaction groups, present in this shard, that own a particular token range.
     utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const;
     // Select a compaction group from a given key.
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
+    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const;
     // Select a compaction group from a given sstable based on its token range.
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
     void for_each_compaction_group(std::function<void(compaction_group&)> action);
