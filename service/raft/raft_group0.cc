@@ -991,10 +991,42 @@ future<> raft_group0::modify_raft_voter_status(
         const std::unordered_set<raft::server_id>& ids, can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
     co_await run_op_with_retry(as, [this, &ids, timeout, can_vote, &as]() -> future<operation_result> {
         std::vector<raft::config_member> add;
+<<<<<<< HEAD
         add.reserve(ids.size());
         std::transform(ids.begin(), ids.end(), std::back_inserter(add), [can_vote](raft::server_id id) {
             return raft::config_member{{id, {}}, static_cast<bool>(can_vote)};
         });
+||||||| parent of 3b9765dac8 (raft_group0: modify_raft_voter_status: do not add new members)
+        add.reserve(voters_add.size() + voters_del.size());
+
+        std::transform(voters_add.begin(), voters_add.end(), std::back_inserter(add), [](raft::server_id id) {
+            return raft::config_member{{id, {}}, true};
+        });
+
+        std::transform(voters_del.begin(), voters_del.end(), std::back_inserter(add), [](raft::server_id id) {
+            return raft::config_member{{id, {}}, false};
+        });
+=======
+        add.reserve(voters_add.size() + voters_del.size());
+
+        for (const auto& id: voters_add) {
+            if (is_member(id, false)) {
+                add.push_back(raft::config_member{{id, {}}, true});
+            } else {
+                group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a voter, ignoring",
+                        voters_add, voters_del, id);
+            }
+        }
+
+        for (const auto& id: voters_del) {
+            if (is_member(id, false)) {
+                add.push_back(raft::config_member{{id, {}}, false});
+            } else {
+                group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a non-voter, ignoring",
+                        voters_add, voters_del, id);
+            }
+        }
+>>>>>>> 3b9765dac8 (raft_group0: modify_raft_voter_status: do not add new members)
 
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config(std::move(add), {}, &as, timeout);
