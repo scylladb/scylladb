@@ -184,7 +184,14 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_auth_v2_during_recovery(manager: ManagerClient):
+<<<<<<< HEAD:test/auth_cluster/test_auth_v2_migration.py
     servers = await manager.servers_add(3)
+||||||| parent of ca5c223505 (test: mark tests with the gossip-based recovery procedure):test/cluster/auth_cluster/test_auth_v2_migration.py
+    servers = await manager.servers_add(3, config=auth_config)
+=======
+    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
+    servers = await manager.servers_add(3, config=auth_config)
+>>>>>>> ca5c223505 (test: mark tests with the gossip-based recovery procedure):test/cluster/auth_cluster/test_auth_v2_migration.py
     cql, hosts = await manager.get_ready_cql(servers)
 
     logging.info("Checking auth version before recovery")

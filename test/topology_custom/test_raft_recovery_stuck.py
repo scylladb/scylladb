@@ -21,6 +21,8 @@ from test.topology.util import (delete_raft_data_and_upgrade_state, enter_recove
 @log_run_time
 async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     """
+    This test uses the gossip-based recovery procedure.
+
     1. Create a cluster,
     2. Enter RECOVERY state on every server.
     3. Delete the Raft data and the upgrade state on all servers.

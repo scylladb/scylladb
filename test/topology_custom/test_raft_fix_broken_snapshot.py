@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 async def test_raft_fix_broken_snapshot(manager: ManagerClient):
     """Reproducer for scylladb/scylladb#16683.
 
+       This test uses the gossip-based recovery procedure.
+
        Simulate upgrade-to-Raft in old cluster (which doesn't have ff386e7a445)
        using RECOVERY mode and error injection.
        Then bootstrap a new server.
