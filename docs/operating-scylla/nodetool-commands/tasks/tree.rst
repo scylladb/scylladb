@@ -1,7 +1,7 @@
 Nodetool tasks tree
 =======================
 **tasks tree** - Gets the statuses of a task manager task and all its descendants.
-The statuses are listed in BFS order. If the task was finished it is unregistered.
+The statuses are listed in BFS order.
 
 If task_id isn't specified, trees of all non-internal tasks are printed
 (internal tasks are the ones that have a parent or cover an operation that

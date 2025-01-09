@@ -56,7 +56,6 @@ def test_task_manager_status_done(rest_api):
 
                 status = get_task_status(rest_api, task0)
                 check_status_correctness(status, { "id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
-                assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_status_failed(rest_api):
     with new_test_module(rest_api):
@@ -70,7 +69,6 @@ def test_task_manager_status_failed(rest_api):
 
                 status = get_task_status(rest_api, task0)
                 check_status_correctness(status, { "id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
-                assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_not_abortable(rest_api):
     with new_test_module(rest_api):
