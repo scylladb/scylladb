@@ -17,7 +17,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.xfail(reason="issue #20814")
 @pytest.mark.asyncio
 async def test_error_while_becoming_voter(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """
