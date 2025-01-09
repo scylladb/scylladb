@@ -25,12 +25,15 @@ frozen_schema::frozen_schema(const schema_ptr& s)
     }())
 { }
 
-schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
+schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<schema_ptr> base_schema) const {
     auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
-    return sv.mutations().is_view()
-         ? db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), sv.version())
-         : db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
+    auto sm = sv.mutations();
+    if (sm.is_view()) {
+        return db::schema_tables::create_view_from_mutations(ctxt, std::move(sm), base_schema, sv.version());
+    } else {
+        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), sv.version());
+    }
 }
 
 frozen_schema::frozen_schema(bytes_ostream b)
