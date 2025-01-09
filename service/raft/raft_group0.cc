@@ -95,6 +95,44 @@ namespace service {
 static logging::logger group0_log("raft_group0");
 static logging::logger upgrade_log("raft_group0_upgrade");
 
+namespace {
+
+constexpr std::chrono::milliseconds default_retry_period{10};   // 10 milliseconds
+constexpr std::chrono::seconds default_max_retry_period{1};     // 1 second
+constexpr std::chrono::seconds default_max_total_timeout{300};  // 5 minutes
+
+enum class operation_result : uint8_t { success, failure };
+
+future<> run_op_with_retry(abort_source& as, auto&& op, const sstring op_name,
+        const std::optional<std::chrono::seconds> max_total_timeout = default_max_total_timeout, std::chrono::milliseconds retry_period = default_retry_period,
+        const std::chrono::seconds max_retry_period = default_max_retry_period) {
+    const auto start = lowres_clock::now();
+    while (true) {
+        as.check();
+        const operation_result result = co_await op();
+        if (result == operation_result::success) {
+            co_return;
+        }
+
+        if (max_total_timeout) {
+            const auto elapsed = lowres_clock::now() - start;
+            if (elapsed > *max_total_timeout) {
+                on_internal_error(group0_log,
+                        format("{} timed out after retrying for {} seconds", op_name, std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()));
+            }
+        }
+
+        retry_period *= 2;
+        if (retry_period > max_retry_period) {
+            retry_period = max_retry_period;
+        }
+        co_await sleep_abortable(retry_period, as);
+    }
+    std::unreachable();
+}
+
+} // namespace
+
 // TODO: change the links from master to stable/5.2 after 5.2 is released
 const char* const raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
 static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/architecture/raft.html#raft-manual-recovery-procedure";
