@@ -1082,7 +1082,7 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
                 // It should be fine since if we tried to register a view for which
                 // we don't know the base table, our registry is broken.
                 schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
-                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
+                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(std::move(base_schema)));
             }
         }
         return s;
@@ -1135,7 +1135,7 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
         // read or write so we better throw than return an incomplete useless
         // schema
         schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
-        s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
+        s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(std::move(base_schema)));
     }
 
     co_return s;

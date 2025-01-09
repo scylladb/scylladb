@@ -405,7 +405,7 @@ schema::raw_schema::raw_schema(table_id id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props)
+schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props, std::optional<schema_ptr> base_schema)
     : _raw(raw)
     , _static_props(props)
     , _offsets([this] {
@@ -489,7 +489,11 @@ schema::schema(private_tag, const raw_schema& raw, const schema_static_props& pr
 
     rebuild();
     if (_raw._view_info) {
-        _view_info = std::make_unique<::view_info>(*this, *_raw._view_info);
+        if (!base_schema) {
+            throw std::runtime_error(format("Tried to create schema for view {}.{} without schema of the base {}",
+                                            _raw._ks_name, _raw._cf_name, _raw._view_info->base_name()));
+        }
+        _view_info = std::make_unique<::view_info>(*this, *_raw._view_info, *base_schema);
     }
 }
 
@@ -506,7 +510,7 @@ schema::schema(const schema& o, const std::function<void(schema&)>& transform)
 
     rebuild();
     if (o.is_view()) {
-        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
+        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw(), o.view_info()->base_info()->base_schema());
         if (o.view_info()->base_info()) {
             _view_info->set_base_info(o.view_info()->base_info());
         }
@@ -1238,6 +1242,7 @@ schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
 {
     if (s->is_view()) {
+        _base_schema = s->view_info()->base_info()->base_schema();
         _view_info = s->view_info()->raw();
     }
 }
@@ -1475,8 +1480,9 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     }
 }
 
-schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
-    _raw._view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+schema_builder& schema_builder::with_view_info(schema_ptr base, bool include_all_columns, sstring where_clause) {
+    _base_schema = std::move(base);
+    _raw._view_info = raw_view_info(_base_schema.value()->id(), _base_schema.value()->cf_name(), include_all_columns, std::move(where_clause));
     return *this;
 }
 
@@ -1581,7 +1587,7 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
         }
     ), _version);
 
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props);
+    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, _base_schema);
 }
 
 auto schema_builder::static_configurators() -> std::vector<static_configurator>& {

@@ -370,6 +370,9 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
             validate_column_rename(db, *s, *from, *to);
             cfm.rename_column(from->name(), to->name());
         }
+        // New view schemas contain the new column names, so we need to base them on the
+        // new base schema.
+        schema_ptr new_base_schema = cfm.build();
         // If the view includes a renamed column, it must be renamed in
         // the view table and the definition.
         for (auto&& view : cf.views()) {
@@ -394,8 +397,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                 }
             }
             if (view_updated) {
-                builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
-                        view->view_info()->include_all_columns(), std::move(new_where));
+                builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
                 view_updates.push_back(view_ptr(builder.build()));
             }
         }

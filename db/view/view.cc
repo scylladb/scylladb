@@ -77,9 +77,10 @@ static inline void inject_failure(std::string_view operation) {
             [operation] { throw std::runtime_error(std::string(operation)); });
 }
 
-view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
+view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema)
         : _schema(schema)
         , _raw(raw_view_info)
+        , _base_info(make_base_dependent_view_info(base_schema))
         , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
@@ -176,16 +177,16 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     return _base_schema;
 }
 
-db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
+db::view::base_info_ptr view_info::make_base_dependent_view_info(schema_ptr base) const {
     std::vector<column_id> base_regular_columns_in_view_pk;
     std::vector<column_id> base_static_columns_in_view_pk;
 
     _is_partition_key_permutation_of_base_partition_key =
         std::ranges::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
-            const column_definition* base_col = base.get_column_definition(view_col.name());
+            const column_definition* base_col = base->get_column_definition(view_col.name());
             return base_col && base_col->is_partition_key();
             })
-        && _schema.partition_key_size() == base.partition_key_size();
+        && _schema.partition_key_size() == base->partition_key_size();
 
     for (auto&& view_col : _schema.primary_key_columns()) {
         if (view_col.is_computed()) {
@@ -196,14 +197,14 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             continue;
         }
         const bytes& view_col_name = view_col.name();
-        auto* base_col = base.get_column_definition(view_col_name);
+        auto* base_col = base->get_column_definition(view_col_name);
         if (base_col && base_col->is_regular()) {
             base_regular_columns_in_view_pk.push_back(base_col->id);
         } else if (base_col && base_col->is_static()) {
             base_static_columns_in_view_pk.push_back(base_col->id);
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
-                    to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
+                    to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base->ks_name(), base->cf_name());
             if (to_string_view(view_col_name) == "idx_token") {
                 vlogger.warn("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
                         "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
@@ -219,7 +220,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         }
     }
 
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk));
+    return make_lw_shared<db::view::base_dependent_view_info>(std::move(base), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk));
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
