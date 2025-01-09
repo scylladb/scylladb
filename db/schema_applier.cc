@@ -579,19 +579,23 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // 2. The table was just created - the table is guaranteed to be published with the view in that case.
         // 3. The view itself was altered - in that case we already know the base table so we can take it from
         //    the database object.
-        view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
+        query::result_set rs(sm.columnfamilies_mutation());
+        const query::result_set_row& view_row = rs.row(0);
+        auto ks_name = view_row.get_nonnull<sstring>("keyspace_name");
+        auto base_name = view_row.get_nonnull<sstring>("base_table_name");
+
         schema_ptr base_schema;
         for (auto&& altered : tables_diff.altered) {
             // Chose the appropriate version of the base table schema: old -> old, new -> new.
             schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
-            if (s->ks_name() == vp->ks_name() && s->cf_name() == vp->view_info()->base_name() ) {
+            if (s->ks_name() == ks_name && s->cf_name() == base_name) {
                 base_schema = s;
                 break;
             }
         }
         if (!base_schema) {
             for (auto&& s : tables_diff.created) {
-                if (s.get()->ks_name() == vp->ks_name() && s.get()->cf_name() == vp->view_info()->base_name() ) {
+                if (s.get()->ks_name() == ks_name && s.get()->cf_name() == base_name) {
                     base_schema = s;
                     break;
                 }
@@ -599,8 +603,9 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         }
 
         if (!base_schema) {
-            base_schema = proxy.local().local_db().find_schema(vp->ks_name(), vp->view_info()->base_name());
+            base_schema = proxy.local().local_db().find_schema(ks_name, base_name);
         }
+        view_ptr vp = create_view_from_mutations(proxy, std::move(sm), base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
