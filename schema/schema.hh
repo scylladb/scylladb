@@ -628,7 +628,7 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, const schema_static_props& props);
+    schema(private_tag, const raw_schema&, const schema_static_props& props, std::optional<schema_ptr> base_schema);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
