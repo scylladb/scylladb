@@ -29,7 +29,7 @@ class view_info final {
     // partition key columns of the base, maybe in a different order.
     mutable bool _is_partition_key_permutation_of_base_partition_key;
 public:
-    view_info(const schema& schema, const raw_view_info& raw_view_info);
+    view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema);
 
     const raw_view_info& raw() const {
         return _raw;

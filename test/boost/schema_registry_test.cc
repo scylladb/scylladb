@@ -288,7 +288,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
     auto view_schema = schema_builder("ks", "cf_view")
             .with_column("v", int32_type, column_kind::partition_key)
             .with_column("pk", int32_type)
-            .with_view_info(*base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
+            .with_view_info(base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
             .build();
     view_schema->view_info()->set_base_info(view_schema->view_info()->make_base_dependent_view_info(*base_schema));
     local_schema_registry().get_or_load(view_schema->version(),
