@@ -1037,7 +1037,7 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
 
         sleep(500ms).get(); // wait until memtable will be flushed at least once
 
-        BOOST_REQUIRE_EQUAL(t.sstables_count(), 1); // check sstable exists after flush
+        eventually_true([&] { return t.sstables_count() == 1; }); // check sstable exists after flush
 
         // Check mutation presents in the table
         mutation_source ms = t.as_mutation_source();
