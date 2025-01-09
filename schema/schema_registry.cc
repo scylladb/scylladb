@@ -234,7 +234,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
-        auto s = _frozen_schema->unfreeze(*_registry._ctxt);
+        schema_ptr s = _frozen_schema->unfreeze(*_registry._ctxt, _base_schema);
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
