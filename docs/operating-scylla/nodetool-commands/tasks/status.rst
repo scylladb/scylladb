@@ -1,6 +1,6 @@
 Nodetool tasks status
 =========================
-**tasks status** - Gets the status of a task manager task. If the task was finished it is unregistered.
+**tasks status** - Gets the status of a task manager task.
 
 Syntax
 -------
