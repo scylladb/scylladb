@@ -19,6 +19,7 @@ class tablet_replica;
 
 namespace service {
 
+class status_helper;
 class storage_service;
 
 class tablet_virtual_task : public tasks::task_manager::virtual_task::impl {
@@ -42,7 +43,7 @@ public:
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
     std::vector<table_id> get_table_ids() const;
-    future<std::optional<tasks::task_status>> get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica, size_t& tablet_count);
+    future<std::optional<status_helper>> get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint);
 };
 
 class task_manager_module : public tasks::task_manager::module {

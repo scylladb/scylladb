@@ -17,6 +17,12 @@
 
 namespace service {
 
+struct status_helper {
+    tasks::task_status status;
+    utils::chunked_vector<locator::tablet_id> tablets;
+    std::optional<locator::tablet_replica> pending_replica;
+};
+
 tasks::task_manager::task_group tablet_virtual_task::get_group() const noexcept {
     return tasks::task_manager::task_group::tablets_group;
 }
@@ -111,10 +117,10 @@ future<tasks::is_abortable> tablet_virtual_task::is_abortable(tasks::virtual_tas
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::get_status(tasks::task_id id, tasks::virtual_task_hint hint) {
-    utils::chunked_vector<locator::tablet_id> tablets;
-    std::optional<locator::tablet_replica> pending_replica;
-    size_t tablet_count;
-    co_return co_await get_status_helper(id, tablets, std::move(hint), pending_replica, tablet_count);
+    auto res = co_await get_status_helper(id, std::move(hint));
+    co_return res.transform([] (status_helper s) {
+        return s.status;
+    });
 }
 
 future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_id id, tasks::virtual_task_hint hint) {
@@ -122,11 +128,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     auto task_type = hint.get_task_type();
     auto tablet_id_opt = tablet_id_provided(task_type) ? std::make_optional(hint.get_tablet_id()) : std::nullopt;
 
-    utils::chunked_vector<locator::tablet_id> tablets;
-    std::optional<locator::tablet_replica> pending_replica;
-    size_t tablet_count;
-    auto status = co_await get_status_helper(id, tablets, std::move(hint), pending_replica, tablet_count);
-    if (!status) {
+    size_t tablet_count = _ss.get_token_metadata().tablets().get_tablet_map(table).tablet_count();
+    auto res = co_await get_status_helper(id, std::move(hint));
+    if (!res) {
         co_return std::nullopt;
     }
 
@@ -138,24 +142,24 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
         } else if (tablet_id_opt.has_value()) {    // Migration task.
             return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
         } else {    // Repair task.
-            return std::all_of(tablets.begin(), tablets.end(), [&] (const locator::tablet_id& tablet) {
+            return std::all_of(res->tablets.begin(), res->tablets.end(), [&] (const locator::tablet_id& tablet) {
                 return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
             });
         }
     });
 
-    status->state = tasks::task_manager::task_state::done; // Failed repair task is retried.
+    res->status.state = tasks::task_manager::task_state::done; // Failed repair task is retried.
     if (is_migration_task(task_type)) {
         auto& replicas = _ss.get_token_metadata().tablets().get_tablet_map(table).get_tablet_info(tablet_id_opt.value()).replicas;
-        auto migration_failed = std::all_of(replicas.begin(), replicas.end(), [&] (const auto& replica) { return pending_replica.has_value() && replica != pending_replica.value(); });
-        status->state = migration_failed ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::done;
+        auto migration_failed = std::all_of(replicas.begin(), replicas.end(), [&] (const auto& replica) { return res->pending_replica.has_value() && replica != res->pending_replica.value(); });
+        res->status.state = migration_failed ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::done;
     } else if (is_resize_task(task_type)) {
         auto new_tablet_count = _ss.get_token_metadata().tablets().get_tablet_map(table).tablet_count();
-        status->state = new_tablet_count == tablet_count ? tasks::task_manager::task_state::suspended : tasks::task_manager::task_state::done;
-        status->children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
+        res->status.state = new_tablet_count == tablet_count ? tasks::task_manager::task_state::suspended : tasks::task_manager::task_state::done;
+        res->status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
     }
-    status->end_time = db_clock::now(); // FIXME: Get precise end time.
-    co_return status;
+    res->status.end_time = db_clock::now(); // FIXME: Get precise end time.
+    co_return res->status;
 }
 
 future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept {
@@ -224,11 +228,12 @@ static void update_status(const locator::tablet_task_info& task_info, tasks::tas
     status.start_time = task_info.request_time;
 }
 
-future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper(tasks::task_id id, utils::chunked_vector<locator::tablet_id>& tablets, tasks::virtual_task_hint hint, std::optional<locator::tablet_replica>& pending_replica, size_t& tablet_count) {
+future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint) {
+    status_helper res;
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
     auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
-    tasks::task_status res{
+    res.status = {
         .task_id = id,
         .kind = tasks::task_kind::cluster,
         .is_abortable = co_await is_abortable(std::move(hint)),
@@ -241,32 +246,31 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::get_status_helper
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             auto& task_info = info.repair_task_info;
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
-                update_status(task_info, res, sched_nr);
-                tablets.push_back(tid);
+                update_status(task_info, res.status, sched_nr);
+                res.tablets.push_back(tid);
             }
             return make_ready_future();
         });
     } else if (is_migration_task(task_type)) {    // Migration task.
         auto tablet_id = hint.get_tablet_id();
-        pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
+        res.pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
         auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
-            update_status(task_info, res, sched_nr);
-            tablets.push_back(tablet_id);
+            update_status(task_info, res.status, sched_nr);
+            res.tablets.push_back(tablet_id);
         }
     } else {    // Resize task.
-        tablet_count = tmap.tablet_count();
         auto& task_info = tmap.resize_task_info();
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
-            update_status(task_info, res, sched_nr);
-            res.state = tasks::task_manager::task_state::running;
-            res.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
+            update_status(task_info, res.status, sched_nr);
+            res.status.state = tasks::task_manager::task_state::running;
+            res.status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
             co_return res;
         }
     }
 
-    if (!tablets.empty()) {
-        res.state = sched_nr == 0 ? tasks::task_manager::task_state::created : tasks::task_manager::task_state::running;
+    if (!res.tablets.empty()) {
+        res.status.state = sched_nr == 0 ? tasks::task_manager::task_state::created : tasks::task_manager::task_state::running;
         co_return res;
     }
     // FIXME: Show finished tasks.
