@@ -171,9 +171,6 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         tasks::task_manager::foreign_task_ptr task;
         try {
             task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
                 co_return std::move(task);
             }));
         } catch (tasks::task_manager::task_not_found& e) {
@@ -227,9 +224,6 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         try {
             // Get requested task.
             task = co_await tasks::task_manager::invoke_on_task(tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
                 co_return task;
             }));
         } catch (tasks::task_manager::task_not_found& e) {
