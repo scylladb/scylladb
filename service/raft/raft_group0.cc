@@ -1002,13 +1002,23 @@ future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::se
         std::vector<raft::config_member> add;
         add.reserve(voters_add.size() + voters_del.size());
 
-        std::transform(voters_add.begin(), voters_add.end(), std::back_inserter(add), [](raft::server_id id) {
-            return raft::config_member{{id, {}}, true};
-        });
+        for (const auto& id: voters_add) {
+            if (is_member(id, false)) {
+                add.push_back(raft::config_member{{id, {}}, true});
+            } else {
+                group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a voter, ignoring",
+                        voters_add, voters_del, id);
+            }
+        }
 
-        std::transform(voters_del.begin(), voters_del.end(), std::back_inserter(add), [](raft::server_id id) {
-            return raft::config_member{{id, {}}, false};
-        });
+        for (const auto& id: voters_del) {
+            if (is_member(id, false)) {
+                add.push_back(raft::config_member{{id, {}}, false});
+            } else {
+                group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a non-voter, ignoring",
+                        voters_add, voters_del, id);
+            }
+        }
 
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config(std::move(add), {}, &as, timeout);
