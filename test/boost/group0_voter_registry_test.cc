@@ -775,4 +775,160 @@ SEASTAR_TEST_CASE(dead_voters_are_removed_on_reload) {
 }
 
 
+SEASTAR_TEST_CASE(adaptive_voters_is_low_bound_with_lower_dc_count) {
+    abort_source as;
+
+    // Arrange: Set the adaptive voters limit.
+
+    constexpr size_t max_voters = service::group0_voter_registry::MAX_VOTERS_ADAPTIVE;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    constexpr std::array dcs = {"dc-1", "dc-2", "dc-3"};
+
+    info_accessor->set_info(ids[0], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[1], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[2], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[3], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[4], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[5], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[6], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[7], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[8], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[9], {.datacenter = dcs[2], .rack = "rack"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: There are more voters than DCs (we're under the low bound).
+
+    const auto& voters = voter_client->voters();
+
+    BOOST_CHECK_GT(voters.size(), dcs.size());
+}
+
+
+SEASTAR_TEST_CASE(adaptive_voters_is_equal_with_regular_dc_count) {
+    abort_source as;
+
+    // Arrange: Set the adaptive voters limit.
+
+    constexpr size_t max_voters = service::group0_voter_registry::MAX_VOTERS_ADAPTIVE;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    constexpr std::array dcs = {"dc-1", "dc-2", "dc-3", "dc-4", "dc-5", "dc-6", "dc-7"};
+
+    info_accessor->set_info(ids[0], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[1], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[2], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[3], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[4], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[5], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[6], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[7], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[8], {.datacenter = dcs[3], .rack = "rack"});
+    info_accessor->set_info(ids[9], {.datacenter = dcs[3], .rack = "rack"});
+    info_accessor->set_info(ids[10], {.datacenter = dcs[4], .rack = "rack"});
+    info_accessor->set_info(ids[11], {.datacenter = dcs[4], .rack = "rack"});
+    info_accessor->set_info(ids[12], {.datacenter = dcs[5], .rack = "rack"});
+    info_accessor->set_info(ids[13], {.datacenter = dcs[6], .rack = "rack"});
+    info_accessor->set_info(ids[14], {.datacenter = dcs[6], .rack = "rack"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: The number of voters is equal to the number of DCs.
+
+    const auto& voters = voter_client->voters();
+
+    BOOST_CHECK_EQUAL(voters.size(), dcs.size());
+
+    std::unordered_set<sstring> voters_dcs;
+    for (const auto id : voters) {
+        const auto& server_info = info_accessor->find(id);
+        BOOST_CHECK_MESSAGE(voters_dcs.emplace(server_info.datacenter).second, fmt::format("Duplicate voter in DC: {}", server_info.datacenter));
+    }
+}
+
+
+SEASTAR_TEST_CASE(adaptive_voters_is_high_bound_with_higher_dc_count) {
+    abort_source as;
+
+    // Arrange: Set the adaptive voters limit.
+
+    constexpr size_t max_voters = service::group0_voter_registry::MAX_VOTERS_ADAPTIVE;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    constexpr std::array dcs = {"dc-1", "dc-2", "dc-3", "dc-4", "dc-5", "dc-6", "dc-7", "dc-8", "dc-9", "dc-10", "dc-11", "dc-12"};
+
+    info_accessor->set_info(ids[0], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[1], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[2], {.datacenter = dcs[0], .rack = "rack"});
+    info_accessor->set_info(ids[3], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[4], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[5], {.datacenter = dcs[1], .rack = "rack"});
+    info_accessor->set_info(ids[6], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[7], {.datacenter = dcs[2], .rack = "rack"});
+    info_accessor->set_info(ids[8], {.datacenter = dcs[3], .rack = "rack"});
+    info_accessor->set_info(ids[9], {.datacenter = dcs[3], .rack = "rack"});
+    info_accessor->set_info(ids[10], {.datacenter = dcs[4], .rack = "rack"});
+    info_accessor->set_info(ids[11], {.datacenter = dcs[4], .rack = "rack"});
+    info_accessor->set_info(ids[12], {.datacenter = dcs[5], .rack = "rack"});
+    info_accessor->set_info(ids[13], {.datacenter = dcs[6], .rack = "rack"});
+    info_accessor->set_info(ids[14], {.datacenter = dcs[6], .rack = "rack"});
+    info_accessor->set_info(ids[15], {.datacenter = dcs[7], .rack = "rack"});
+    info_accessor->set_info(ids[16], {.datacenter = dcs[7], .rack = "rack"});
+    info_accessor->set_info(ids[17], {.datacenter = dcs[7], .rack = "rack"});
+    info_accessor->set_info(ids[18], {.datacenter = dcs[8], .rack = "rack"});
+    info_accessor->set_info(ids[19], {.datacenter = dcs[8], .rack = "rack"});
+    info_accessor->set_info(ids[20], {.datacenter = dcs[9], .rack = "rack"});
+    info_accessor->set_info(ids[21], {.datacenter = dcs[9], .rack = "rack"});
+    info_accessor->set_info(ids[22], {.datacenter = dcs[9], .rack = "rack"});
+    info_accessor->set_info(ids[23], {.datacenter = dcs[10], .rack = "rack"});
+    info_accessor->set_info(ids[24], {.datacenter = dcs[10], .rack = "rack"});
+    info_accessor->set_info(ids[25], {.datacenter = dcs[11], .rack = "rack"});
+    info_accessor->set_info(ids[26], {.datacenter = dcs[11], .rack = "rack"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: The number of voters is equal to the number of DCs.
+
+    const auto& voters = voter_client->voters();
+
+    BOOST_CHECK_LT(voters.size(), dcs.size());
+
+    std::unordered_set<sstring> voters_dcs;
+    for (const auto id : voters) {
+        const auto& server_info = info_accessor->find(id);
+        BOOST_CHECK_MESSAGE(voters_dcs.emplace(server_info.datacenter).second, fmt::format("Duplicate voter in DC: {}", server_info.datacenter));
+    }
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
