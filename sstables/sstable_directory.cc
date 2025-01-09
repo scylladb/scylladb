@@ -460,6 +460,13 @@ sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_ve
     });
 }
 
+future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
+    auto sst = _manager.make_sstable(_schema, _table_dir, *_storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    co_await sst->load_owner_shards(_sharder);
+    validate(sst, flags);
+    co_return sst->get_shards_for_this_sstable();
+}
+
 future<>
 sstable_directory::remove_sstables(std::vector<sstables::shared_sstable> sstlist) {
     dirlog.debug("Removing {} SSTables", sstlist.size());
