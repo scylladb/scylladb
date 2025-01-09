@@ -285,6 +285,8 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_upgrade(manager: ManagerClient):
     """
+    This test uses the gossip-based recovery procedure.
+
     While Raft is disabled, we use digest-based schema versioning.
     Once Raft upgrade is complete, we use persisted versions committed through group 0.
     """
