@@ -283,6 +283,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 decision.way = locator::resize_decision::split{},
                 decision.sequence_number = 1;
                 tmap.set_resize_decision(decision);
+                tmap.set_resize_task_info(locator::tablet_task_info::make_split_request());
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
