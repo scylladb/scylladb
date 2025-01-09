@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include "bytes.hh"
-#include <seastar/core/sharded.hh>
+#include "bytes_fwd.hh"
+#include <map>
+#include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/format.hh>
 #include <seastar/core/scattered_message.hh>
 #include "redis/exceptions.hh"
 

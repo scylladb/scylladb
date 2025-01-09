@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace redis {
 

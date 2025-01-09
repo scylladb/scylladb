@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <seastar/util/noncopyable_function.hh>
 #include "readers/mutation_reader.hh"
 
 namespace mutation_writer {

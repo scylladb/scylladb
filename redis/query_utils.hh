@@ -10,7 +10,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
 

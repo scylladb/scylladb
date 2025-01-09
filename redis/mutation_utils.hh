@@ -9,7 +9,7 @@
 #pragma once
 #include <vector>
 #include <seastar/core/future.hh>
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "seastarx.hh"
 
 class service_permit;

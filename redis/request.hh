@@ -9,7 +9,7 @@
 #pragma once
 
 #include <vector>
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace redis {
 
