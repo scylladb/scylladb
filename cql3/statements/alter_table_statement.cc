@@ -276,7 +276,7 @@ void alter_table_statement::drop_column(const query_options& options, const sche
     }
 }
 
-std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
+std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
@@ -370,6 +370,9 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
             validate_column_rename(db, *s, *from, *to);
             cfm.rename_column(from->name(), to->name());
         }
+        // New view schemas contain the new column names, so we need to base them on the
+        // new base schema.
+        schema_ptr new_base_schema = cfm.build();
         // If the view includes a renamed column, it must be renamed in
         // the view table and the definition.
         for (auto&& view : cf.views()) {
@@ -390,22 +393,21 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                         view->view_info()->where_clause(),
                         view_renames,
                         cql3::dialect{});
-                builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
-                        view->view_info()->include_all_columns(), std::move(new_where));
+                builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
                 view_updates.push_back(view_ptr(builder.build()));
             }
         }
-        break;
+        return make_pair(std::move(new_base_schema), std::move(view_updates));
     }
 
-    return make_pair(std::move(cfm), std::move(view_updates));
+    return make_pair(cfm.build(), std::move(view_updates));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
   data_dictionary::database db = qp.db();
-  auto [cfm, view_updates] = prepare_schema_update(db, options);
-  auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm.build(), std::move(view_updates), ts);
+  auto [s, view_updates] = prepare_schema_update(db, options);
+  auto m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(s), std::move(view_updates), ts);
 
   using namespace cql_transport;
   auto ret = ::make_shared<event::schema_change>(
