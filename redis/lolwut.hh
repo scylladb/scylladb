@@ -10,7 +10,7 @@
 
 #include <seastar/core/future.hh>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "seastarx.hh"
 
 namespace redis {
