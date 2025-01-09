@@ -3514,8 +3514,9 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service) {
 
-    group0_voter_registry::instance_ptr voter_registry = std::make_unique<voter_registry_wrapper>(
-            group0, feature_service, std::make_unique<group0_server_info_accessor>(topo_sm._topology, gossiper), std::make_unique<group0_voter_client>(group0));
+    group0_voter_registry::instance_ptr voter_registry =
+            std::make_unique<voter_registry_wrapper>(group0, feature_service, std::make_unique<group0_server_info_accessor>(topo_sm._topology, gossiper),
+                    std::make_unique<group0_voter_client>(group0), group0_voter_registry::MAX_VOTERS_ADAPTIVE);
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,

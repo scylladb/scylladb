@@ -89,6 +89,15 @@ public:
 class group0_voter_registry {
 
 public:
+    // The maximum number of voters is not limited (= all nodes are voters).
+    constexpr static size_t MAX_VOTERS_UNLIMITED = std::numeric_limits<size_t>::max();
+
+    // The maximum number of voters is adaptive, determined by the number of DCs in the cluster:
+    // - if there are less than 5 DCs, there are max 5 voters;
+    // - if there are more than 5 and less than 9 DCs, there number of voters is equal to the number of DCs;
+    // - if there are more than 9 DCs, there are max 9 voters.
+    constexpr static size_t MAX_VOTERS_ADAPTIVE = 0;
+
     using instance_ptr = std::unique_ptr<group0_voter_registry>;
 
     // Create a new voter registry instance.
