@@ -203,7 +203,7 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
     , _ss(ss)
 {}
 
-std::set<gms::inet_address> task_manager_module::get_nodes() const noexcept {
+std::set<gms::inet_address> task_manager_module::get_nodes() const {
     return std::ranges::join_view(std::to_array({
             std::views::all(_ss._topology_state_machine._topology.normal_nodes),
             std::views::all(_ss._topology_state_machine._topology.transition_nodes)})

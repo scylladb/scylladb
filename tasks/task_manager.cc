@@ -527,7 +527,7 @@ const task_manager::tasks_collection& task_manager::module::get_tasks_collection
     return _tasks;
 }
 
-std::set<gms::inet_address> task_manager::module::get_nodes() const noexcept {
+std::set<gms::inet_address> task_manager::module::get_nodes() const {
     return {_tm.get_broadcast_address()};
 }
 

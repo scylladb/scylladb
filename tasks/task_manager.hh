@@ -332,7 +332,7 @@ public:
         tasks_collection& get_tasks_collection() noexcept;
         const tasks_collection& get_tasks_collection() const noexcept;
         // Returns a set of nodes on which some of virtual tasks on this module can have their children.
-        virtual std::set<gms::inet_address> get_nodes() const noexcept;
+        virtual std::set<gms::inet_address> get_nodes() const;
         future<utils::chunked_vector<task_stats>> get_stats(is_internal internal, std::function<bool(std::string&, std::string&)> filter) const;
 
         void register_task(task_ptr task);
