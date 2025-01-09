@@ -971,9 +971,14 @@ future<> raft_group0::modify_raft_voter_status(
     co_await run_op_with_retry(as, [this, &ids, timeout, can_vote, &as]() -> future<operation_result> {
         std::vector<raft::config_member> add;
         add.reserve(ids.size());
-        std::transform(ids.begin(), ids.end(), std::back_inserter(add), [can_vote](raft::server_id id) {
-            return raft::config_member{{id, {}}, static_cast<bool>(can_vote)};
-        });
+        for (const auto& id: ids) {
+            if (is_member(id, false)) {
+                add.push_back(raft::config_member{{id, {}}, static_cast<bool>(can_vote)});
+            } else {
+                group0_log.warn("modify_raft_voter_config({}): tried to mark non-member {} as a {}, ignoring",
+                        ids, id, can_vote ? "voter" : "non-voter");
+            }
+        }
 
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config(std::move(add), {}, &as, timeout);
