@@ -32,6 +32,9 @@ namespace bmi = boost::multi_index;
 
 class group0_voter_registry_impl : public group0_voter_registry {
 
+    constexpr static size_t ADAPTIVE_VOTERS_DC_LOW_CAP = 5;
+    constexpr static size_t ADAPTIVE_VOTERS_DC_HIGH_CAP = 9;
+
     const raft_server_info_accessor& _server_info_accessor;
     raft_voter_client& _voter_client;
 
@@ -74,6 +77,8 @@ public:
     future<> remove_nodes(const std::unordered_set<raft::server_id>& nodes, abort_source& as) override;
 
 private:
+    static size_t get_max_slots(size_t max_voters, size_t dc_count);
+
     future<> update_voters(const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as);
 
     std::unordered_map<sstring, size_t> distribute_slots();
@@ -86,6 +91,24 @@ future<> group0_voter_registry_impl::insert_nodes(const std::unordered_set<raft:
 
 future<> group0_voter_registry_impl::remove_nodes(const std::unordered_set<raft::server_id>& nodes, abort_source& as) {
     return update_voters({}, nodes, as);
+}
+
+size_t group0_voter_registry_impl::get_max_slots(size_t max_voters, size_t dc_count) {
+    if (max_voters != group0_voter_registry::MAX_VOTERS_ADAPTIVE) {
+        return max_voters;
+    }
+
+    // Adaptive voters cases
+
+    if (dc_count < ADAPTIVE_VOTERS_DC_LOW_CAP) {
+        return ADAPTIVE_VOTERS_DC_LOW_CAP;
+    }
+
+    if (dc_count > ADAPTIVE_VOTERS_DC_HIGH_CAP) {
+        return ADAPTIVE_VOTERS_DC_HIGH_CAP;
+    }
+
+    return dc_count;
 }
 
 future<> group0_voter_registry_impl::update_voters(
@@ -198,8 +221,8 @@ std::unordered_map<sstring, size_t> group0_voter_registry_impl::distribute_slots
     }
 
     const auto dc_count = slots_left_per_dc.size();
-
-    auto slots_left = std::min(_max_voters, _nodes.size());
+    const size_t max_slots = get_max_slots(_max_voters, dc_count);
+    auto slots_left = std::min(max_slots, _nodes.size());
 
     const auto max_slots_per_dc = (dc_count > 2)
                                           // if the number of DCs is greater than 2, prevent any DC taking majority of voters
