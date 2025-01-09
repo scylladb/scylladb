@@ -20,7 +20,8 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
+    Awaitable
 import uuid
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
@@ -49,7 +50,6 @@ from cassandra.cluster import ExecutionProfile  # pylint: disable=no-name-in-mod
 from cassandra.cluster import EXEC_PROFILE_DEFAULT  # pylint: disable=no-name-in-module
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 from cassandra.connection import UnixSocketEndPoint
-
 
 io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
@@ -873,8 +873,8 @@ class ScyllaCluster:
         self.is_dirty = True
         self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
-        await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
-        await asyncio.gather(*(self.host_registry.release_host(Host(ip))
+        await gather_safely(*(srv.uninstall() for srv in self.stopped.values()))
+        await gather_safely(*(self.host_registry.release_host(Host(ip))
                                for ip in self.leased_ips))
 
     async def release_ips(self) -> None:
@@ -897,7 +897,7 @@ class ScyllaCluster:
                 self.logger.info("Cluster %s stopping", self)
                 self.is_dirty = True
                 # If self.running is empty, no-op
-                await asyncio.gather(*(server.stop() for server in self.running.values()))
+                await gather_safely(*(server.stop() for server in self.running.values()))
                 self.stopped.update(self.running)
                 self.running.clear()
 
@@ -908,7 +908,7 @@ class ScyllaCluster:
             self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
             # If self.running is empty, no-op
-            await asyncio.gather(*(server.stop_gracefully() for server in self.running.values()))
+            await gather_safely(*(server.stop_gracefully() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
 
@@ -1024,7 +1024,7 @@ class ScyllaCluster:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await asyncio.gather(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error)
+        return await gather_safely(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error)
                                       for _ in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -1780,3 +1780,20 @@ async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], te
         yield manager
     finally:
         await manager.stop()
+
+
+async def gather_safely(*awaitables: Awaitable):
+    """
+    Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens.
+    But this isn't true when the return_exceptions parameter is False, which is the default.
+    In that case, as soon as one future completes with an exception, the gather() call will return this exception
+    immediately, and some of the finished tasks may continue to run in the background.
+    This is bad for applications that use gather() to ensure that a list of background tasks has all completed.
+    So such applications must use asyncio.gather() with return_exceptions=True, to wait for all given futures to
+    complete either successfully or unsuccessfully.
+    """
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result from None
+    return results
