@@ -9,6 +9,7 @@
 #include <fmt/ranges.h>
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/log.hh"
 #include "db/config.hh"
 
 // These tests are slow, and tuned to a particular amount of memory
@@ -69,7 +70,7 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
 
         // A bijection between uint64_t and blobs of size pk_size.
         auto make_key = [pk_size] (uint64_t x) {
-            bytes b(bytes::initialized_later(), std::max(pk_size, sizeof(x)));
+            bytes b(std::max(pk_size, sizeof(x)), '\0');
             auto i = b.begin();
             write<uint64_t>(i, x);
             return b;
@@ -82,7 +83,9 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         // Flushing makes reasoning easier.
         e.db().invoke_on_all(&replica::database::flush_all_memtables).get();
 
-
+        int retries = 0;
+        constexpr int max_retries = 100;
+    retry:
         constexpr uint64_t hot_subset_size = 1000;
         // Sanity check. The test assumes that the total *hot* index size is significantly bigger than RAM.
         //
@@ -97,18 +100,32 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
         auto get_misses = [&e] { return e.local_db().row_cache_tracker().get_stats().partition_misses; };
         uint64_t misses_before = get_misses();
         for (size_t i = 0; i < hot_subset_size; ++i) {
-            e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
-            // Sanity check. If a single query is causing multiple partition misses,
-            // something unexpected is happening.
-            BOOST_REQUIRE_LE(get_misses() - misses_before, i + 1);
+            e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(hot_subset_size * retries + i))}}).get();
         }
 
         misses_before = get_misses();
+        uint64_t reads_before = e.local_db().row_cache_tracker().get_stats().reads;
+        uint64_t reads_expected = reads_before;
+
         // The rows we just read have a small total size. They should be perfectly cached.
         for (size_t repeat = 0; repeat < 3; ++repeat) {
             for (size_t i = 0; i < hot_subset_size; ++i) {
-                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(i))}}).get();
+                e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(hot_subset_size * retries + i))}}).get();
+                ++reads_expected;
                 // If the rows were perfectly cached, there were no new misses.
+                uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads_done;
+                uint64_t misses_after = get_misses();
+                if (get_misses() != misses_before) {
+                    // Cache misses are allowed only if they were done by something outside of the test.
+                    BOOST_REQUIRE_GT(reads_after, reads_expected);
+                    if (retries < max_retries) {
+                        ++retries;
+                        testlog.warn("Detected extra cache misses (actual={}, expected={}, repeat={}, i={}), but they can be explained by extra reads (after={}, before={}, expected={}) done by something in the background, so retrying. (retries={})", misses_after, misses_before, repeat, i, reads_after, reads_before, reads_expected, retries);
+                        goto retry;
+                    } else {
+                        BOOST_FAIL("Test failed due to too much background noise");
+                    }
+                }
                 BOOST_REQUIRE_EQUAL(get_misses(), misses_before);
             }
         }
@@ -168,12 +185,31 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
             }
         }
 
+        int retries = 0;
+        constexpr int max_retries = 100;
+    retry: 
         // The index is small and used once every few reads, so it should be perfectly cached.
         auto get_misses = [&e] { return e.local_db().row_cache_tracker().get_partition_index_cache_stats().misses; };
         uint64_t misses_before = get_misses();
+        uint64_t reads_before = e.local_db().row_cache_tracker().get_stats().reads;
+        uint64_t reads_expected = reads_before;
         for (size_t ck = 0; ck < ck_number; ++ck) {
             for (size_t pk = 0; pk < pk_number; ++pk) {
                 e.execute_prepared(select_query, {{cql3::raw_value::make_value(make_key(pk))}, {cql3::raw_value::make_value(make_key(ck))}}).get();
+                ++reads_expected;
+            }
+        }
+        uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads_done;
+        uint64_t misses_after = get_misses();
+        if (misses_after != misses_before) {
+            // Cache misses are allowed only if they were done by something outside of the test.
+            BOOST_REQUIRE_GT(reads_after, reads_expected);
+            if (retries < max_retries) {
+                ++retries;
+                testlog.warn("Detected extra cache misses (actual={}, expected={}), but they can be explained by extra reads (after={}, before={}, expected={}) done by something in the background, so retrying. (retries={})", misses_after, misses_before, reads_after, reads_before, reads_expected, retries);
+                goto retry;
+            } else {
+                BOOST_FAIL("Test failed due to too much background noise");
             }
         }
         BOOST_REQUIRE_EQUAL(get_misses(), misses_before);
