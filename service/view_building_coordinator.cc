@@ -15,9 +15,15 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
+#include "dht/i_partitioner_fwd.hh"
+#include "locator/host_id.hh"
+#include "locator/tablets.hh"
+#include "message/messaging_service.hh"
+#include "query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "seastar/core/loop.hh"
 #include "seastar/coroutine/maybe_yield.hh"
+#include "seastar/coroutine/parallel_for_each.hh"
 #include "service/coordinator_event_subscriber.hh"
 #include "service/query_state.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -30,6 +36,7 @@
 #include "service/migration_manager.hh"
 #include "replica/database.hh"
 #include "view_info.hh"
+#include "idl/view.dist.hh"
 
 #include "service/view_building_coordinator.hh"
 
@@ -59,23 +66,28 @@ class view_building_coordinator : public migration_listener::only_view_notificat
     replica::database& _db;
     raft_group0& _group0;
     db::system_keyspace& _sys_ks;
+    netw::messaging_service& _messaging;
     const topology_state_machine& _topo_sm;
     
     abort_source& _as;
     condition_variable _cond;
+    semaphore _rpc_response_mutex = semaphore(1);
     std::optional<view_building_state> _vb_state;
+    std::map<vbc_view_tasks::key_type, future<>> _rpc_handlers;
 
 public:
-    view_building_coordinator(abort_source& as, replica::database& db, raft_group0& group0, db::system_keyspace& sys_ks, const topology_state_machine& topo_sm) 
+    view_building_coordinator(abort_source& as, replica::database& db, raft_group0& group0, db::system_keyspace& sys_ks, netw::messaging_service& messaging, const topology_state_machine& topo_sm) 
         : _db(db)
         , _group0(group0)
         , _sys_ks(sys_ks)
+        , _messaging(messaging)
         , _topo_sm(topo_sm)
         , _as(as) 
         , _vb_state(std::nullopt)
     {}
 
     future<> run();
+    future<> stop();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
@@ -112,6 +124,10 @@ private:
     future<> add_view(const view_name& view_name, view_building_state& state_copy, group0_batch& batch);
     future<> remove_view(const view_name& view_name, view_building_state& state_copy, group0_batch& batch);
 
+    future<> build_view();
+    future<> send_task(locator::host_id host_id, const view_name& view_name, unsigned shard, dht::token_range range);
+    future<> maybe_mark_view_as_built(const view_name& view_name, group0_guard& guard, locator::host_id host_id, unsigned shard, const dht::token_range& range);
+
 private:
     future<std::set<view_name>> load_all_views() {
         static const sstring query = format("SELECT keyspace_name, view_name FROM {}.{}", db::schema_tables::v3::NAME, db::schema_tables::v3::VIEWS);
@@ -144,15 +160,104 @@ future<> view_building_coordinator::run() {
         vbc_logger.debug("coordinator loop iteration");
         try {
             co_await update_coordinator_state(co_await start_operation());
-
-            // TODO
-            // Do actual work, send RPCs to build a particular view's range
+            co_await build_view();
             co_await await_event();
         } catch (...) {
             
         }
         co_await coroutine::maybe_yield();
     }
+}
+
+future<> view_building_coordinator::build_view() {
+    SCYLLA_ASSERT(_vb_state);
+    if (!_vb_state->processing_view) {
+        vbc_logger.info("No view to process");
+        co_return;
+    }
+
+    SCYLLA_ASSERT(_vb_state->build_tasks.contains(*_vb_state->processing_view));
+    auto& view_tasks = _vb_state->build_tasks[*_vb_state->processing_view];
+
+    for (auto& [key, ranges]: view_tasks) {
+        auto& host = key.first;
+        auto& shard = key.second;
+
+        if ((_rpc_handlers.contains(key) && !_rpc_handlers.at(key).available()) || ranges.empty()) {
+            vbc_logger.info("Node {}, shard {} is not available yet.", host, shard);
+            continue;
+        }
+
+        if (_rpc_handlers.contains(key)) {
+            co_await std::move(_rpc_handlers.at(key));
+        }
+        _rpc_handlers.insert({key, send_task(host, *_vb_state->processing_view, shard, ranges.front())});
+    }
+}
+
+future<> view_building_coordinator::send_task(locator::host_id host_id, const view_name& view_name, unsigned shard, dht::token_range range) {
+    vbc_logger.info("Sending view building task to node {}, shard {} (view: {}.{} | token range: {})", host_id, shard, view_name.first, view_name.second, range);
+    
+    dht::token_range built_range;
+    try {
+        built_range = co_await ser::view_rpc_verbs::send_build_view_request(&_messaging, host_id, _as, view_name.first, view_name.second, shard, std::move(range));
+    } catch (...) {
+        // TODO
+    }
+
+    auto lock = get_units(_rpc_response_mutex, 1, _as);
+    auto guard = co_await _group0.client().start_operation(_as);
+    std::vector<canonical_mutation> cmuts;
+
+    auto mut = co_await _sys_ks.make_vbc_task_done_mutation(guard.write_timestamp(), view_name, host_id, shard, built_range);
+    cmuts.emplace_back(std::move(mut));
+    vbc_logger.info("Token range {} (view: {}.{}) was built on node {}, shard {}", built_range, view_name.first, view_name.second, host_id, shard);
+
+    co_await maybe_mark_view_as_built(view_name, guard, host_id, shard, built_range);
+    // auto mark_as_built_mut = co_await maybe_mark_view_as_built(view_name, guard, host_id, shard, built_range);
+    // if (mark_as_built_mut) {
+    //     cmuts.emplace_back(std::move(*mark_as_built_mut));
+    //     vbc_logger.info("View {}.{} is built.", view_name.first, view_name.second);
+    // }
+
+    auto cmd = _group0.client().prepare_command(write_mutations{.mutations = std::move(cmuts)}, guard, "finished step");
+    co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+
+    _cond.broadcast();
+}
+
+// TODO: save this info to group0. Now system.built_views is node local table.
+future<> view_building_coordinator::maybe_mark_view_as_built(const view_name& view_name, group0_guard& guard, locator::host_id host_id, unsigned shard, const dht::token_range& range) {
+    auto query = fmt::format("SELECT * FROM {}.{} WHERE keyspace_name = '{}' AND view_name = '{}'", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS, view_name.first, view_name.second);
+    bool has_work = false;
+    co_await _sys_ks.query_processor().query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto h_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto s = unsigned(row.get_as<int32_t>("shard"));
+        auto start_token = dht::token(row.get_as<int64_t>("start_token"));
+        auto end_token = dht::token(row.get_as<int64_t>("end_token"));
+
+        auto start = range.start() ? range.start()->value() : dht::token(std::numeric_limits<int64_t>::min());
+        auto end = range.end() ? range.end()->value() : dht::token(std::numeric_limits<int64_t>::min());
+        if (h_id != host_id || s != shard || start_token != start || end_token != end) {
+            has_work = true;
+            co_return stop_iteration::yes;
+        }
+        co_return stop_iteration::no;
+    });
+    if (has_work) {
+        co_return;
+        // co_return std::nullopt;
+    }
+
+
+    // TODO: save this information to group0. built_views is node local table
+    co_await _sys_ks.mark_view_as_built(view_name.first, view_name.second);
+    vbc_logger.info("View {}.{} is built.", view_name.first, view_name.second);
+
+    // static const sstring mark_as_built_query = fmt::format("INSERT INTO {}.{} (keyspace_name, view_name) VALUES (?, ?)", db::system_keyspace::NAME, db::system_keyspace::v3::BUILT_VIEWS);
+    // auto muts = co_await _sys_ks.query_processor().get_mutations_internal(mark_as_built_query, vb_coordinator_query_state(), guard.write_timestamp(), {view_name.first, view_name.second});
+    // SCYLLA_ASSERT(muts.size() == 1);
+    // co_return std::move(muts[0]);
 }
 
 future<> view_building_coordinator::update_coordinator_state(group0_guard guard) {
@@ -280,8 +385,16 @@ future<> view_building_coordinator::remove_view(const view_name& view_name, view
     state_copy.build_tasks.erase(view_name);
 }
 
-future<> run_view_building_coordinator(abort_source& as, replica::database& db, raft_group0& group0, db::system_keyspace& sys_ks, const topology_state_machine& topo_sm) {
-    view_building_coordinator vb_coordinator{as, db, group0, sys_ks, topo_sm};
+future<> view_building_coordinator::stop() {
+    _as.request_abort();
+    // TODO: send abort rpc to all nodes doing any work
+    co_await coroutine::parallel_for_each(_rpc_handlers, [] (auto& rpc_call) -> future<> {
+        co_await std::move(rpc_call.second);
+    });
+}
+
+future<> run_view_building_coordinator(abort_source& as, replica::database& db, raft_group0& group0, db::system_keyspace& sys_ks, netw::messaging_service& messaging, const topology_state_machine& topo_sm) {
+    view_building_coordinator vb_coordinator{as, db, group0, sys_ks, messaging, topo_sm};
 
     std::exception_ptr ex;
     db.get_notifier().register_listener(&vb_coordinator);
@@ -297,6 +410,7 @@ future<> run_view_building_coordinator(abort_source& as, replica::database& db, 
     }
 
     co_await db.get_notifier().unregister_listener(&vb_coordinator);
+    co_await vb_coordinator.stop();
 }
 
 }
