@@ -19,6 +19,8 @@ from test.topology.util import reconnect_driver, enter_recovery_state, \
 @log_run_time
 async def test_recovery_after_majority_loss(request, manager: ManagerClient):
     """
+    This test uses the gossip-based recovery procedure.
+
     All initial servers but one fail - group 0 is left without a majority. We create a new group
     0 by entering RECOVERY, using `removenode` to get rid of the other servers, clearing Raft
     data and restarting. The Raft upgrade procedure runs to establish a single-node group 0. We
