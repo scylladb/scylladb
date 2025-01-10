@@ -40,7 +40,7 @@ bool operator<(const is_voter_t& lhs, const is_voter_t& rhs) {
 }
 
 
-class datacenter_info {
+class rack_info {
 
     using nodes_map_key_t = std::tuple<is_alive_t, is_voter_t>;
     using nodes_map_t = std::multimap<nodes_map_key_t, raft::server_id>;
@@ -56,7 +56,7 @@ class datacenter_info {
     }
 
 public:
-    explicit datacenter_info(std::ranges::input_range auto&& nodes)
+    explicit rack_info(std::ranges::input_range auto&& nodes)
         : _nodes(create_nodes_map(nodes)) {
     }
 
@@ -88,8 +88,108 @@ public:
         return voter_id;
     }
 
+    [[nodiscard]] bool has_more_candidates() const {
+        return !_nodes.empty();
+    }
+
+    // The priority comparator for the rack_info
+    friend bool operator<(const rack_info& rack1, const rack_info& rack2) {
+        // First criteria: The number of already assigned voters (lower has more priority)
+        if (rack1._voters_count != rack2._voters_count) {
+            return rack1._voters_count > rack2._voters_count;
+        }
+
+        const auto& rack1_alive_nodes_boundary = rack1._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
+        const auto& rack2_alive_nodes_boundary = rack2._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
+
+        // Second criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
+
+        const auto rack1_alive_nodes_remaining = std::distance(rack1_alive_nodes_boundary, rack1._nodes.end());
+        const auto rack2_alive_nodes_remaining = std::distance(rack2_alive_nodes_boundary, rack2._nodes.end());
+        if (rack1_alive_nodes_remaining != rack2_alive_nodes_remaining) {
+            return rack1_alive_nodes_remaining < rack2_alive_nodes_remaining;
+        }
+
+        // Third criteria: The number of dead voters remaining (higher has more priority)
+        //      We want to keep the dead voters in case we can't find enough alive voters.
+
+        // Note that the nodes don't contain dead non-voters (we filter them out in `group0_voter_calculator::distribute_voters`),
+        // so we can use the whole subrange from the beginning (and can avoid another boundary search).
+        // We check for this condition in the debug builds.
+        assert(rack1._nodes.upper_bound(std::make_tuple(is_alive_t::no, is_voter_t::no)) == rack1._nodes.begin());
+        assert(rack2._nodes.upper_bound(std::make_tuple(is_alive_t::no, is_voter_t::no)) == rack2._nodes.begin());
+
+        const auto rack1_dead_nodes_remaining = std::distance(rack1._nodes.begin(), rack1_alive_nodes_boundary);
+        const auto rack2_dead_nodes_remaining = std::distance(rack2._nodes.begin(), rack2_alive_nodes_boundary);
+        return rack1_dead_nodes_remaining < rack2_dead_nodes_remaining;
+    }
+
+};
+
+
+class datacenter_info {
+
+    size_t _nodes_remaining = 0;
+    size_t _voters_count = 0;
+
+    using racks_store_t = std::priority_queue<rack_info>;
+    racks_store_t _racks;
+
+    static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes, size_t nodes_remaining) {
+        const auto nodes_by_rack = nodes | std::views::transform([](const auto& node_entry) {
+            const auto& [id, node] = node_entry;
+            return std::make_pair(std::string_view{node.rack}, std::make_pair(id, std::cref(node)));
+        }) | std::ranges::to<std::unordered_multimap>();
+
+        racks_store_t::container_type racks;
+
+        for (const auto rack : nodes_by_rack | std::views::keys | std::ranges::to<std::set>()) {
+            const auto [first, last] = nodes_by_rack.equal_range(rack);
+
+            racks.emplace_back(std::ranges::subrange(first, last) | std::views::transform([](const auto& node_entry) {
+                return node_entry.second;
+            }));
+
+            nodes_remaining += std::distance(first, last);
+        }
+
+        return racks | std::ranges::to<racks_store_t>();
+    }
+
+public:
+    explicit datacenter_info(std::ranges::input_range auto&& nodes)
+        : _racks(create_racks_list(nodes, _nodes_remaining)) {
+    }
+
+    [[nodiscard]] std::optional<raft::server_id> select_next_voter() {
+        while (!_racks.empty()) {
+
+            // Select the datacenter with the highest priority (according to the comparator)
+            auto rack = _racks.top();
+            _racks.pop();
+
+            const auto voter_id = rack.select_next_voter();
+
+            if (!voter_id) {
+                continue;
+            }
+
+            if (rack.has_more_candidates()) {
+                _racks.push(rack);
+            }
+
+            --_nodes_remaining;
+            ++_voters_count;
+
+            return voter_id;
+        }
+
+        // No more nodes to select
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool has_more_candidates(size_t voters_max_per_dc) const {
-        return !_nodes.empty() && _voters_count < voters_max_per_dc;
+        return _nodes_remaining > 0 && _voters_count < voters_max_per_dc;
     }
 
     // The priority comparator for the datacenter_info
@@ -100,29 +200,8 @@ public:
             return dc1._voters_count > dc2._voters_count;
         }
 
-        const auto& dc1_alive_nodes_boundary = dc1._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
-        const auto& dc2_alive_nodes_boundary = dc2._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
-
-        // Second criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
-
-        const auto dc1_alive_nodes_remaining = std::distance(dc1_alive_nodes_boundary, dc1._nodes.end());
-        const auto dc2_alive_nodes_remaining = std::distance(dc2_alive_nodes_boundary, dc2._nodes.end());
-        if (dc1_alive_nodes_remaining != dc2_alive_nodes_remaining) {
-            return dc1_alive_nodes_remaining < dc2_alive_nodes_remaining;
-        }
-
-        // Third criteria: The number of dead voters remaining (higher has more priority)
-        //      We want to keep the dead voters in case we can't find enough alive voters.
-
-        // Note that the nodes don't contain dead non-voters (we filter them out in `group0_voter_calculator::distribute_voters`),
-        // so we can use the whole subrange from the beginning (and can avoid another boundary search).
-        // We check for this condition in the debug builds.
-        assert(dc1._nodes.upper_bound(std::make_tuple(is_alive_t::no, is_voter_t::no)) == dc1._nodes.begin());
-        assert(dc2._nodes.upper_bound(std::make_tuple(is_alive_t::no, is_voter_t::no)) == dc2._nodes.begin());
-
-        const auto dc1_dead_nodes = std::distance(dc1._nodes.begin(), dc1_alive_nodes_boundary);
-        const auto dc2_dead_nodes = std::distance(dc2._nodes.begin(), dc2_alive_nodes_boundary);
-        return dc1_dead_nodes < dc2_dead_nodes;
+        // Second criteria: The number of racks (higher has more priority)
+        return dc1._racks.size() < dc2._racks.size();
     }
 };
 
