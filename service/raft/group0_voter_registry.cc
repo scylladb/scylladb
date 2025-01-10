@@ -8,6 +8,8 @@
 
 #include "group0_voter_registry.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/uniqued.hpp>
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/composite_key.hpp>
 #include <boost/multi_index/hashed_index.hpp>
@@ -44,6 +46,7 @@ class group0_voter_registry_impl : public group0_voter_registry {
     struct node_record {
         raft::server_id id;
         sstring dc;
+        sstring rack;
         bool is_voter;
     };
 
@@ -55,7 +58,8 @@ class group0_voter_registry_impl : public group0_voter_registry {
                     // Primary index by the node id.
                     bmi::hashed_unique<bmi::tag<by_id>, bmi::key<&node_record::id>, std::hash<raft::server_id>>,
                     // Secondary index by the datacenter and voter status.
-                    bmi::ordered_non_unique<bmi::tag<by_dc>, bmi::composite_key<node_record, bmi::key<&node_record::dc>, bmi::key<&node_record::is_voter>>>>>;
+                    bmi::ordered_non_unique<bmi::tag<by_dc>,
+                            bmi::composite_key<node_record, bmi::key<&node_record::dc>, bmi::key<&node_record::rack>, bmi::key<&node_record::is_voter>>>>>;
 
 public:
     group0_voter_registry_impl(std::unique_ptr<const raft_server_info_accessor> server_info_accessor, std::unique_ptr<raft_voter_client> voter_client,
@@ -73,7 +77,8 @@ private:
     future<> update_voters(
             const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) override;
 
-    using voter_slots_t = std::unordered_map<sstring, size_t>;
+    using voter_slots_key_t = std::tuple<sstring, sstring>;
+    using voter_slots_t = std::unordered_map<voter_slots_key_t, size_t, utils::tuple_hash>;
 
     [[nodiscard]] voter_slots_t distribute_voter_slots(nodes_map_t nodes) const;
 };
@@ -114,7 +119,7 @@ future<> group0_voter_registry_impl::update_voters(
     for (const auto& [node, rs] : members) {
         const auto is_voter = _voter_client->is_voter(node);
         const auto is_alive = _server_info_accessor->is_alive(node);
-        rvlogger.debug("Node: {}, DC: {}, is_voter: {}, is_alive: {}", node, rs.datacenter, is_voter, is_alive);
+        rvlogger.debug("Node: {}, DC/rack: {}, is_voter: {}, is_alive: {}", node, rs.datacenter, rs.rack, is_voter, is_alive);
         if (!is_alive) {
             rvlogger.info("Node {} is not alive, skipping", node);
             if (is_voter) {
@@ -123,7 +128,7 @@ future<> group0_voter_registry_impl::update_voters(
             }
             continue;
         }
-        nodes.emplace(node, rs.datacenter, is_voter);
+        nodes.emplace(node, rs.datacenter, rs.rack, is_voter);
     }
 
     // Handle the added nodes
@@ -140,7 +145,7 @@ future<> group0_voter_registry_impl::update_voters(
             rvlogger.warn("Node {} is not alive, skipping", node);
             continue;
         }
-        nodes.emplace(node, rs.datacenter, is_voter);
+        nodes.emplace(node, rs.datacenter, rs.rack, is_voter);
     }
 
     // Handle the removed nodes
@@ -161,12 +166,12 @@ future<> group0_voter_registry_impl::update_voters(
 
     auto& nodes_by_dc = nodes.get<by_dc>();
 
-    for (auto& [dc, slots_left_dc] : slots_left_per_dc) {
-        rvlogger.debug("DC: {}, voter slots: {}", dc, slots_left_dc);
+    for (auto& [dc_rack, slots_left_dc] : slots_left_per_dc) {
+        rvlogger.debug("DC/rack: {}/{}, voter slots: {}", std::get<0>(dc_rack), std::get<1>(dc_rack), slots_left_dc);
 
         // Process the (pre-existing) voters first
         {
-            auto [itr, end] = nodes_by_dc.equal_range(std::make_tuple(dc, true));
+            auto [itr, end] = nodes_by_dc.equal_range(std::make_tuple(std::get<0>(dc_rack), std::get<1>(dc_rack), true));
             while (slots_left_dc && itr != end) {
                 --slots_left_dc;
                 ++itr;
@@ -188,7 +193,7 @@ future<> group0_voter_registry_impl::update_voters(
 
         // Process the non-voters
         {
-            const auto [beg, end] = nodes_by_dc.equal_range(std::make_tuple(dc, false));
+            const auto [beg, end] = nodes_by_dc.equal_range(std::make_tuple(std::get<0>(dc_rack), std::get<1>(dc_rack), false));
             auto itr = beg;
             while (slots_left_dc && itr != end) {
                 --slots_left_dc;
@@ -216,16 +221,49 @@ future<> group0_voter_registry_impl::update_voters(
 
 group0_voter_registry_impl::voter_slots_t group0_voter_registry_impl::distribute_voter_slots(nodes_map_t nodes) const {
     // Calculate the number of voter slots left for each DC
-    voter_slots_t slots_left_per_dc;
+    voter_slots_t slots_left_per_dc_rack;
+
+    std::unordered_map<sstring, size_t> slots_left_per_dc;
 
     const auto& nodes_by_dc = nodes.get<by_dc>();
 
-    for (const auto& rec : nodes_by_dc) {
-        slots_left_per_dc.emplace(rec.dc, 0);
+    struct dc_info_vals {
+        size_t count_racks = 0;
+        size_t count_nodes = 0;
+        std::unordered_map<sstring, size_t> rack_node_count;
+    };
+
+    std::unordered_map<sstring, dc_info_vals> dc_info;
+
+    for (const auto& dc : nodes_by_dc | boost::adaptors::transformed([](const auto& rec) {
+             return rec.dc;
+         }) | boost::adaptors::uniqued) {
+        auto& dc_vals = dc_info[dc];
+        const auto& dc_range = nodes_by_dc.equal_range(dc);
+        slots_left_per_dc.emplace(dc, 0);
+        dc_vals.count_nodes = std::distance(dc_range.first, dc_range.second);
+
+        for (const auto rack : dc_range | boost::adaptors::transformed([](const auto& rec) {
+                 return rec.rack;
+             }) | boost::adaptors::uniqued) {
+            const auto& dc_rack_key = std::make_tuple(dc, rack);
+            slots_left_per_dc_rack.emplace(dc_rack_key, 0);
+            dc_vals.count_racks++;
+            dc_vals.rack_node_count[rack] = nodes_by_dc.count(dc_rack_key);
+        }
     }
 
-    auto compare_priority_dc = [&nodes_by_dc](const sstring& dc1, const sstring& dc2) {
-        return nodes_by_dc.count(dc2) < nodes_by_dc.count(dc1);
+    auto compare_priority_dc = [&dc_info](const sstring& dc1, const sstring& dc2) {
+        const auto& info_dc1 = dc_info.at(dc1);
+        const auto& info_dc2 = dc_info.at(dc2);
+
+        // primary ordering criteria: number of racks
+        if (info_dc2.count_racks != info_dc1.count_racks) {
+            return info_dc2.count_racks < info_dc1.count_racks;
+        }
+
+        // secondary ordering criteria: number of nodes in the DC
+        return info_dc2.count_nodes < info_dc1.count_nodes;
     };
 
     std::priority_queue<sstring, std::deque<sstring>, decltype(compare_priority_dc)> dc_by_priority(compare_priority_dc);
@@ -252,10 +290,11 @@ group0_voter_registry_impl::voter_slots_t group0_voter_registry_impl::distribute
 
         auto& slots_left_dc = slots_left_per_dc[dc];
 
-        auto slots_per_dc = slots_left / dc_count_left;
+        auto slots_per_dc = std::max(slots_left / dc_count_left, 1UL);
+        slots_per_dc = std::min(slots_per_dc, slots_left);
 
         // Slots for a dc are capped by the number of nodes in the dc
-        slots_left_dc = std::min(slots_per_dc, nodes_by_dc.count(dc));
+        slots_left_dc = std::min(slots_per_dc, dc_info[dc].count_nodes);
         if (slots_left_dc > max_slots_per_dc) {
             // If the DC has reached the majority limit, we can't add more
             rvlogger.debug("Max voters reached for DC: {}, slots: {}", dc, slots_left_dc);
@@ -285,7 +324,40 @@ group0_voter_registry_impl::voter_slots_t group0_voter_registry_impl::distribute
         }
     }
 
-    return slots_left_per_dc;
+    // Now distribute the voters across the racks in each DC
+    for (auto& [dc, slots_left_dc] : slots_left_per_dc) {
+        const auto& info_dc = dc_info.at(dc);
+
+        auto compare_priority_rack = [&info_dc](const sstring& rack1, const sstring& rack2) {
+            return info_dc.rack_node_count.at(rack2) < info_dc.rack_node_count.at(rack1);
+        };
+
+        std::priority_queue<sstring, std::deque<sstring>, decltype(compare_priority_rack)> rack_by_priority(compare_priority_rack);
+
+        for (const auto& [rack, _] : info_dc.rack_node_count) {
+            rack_by_priority.push(rack);
+        }
+
+        auto rack_count_left = info_dc.rack_node_count.size();
+
+        while (!rack_by_priority.empty()) {
+            auto rack = rack_by_priority.top();
+            rack_by_priority.pop();
+
+            auto& slots_left_rack = slots_left_per_dc_rack[std::make_tuple(dc, rack)];
+
+            auto slots_per_rack = std::max(slots_left_dc / rack_count_left, 1UL);
+            slots_per_rack = std::min(slots_per_rack, slots_left_dc);
+
+            // Slots for a DC/rack are capped by the number of nodes in the DC/rack
+            slots_left_rack = std::min(slots_per_rack, info_dc.rack_node_count.at(rack));
+            slots_left_dc -= slots_left_rack;
+
+            --rack_count_left;
+        }
+    }
+
+    return slots_left_per_dc_rack;
 }
 
 } // namespace
