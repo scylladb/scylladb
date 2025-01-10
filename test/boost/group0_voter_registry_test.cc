@@ -561,8 +561,8 @@ SEASTAR_TEST_CASE(dc_cannot_have_majority_of_voters) {
     const std::array ids = {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
-    info_accessor->set_info(ids[0], {.datacenter = "dc-1", .rack = "rack"});
-    info_accessor->set_info(ids[1], {.datacenter = "dc-1", .rack = "rack"});
+    info_accessor->set_info(ids[0], {.datacenter = "dc-1", .rack = "rack-1"});
+    info_accessor->set_info(ids[1], {.datacenter = "dc-1", .rack = "rack-2"});
     info_accessor->set_info(ids[2], {.datacenter = "dc-2", .rack = "rack"});
     info_accessor->set_info(ids[3], {.datacenter = "dc-3", .rack = "rack"});
 
@@ -928,6 +928,120 @@ SEASTAR_TEST_CASE(adaptive_voters_is_high_bound_with_higher_dc_count) {
         const auto& server_info = info_accessor->find(id);
         BOOST_CHECK_MESSAGE(voters_dcs.emplace(server_info.datacenter).second, fmt::format("Duplicate voter in DC: {}", server_info.datacenter));
     }
+}
+
+
+SEASTAR_TEST_CASE(voters_are_distributed_across_racks) {
+    abort_source as;
+
+    // Arrange: Set the voters limit.
+
+    constexpr size_t max_voters = 3;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    info_accessor->set_info(ids[0], {.datacenter = "dc", .rack = "rack-1"});
+    info_accessor->set_info(ids[1], {.datacenter = "dc", .rack = "rack-1"});
+    info_accessor->set_info(ids[2], {.datacenter = "dc", .rack = "rack-1"});
+    info_accessor->set_info(ids[3], {.datacenter = "dc", .rack = "rack-2"});
+    info_accessor->set_info(ids[4], {.datacenter = "dc", .rack = "rack-2"});
+    info_accessor->set_info(ids[5], {.datacenter = "dc", .rack = "rack-3"});
+    info_accessor->set_info(ids[6], {.datacenter = "dc", .rack = "rack-3"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: There is no duplicate rack across the voters (having 3 voters and 3 racks).
+
+    const auto& voters = voter_client->voters();
+
+    std::unordered_set<sstring> voters_racks;
+    for (const auto id : voters) {
+        const auto& server_info = info_accessor->find(id);
+        BOOST_CHECK_MESSAGE(voters_racks.emplace(server_info.rack).second, fmt::format("Duplicate voter in the same rack: {}", server_info.rack));
+    }
+}
+
+
+SEASTAR_TEST_CASE(more_racks_preferred_over_more_nodes_in_two_dc) {
+    abort_source as;
+
+    // Arrange: Set the voters limit.
+
+    constexpr size_t max_voters = 5;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    info_accessor->set_info(ids[0], {.datacenter = "dc-1", .rack = "rack-1"});
+    info_accessor->set_info(ids[1], {.datacenter = "dc-1", .rack = "rack-2"});
+    info_accessor->set_info(ids[2], {.datacenter = "dc-1", .rack = "rack-2"});
+    info_accessor->set_info(ids[3], {.datacenter = "dc-2", .rack = "rack-3"});
+    info_accessor->set_info(ids[4], {.datacenter = "dc-2", .rack = "rack-3"});
+    info_accessor->set_info(ids[5], {.datacenter = "dc-2", .rack = "rack-3"});
+    info_accessor->set_info(ids[6], {.datacenter = "dc-2", .rack = "rack-3"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: The racks are preferred over the nodes (DC-1 has more racks so it should have more voters, despite DC-2 having more nodes).
+
+    const auto& voters = voter_client->voters();
+
+    std::unordered_map<sstring, size_t> voters_dcs;
+    for (const auto id : voters) {
+        const auto& server_info = info_accessor->find(id);
+        ++voters_dcs[server_info.datacenter];
+    }
+
+    BOOST_CHECK_GT(voters_dcs["dc-1"], voters_dcs["dc-2"]);
+}
+
+
+SEASTAR_TEST_CASE(dcs_preferred_over_racks) {
+    abort_source as;
+
+    // Arrange: Set the voters limit.
+
+    constexpr size_t max_voters = 5;
+
+    auto [reg, info_accessor, voter_client] = create_registry(max_voters);
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    info_accessor->set_info(ids[0], {.datacenter = "dc-1", .rack = "rack-1"});
+    info_accessor->set_info(ids[1], {.datacenter = "dc-1", .rack = "rack-2"});
+    info_accessor->set_info(ids[2], {.datacenter = "dc-1", .rack = "rack-3"});
+    info_accessor->set_info(ids[3], {.datacenter = "dc-2", .rack = "rack-4"});
+    info_accessor->set_info(ids[4], {.datacenter = "dc-3", .rack = "rack-5"});
+    info_accessor->set_info(ids[5], {.datacenter = "dc-4", .rack = "rack-6"});
+    info_accessor->set_info(ids[6], {.datacenter = "dc-5", .rack = "rack-7"});
+
+    const auto ids_set = ids | std::ranges::to<std::unordered_set>();
+    co_await reg->insert_nodes(ids_set, as);
+
+    // Assert: The DCs are preferred over racks when distributing voters (each DC should have a voter).
+
+    const auto& voters = voter_client->voters();
+
+    std::unordered_set<sstring> voters_dcs;
+    for (const auto id : voters) {
+        const auto& server_info = info_accessor->find(id);
+        BOOST_CHECK_MESSAGE(voters_dcs.emplace(server_info.datacenter).second, fmt::format("Duplicate voter in the same DC: {}", server_info.datacenter));
+    }
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
 }
 
 
