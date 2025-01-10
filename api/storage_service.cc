@@ -990,13 +990,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
-    ss::truncate.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req);
-        auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
 
     ss::get_keyspaces.set(r, [&ctx](const_req req) {
         auto type = req.get_query_param("type");
@@ -1633,7 +1626,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::is_starting.unset(r);
     ss::get_drain_progress.unset(r);
     ss::drain.unset(r);
-    ss::truncate.unset(r);
     ss::get_keyspaces.unset(r);
     ss::stop_gossiping.unset(r);
     ss::start_gossiping.unset(r);
