@@ -954,50 +954,36 @@ future<bool> raft_group0::wait_for_raft() {
 
 future<> raft_group0::modify_raft_voter_status(
         const std::unordered_set<raft::server_id>& ids, can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
-    static constexpr auto max_retry_period = std::chrono::seconds{1};
-    auto retry_period = std::chrono::milliseconds{10};
-
-    while (true) {
-        as.check();
-
+    co_await run_op_with_retry(as, [this, &ids, timeout, can_vote, &as]() -> future<operation_result> {
         std::vector<raft::config_member> add;
         add.reserve(ids.size());
-        std::transform(ids.begin(), ids.end(), std::back_inserter(add), [can_vote] (raft::server_id id) {
+        std::transform(ids.begin(), ids.end(), std::back_inserter(add), [can_vote](raft::server_id id) {
             return raft::config_member{{id, {}}, static_cast<bool>(can_vote)};
         });
 
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config(std::move(add), {}, &as, timeout);
-            co_return;
         } catch (const raft::commit_status_unknown& e) {
             group0_log.info("modify_raft_voter_config({}): modify_config returned \"{}\", retrying", ids, e);
+            co_return operation_result::failure;
         }
-        retry_period *= 2;
-        if (retry_period > max_retry_period) {
-            retry_period = max_retry_period;
-        }
-        co_await sleep_abortable(retry_period, as);
-    }
+        co_return operation_result::success;
+    }, "modify_raft_voter_status->modify_config");
+    co_return;
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
-    static constexpr auto max_retry_period = std::chrono::seconds{1};
-    auto retry_period = std::chrono::milliseconds{10};
-
     // TODO: add a timeout mechanism? This could get stuck (and _abort_source is only called on shutdown).
-    while (true) {
+    co_await run_op_with_retry(_abort_source, [this, id]() -> future<operation_result> {
         try {
             co_await _raft_gr.group0().modify_config({}, {id}, &_abort_source);
-            break;
         } catch (const raft::commit_status_unknown& e) {
             group0_log.info("remove_from_raft_config({}): modify_config returned \"{}\", retrying", id, e);
+            co_return operation_result::failure;
         }
-        retry_period *= 2;
-        if (retry_period > max_retry_period) {
-            retry_period = max_retry_period;
-        }
-        co_await sleep_abortable(retry_period, _abort_source);
-    }
+        co_return operation_result::success;
+    }, "remove_from_raft_config->modify_config");
+    co_return;
 }
 
 bool raft_group0::joined_group0() const {
