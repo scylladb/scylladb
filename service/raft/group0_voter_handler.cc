@@ -15,6 +15,7 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "raft_group0.hh"
+#include "utils/hash.hh"
 
 namespace service {
 
@@ -28,7 +29,9 @@ class group0_voter_calculator_impl {
     size_t _max_voters;
 
     using nodes_rec_t = std::unordered_multimap<bool, raft::server_id>;
-    using nodes_map_t = std::unordered_map<sstring, nodes_rec_t>;
+
+    using nodes_key_t = std::tuple<sstring, sstring>;
+    using nodes_map_t = std::unordered_map<nodes_key_t, nodes_rec_t, utils::tuple_hash>;
 
 public:
     constexpr static size_t MAX_VOTERS_DEFAULT = 5;
@@ -40,7 +43,8 @@ public:
     [[nodiscard]] group0_voter_calculator::voters_result_t calculate_voters(const group0_voter_calculator::nodes_list_t& nodes) const;
 
 private:
-    using voter_slots_t = std::unordered_map<sstring, size_t>;
+    using voter_slots_key_t = std::tuple<sstring, sstring>;
+    using voter_slots_t = std::unordered_map<voter_slots_key_t, size_t, utils::tuple_hash>;
 
     [[nodiscard]] voter_slots_t distribute_voter_slots(const group0_voter_calculator::nodes_list_t& nodes) const;
 };
@@ -69,14 +73,14 @@ group0_voter_calculator::voters_result_t group0_voter_calculator_impl::calculate
     nodes_map_t nodes_map;
 
     for (const auto& [id, node] : nodes_filtered) {
-        nodes_map[node.datacenter].emplace(node.is_voter, id);
+        nodes_map[std::make_tuple(node.datacenter, node.rack)].emplace(node.is_voter, id);
     }
 
     // Distribute the available voter slots across the datacenters
     auto slots_left_per_dc = distribute_voter_slots(nodes_filtered);
 
-    for (auto& [dc, voters] : nodes_map) {
-        auto slots_left_dc = slots_left_per_dc[dc];
+    for (auto& [dc_rack, voters] : nodes_map) {
+        auto slots_left_dc = slots_left_per_dc[dc_rack];
 
         // Process the (pre-existing) voters first
         {
@@ -117,10 +121,14 @@ group0_voter_calculator::voters_result_t group0_voter_calculator_impl::calculate
 
 group0_voter_calculator_impl::voter_slots_t group0_voter_calculator_impl::distribute_voter_slots(const group0_voter_calculator::nodes_list_t& nodes) const {
     // Calculate the number of voter slots left for each DC
-    voter_slots_t slots_left_per_dc;
+    voter_slots_t slots_left_per_dc_rack;
+
+    std::unordered_map<sstring, size_t> slots_left_per_dc;
 
     struct dc_info_vals {
+        size_t count_racks = 0;
         size_t count_nodes = 0;
+        std::unordered_map<sstring, size_t> rack_node_count;
     };
 
     std::unordered_map<sstring, dc_info_vals> dc_info;
@@ -129,12 +137,22 @@ group0_voter_calculator_impl::voter_slots_t group0_voter_calculator_impl::distri
         auto& dc_vals = dc_info[node.datacenter];
         slots_left_per_dc.emplace(node.datacenter, 0);
         dc_vals.count_nodes++;
+        dc_vals.rack_node_count[node.rack]++;
+        if (slots_left_per_dc_rack.emplace(std::make_tuple(node.datacenter, node.rack), 0).second) {
+            dc_vals.count_racks++;
+        }
     }
 
     auto compare_priority_dc = [&dc_info](const sstring& dc1, const sstring& dc2) {
         const auto& info_dc1 = dc_info.at(dc1);
         const auto& info_dc2 = dc_info.at(dc2);
 
+        // primary ordering criteria: number of racks
+        if (info_dc2.count_racks != info_dc1.count_racks) {
+            return info_dc2.count_racks < info_dc1.count_racks;
+        }
+
+        // secondary ordering criteria: number of nodes in the DC
         return info_dc2.count_nodes < info_dc1.count_nodes;
     };
 
@@ -159,7 +177,8 @@ group0_voter_calculator_impl::voter_slots_t group0_voter_calculator_impl::distri
 
         auto& slots_left_dc = slots_left_per_dc[dc];
 
-        auto slots_per_dc = slots_left / dc_count_left;
+        auto slots_per_dc = std::max(slots_left / dc_count_left, 1UL);
+        slots_per_dc = std::min(slots_per_dc, slots_left);
 
         // Slots for a dc are capped by the number of nodes in the dc
         slots_left_dc = std::min(slots_per_dc, dc_info[dc].count_nodes);
@@ -192,7 +211,37 @@ group0_voter_calculator_impl::voter_slots_t group0_voter_calculator_impl::distri
         }
     }
 
-    return slots_left_per_dc;
+    // Now distribute the voters across the racks in each DC
+    for (auto& [dc, slots_left_dc] : slots_left_per_dc) {
+        const auto& info_dc = dc_info.at(dc);
+
+        auto compare_priority_rack = [&info_dc](const sstring& rack1, const sstring& rack2) {
+            return info_dc.rack_node_count.at(rack2) < info_dc.rack_node_count.at(rack1);
+        };
+
+        std::priority_queue<sstring, std::vector<sstring>, decltype(compare_priority_rack)> rack_by_priority(
+                compare_priority_rack, std::views::keys(info_dc.rack_node_count) | std::ranges::to<std::vector>());
+
+        auto rack_count_left = info_dc.rack_node_count.size();
+
+        while (!rack_by_priority.empty()) {
+            auto rack = rack_by_priority.top();
+            rack_by_priority.pop();
+
+            auto& slots_left_rack = slots_left_per_dc_rack[std::make_tuple(dc, rack)];
+
+            auto slots_per_rack = std::max(slots_left_dc / rack_count_left, 1UL);
+            slots_per_rack = std::min(slots_per_rack, slots_left_dc);
+
+            // Slots for a DC/rack are capped by the number of nodes in the DC/rack
+            slots_left_rack = std::min(slots_per_rack, info_dc.rack_node_count.at(rack));
+            slots_left_dc -= slots_left_rack;
+
+            --rack_count_left;
+        }
+    }
+
+    return slots_left_per_dc_rack;
 }
 
 } // namespace
