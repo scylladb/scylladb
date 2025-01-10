@@ -467,9 +467,9 @@ BOOST_AUTO_TEST_CASE(dc_cannot_have_half_or_more_of_voters) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
             {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
             {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
     };
@@ -744,6 +744,128 @@ BOOST_AUTO_TEST_CASE(dead_voters_moved_to_available_alive_nodes) {
     BOOST_CHECK_EQUAL(voters.size(), max_voters);
     BOOST_CHECK(!voters.contains(ids[3]));
     BOOST_CHECK(voters.contains(ids[4]));
+}
+
+
+BOOST_AUTO_TEST_CASE(voters_are_distributed_across_racks) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[6], {.datacenter = "dc", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: There is no duplicate rack across the voters (having 3 voters and 3 racks).
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+
+    std::unordered_set<sstring> voters_racks;
+    for (const auto id : voters) {
+        const auto& node = nodes.at(id);
+        BOOST_CHECK_MESSAGE(voters_racks.emplace(node.rack).second, fmt::format("Duplicate voter in the same rack: {}", node.rack));
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE(more_racks_preferred_over_more_nodes_in_two_dc) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[6], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: The racks are preferred over the nodes (DC-1 has more racks so it should have more voters, despite DC-2 having more nodes).
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+
+    std::unordered_map<sstring, size_t> voters_dcs;
+    for (const auto id : voters) {
+        const auto& node = nodes.at(id);
+        ++voters_dcs[node.datacenter];
+    }
+
+    BOOST_CHECK_GT(voters_dcs["dc-1"], voters_dcs["dc-2"]);
+
+    // Check that the DC-1 has voters in different racks.
+    std::unordered_set<sstring> voters_racks;
+    for (const auto id : voters | std::views::filter([&nodes](const auto id) {
+             return nodes.at(id).datacenter == "dc-1";
+         })) {
+        const auto& node = nodes.at(id);
+        BOOST_CHECK_MESSAGE(voters_racks.emplace(node.rack).second, fmt::format("Duplicate voter in the same rack: {}", node.rack));
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE(dcs_preferred_over_racks) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add the nodes.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-4", .rack = "rack-6", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-1", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[6], {.datacenter = "dc-5", .rack = "rack-7", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: The DCs are preferred over racks when distributing voters (each DC should have a voter).
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+
+    std::unordered_set<sstring> voters_dcs;
+    for (const auto id : voters) {
+        const auto& node = nodes.at(id);
+        BOOST_CHECK_MESSAGE(voters_dcs.emplace(node.datacenter).second, fmt::format("Duplicate voter in the same DC: {}", node.datacenter));
+    }
 }
 
 
