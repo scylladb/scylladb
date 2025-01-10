@@ -1649,38 +1649,6 @@
          ]
       },
       {
-         "path":"/storage_service/truncate/{keyspace}",
-         "operations":[
-            {
-               "method":"POST",
-               "summary":"Truncates (deletes) the given columnFamily from the provided keyspace. Calling truncate results in actual deletion of all data in the cluster under the given columnFamily and it will fail unless all hosts are up. All data in the given column family will be deleted, but its definition will not be affected.",
-               "type":"void",
-               "nickname":"truncate",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-                  {
-                     "name":"keyspace",
-                     "description":"The keyspace",
-                     "required":true,
-                     "allowMultiple":false,
-                     "type":"string",
-                     "paramType":"path"
-                  },
-                  {
-                     "name":"cf",
-                     "description":"Column family name",
-                     "required":false,
-                     "allowMultiple":false,
-                     "type":"string",
-                     "paramType":"query"
-                  }
-               ]
-            }
-         ]
-      },
-      {
          "path":"/storage_service/keyspaces",
          "operations":[
             {
