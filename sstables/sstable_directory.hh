@@ -197,8 +197,7 @@ private:
             noncopyable_function<data_dictionary::storage_options()>&& get_storage_options);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc,
-            noncopyable_function<data_dictionary::storage_options()>&& get_storage_options,
-            sstables::sstable_open_config cfg = {}) const;
+            const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg = {}) const;
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
