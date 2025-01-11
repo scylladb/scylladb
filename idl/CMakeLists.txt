@@ -77,9 +77,6 @@ add_custom_target(idl-sources
   DEPENDS ${idl_sources})
 add_library(idl INTERFACE)
 add_dependencies(idl idl-sources)
-target_link_directories(idl
-  INTERFACE
-    absl::headers)
 target_include_directories(idl
   INTERFACE
     ${scylla_gen_build_dir})
