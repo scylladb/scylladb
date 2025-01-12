@@ -9,6 +9,7 @@
 
 
 #include <seastar/core/shard_id.hh>
+#include <seastar/coroutine/as_future.hh>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
@@ -3724,6 +3725,20 @@ SEASTAR_TEST_CASE(test_explicit_tablets_disable) {
     // Tablets can also be explicitly enabled for a new keyspace
     co_await test_create_keyspace("test_explictly_enabled_0", true, cfg, 0);
     co_await test_create_keyspace("test_explictly_enabled_128", true, cfg, 128);
+}
+
+// Test that when tablets they cannot be explicitly disabled
+// when creating a keyspace when the `enable_tablets`
+// configuration option is set to `force`.
+SEASTAR_TEST_CASE(test_enforce_tablets) {
+    auto cfg = tablet_cql_test_config(db::tablets_mode_t::mode::enforced);
+
+    // By default tablets are enabled
+    co_await test_create_keyspace("test_default_settings", std::nullopt, cfg);
+
+    // Tablets cannot be explicitly disabled for a new keyspace
+    auto f = co_await coroutine::as_future(test_create_keyspace("test_not_explictly_disabled", false, cfg));
+    BOOST_REQUIRE_THROW(f.get(), exceptions::configuration_exception);
 }
 
 SEASTAR_TEST_CASE(test_recognition_of_deprecated_name_for_resize_transition) {

@@ -688,6 +688,12 @@ maintenance_socket: ignore
 # unless tablets are explicitly enabled in the CREATE KEYSPACE query
 # by using the `tablets = {'enabled': true}` replication option.
 #
+# When set to `enforced`, newly created keyspaces will always have tablets enabled by default.
+# This prevents explicitly disabling tablets in the CREATE KEYSPACE query
+# using the `tablets = {'enabled': false}` replication option.
+# It also mandates a replication strategy supporting tablets, like
+# NetworkTopologyStrategy
+#
 # Note that creating keyspaces with tablets enabled or disabled is irreversible.
 # The `tablets` option cannot be changed using `ALTER KEYSPACE`.
 tablets_mode_for_new_keyspaces: enabled

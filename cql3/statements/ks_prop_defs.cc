@@ -140,7 +140,7 @@ data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
     return opts;
 }
 
-std::optional<unsigned> ks_prop_defs::get_initial_tablets(std::optional<unsigned> default_value) const {
+std::optional<unsigned> ks_prop_defs::get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets) const {
     auto tablets_options = get_map(KW_TABLETS);
     if (!tablets_options) {
         return default_value;
@@ -155,6 +155,9 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(std::optional<unsigned
         if (enabled == "true") {
             // nothing
         } else if (enabled == "false") {
+            if (enforce_tablets) {
+                throw exceptions::configuration_exception("Cannot disable tablets for keyspace since tablets are enforced using the `tablets_mode_for_new_keyspaces: enforced` config option.");
+            }
             return std::nullopt;
         } else {
             throw exceptions::configuration_exception(sstring("Tablets enabled value must be true or false; found: ") + enabled);
@@ -190,7 +193,9 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0 for N.T.S. only
     auto enable_tablets = feat.tablets && cfg.enable_tablets_by_default();
-    auto initial_tablets = get_initial_tablets(enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy" ? std::optional<unsigned>(0) : std::nullopt);
+    std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
+            ? std::optional<unsigned>(0) : std::nullopt;
+    auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     auto options = prepare_options(sc, tm, get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());

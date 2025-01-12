@@ -139,6 +139,7 @@ struct tablets_mode_t {
         unset = -1,
         disabled = 0,
         enabled = 1,
+        enforced = 2
     };
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
@@ -550,8 +551,12 @@ public:
         case tablets_mode_t::mode::disabled:
             return false;
         case tablets_mode_t::mode::enabled:
+        case tablets_mode_t::mode::enforced:
             return true;
         }
+    }
+    bool enforce_tablets() const noexcept {
+        return tablets_mode_for_new_keyspaces() == tablets_mode_t::mode::enforced;
     }
 
     named_value<uint32_t> view_flow_control_delay_limit_in_ms;

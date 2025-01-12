@@ -87,7 +87,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
     if (cfg.force_gossip_topology_changes()) {
         if (cfg.enable_tablets_by_default()) {
-            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled or --force-gossip-topology-changes, but not both.");
+            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
         }
         logger.warn("The tablets feature is disabled due to forced gossip topology changes");
         fcfg._disabled_features.insert("TABLETS"s);
