@@ -684,6 +684,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::TABLET_REPAIR:
     case messaging_verb::TABLE_LOAD_STATS:
     case messaging_verb::BUILD_VIEW_REQUEST:
+    case messaging_verb::ABORT_VBC_WORK:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:

@@ -54,6 +54,7 @@
 #include "mutation/mutation_partition.hh"
 #include "seastar/core/loop.hh"
 #include "seastar/core/when_all.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
@@ -3331,6 +3332,7 @@ class view_building_worker::consumer {
     reader_permit _permit;
     shared_ptr<view_update_generator> _gen;
     gc_clock::time_point _now;
+    abort_source& _as;
 
     view_ptr _view;
     replica::table& _base;
@@ -3347,6 +3349,7 @@ class view_building_worker::consumer {
     }
 
     void flush_fragments() {
+        _as.check();
         if (!_fragments.empty()) {
             // view_builder::consumer::flush_fragments() emplaces front of the _fragments queue. is it needed here?
             auto base_schema = _base.schema();
@@ -3367,12 +3370,12 @@ class view_building_worker::consumer {
     }
 
 public:
-    // TODO: add abort source
-    consumer(mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, view_ptr view, replica::table& base) 
+    consumer(mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, view_ptr view, replica::table& base, abort_source& as) 
         : _reader(reader)
         , _permit(std::move(permit))
         , _gen(std::move(gen))
         , _now(now)
+        , _as(as)
         , _view(std::move(view))
         , _base(base)
         {}
@@ -3387,11 +3390,19 @@ public:
     }
 
     stop_iteration consume(static_row&& sr, tombstone, bool) {
+        if (_as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+
         add_fragment(std::move(sr));
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
+        if (_as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+
         if (!is_live) {
             return stop_iteration::no;
         }
@@ -3426,6 +3437,7 @@ future<> view_building_worker::stop() {
 }
 
 future<dht::token_range> view_building_worker::build_view_range(sstring ks_name, sstring view_name, dht::token_range range) {
+    _as = abort_source();
     gc_clock::time_point now = gc_clock::now();
 
     /* TODO: finish view_building_worker::consumer
@@ -3461,6 +3473,12 @@ void view_building_worker::init_messaging_service() {
         return container().invoke_on(shard, [ks_name = std::move(ks_name), view_name = std::move(view_name), range = std::move(range)] (auto& vbr) {
             return vbr.build_view_range(std::move(ks_name), std::move(view_name), std::move(range));
         });
+    });
+    ser::view_rpc_verbs::register_abort_vbc_work(&_messaging.local(), [this] () -> future<rpc::no_wait_type> {
+        (void)container().invoke_on_all([] (auto& vbw) {
+            vbw._as.request_abort();
+        });
+        co_return rpc::no_wait_type{};
     });
 }
 

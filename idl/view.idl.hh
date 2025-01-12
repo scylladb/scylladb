@@ -16,5 +16,6 @@ class update_backlog {
 };
 
 verb [[cancellable]] build_view_request(sstring ks_name, sstring view_name, unsigned shard, dht::token_range range) -> dht::token_range;
+verb [[one_way]] abort_vbc_work();
 }
 }
