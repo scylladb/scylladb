@@ -481,6 +481,8 @@ scylla_tests = set([
     'test/boost/double_decker_test',
     'test/boost/duration_test',
     'test/boost/dynamic_bitset_test',
+    'test/boost/encrypted_file_test',
+    'test/boost/encryption_at_rest_test',
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/estimated_histogram_test',
@@ -560,6 +562,7 @@ scylla_tests = set([
     'test/boost/token_metadata_test',
     'test/boost/top_k_test',
     'test/boost/transport_test',
+    'test/boost/symmetric_key_test',
     'test/boost/types_test',
     'test/boost/utf8_test',
     'test/boost/vint_serialization_test',
@@ -1131,6 +1134,19 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                 'querier.cc',
                 'mutation_writer/multishard_writer.cc',
+                'ent/encryption/encryption_config.cc',
+                'ent/encryption/encryption.cc',
+                'ent/encryption/symmetric_key.cc',
+                'ent/encryption/local_file_provider.cc',
+                'ent/encryption/replicated_key_provider.cc',
+                'ent/encryption/system_key.cc',
+                'ent/encryption/encrypted_file_impl.cc',
+                'ent/encryption/kmip_host.cc',
+                'ent/encryption/kmip_key_provider.cc',
+                'ent/encryption/kms_host.cc',
+                'ent/encryption/kms_key_provider.cc',
+                'ent/encryption/gcp_host.cc',
+                'ent/encryption/gcp_key_provider.cc',
                 'ent/ldap/ldap_connection.cc',
                 'multishard_mutation_query.cc',
                 'reader_concurrency_semaphore.cc',
@@ -1330,7 +1346,8 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
 
-scylla_tools = ['tools/read_mutation.cc',
+scylla_tools = ['tools/scylla-local-file-key-generator.cc',
+                'tools/read_mutation.cc',
                 'tools/scylla-types.cc',
                 'tools/scylla-sstable.cc',
                 'tools/scylla-nodetool.cc',
@@ -1997,7 +2014,6 @@ def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):
         libs = f"-Wl,-rpath='{rpath}' {libs}"
     if link_static_cxx:
         libs = libs.replace('-lstdc++ ', '')
-
     testing_libs = pkg_config(pc_file.replace('seastar.pc', 'seastar-testing.pc'), '--libs', '--static')
     return {'seastar_cflags': cflags,
             'seastar_libs': libs,
@@ -2010,7 +2026,7 @@ pkgs = ['libsystemd',
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
 
-libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy',
+libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-lz', '-lsnappy', '-lcrypto',
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread', ' -lldap -llber',
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
@@ -2020,6 +2036,8 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  '-lxxhash',
                  '-ldeflate',
                 ])
+
+args.user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
 
 if not args.staticboost:
     user_cflags += ' -DBOOST_ALL_DYN_LINK'
@@ -2032,6 +2050,32 @@ user_ldflags += ' -fvisibility=hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 
+kmip_lib_ver = '1.9.2a';
+
+def kmiplib():
+    os_ids = get_os_ids()
+    for id in os_ids:
+        if id in { 'centos', 'fedora', 'rhel' }:
+            return 'rhel84'
+    print('Could not resolve libkmip.a for platform {}'.format(os_ids))
+    sys.exit(1)
+
+def target_cpu():
+    cpu, _, _ = subprocess.check_output([cxx, '-dumpmachine']).decode('utf-8').partition('-')
+    return cpu    
+
+def kmip_arch():
+    arch = target_cpu()
+    if arch == 'x86_64':
+        return '64'
+    return arch 
+
+kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
+kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
+libs += ' -lboost_filesystem'
+if os.path.exists(kmipc_lib):
+    libs += f' {kmipc_lib}'
+    user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
 
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = []

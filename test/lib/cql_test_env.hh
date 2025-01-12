@@ -98,6 +98,8 @@ public:
     bool ms_listen = false;
     bool run_with_raft_recovery = false;
 
+    std::optional<timeout_config> query_timeout;
+
     cql_test_config();
     cql_test_config(const cql_test_config&);
     cql_test_config(shared_ptr<db::config>);

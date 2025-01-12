@@ -55,6 +55,7 @@ Additional References
 ---------------------
 
 .. include:: nodetool-index.rst
+:doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>`
 
 
 

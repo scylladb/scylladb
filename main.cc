@@ -119,6 +119,12 @@
 #include "message/dictionary_service.hh"
 #include "utils/disk_space_monitor.hh"
 
+
+#define P11_KIT_FUTURE_UNSTABLE_API
+extern "C" {
+#include <p11-kit/p11-kit.h>
+}
+
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
@@ -2415,6 +2421,7 @@ int main(int ac, char** av) {
         {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
         {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
         {"nodetool", tools::scylla_nodetool_main, "a command-line tool to administer local or remote ScyllaDB nodes"},
+        {"local-file-key-generator", tools::scylla_local_file_key_generator_main, "a command-line tool to generate encryption at rest keys"},
         {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
         {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
         {"perf-tablets", perf::scylla_tablets_main, "run performance tests of tablet metadata management"},
@@ -2470,6 +2477,21 @@ int main(int ac, char** av) {
             fmt::print("{} - {}\n", tool.name, tool.desc);
         }
         return 0;
+    }
+
+    // We have to override p11-kit config path before p11-kit initialization.
+    // And the initialization will invoke on seastar initalization, so it has to
+    // be before app.run()
+    // #3583 - need to potentially ensure this for tools as well, since at least
+    // sstable* might need crypto libraries.
+    auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe")); // could just be argv[0] I guess...
+    auto p11_modules = scylla_path.parent_path().parent_path().append("share/p11-kit/modules");
+    // Note: must be in scope for application lifetime. p11_kit_override_system_files does _not_
+    // copy input strings.
+    auto p11_modules_str = p11_modules.string<char>();
+    // #3392 only do this if we are actually packaged and the path exists.
+    if (fs::exists(p11_modules)) {
+        ::p11_kit_override_system_files(NULL, NULL, p11_modules_str.c_str(), NULL, NULL);
     }
 
     return main_func(ac, av);

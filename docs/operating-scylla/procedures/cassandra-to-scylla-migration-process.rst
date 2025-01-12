@@ -51,6 +51,19 @@ Procedure
    - Import schema to ScyllaDB: ``cqlsh [IP] --file 'adjusted_schema.cql'``
 
 .. _`limitations and known issues section`: #notes-limitations-and-known-issues
+
+
+.. note::
+
+   Scylla and Apache Cassandra :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>` are **not** compatible.
+   sstableloader does **not** support loading from encrypted files.
+
+   If you need to migrate/restore from encrypted files:
+
+   * Upload them to the original database
+   * Decrypted the table with ALTER TABLE
+   * Update the SSTables files with :doc:`upgradesstable </operating-scylla/nodetool-commands/upgradesstables>`
+   * Use sstableloader
                                              
 .. note::
 

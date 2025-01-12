@@ -473,6 +473,9 @@ class partition_slice;
 class schema_extension {
 public:
     virtual ~schema_extension() {};
+    virtual future<> validate(const schema&) const {
+        return make_ready_future<>();
+    }
     virtual bytes serialize() const = 0;
     virtual bool is_placeholder() const {
         return false;
