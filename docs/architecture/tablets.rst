@@ -94,11 +94,11 @@ controlled by the :confval:`tablets_mode_for_new_keyspaces` option. However, tab
 supported on all nodes within the cluster.
 
 When creating a new keyspace with tablets enabled by default, you can still opt-out
-on a per-keyspace basis. The recommended ``NetworkTopologyStrategy`` for keyspaces
-remains *required* even if tablets are disabled.
+on a per-keyspace basis using ``CREATE KEYSPACE <ks> WITH tablets = {'enabled': false}``,
+unless the :confval:`tablets_mode_for_new_keyspaces` option is set to ``enforced``.
 
-You can create a keyspace with tablets
-disabled with the ``tablets = {'enabled': false}`` option:
+Note: The recommended ``NetworkTopologyStrategy`` for keyspaces
+remains *required* even if tablets are disabled.
 
 .. code:: cql
 
