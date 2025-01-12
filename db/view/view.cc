@@ -24,6 +24,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/view_building_worker.hh"
+#include "dht/i_partitioner_fwd.hh"
+#include "dht/token.hh"
+#include "mutation/tombstone.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -48,6 +52,8 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
+#include "seastar/core/loop.hh"
+#include "seastar/core/when_all.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
@@ -67,6 +73,7 @@
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
+#include "idl/view.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -3318,5 +3325,149 @@ std::chrono::microseconds calculate_view_update_throttling_delay(db::view::updat
         return std::chrono::duration_cast<std::chrono::microseconds>(budget);
     }
 }
+
+class view_building_worker::consumer {
+    mutation_reader& _reader;
+    reader_permit _permit;
+    shared_ptr<view_update_generator> _gen;
+    gc_clock::time_point _now;
+
+    view_ptr _view;
+    replica::table& _base;
+
+    std::deque<mutation_fragment_v2> _fragments;
+    size_t _fragments_memory_usage = 0;
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*_reader.schema());
+        _fragments.emplace_back(*_reader.schema(), _permit, std::move(fragment));
+        if (_fragments_memory_usage > view_builder::batch_memory_max) {
+            flush_fragments();
+        }
+    }
+
+    void flush_fragments() {
+        if (!_fragments.empty()) {
+            // view_builder::consumer::flush_fragments() emplaces front of the _fragments queue. is it needed here?
+            auto base_schema = _base.schema();
+            auto views = std::vector<view_and_base> {view_and_base{_view, _view->view_info()->base_info()}};
+            auto reader = make_mutation_reader_from_fragments(_reader.schema(), _permit, std::move(_fragments));
+            auto close_reader = defer([&reader] { reader.close().get(); });
+            reader.upgrade_schema(base_schema);
+            _gen->populate_views(
+                    _base,
+                    std::move(views),
+                    dht::token(), //TODO: pass base token
+                    std::move(reader),
+                    _now).get();
+            close_reader.cancel();
+            _fragments.clear();
+            _fragments_memory_usage = 0;
+        }
+    }
+
+public:
+    // TODO: add abort source
+    consumer(mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, view_ptr view, replica::table& base) 
+        : _reader(reader)
+        , _permit(std::move(permit))
+        , _gen(std::move(gen))
+        , _now(now)
+        , _view(std::move(view))
+        , _base(base)
+        {}
+
+    stop_iteration consume_new_partition(const dht::decorated_key& dk) {
+        // TODO
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(tombstone) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        add_fragment(std::move(sr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
+        if (!is_live) {
+            return stop_iteration::no;
+        }
+        add_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone_change&&) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume_end_of_partition() {
+        flush_fragments();
+        return stop_iteration::no;
+    }
+
+    dht::token_range consume_end_of_stream() {
+        // TODO
+        return dht::token_range();
+    }
+};
+
+view_building_worker::view_building_worker(replica::database& db, sharded<netw::messaging_service>& messaging) 
+    : _db(db)
+    , _messaging(messaging)
+{
+    init_messaging_service();   
+}
+
+future<> view_building_worker::stop() {
+    co_await uninit_messaging_service();
+}
+
+future<dht::token_range> view_building_worker::build_view_range(sstring ks_name, sstring view_name, dht::token_range range) {
+    gc_clock::time_point now = gc_clock::now();
+
+    /* TODO: finish view_building_worker::consumer
+    auto view_schema = _db.find_schema(ks_name, view_name);
+    auto& base_table = _db.find_column_family(view_schema->view_info()->base_id());
+
+    reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_view_range", db::no_timeout, {});
+    auto slice = make_partition_slice(*base_table.schema());
+    auto prange = dht::to_partition_range(range);
+
+    auto reader = base_table.get_sstable_set().make_local_shard_sstable_reader(
+            base_table.schema(), 
+            permit,
+            prange,
+            slice,
+            nullptr,
+            streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no);
+    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+            *reader.schema(),
+            now,
+            slice,
+            db::view::view_builder::batch_size,
+            query::max_partitions);
+    auto consumer = compact_for_query_v2<view_building_worker::consumer>(compaction_state, view_building_worker::consumer{});
+    auto built = reader.consume_in_thread(std::move(consumer));
+    */
+    co_return range;
+}
+
+void view_building_worker::init_messaging_service() {
+    ser::view_rpc_verbs::register_build_view_request(&_messaging.local(), [this] (sstring ks_name, sstring view_name, unsigned shard, dht::token_range range) {
+        return container().invoke_on(shard, [ks_name = std::move(ks_name), view_name = std::move(view_name), range = std::move(range)] (auto& vbr) {
+            return vbr.build_view_range(std::move(ks_name), std::move(view_name), std::move(range));
+        });
+    });
+}
+
+future<> view_building_worker::uninit_messaging_service() {
+    return ser::view_rpc_verbs::unregister(&_messaging.local());
+    // co_return;
+}
+
 } // namespace view
 } // namespace db
