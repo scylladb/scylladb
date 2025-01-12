@@ -298,6 +298,15 @@ public:
         return entry._addr;
     }
 
+    // Same as find() above but expects mapping to exist
+    gms::inet_address get(locator::host_id id) const {
+        try {
+            return find(id).value();
+        } catch (std::bad_optional_access& err) {
+            on_internal_error(rslog, fmt::format("No ip address for {} when one is expected", id));
+        }
+    }
+
     // Find an id with a given mapping.
     //
     // If a mapping is expiring, the last access timestamp is updated automatically.
