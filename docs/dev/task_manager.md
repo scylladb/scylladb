@@ -76,6 +76,8 @@ Briefly:
         gets or sets new ttl.
 - `/task_manager/user_ttl` -
         gets or sets new user ttl.
+- `/task_manager/drain/{module}` -
+        unregisters all finished local tasks in the module.
 
 # Virtual tasks
 

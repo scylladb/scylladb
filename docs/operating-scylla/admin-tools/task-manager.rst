@@ -89,6 +89,8 @@ API calls
 
 	- *user_ttl* - new user ttl value.
 
+* ``/task_manager/drain/{module}`` - unregisters all finished local tasks in the module.
+
 Cluster tasks are not unregistered from task manager with API calls.
 
 Tasks API
