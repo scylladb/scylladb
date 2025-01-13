@@ -1809,8 +1809,13 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         }
     }
 
-    // if the node is bootstrapped the function will do nothing since we already created group0 in main.cc
-    ::shared_ptr<group0_handshaker> handshaker = raft_topology_change_enabled()
+    // setup_group0 will do nothing if the node has already set up group 0 in setup_group0_if_exist in main.cc,
+    // which is the case when the node is restaring and not joining the new group 0 in Raft recovery.
+    //
+    // We use the legacy handshaker in Raft recovery to join the new group 0 without involving the topology
+    // coordinator.
+    ::shared_ptr<group0_handshaker> handshaker =
+            raft_topology_change_enabled() && _db.local().get_config().recovery_leader().empty()
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(can_vote::no);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
@@ -1886,6 +1891,11 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             if (!_db.local().get_config().join_ring() && !_feature_service.zero_token_nodes) {
                 throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
             }
+
+            co_await utils::get_local_injector().inject("crash_before_topology_request_completion", [] (auto& handler) -> future<> {
+                co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+                throw std::runtime_error("Crashed in stop_before_topology_request_completion");
+            });
 
             auto err = co_await wait_for_topology_request_completion(join_params.request_id);
             if (!err.empty()) {
@@ -3011,6 +3021,45 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         loaded_endpoints | std::views::transform([] (const auto& x) {
             return x.second.endpoint;
         }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
+
+    gms::inet_address recovery_leader_ip;
+    locator::host_id recovery_leader_id;
+    if (!_db.local().get_config().recovery_leader().empty()) {
+        if (_group0->joined_group0()) {
+            // Something is wrong unless it is a noninitial (and unneeded) restart during the Raft recovery procedure.
+            slogger.warn(
+                    "recovery_leader is set to {} but persistent group 0 ID is present: {}. "
+                    "The recovery_leader option will be ignored. If you are trying to run the Raft recovery procedure, "
+                    "ensure you delete raft_group_id and truncate system.discovery.",
+                    _db.local().get_config().recovery_leader(), _group0->load_my_id());
+        } else {
+            recovery_leader_id = locator::host_id(utils::UUID(_db.local().get_config().recovery_leader()));
+            if (recovery_leader_id != my_host_id() && !loaded_endpoints.contains(recovery_leader_id)) {
+                throw std::runtime_error(format("Recovery leader {} unrecognised as a cluster member", recovery_leader_id));
+            }
+            recovery_leader_ip = recovery_leader_id == my_host_id() ?
+                    get_broadcast_address() : loaded_endpoints[recovery_leader_id].endpoint;
+            initial_contact_nodes = std::unordered_set{recovery_leader_ip};
+
+            if (_group0->client().in_recovery()) {
+                throw std::runtime_error(format(
+                        "Entered RECOVERY mode and set recovery_leader to {}. RECOVERY mode is used in the old "
+                        "recovery procedure, while recovery_leader is used in the new procedure. If raft-based "
+                        "topology is enabled in the whole cluster, use the new procedure. Otherwise, use the old one.",
+                        recovery_leader_id));
+            }
+            if (!_sys_ks.local().bootstrap_complete()) {
+                throw std::runtime_error("Cannot bootstrap in Raft recovery");
+            }
+            if (!co_await _sys_ks.local().load_topology_features_state()) {
+                throw std::runtime_error("Cannot start in Raft recovery - raft-based topology has not been enabled");
+            }
+            if (_db.local().get_config().force_gossip_topology_changes()) {
+                throw std::runtime_error("Cannot force gossip topology changes in Raft recovery");
+            }
+        }
+    }
+
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
             initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
@@ -3018,7 +3067,19 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
-    if (_group0->client().in_recovery()) {
+    if (recovery_leader_id) {
+        // The new Raft recovery procedure.
+        slogger.info("Raft recovery with recovery leader {}/{}", recovery_leader_id, recovery_leader_ip);
+        auto g0_info = co_await _group0->discover_group0(std::vector{recovery_leader_ip}, _qp);
+        if (g0_info.id.uuid() != recovery_leader_id.uuid()) {
+            throw std::runtime_error(fmt::format(
+                    "Raft recovery - found group 0 {} with leader {}/{} not matching recovery leader {}/{}.",
+                    g0_info.group0_id, g0_info.id, g0_info.ip_addr, recovery_leader_id, recovery_leader_ip));
+        }
+        slogger.info("Raft recovery - found group 0 with ID {}", g0_info.group0_id, g0_info.id, g0_info.ip_addr);
+        set_topology_change_kind(topology_change_kind::raft);
+    } else if (_group0->client().in_recovery()) {
+        // The old Raft recovery procedure.
         slogger.info("Raft recovery - starting in legacy topology operations mode");
         set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
@@ -3030,6 +3091,12 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         }
         slogger.info("The node is already in group 0 and will restart in {} mode", raft_topology_change_enabled() ? "raft" : "legacy");
     } else if (_sys_ks.local().bootstrap_complete()) {
+        if (co_await _sys_ks.local().load_topology_features_state()) {
+            throw std::runtime_error(
+                    "Cannot start - raft-based topology has been enabled but persistent group 0 ID is not present. "
+                    "If you are trying to run the Raft recovery procedure, you must set recovery_reader.");
+        }
+
         // We already bootstrapped but we are not a part of group 0. This means that we are restarting after recovery.
         slogger.info("Restarting in legacy mode. The node was either upgraded from a non-raft-topology version or is restarting after recovery.");
         set_topology_change_kind(topology_change_kind::legacy);

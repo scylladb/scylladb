@@ -40,7 +40,7 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
 
     await wait_for_cql_and_get_hosts(manager.cql, servers, time.time() + 60)
     cql = await reconnect_driver(manager)
-    finish_writes = await start_writes(cql, rf, ConsistencyLevel.ONE)
+    _, finish_writes = await start_writes(cql, rf, ConsistencyLevel.ONE)
 
     logger.info(f"Decommissioning node {servers[0]}")
     await manager.decommission_node(servers[0].server_id)
