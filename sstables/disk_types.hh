@@ -11,9 +11,8 @@
 #include "bytes.hh"
 #include "utils/chunked_vector.hh"
 #include <seastar/core/enum.hh>
-#include <boost/variant/variant.hpp>
-#include <boost/variant/get.hpp>
 #include <unordered_map>
+#include <variant>
 #include <type_traits>
 #include "mutation/atomic_cell.hh"
 
@@ -106,7 +105,7 @@ struct disk_set_of_tagged_union {
     using tag_type = TagType;
     using key_type = std::conditional_t<std::is_enum<TagType>::value, std::underlying_type_t<TagType>, TagType>;
     using hash_type = std::conditional_t<std::is_enum<TagType>::value, enum_hash<TagType>, TagType>;
-    using value_type = boost::variant<Members...>;
+    using value_type = std::variant<Members...>;
     std::unordered_map<tag_type, value_type, hash_type> data;
 
     template <TagType Tag, typename T>
@@ -116,7 +115,7 @@ struct disk_set_of_tagged_union {
         if (i == data.end()) {
             return nullptr;
         } else {
-            return &boost::get<disk_tagged_union_member<TagType, Tag, T>>(i->second).value;
+            return &std::get<disk_tagged_union_member<TagType, Tag, T>>(i->second).value;
         }
     }
     template <TagType Tag, typename T>
