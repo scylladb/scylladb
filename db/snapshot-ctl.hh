@@ -121,8 +121,7 @@ private:
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
-    template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_modify_operation(Func&&);
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
 
     template <typename Func>
     std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
