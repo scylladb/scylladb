@@ -3654,7 +3654,7 @@ SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
 
 namespace {
 
-future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, const cql_test_config& cfg, uint64_t initial_tablets = 0) {
+future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, const cql_test_config& cfg, uint64_t initial_tablets = 0, sstring replication_strategy = "NetworkTopologyStrategy") {
     co_await do_with_cql_env_thread([&] (cql_test_env& e) {
         sstring extra;
         if (tablets_opt) {
@@ -3668,7 +3668,7 @@ future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, 
                 extra = " and tablets = { 'enabled' : false }";
             }
         }
-        auto q = format("create keyspace {} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}{};", ks_name, extra);
+        auto q = format("create keyspace {} with replication = {{ 'class' : '{}', 'replication_factor' : 1 }}{};", ks_name, replication_strategy, extra);
         testlog.debug("{}", q);
         e.execute_cql(q).get();
         BOOST_REQUIRE(e.local_db().has_keyspace(ks_name));
@@ -3708,6 +3708,14 @@ SEASTAR_TEST_CASE(test_explicit_tablets_enable) {
 
     // Tablets can also be explicitly disabled for a new keyspace
     co_await test_create_keyspace("test_explictly_disabled", false, cfg);
+
+    // Replication strategies that do not support tablets cannot be used when tablets are explicitly enabled
+    for (const auto& [rs_desc, rs_type] : db::replication_strategy_restriction_t::map()) {
+        if (rs_type != locator::replication_strategy_type::network_topology) {
+            auto f = co_await coroutine::as_future(test_create_keyspace("test_unsupported_replication_strategy", true, cfg, 0, rs_desc));
+            BOOST_REQUIRE_THROW(f.get(), exceptions::configuration_exception);
+        }
+    }
 }
 
 // Test that tablets can be explicitly disabled
@@ -3739,6 +3747,14 @@ SEASTAR_TEST_CASE(test_enforce_tablets) {
     // Tablets cannot be explicitly disabled for a new keyspace
     auto f = co_await coroutine::as_future(test_create_keyspace("test_not_explictly_disabled", false, cfg));
     BOOST_REQUIRE_THROW(f.get(), exceptions::configuration_exception);
+
+    // Replication strategies that do not support tablets cannot be used when tablets are explicitly enabled
+    for (const auto& [rs_desc, rs_type] : db::replication_strategy_restriction_t::map()) {
+        if (rs_type != locator::replication_strategy_type::network_topology) {
+            auto f = co_await coroutine::as_future(test_create_keyspace("test_unsupported_replication_strategy", true, cfg, 0, rs_desc));
+            BOOST_REQUIRE_THROW(f.get(), exceptions::configuration_exception);
+        }
+    }
 }
 
 SEASTAR_TEST_CASE(test_recognition_of_deprecated_name_for_resize_transition) {
