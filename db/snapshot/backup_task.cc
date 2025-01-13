@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "utils/lister.hh"
@@ -62,6 +63,24 @@ tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
     return tasks::is_user_task::yes;
 }
 
+future<> backup_task_impl::upload_component(sstring name) {
+    auto component_name = _snapshot_dir / name;
+    auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, name);
+    snap_log.trace("Upload {} to {}", component_name.native(), destination);
+
+    // Start uploading in the background. The caller waits for these fibers
+    // with the uploads gate.
+    // Parallelism is implicitly controlled in two ways:
+    //  - s3::client::claim_memory semaphore
+    //  - http::client::max_connections limitation
+    try {
+        co_await _client->upload_file(component_name, destination, _progress, &_as);
+    } catch (...) {
+        snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
+        throw;
+    }
+}
+
 future<> backup_task_impl::do_backup() {
     if (!co_await file_exists(_snapshot_dir.native())) {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));
@@ -85,20 +104,11 @@ future<> backup_task_impl::do_backup() {
             break;
         }
         auto gh = uploads.hold();
-        auto component_name = _snapshot_dir / component_ent->name;
-        auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, component_ent->name);
-        snap_log.trace("Upload {} to {}", component_name.native(), destination);
 
         // Pre-upload break point. For testing abort in actual s3 client usage.
         co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-        // Start uploading in the background. The caller waits for these fibers
-        // with the uploads gate.
-        // Parallelism is implicitly controlled in two ways:
-        //  - s3::client::claim_memory semaphore
-        //  - http::client::max_connections limitation
-        std::ignore = _client->upload_file(component_name, destination, _progress, &_as).handle_exception([comp = component_name, &ex] (std::exception_ptr e) {
-            snap_log.error("Error uploading {}: {}", comp.native(), e);
+        std::ignore = upload_component(component_ent->name).handle_exception([&ex] (std::exception_ptr e) {
             // keep the first exception
             if (!ex) {
                 ex = std::move(e);
@@ -120,7 +130,9 @@ future<> backup_task_impl::do_backup() {
 }
 
 future<> backup_task_impl::run() {
-    co_await _snap_ctl.run_snapshot_list_operation([this] {
+    // do_backup() removes a file once it is fully uploaded, so we are actually
+    // mutating snapshots.
+    co_await _snap_ctl.run_snapshot_modify_operation([this] {
         return do_backup();
     });
     snap_log.info("Finished backup");
