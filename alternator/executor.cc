@@ -1423,7 +1423,13 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto schema = builder.build();
         co_await verify_permission(enforce_authorization, client_state_other_shard.get(), schema, auth::permission::ALTER);
-        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema,  std::vector<view_ptr>(), group0_guard.write_timestamp());
+        std::vector<view_ptr> view_updates;
+        auto cf = p.local().data_dictionary().find_column_family(schema);
+        // Update all view so that they use the new base schema version.
+        for (auto&& view : cf.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
+        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(view_updates), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 

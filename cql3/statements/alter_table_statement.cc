@@ -377,13 +377,11 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
         // the view table and the definition.
         for (auto&& view : cf.views()) {
             schema_builder builder(view);
-            bool view_updated = false;
             auto new_where = view->view_info()->where_clause();
             for (auto&& entry : _renames) {
                 auto from = entry.first->prepare_column_identifier(*s);
                 auto to = entry.second->prepare_column_identifier(*s);
                 if (view->get_column_definition(from->name())) {
-                    view_updated = true;
                     auto view_from = entry.first->prepare_column_identifier(*view);
                     auto view_to = entry.second->prepare_column_identifier(*view);
                     validate_column_rename(db, *view, *view_from, *view_to);
@@ -396,12 +394,20 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
                             cql3::dialect{});
                 }
             }
-            if (view_updated) {
-                builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
-                view_updates.push_back(view_ptr(builder.build()));
-            }
+            // Even if no column is changed in the view, push an view update with the original where clause
+            // so that a new view schema is created with the new base schema.
+            builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
+            view_updates.push_back(view_ptr(builder.build()));
         }
         break;
+    }
+    if (_type != alter_table_statement::type::rename) {
+        // If we're renaming columns, we don't want to update the view schema again
+        // because that would overwrite the new where clause with the original one.
+        // Otherwise, we always want to update all views with the new base schema version.
+        for (auto&& view : cf.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
     }
 
     return make_pair(std::move(cfm), std::move(view_updates));

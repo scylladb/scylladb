@@ -78,7 +78,13 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp, const query_
     auto cfm = make_drop_idex_schema(qp);
 
     if (cfm) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm, {}, ts);
+        std::vector<view_ptr> view_updates;
+        auto cf = qp.db().find_column_family(cfm);
+        // Update all view so that they use the new base schema version.
+        for (auto&& view : cf.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm, std::move(view_updates), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,

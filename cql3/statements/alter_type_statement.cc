@@ -72,6 +72,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     auto res = co_await service::prepare_update_type_announcement(sp, updated, ts);
     std::move(res.begin(), res.end(), std::back_inserter(m));
 
+    auto db = sp.data_dictionary();
     for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
         auto cfm = schema_builder(schema);
         bool modified = false;
@@ -88,7 +89,13 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
                 auto res = co_await service::prepare_view_update_announcement(sp, view_ptr(cfm.build()), ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                auto res = co_await service::prepare_column_family_update_announcement(sp, cfm.build(), {}, ts);
+                std::vector<view_ptr> view_updates;
+                auto cf = db.find_column_family(schema);
+                // Update all view so that they use the new base schema version.
+                for (auto&& view : cf.views()) {
+                    view_updates.push_back(view_ptr(schema_builder(view).build()));
+                }
+                auto res = co_await service::prepare_column_family_update_announcement(sp, cfm.build(), std::move(view_updates), ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }
