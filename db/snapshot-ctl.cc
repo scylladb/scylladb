@@ -56,9 +56,8 @@ future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, s
     });
 }
 
-template <typename Func>
-std::invoke_result_t<Func> snapshot_ctl::run_snapshot_modify_operation(Func&& f) {
-    return with_gate(_ops, [f = std::move(f), this] () {
+future<> snapshot_ctl::run_snapshot_modify_operation(noncopyable_function<future<>()>&& f) {
+    return with_gate(_ops, [f = std::move(f), this] () mutable {
         return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
             return with_lock(snap._lock.for_write(), std::move(f));
         });
