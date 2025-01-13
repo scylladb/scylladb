@@ -76,7 +76,6 @@ public:
     /// The snapshot of both the view schema and base_dependent_view_info is represented
     /// by view_and_base. See with_base_info_snapshot().
     const db::view::base_info_ptr& base_info() const { return _base_info; }
-    void set_base_info(db::view::base_info_ptr);
     db::view::base_info_ptr make_base_dependent_view_info(const schema& base_schema) const;
 
     friend bool operator==(const view_info& x, const view_info& y) {

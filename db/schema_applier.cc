@@ -605,8 +605,6 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
         check_no_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema);
-
-        vp->view_info()->set_base_info(vp->view_info()->make_base_dependent_view_info(*base_schema));
         return vp;
     });
 
