@@ -5,6 +5,7 @@ Nodetool tasks
    :hidden:
 
    abort <abort>
+   drain <drain>
    user-ttl <user-ttl>
    list <list>
    modules <modules>
@@ -32,6 +33,7 @@ Supported tasks suboperations
 -----------------------------
 
 * :doc:`abort </operating-scylla/nodetool-commands/tasks/abort>` - Aborts the task.
+* :doc:`drain </operating-scylla/nodetool-commands/tasks/drain>` - Unregisters all finished local tasks.
 * :doc:`user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>` - Gets or sets user_task_ttl value.
 * :doc:`list </operating-scylla/nodetool-commands/tasks/list>` - Lists tasks in the module.
 * :doc:`modules </operating-scylla/nodetool-commands/tasks/modules>` - Lists supported modules.

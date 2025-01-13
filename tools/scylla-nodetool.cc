@@ -2912,6 +2912,18 @@ void tasks_abort_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 }
 
+void tasks_drain_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.contains("module")) {
+        auto module = vm["module"].as<sstring>();
+        auto res = client.post(format("/task_manager/drain/{}", module));
+        return;
+    }
+    auto module_res = client.get("/task_manager/list_modules");
+    for (const auto& module : module_res.GetArray()) {
+        auto drain_res = client.post(format("/task_manager/drain/{}", module.GetString()));
+    }
+}
+
 void tasks_user_ttl_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (!vm.contains("set")) {
         auto res = client.get("/task_manager/user_ttl");
@@ -4269,6 +4281,20 @@ For more information, see: {}"
                             },
                         },
                         {
+                            "drain",
+                            "Drains tasks",
+fmt::format(R"(
+Unregisters all finished local tasks from the specified module. If a module is not specified,
+all modules are drained.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tasks/drain.html")),
+                            {
+                                typed_option<sstring>("module", "The module name; if specified, only the tasks from this module are unregistered"),
+                            },
+                            { },
+                        },
+                        {
                             "user-ttl",
                             "Gets or sets user task ttl",
 fmt::format(R"(
@@ -4381,6 +4407,9 @@ For more information, see: {}"
                 {
                     {
                         "abort", { tasks_abort_operation }
+                    },
+                    {
+                        "drain", { tasks_drain_operation }
                     },
                     {
                         "user-ttl", { tasks_user_ttl_operation }
