@@ -15,10 +15,13 @@ env:
   BUILD_DIR: build
 
 jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
   build-with-the-latest-seastar:
+    needs:
+      - read-toolchain
     runs-on: ubuntu-latest
-    # be consistent with tools/toolchain/image
-    container: scylladb/scylla-toolchain:fedora-40-20240621
+    container: ${{ needs.read-toolchain.outputs.image }}
     strategy:
       matrix:
         build_type:
