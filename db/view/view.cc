@@ -917,17 +917,12 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
         const auto& col_ids = existing.is_clustering_row()
                 ? _base_info->base_regular_columns_in_view_pk()
                 : _base_info->base_static_columns_in_view_pk();
-        if (_view_info.has_computed_column_depending_on_base_non_primary_key()) {
-            if (auto ts_tag = std::get_if<view_key_and_action::shadowable_tombstone_tag>(&action)) {
-                r->apply(ts_tag->into_shadowable_tombstone(now));
-            } else {
-                // The above if() is only implemented for collection column
-                // indexing, and it generates the deletion timestamp in an
-                // elaborate per-row manner. In other cases, only one
-                // row is involved and the caller gives us deletion_ts to use.
-                r->apply(shadowable_tombstone(deletion_ts, now));
-            }
-        } else if (!col_ids.empty()) {
+        if (!col_ids.empty() || _view_info.has_computed_column_depending_on_base_non_primary_key()) {
+            // The view key could have been modified because it contains or
+            // depends on a non-primary-key. The fact that this function was
+            // called instead of update_entry() means the caller knows it
+            // wants to delete the old row (with the given deletion_ts) and
+            // will create a different one. So let's honor this.
             r->apply(shadowable_tombstone(deletion_ts, now));
         } else {
             // "update" caused the base row to have been deleted, and !col_id
