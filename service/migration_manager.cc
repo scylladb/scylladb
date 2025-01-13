@@ -698,6 +698,17 @@ future<std::vector<mutation>> prepare_column_family_update_announcement(storage_
             // Can call notifier when it creates new indexes, so needs to run in Seastar thread
             return db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts);
         });
+        auto table = sp.data_dictionary().find_column_family(cfm);
+        // Update versions of all views so that they use the new base schema version.
+        for (auto&& old_view : table.views()) {
+            auto view = view_ptr(schema_builder(old_view).build());
+            mlogger.info("Update view schema '{}.{}' due to base schema update", view->ks_name(), view->cf_name());
+            auto view_mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, false);
+            std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(mutations));
+            co_await coroutine::maybe_yield();
+        }
+        // Perform actual updates to view tables. The mutations from this loop will merge with the version update mutations
+        // from the loop above, resulting in a single update.
         for (auto&& view : view_updates) {
             auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
             mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
