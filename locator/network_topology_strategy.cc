@@ -176,13 +176,13 @@ class natural_endpoints_tracker {
     // all token owners in each DC, so we can check when we have exhausted all
     // the token-owning members of a DC
     //
-    std::unordered_map<sstring, std::unordered_set<inet_address>> _token_owners;
+    std::unordered_map<sstring, std::unordered_set<locator::host_id>> _token_owners;
 
     //
     // all racks (with non-token owners filtered out) in a DC so we can check
     // when we have exhausted all racks in a DC
     //
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>> _racks;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<locator::host_id>>> _racks;
 
     std::unordered_map<std::string_view, data_center_endpoints> _dcs;
 
@@ -193,8 +193,8 @@ public:
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
-        , _token_owners(_tm.get_datacenter_token_owners_ips())
-        , _racks(_tm.get_datacenter_racks_token_owners_ips())
+        , _token_owners(_tm.get_datacenter_token_owners())
+        , _racks(_tm.get_datacenter_racks_token_owners())
     {
         // not aware of any cluster members
         SCYLLA_ASSERT(!_token_owners.empty() && !_racks.empty());

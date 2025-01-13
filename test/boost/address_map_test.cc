@@ -246,6 +246,23 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_operations) {
         scoped_no_abort_on_internal_error abort_guard;
         BOOST_CHECK_THROW(m.find_by_addr(gms::inet_address{}), std::runtime_error);
     }
+    {
+        // Check that an update with smaller generation will not overwrite update with larger one
+        // but other way around works
+        sharded<address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.add_or_update_entry(id1, addr1, gms::generation_type{2});
+        m.add_or_update_entry(id1, addr2, gms::generation_type{1});
+
+        BOOST_CHECK(m.find(id1).value() == addr1);
+
+        m.add_or_update_entry(id1, addr2, gms::generation_type{3});
+
+        BOOST_CHECK(m.find(id1).value() == addr2);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {

@@ -535,7 +535,7 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
-    db::system_keyspace::peer_info get_peer_info_for_update(inet_address endpoint);
+    std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(inet_address endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map);
 

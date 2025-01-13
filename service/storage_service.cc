@@ -512,18 +512,20 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
             // add one.
             const auto& host_id_to_ip_map = *(co_await get_host_id_to_ip_map());
 
-            // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
+            // Some state that is used to fill in 'peers' table is still propagated over gossiper.
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
             // for the node were not in the 'normal' state yet
             auto info = get_peer_info_for_update(*ip);
-            // And then amend with the info from raft
-            info.tokens = rs.ring.value().tokens;
-            info.data_center = rs.datacenter;
-            info.rack = rs.rack;
-            info.release_version = rs.release_version;
-            info.supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-            sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, info));
+            if (info) {
+                // And then amend with the info from raft
+                info->tokens = rs.ring.value().tokens;
+                info->data_center = rs.datacenter;
+                info->rack = rs.rack;
+                info->release_version = rs.release_version;
+                info->supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
+                sys_ks_futures.push_back(_sys_ks.local().update_peer_info(*ip, host_id, *info));
+            }
             if (!prev_normal.contains(id)) {
                 nodes_to_notify.joined.push_back(*ip);
             }
@@ -788,45 +790,11 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     co_await update_fence_version(_topology_state_machine._topology.fence_version);
 
-    // We don't load gossiper endpoint states in storage_service::join_cluster
-    // if raft_topology_change_enabled(). On the other hand gossiper is still needed
-    // even in case of raft_topology_change_enabled() mode, since it still contains part
-    // of the cluster state. To work correctly, the gossiper needs to know the current
-    // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
-    // will be up to date and reachable at the time of restart.
-    const auto tmptr = get_token_metadata_ptr();
-    for (const auto& node : tmptr->get_topology().get_nodes()) {
-        const auto& host_id = node.get().host_id();
-        const auto& ep = node.get().endpoint();
-        if (is_me(host_id)) {
-            continue;
-        }
-        if (ep == inet_address{}) {
-            continue;
-        }
-        auto permit = co_await _gossiper.lock_endpoint(ep, gms::null_permit_id);
-        // Add the endpoint if it doesn't exist yet in gossip
-        // since it is not loaded in join_cluster in the
-        // raft_topology_change_enabled() case.
-        if (!_gossiper.get_endpoint_state_ptr(ep)) {
-            gms::loaded_endpoint_state st;
-            st.endpoint = ep;
-            st.tokens = tmptr->get_tokens(host_id) | std::ranges::to<std::unordered_set<dht::token>>();
-            st.opt_dc_rack = node.get().dc_rack();
-            // Save tokens, not needed for raft topology management, but needed by legacy
-            // Also ip -> id mapping is needed for address map recreation on reboot
-            if (node.get().is_this_node() && !st.tokens.empty()) {
-                st.opt_status = gms::versioned_value::normal(st.tokens);
-            }
-            co_await _gossiper.add_saved_endpoint(host_id, std::move(st), permit.id());
-        }
-    }
-
     // As soon as a node joins token_metadata.topology we
     // need to drop all its rpc connections with ignored_topology flag.
     {
         std::vector<future<>> futures;
-        tmptr->get_topology().for_each_node([&](const locator::node& n) {
+        get_token_metadata_ptr()->get_topology().for_each_node([&](const locator::node& n) {
             const auto ep = n.endpoint();
             if (ep != inet_address{} && !saved_tmpr->get_topology().has_endpoint(ep)) {
                 futures.push_back(remove_rpc_client_with_ignored_topology(ep, n.host_id()));
@@ -2580,7 +2548,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
     if (!is_me(endpoint) && !owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         try {
-            auto info = get_peer_info_for_update(endpoint);
+            auto info = get_peer_info_for_update(endpoint).value();
             info.tokens = std::move(owned_tokens);
             co_await _sys_ks.local().update_peer_info(endpoint, host_id, info);
         } catch (...) {
@@ -2791,17 +2759,16 @@ future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_s
     return make_ready_future();
 }
 
-db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_address endpoint) {
+std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(inet_address endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
         return db::system_keyspace::peer_info{};
     }
     auto info = get_peer_info_for_update(endpoint, ep_state->get_application_state_map());
-    if (!info) {
+    if (!info && !raft_topology_change_enabled()) {
         on_internal_error_noexcept(slogger, seastar::format("get_peer_info_for_update({}): application state has no peer info: {}", endpoint, ep_state->get_application_state_map()));
-        return db::system_keyspace::peer_info{};
     }
-    return *info;
+    return info;
 }
 
 std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
@@ -2968,38 +2935,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 
     set_mode(mode::STARTING);
 
-    std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints;
-    if (_db.local().get_config().load_ring_state() && !raft_topology_change_enabled()) {
-        slogger.info("Loading persisted ring state");
-        loaded_endpoints = co_await _sys_ks.local().load_endpoint_state();
-
-        auto tmlock = co_await get_token_metadata_lock();
-        auto tmptr = co_await get_mutable_token_metadata_ptr();
-        for (auto& [host_id, st] : loaded_endpoints) {
-            if (st.endpoint == get_broadcast_address()) {
-                // entry has been mistakenly added, delete it
-                slogger.warn("Loaded saved endpoint={}/{} has my broadcast address.  Deleting it", host_id, st.endpoint);
-                co_await _sys_ks.local().remove_endpoint(st.endpoint);
-            } else {
-                if (host_id == my_host_id()) {
-                    on_internal_error(slogger, format("Loaded saved endpoint {} with my host_id={}", st.endpoint, host_id));
-                }
-                if (!st.opt_dc_rack) {
-                    st.opt_dc_rack = locator::endpoint_dc_rack::default_location;
-                    slogger.warn("Loaded no dc/rack for saved endpoint={}/{}. Set to default={}/{}", host_id, st.endpoint, st.opt_dc_rack->dc, st.opt_dc_rack->rack);
-                }
-                const auto& dc_rack = *st.opt_dc_rack;
-                slogger.debug("Loaded tokens: endpoint={}/{} dc={} rack={} tokens={}", host_id, st.endpoint, dc_rack.dc, dc_rack.rack, st.tokens);
-                tmptr->update_topology(host_id, dc_rack, locator::node::state::normal);
-                co_await tmptr->update_normal_tokens(st.tokens, host_id);
-                tmptr->update_host_id(host_id, st.endpoint);
-                // gossiping hasn't started yet
-                // so no need to lock the endpoint
-                co_await _gossiper.add_saved_endpoint(host_id, st, gms::null_permit_id);
-            }
-        }
-        co_await replicate_to_all_cores(std::move(tmptr));
-    }
+    std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints = co_await _sys_ks.local().load_endpoint_state();
 
     // Seeds are now only used as the initial contact point nodes. If the
     // loaded_endpoints are empty which means this node is a completely new
@@ -3011,12 +2947,6 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         loaded_endpoints | std::views::transform([] (const auto& x) {
             return x.second.endpoint;
         }) | std::ranges::to<std::unordered_set<gms::inet_address>>();
-    auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
-    slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
-            initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
-    for (auto& x : loaded_peer_features) {
-        slogger.info("peer={}, supported_features={}", x.first, x.second);
-    }
 
     if (_group0->client().in_recovery()) {
         slogger.info("Raft recovery - starting in legacy topology operations mode");
@@ -3072,6 +3002,57 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     if (!_db.local().get_config().join_ring() && !_sys_ks.local().bootstrap_complete() && !raft_topology_change_enabled()) {
         throw std::runtime_error("Cannot boot the node with join_ring=false because the raft-based topology is disabled");
         // We must allow restarts of zero-token nodes in the gossip-based topology due to the recovery mode.
+    }
+
+    if (!raft_topology_change_enabled()) {
+        if (_db.local().get_config().load_ring_state()) {
+            slogger.info("Loading persisted ring state");
+
+            auto tmlock = co_await get_token_metadata_lock();
+            auto tmptr = co_await get_mutable_token_metadata_ptr();
+            for (auto& [host_id, st] : loaded_endpoints) {
+                if (st.endpoint == get_broadcast_address()) {
+                    // entry has been mistakenly added, delete it
+                    slogger.warn("Loaded saved endpoint={}/{} has my broadcast address.  Deleting it", host_id, st.endpoint);
+                    co_await _sys_ks.local().remove_endpoint(st.endpoint);
+                } else {
+                    if (host_id == my_host_id()) {
+                        on_internal_error(slogger, format("Loaded saved endpoint {} with my host_id={}", st.endpoint, host_id));
+                    }
+                    if (!st.opt_dc_rack) {
+                        st.opt_dc_rack = locator::endpoint_dc_rack::default_location;
+                        slogger.warn("Loaded no dc/rack for saved endpoint={}/{}. Set to default={}/{}", host_id, st.endpoint, st.opt_dc_rack->dc, st.opt_dc_rack->rack);
+                    }
+                    const auto& dc_rack = *st.opt_dc_rack;
+                    slogger.debug("Loaded tokens: endpoint={}/{} dc={} rack={} tokens={}", host_id, st.endpoint, dc_rack.dc, dc_rack.rack, st.tokens);
+                    tmptr->update_topology(host_id, dc_rack, locator::node::state::normal);
+                    co_await tmptr->update_normal_tokens(st.tokens, host_id);
+                    tmptr->update_host_id(host_id, st.endpoint);
+                    // gossiping hasn't started yet
+                    // so no need to lock the endpoint
+                    co_await _gossiper.add_saved_endpoint(host_id, st, gms::null_permit_id);
+                }
+            }
+            co_await replicate_to_all_cores(std::move(tmptr));
+        }
+    }  else {
+        slogger.info("Loading persisted peers into the gossiper");
+        // If topology coordinator is enabled only load peers into the gossiper (since it is were ID to IP maopping is managed)
+        // No need to update topology.
+        co_await coroutine::parallel_for_each(loaded_endpoints, [&] (auto& e) -> future<> {
+            auto& [host_id, st] = e;
+            if (host_id == my_host_id()) {
+                on_internal_error(slogger, format("Loaded saved endpoint {} with my host_id={}", st.endpoint, host_id));
+            }
+            co_await _gossiper.add_saved_endpoint(host_id, st, gms::null_permit_id);
+        });
+    }
+
+    auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
+    slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
+            initial_contact_nodes, loaded_endpoints | std::views::keys, loaded_peer_features.size());
+    for (auto& x : loaded_peer_features) {
+        slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
     co_return co_await join_topology(sys_dist_ks, proxy, std::move(initial_contact_nodes),
@@ -6830,6 +6811,13 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
             if (replaced_it == _topology_state_machine._topology.normal_nodes.end()) {
                 result.result = join_node_request_result::rejected{
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", *params.replaced_id),
+                };
+                co_return result;
+            }
+
+            if (replaced_it->second.datacenter != params.datacenter || replaced_it->second.rack != params.rack) {
+                result.result = join_node_request_result::rejected{
+                    .reason = fmt::format("Cannot replace node in {}/{} with node in {}/{}", replaced_it->second.datacenter, replaced_it->second.rack, params.datacenter, params.rack),
                 };
                 co_return result;
             }
