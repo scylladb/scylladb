@@ -2223,9 +2223,6 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
         ep_state.add_application_state(gms::application_state::DC, gms::versioned_value::datacenter(st.opt_dc_rack->dc));
         ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
     }
-    if (st.opt_status) {
-        ep_state.add_application_state(gms::application_state::STATUS, std::move(*st.opt_status));
-    }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
     _unreachable_endpoints[ep] = now();
