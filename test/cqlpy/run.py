@@ -271,7 +271,6 @@ def run_scylla_cmd(pid, dir):
         '--options-file',  source_path + '/conf/scylla.yaml',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
-        '--collectd', '0',
         '--smp', '2',
         '-m', '1G',
         '--overprovisioned',

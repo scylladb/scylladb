@@ -6,7 +6,6 @@ import sys
 import threading
 import pprint
 import logging
-import collectd
 import prometheus
 import metric
 import fake
@@ -50,11 +49,10 @@ def fancyUserInterface(metricPatterns, interval, metric_source, ttl):
 
 
 if __name__ == '__main__':
-    description = '\n'.join(['A top-like tool for scylladb collectd/prometheus metrics.',
+    description = '\n'.join(['A top-like tool for scylladb prometheus metrics.',
                              'Keyboard shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
                              '',
                              'By default it would work with the Prometheus API and does not require configuration.',
-                             'For collectd, you need to configure the unix-sock plugin for collectd'
                              'before you can use this, use the --print-config option to give you a configuration example',
                              'enjoy!'])
     parser = argparse.ArgumentParser(description=description)
@@ -66,14 +64,9 @@ if __name__ == '__main__':
         default='ERROR')
     parser.add_argument(dest='metricPattern', nargs='*', default=[], help='metrics to query, separated by spaces. You can use shell globs (e.g. *cpu*nice*) here to efficiently specify metrics')
     parser.add_argument('-i', '--interval', help="time resolution in seconds, default: 1", type=float, default=1)
-    parser.add_argument('-s', '--socket', default='/var/run/collectd-unixsock', help="unixsock plugin to connect to, default: /var/run/collectd-unixsock")
     parser.add_argument('-p', '--prometheus-address', default='http://localhost:9180/metrics', help="The prometheus end-point")
-    parser.add_argument('--print-config', action='store_true',
-                        help="print out a configuration to put in your collectd.conf (you can use -s here to define the socket path)")
     parser.add_argument('-l', '--list', action='store_true',
-                        help="print out a list of all metrics exposed by collectd and exit")
-    parser.add_argument('-c', '--collectd', action='store_true',
-                        help="Use collectd instead of Prometheus to connect to scylla")
+                        help="print out a list of all metrics exposed and exit")
     parser.add_argument('-L', '--logfile', default='scyllatop.log',
                         help="specify path for log file")
     parser.add_argument('-S', '--shell', action='store_true', help="uses IPython to enter a debug shell, usefull for development")
@@ -97,16 +90,10 @@ if __name__ == '__main__':
     logging.getLogger().addHandler(file_log)
     logging.getLogger().setLevel(logging.DEBUG)
 
-    if arguments.print_config:
-        print(collectd.COLLECTD_EXAMPLE_CONFIGURATION.format(socket=arguments.socket))
-        quit()
-
     if arguments.fake:
         fake.fake()
-    if arguments.collectd:
-        metric_source = collectd.Collectd(arguments.socket)
-    else:
-        metric_source = prometheus.Prometheus(arguments.prometheus_address)
+
+    metric_source = prometheus.Prometheus(arguments.prometheus_address)
     if arguments.shell:
         shell()
         quit()
