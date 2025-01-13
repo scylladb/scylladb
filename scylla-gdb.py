@@ -4529,11 +4529,14 @@ class scylla_sstables(gdb.Command):
             sm = std_optional(sc['scylla_metadata'])
             if sm:
                 for tag, value in unordered_map(sm.get()['data']['data']):
-                    bv = boost_variant(value)
-                    # FIXME: only gdb.Type.template_argument(0) works for boost::variant<>
-                    if bv.which() != 0:
-                        continue
-                    val = bv.get()['value']
+                    try:
+                        v = std_variant(value)
+                    except gdb.error: # scylla 6.2 compatibility
+                        v = boost_variant(value)
+                        # FIXME: only gdb.Type.template_argument(0) works for boost::variant<>
+                        if v.which() != 0:
+                            continue
+                    val = v.get()['value']
                     if str(val.type) == 'sstables::sharding_metadata':
                         sm_size += chunked_vector(val['token_ranges']['elements']).external_memory_footprint()
             size += sm_size
