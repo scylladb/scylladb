@@ -973,10 +973,9 @@ future<> raft_group0::modify_raft_voter_status(
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
-    // TODO: add a timeout mechanism? This could get stuck (and _abort_source is only called on shutdown).
     co_await run_op_with_retry(_abort_source, [this, id]() -> future<operation_result> {
         try {
-            co_await _raft_gr.group0().modify_config({}, {id}, &_abort_source);
+            co_await _raft_gr.group0_with_timeouts().modify_config({}, {id}, &_abort_source, raft_timeout{});
         } catch (const raft::commit_status_unknown& e) {
             group0_log.info("remove_from_raft_config({}): modify_config returned \"{}\", retrying", id, e);
             co_return operation_result::failure;
