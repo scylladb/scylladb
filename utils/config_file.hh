@@ -52,22 +52,7 @@ public:
 };
 
 template <typename T>
-extern const config_type config_type_for;
-
-template<>
-extern const config_type config_type_for<uint32_t>;
-
-template<>
-extern const config_type config_type_for<sstring>;
-
-template<>
-extern const config_type config_type_for<bool>;
-
-template<>
-extern const config_type config_type_for<std::unordered_map<sstring, sstring>>;
-
-template<>
-extern const config_type config_type_for<std::unordered_map<sstring, std::unordered_map<sstring, sstring>>>;
+extern const config_type& config_type_for();
 
 class config_file {
     static thread_local unsigned s_shard_id;
@@ -210,7 +195,7 @@ public:
 
         named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : config_src(file, name, alias, &config_type_for<T>, desc)
+            : config_src(file, name, alias, &config_type_for<T>(), desc)
             , _value_status(vs)
             , _liveness(liveness_)
             , _allowed_values(std::move(allowed_values)) {
