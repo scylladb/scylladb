@@ -72,6 +72,8 @@ Briefly:
         order, unregisters the task;
 - `/task_manager/ttl` -
         gets or sets new ttl.
+- `/task_manager/drain/{module}` -
+        unregisters all finished local tasks in the module.
 
 # Virtual tasks
 

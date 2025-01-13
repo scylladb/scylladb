@@ -5,6 +5,7 @@ Nodetool tasks
    :hidden:
 
    abort <abort>
+   drain <drain>
    list <list>
    modules <modules>
    status <status>
@@ -31,6 +32,7 @@ Supported tasks suboperations
 -----------------------------
 
 * :doc:`abort </operating-scylla/nodetool-commands/tasks/abort>` - Aborts the task.
+* :doc:`drain </operating-scylla/nodetool-commands/tasks/drain>` - Unregisters all finished local tasks.
 * :doc:`list </operating-scylla/nodetool-commands/tasks/list>` - Lists tasks in the module.
 * :doc:`modules </operating-scylla/nodetool-commands/tasks/modules>` - Lists supported modules.
 * :doc:`status </operating-scylla/nodetool-commands/tasks/status>` - Gets status of the task.
