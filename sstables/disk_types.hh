@@ -100,12 +100,6 @@ struct disk_tagged_union_member {
     T value;
 };
 
-template <typename TagType, typename... Members>
-struct disk_tagged_union {
-    using variant_type = boost::variant<Members...>;
-    variant_type data;
-};
-
 // Each element of Members... is a disk_tagged_union_member<>
 template <typename TagType, typename... Members>
 struct disk_set_of_tagged_union {
