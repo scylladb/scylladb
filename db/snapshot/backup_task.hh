@@ -27,6 +27,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     s3::upload_progress _progress = {};
 
     future<> do_backup();
+    future<> upload_component(sstring name);
 
 protected:
     virtual future<> run() override;
