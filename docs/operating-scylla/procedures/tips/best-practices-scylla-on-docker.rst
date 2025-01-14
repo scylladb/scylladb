@@ -289,17 +289,17 @@ To disable developer mode:
 
   docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 
---experimental ENABLE
----------------------
-The ``--experimental`` command line option enables ScyllaDB's experimental mode. If no ``--experimental`` command line option is defined, ScyllaDB defaults to running with experimental mode disabled.
+--experimental-features FEATURE
+-------------------------------
+The ``--experimental-features`` command line option enables ScyllaDB's experimental feature individually. If no feature flags are specified, ScyllaDB runs with only stable features enabled.
 
-**It is highly recommended to disable experimental mode for production deployments.**
+**Running experimental features in production environments is not recommended.**
 
-For example, to enable experimental mode:
+For example, to enable the User Defined Functions (UDF) feature:
 
 .. code-block:: console
 
-  docker run --name some-scylla -d scylladb/scylla --experimental 1
+  docker run --name some-scylla -d scylladb/scylla --experimental-features=udf
 
 Other Useful Tips and Tricks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

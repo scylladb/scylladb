@@ -23,7 +23,7 @@ class ScyllaSetup:
         self._reserveMemory = arguments.reserveMemory
         self._overprovisioned = arguments.overprovisioned
         self._housekeeping = not arguments.disable_housekeeping
-        self._experimental = arguments.experimental
+        self._experimental_features = arguments.experimental_features
         self._authenticator = arguments.authenticator
         self._authorizer = arguments.authorizer
         self._clusterName = arguments.clusterName
@@ -146,8 +146,9 @@ class ScyllaSetup:
         if self._authorizer is not None:
             args += ["--authorizer %s" % self._authorizer]
 
-        if self._experimental == "1":
-            args += ["--experimental=on"]
+        if self._experimental_features is not None:
+            for feature in self._experimental_features:
+                args += [f"--experimental-features {feature}"]
 
         if self._clusterName is not None:
             args += ["--cluster-name %s" % self._clusterName]

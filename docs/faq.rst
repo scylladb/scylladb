@@ -104,14 +104,35 @@ You can clean snapshots by using :doc:`nodetool clearsnapshot </operating-scylla
   
 Features
 --------
-I want to try out new features.  How do I enable experimental mode?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-You need to add the line :code:`experimental: true`  to your :code:`scylla.yaml` file.
 
-1. Launch the file in a text editor: :code:`$ vi /etc/scylla/scylla.yaml`. (Alternately, on docker, it's :code:`$ docker exec -it your_node vi /etc/scylla/scylla.yaml`);
-2. Add the line :code:`experimental: true`;
+I want to try out new features.  How do I enable them?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+ScyllaDB features can be enabled individually either through the configuration file or via command-line flags.
+
+To configure using :code:`scylla.yaml` file:
+
+1. Open the file in a text editor:
+
+   On Linux systems
+
+   :code:`$ vi /etc/scylla/scylla.yaml`
+
+   On Docker
+
+   :code:`$ docker exec -it your_node vi /etc/scylla/scylla.yaml`
+
+2. Add the features you want to enable
+
+   .. code-block:: yaml
+
+      # Example: enabling UDF and Alternator Streams features
+      experimental_features:
+         - udf
+         - alternator-streams
+
 3. Save the file and exit.
-4. Stop and restart the node. 
+4. Restart the node.
 
    On RedHat Enterprise Linux, CentOS or Ubuntu:
    
@@ -121,11 +142,15 @@ You need to add the line :code:`experimental: true`  to your :code:`scylla.yaml`
    
    :code:`$ docker stop <your_node> && docker start <your_node>`
 
-   Alternately, starting from ScyllaDB 2.0, you can start ScyllaDB for Docker with the :code:`experimental` flag as follows:
+Alternately, starting from ScyllaDB 3.3, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Alternator Streams:
 
-   :code:`$ docker run --name <your_node> -d scylladb/scylla --experimental 1`
+.. code-block:: console
 
-You should now be able to use the experimental features available in your version of ScyllaDB.
+   $ docker run --name <your_node> -d scylladb/scylla \
+       --experimental-features=udf \
+       --experimental-features=alternator-streams
+
+You should now be able to use the specified experimental features.
 
 How do I check the current version of ScyllaDB that I am running?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
