@@ -1819,7 +1819,8 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
             db::write_type::VIEW,
             std::move(tr_state),
             allow_hints,
-            service::is_cancellable::yes);
+            service::is_cancellable::yes,
+            view_token);
     while (utils::get_local_injector().enter("never_finish_remote_view_updates")) {
         co_await seastar::sleep(100ms);
     }

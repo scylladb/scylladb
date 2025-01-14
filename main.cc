@@ -1807,13 +1807,33 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 throw std::runtime_error("Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.");
             }
 
-            supervisor::notify("loading non-system sstables");
-            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
-
-            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
-            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
-                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            supervisor::notify("starting CDC Generation Management service");
+            /* This service uses the system distributed keyspace.
+             * It will only do that *after* the node has joined the token ring, and the token ring joining
+             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
+             * Hence the service will start using sys_dist_ks only after it was initialized.
+             *
+             * However, there is a problem with the service shutdown order: sys_dist_ks is stopped
+             * *before* CDC generation service is stopped (`storage_service::drain_on_shutdown` below),
+             * so CDC generation service takes sharded<db::sys_dist_ks> and must check local_is_initialized()
+             * every time it accesses it (because it may have been stopped already), then take local_shared()
+             * which will prevent sys_dist_ks from being destroyed while the service operates on it.
+             */
+            cdc::generation_service::config cdc_config;
+            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
+            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
+            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db),
+                    [&ss] () -> bool { return ss.local().raft_topology_change_enabled(); }).get();
+            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
+                cdc_generation_service.stop().get();
             });
+
+            utils::get_local_injector().inject("stop_after_starting_cdc_generation_service",
+                [] { std::raise(SIGSTOP); });
+
+            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
@@ -1826,6 +1846,33 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
+
+            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
+            ss.local().init_address_map(gossip_address_map.local()).get();
+            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
+                ss.local().uninit_address_map().get();
+            });
+
+            // Need to make sure storage service stopped using group0 before running group0_service.abort()
+            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
+            // here as well
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
+               ss.local().wait_for_group0_stop().get();
+            });
+
+            // Setup group0 early in case the node is bootstrapped already and the group exists.
+            // Need to do it before allowing incoming messaging service connections since
+            // storage proxy's and migration manager's verbs may access group0.
+            // This will also disable migration manager schema pulls if needed.
+            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
+
+            supervisor::notify("loading non-system sstables");
+            replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
+
+            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -1933,32 +1980,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             utils::get_local_injector().inject("stop_after_starting_repair",
-                [] { std::raise(SIGSTOP); });
-
-            supervisor::notify("starting CDC Generation Management service");
-            /* This service uses the system distributed keyspace.
-             * It will only do that *after* the node has joined the token ring, and the token ring joining
-             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
-             * Hence the service will start using sys_dist_ks only after it was initialized.
-             *
-             * However, there is a problem with the service shutdown order: sys_dist_ks is stopped
-             * *before* CDC generation service is stopped (`storage_service::drain_on_shutdown` below),
-             * so CDC generation service takes sharded<db::sys_dist_ks> and must check local_is_initialized()
-             * every time it accesses it (because it may have been stopped already), then take local_shared()
-             * which will prevent sys_dist_ks from being destroyed while the service operates on it.
-             */
-            cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
-            cdc_config.ring_delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-            cdc_config.dont_rewrite_streams = cfg->cdc_dont_rewrite_streams();
-            cdc_generation_service.start(std::move(cdc_config), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(sys_ks),
-                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db),
-                    [&ss] () -> bool { return ss.local().raft_topology_change_enabled(); }).get();
-            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
-                cdc_generation_service.stop().get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_cdc_generation_service",
                 [] { std::raise(SIGSTOP); });
 
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
@@ -2098,30 +2119,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(gossip_address_map.local()).get();
-            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
-                ss.local().uninit_address_map().get();
-            });
-
-            // Need to make sure storage service stopped using group0 before running group0_service.abort()
-            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
-            // here as well
-            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
-               ss.local().wait_for_group0_stop().get();
-            });
-
-            // Setup group0 early in case the node is bootstrapped already and the group exists.
-            // Need to do it before allowing incoming messaging service connections since
-            // storage proxy's and migration manager's verbs may access group0.
-            // This will also disable migration manager schema pulls if needed.
-            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
-
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
             }).get();
-
-            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);

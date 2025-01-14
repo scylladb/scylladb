@@ -235,7 +235,7 @@ const node& topology::add_node(node_holder nptr) {
             }
         }
 
-        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), node_printer(nptr.get()), lazy_backtrace());
+        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), node_printer(node), lazy_backtrace());
 
         index_node(*node);
     } catch (...) {

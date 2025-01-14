@@ -94,7 +94,8 @@ public:
     using ptr_type = seastar::shared_ptr<abstract_replication_strategy>;
 
     // Check that the read replica set does not exceed what's allowed by the schema.
-    [[nodiscard]] virtual sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const = 0;
+    [[nodiscard]] virtual sstring sanity_check_read_replicas(
+            const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, dht::token token) const = 0;
 
     abstract_replication_strategy(
         replication_strategy_params params,
@@ -207,7 +208,22 @@ public:
     const token_metadata& get_token_metadata() const noexcept { return *_tmptr; }
     const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
     const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
-    size_t get_replication_factor() const noexcept { return _replication_factor; }
+
+    // Get the replication factor across all data centers from the schema replication strategy (as per settings).
+    size_t get_schema_replication_factor() const noexcept { return _replication_factor; }
+
+    // Get the total replication factor for a token across all data centers.
+    // The VNode implementation ignores the token parameter and returns the same value as `get_schema_replication_factor()`.
+    // The Tablets implementation accounts for any ongoing migrations and returns the actual sum across all data centers.
+    // If Tablets are not in transition, this should return the same value as `get_schema_replication_factor()`.
+    [[nodiscard]] virtual size_t get_replication_factor(dht::token id) const = 0;
+
+    // Get the replication factor for a token and specified data center.
+    // The VNode implementation ignores the token parameter and returns the replication factor (RF)
+    // based on the network replication strategy.
+    // The Tablets implementation accounts for potential ongoing migrations and returns the actual
+    // number of replicas in the data center.
+    [[nodiscard]] virtual size_t get_replication_factor(dht::token id, const seastar::sstring& datacenter) const = 0;
 
     void invalidate() const noexcept {
         _validity_abort_source->request_abort();
@@ -296,7 +312,7 @@ protected:
     }
 public:
     virtual ~per_table_replication_strategy() = default;
-    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const = 0;
+    virtual future<effective_replication_map_ptr> make_replication_map(table_id, token_metadata_ptr) const = 0;
 };
 
 // Holds the full replication_map resulting from applying the
@@ -355,6 +371,12 @@ public:
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
+
+    [[nodiscard]] size_t get_replication_factor([[maybe_unused]] const dht::token id) const override {
+        return get_schema_replication_factor();
+    }
+
+    [[nodiscard]] size_t get_replication_factor(dht::token id, const seastar::sstring& datacenter) const override;
 
     struct cloned_data {
         replication_map replication_map;

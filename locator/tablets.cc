@@ -488,6 +488,60 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
     return &i->second;
 }
 
+const tablet_replica_set& tablet_map::get_replicas_for_reading(const tablet_id tablet) const {
+    auto&& info = get_tablet_transition_info(tablet);
+    auto&& replicas = std::invoke([&]() -> const tablet_replica_set& {
+        if (!info) {
+            return get_tablet_info(tablet).replicas;
+        }
+        switch (info->reads) {
+            case read_replica_set_selector::previous:
+                return get_tablet_info(tablet).replicas;
+            case read_replica_set_selector::next: {
+                return info->next;
+            }
+        }
+        on_internal_error(tablet_logger, format("Invalid replica selector {}", static_cast<int>(info->reads)));
+    });
+    return replicas;
+}
+
+const tablet_replica_set& tablet_map::get_replicas_for_writing(const tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    auto&& replicas = std::invoke([&]() -> const tablet_replica_set& {
+        if (!info) {
+            return get_tablet_info(tablet).replicas;
+        }
+        switch (info->writes) {
+            case write_replica_set_selector::previous:
+                [[fallthrough]];
+            case write_replica_set_selector::both:
+                return get_tablet_info(tablet).replicas;
+            case write_replica_set_selector::next: {
+                return info->next;
+            }
+        }
+        on_internal_error(tablet_logger, format("Invalid replica selector {}", static_cast<int>(info->writes)));
+    });
+    return replicas;
+}
+
+const tablet_replica* tablet_map::get_pending_replica(const tablet_id tablet) const {
+    auto&& info = get_tablet_transition_info(tablet);
+    if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        return nullptr;
+    }
+    switch (info->writes) {
+        case write_replica_set_selector::previous:
+            return nullptr;
+        case write_replica_set_selector::both:
+            return (info->pending_replica.has_value() ? &(*info->pending_replica) : nullptr);
+        case write_replica_set_selector::next:
+            return nullptr;
+    }
+    on_internal_error(tablet_logger, format("Invalid replica selector {}", static_cast<int>(info->writes)));
+}
+
 // The names are persisted in system tables so should not be changed.
 static const std::unordered_map<tablet_transition_stage, sstring> tablet_transition_stage_to_name = {
     {tablet_transition_stage::allow_write_both_read_old, "allow_write_both_read_old"},
@@ -761,9 +815,26 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
 }
 
 class tablet_effective_replication_map : public effective_replication_map {
+
+public:
+    using replication_factor_t = uint16_t;
+    using dc_index_type = uint16_t;
+    using replication_factor_list = utils::small_vector<replication_factor_t, 8>;
+    using datacenter_to_index_map = absl::flat_hash_map<sstring, dc_index_type>;
+    using tablet_to_datacenter_replication_factor_list_map = utils::chunked_vector<replication_factor_list>;
+
+private:
+
     table_id _table;
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
+    // The `_datacenter_map` stores the association between each data center
+    // and its index in the `replication_factor_list` in `_tablet_to_dc_replication_factor_map`.
+    const datacenter_to_index_map _datacenter_map;
+    // The `_tablet_to_dc_replication_factor_map` stores replication factors
+    // per data center for each Tablet.
+    const tablet_to_datacenter_replication_factor_list_map _tablet_to_dc_replication_factor_map;
+
 private:
     inet_address_vector_replica_set to_replica_set(const tablet_replica_set& replicas) const {
         inet_address_vector_replica_set result;
@@ -797,22 +868,7 @@ private:
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto* info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->writes) {
-                case write_replica_set_selector::previous:
-                    [[fallthrough]];
-                case write_replica_set_selector::both:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case write_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
-        });
+        auto&& replicas = tablets.get_replicas_for_writing(tablet);
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
     }
@@ -820,58 +876,73 @@ private:
     host_id_vector_topology_change get_pending_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        const auto* replica = tablets.get_pending_replica(tablet);
+
+        if (!replica) {
             return {};
         }
-        switch (info->writes) {
-            case write_replica_set_selector::previous:
-                return {};
-            case write_replica_set_selector::both: {
-                if (!info->pending_replica) {
-                    return {};
-                }
-                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                                    search_token, _table, tablet, *info->pending_replica);
-                return {info->pending_replica->host};
-            }
-            case write_replica_set_selector::next:
-                return {};
-        }
-        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+
+        tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}", search_token, _table, tablet, *replica);
+
+        return {replica->host};
     }
 
     host_id_vector_replica_set get_for_reading_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->reads) {
-                case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case read_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
-        });
+        auto&& replicas = tablets.get_replicas_for_reading(tablet);
         tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return to_host_set(replicas);
     }
 
-
 public:
+
     tablet_effective_replication_map(table_id table,
                                      replication_strategy_ptr rs,
                                      token_metadata_ptr tmptr,
-                                     size_t replication_factor)
+                                     size_t replication_factor,
+                                     datacenter_to_index_map&& datacenter_map,
+                                     tablet_to_datacenter_replication_factor_list_map&& rf_map)
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
             , _sharder(*_tmptr, table)
+            , _datacenter_map(std::move(datacenter_map))
+            , _tablet_to_dc_replication_factor_map(std::move(rf_map))
     { }
+
+    [[nodiscard]] size_t get_replication_factor(const dht::token id, const seastar::sstring& datacenter) const override {
+        tablet_logger.trace("Get RF for token {}, dc {}", id, datacenter);
+        const auto tablet = get_tablet_map().get_tablet_id(id);
+        if (tablet.id >= _tablet_to_dc_replication_factor_map.size()) [[unlikely]] {
+            on_internal_error(tablet_logger,
+                    format("tablet id index [{}] is out of range of replication factor map. Map size: [{}].", tablet.id, _tablet_to_dc_replication_factor_map.size()));
+        }
+
+        const auto& dc_rf_map = _tablet_to_dc_replication_factor_map[tablet.id];
+        const auto dc_it = _datacenter_map.find(datacenter);
+
+        if (dc_it == _datacenter_map.end()) [[unlikely]] {
+            on_internal_error(tablet_logger, format("Data center: [{}] does not exist in the datacenter map.", datacenter));
+        }
+        if (dc_it->second >= dc_rf_map.size()) [[unlikely]] {
+            on_internal_error(tablet_logger, format("Data center's: [{}] index: [{}] is out of range of the dc_rf_map. Map size: [{}].",
+                                                     datacenter, dc_it->second, dc_rf_map.size()));
+        }
+        return dc_rf_map[dc_it->second];
+    }
+
+    [[nodiscard]] size_t get_replication_factor(const dht::token id) const override {
+        tablet_logger.trace("Get RF for token {}", id);
+        const auto tablet = get_tablet_map().get_tablet_id(id);
+        if (tablet.id >= _tablet_to_dc_replication_factor_map.size()) [[unlikely]] {
+            on_internal_error(tablet_logger, format("Tablet id: [{}] index is out of range for"
+                                                    " _tablet_to_dc_replication_factor_map. Map size: [{}]",
+                                                     tablet.id, _tablet_to_dc_replication_factor_map.size()));
+        }
+        const auto& dc_rf_map = _tablet_to_dc_replication_factor_map[tablet.id];
+        const auto rf = std::accumulate(dc_rf_map.begin(), dc_rf_map.end(), 0);
+        return rf;
+    }
 
     virtual ~tablet_effective_replication_map() = default;
 
@@ -1011,9 +1082,65 @@ std::unordered_set<sstring> tablet_aware_replication_strategy::recognized_tablet
     return opts;
 }
 
-effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replication_map(
+namespace {
+
+// Create a simple map [data center -> index]. This index is used as position index in the small vector
+// in the tablet_effective_replication_map::_tablet_to_dc_replication_factor_map.
+[[nodiscard]] tablet_effective_replication_map::datacenter_to_index_map build_datacenter_map(const auto& data_centers_list) {
+    uint32_t datacenter_index = 0;
+    tablet_effective_replication_map::datacenter_to_index_map datacenter_map;
+    datacenter_map.reserve(data_centers_list.size());
+    for (const sstring& datacenter : data_centers_list) {
+        datacenter_map.emplace(datacenter, datacenter_index);
+        ++datacenter_index;
+    }
+    return datacenter_map;
+}
+
+// Populate a map [tablet id -> replication factor list] with replication factors for each data center.
+// For each tablet index in the tablet map, it retrieves the current replica set using `get_endpoints_for_reading`
+// and counts replicas per data center.  Each data center's replication factor (RF) is saved under
+// its index according to the `datacenter_map`.
+future<tablet_effective_replication_map::tablet_to_datacenter_replication_factor_list_map> build_dc_replication_factor_map(const tablet_map& tablets,
+        const topology& topo, const tablet_effective_replication_map::datacenter_to_index_map& datacenter_map) {
+    tablet_effective_replication_map::tablet_to_datacenter_replication_factor_list_map tablet_to_dc_replication_factor_map;
+    tablet_to_dc_replication_factor_map.reserve(tablets.tablet_count());
+    for (size_t tablet_index = 0; tablet_index < tablets.tablet_count(); ++tablet_index) {
+        const tablet_replica_set& replicas = tablets.get_replicas_for_reading(tablet_id{tablet_index});
+        tablet_to_dc_replication_factor_map.emplace_back(datacenter_map.size(), 0);
+        auto& token_rf_list = tablet_to_dc_replication_factor_map.back();
+        for (const auto& node : replicas) {
+            const locator::node* node_ptr = topo.find_node(node.host);
+            if (node_ptr == nullptr) {
+                on_internal_error(tablet_logger, format("Could not find node: {} in topology.", node));
+            }
+            const sstring& datacenter = topo.get_datacenter(node.host);
+            const auto it = datacenter_map.find(datacenter);
+            if (it == datacenter_map.end()) {
+                on_internal_error(tablet_logger, format("Could not find datacenter: {} for node: {} ", datacenter, node));
+            }
+            const auto index = it->second;
+            assert(index < token_rf_list.size());
+            ++token_rf_list[index];
+        }
+        co_await seastar::maybe_yield();
+    }
+    tablet_logger.debug("Added: [{}] records to rf map.", tablet_to_dc_replication_factor_map.size());
+    co_return tablet_to_dc_replication_factor_map;
+}
+} // namespace
+
+future<effective_replication_map_ptr> tablet_aware_replication_strategy::do_make_replication_map(
         table_id table, replication_strategy_ptr rs, token_metadata_ptr tm, size_t replication_factor) const {
-    return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
+    tablet_logger.debug("Preparing ERM for table: [{}], topology {}", table,  fmt::ptr(&tm->get_topology()));
+    auto datacenter_map = build_datacenter_map(tm->get_topology().get_datacenters());
+
+    auto replication_factor_map = co_await build_dc_replication_factor_map(tm->tablets().get_tablet_map(table), tm->get_topology(), datacenter_map);
+
+    auto erm = seastar::make_shared<tablet_effective_replication_map>(
+            table, std::move(rs), std::move(tm), replication_factor, std::move(datacenter_map), std::move(replication_factor_map));
+
+    co_return erm;
 }
 
 void tablet_metadata_guard::check() noexcept {

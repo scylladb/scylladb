@@ -79,7 +79,8 @@ std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(co
     return {{ "replication_factor" }};
 }
 
-sstring simple_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
+sstring simple_strategy::sanity_check_read_replicas(
+        const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, const dht::token token) const {
     if (read_replicas.size() > _replication_factor) {
         return seastar::format("ERM inconsistency, the read replica set for simple strategy has higher count of"
                                " read replicas [{}] than its replication factor [{}]",
