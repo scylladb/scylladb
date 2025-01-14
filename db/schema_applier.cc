@@ -633,23 +633,28 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         });
     }
 
+    // For updating and creating tables use the following order:
+    // 1. Create non-view tables
+    // 2. Atomically update non-view tables and views
+    // 3. Create views
+    // This order is needed to maintain consistency base and view schemas - we shouldn't create a view
+    // before updating the base schema and both base and view schemas need to be updated atomically.
+    // If this atomicity starts causing stalls, we can consider only atomically updating a table and its views,
+    // not all tables and views at once.
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guaranteed to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
-        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
-        });
-    });
-    co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
         for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
-            co_await coroutine::maybe_yield();
         }
+        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
+        });
         auto it = columns_changed.begin();
         auto notify = [&] (auto& r, auto&& f) -> future<> {
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
