@@ -479,22 +479,19 @@ class load_balancer {
     // due to the average size dropping below the merge threshold, as tablet count doubles.
     const uint64_t _target_tablet_size = default_target_tablet_size;
 
-    static constexpr uint64_t target_max_tablet_size(uint64_t target_tablet_size) {
-        return target_tablet_size * 2;
-    }
-    static constexpr uint64_t target_min_tablet_size(uint64_t max_tablet_size) {
-        return double(max_tablet_size / 2) * 0.5;
-    }
-
     struct table_size_desc {
-        uint64_t target_max_tablet_size;
+        uint64_t target_tablet_size;
         uint64_t avg_tablet_size;
         locator::resize_decision resize_decision;
         size_t tablet_count;
         size_t shard_count;
 
+        uint64_t target_max_tablet_size() const noexcept {
+            return target_tablet_size * 2;
+        }
+
         uint64_t target_min_tablet_size() const noexcept {
-            return load_balancer::target_min_tablet_size(target_max_tablet_size);
+            return target_tablet_size / 2;
         }
     };
 
@@ -516,7 +513,7 @@ class load_balancer {
             return left_growing_mode && d.tablet_count > 1 && d.avg_tablet_size < d.target_min_tablet_size();
         }
         static bool table_needs_split(const table_size_desc& d) {
-            return d.avg_tablet_size > d.target_max_tablet_size;
+            return d.avg_tablet_size > d.target_max_tablet_size();
         }
 
         bool table_needs_resize(const table_size_desc& d) const {
@@ -531,9 +528,9 @@ class load_balancer {
         bool table_needs_resize_cancellation(const table_size_desc& d) const {
             auto& way = d.resize_decision.way;
             if (std::holds_alternative<locator::resize_decision::split>(way)) {
-                return d.avg_tablet_size < d.target_max_tablet_size / 2;
+                return d.avg_tablet_size < d.target_tablet_size;
             } else if (std::holds_alternative<locator::resize_decision::merge>(way)) {
-                return d.avg_tablet_size > d.target_min_tablet_size() * 2;
+                return d.avg_tablet_size > d.target_tablet_size;
             }
             return false;
         }
@@ -560,7 +557,7 @@ class load_balancer {
             return [] (const table_id_and_size_desc& a, const table_id_and_size_desc& b) {
                 auto urgency = [] (const table_size_desc& d) -> double {
                     // FIXME: only takes into account split today.
-                    return double(d.avg_tablet_size) / d.target_max_tablet_size;
+                    return double(d.avg_tablet_size) / d.target_max_tablet_size();
                 };
                 return urgency(a.second) < urgency(b.second);
             };
@@ -1083,7 +1080,7 @@ public:
                 });
 
             table_size_desc size_desc {
-                .target_max_tablet_size = target_max_tablet_size(_target_tablet_size),
+                .target_tablet_size = _target_tablet_size,
                 .avg_tablet_size = avg_tablet_size,
                 .resize_decision = tmap.resize_decision(),
                 .tablet_count = tmap.tablet_count(),
