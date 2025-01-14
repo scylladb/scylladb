@@ -2044,7 +2044,6 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         // the view build information.
         fail.cancel();
         co_await barrier.arrive_and_wait();
-        units.return_all();
 
         co_await calculate_shard_build_step(vbi);
         _mnotifier.register_listener(this);
