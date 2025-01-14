@@ -85,6 +85,6 @@ public:
 
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member) {
         using ret_type = std::invoke_result_t<decltype(member), reader_concurrency_semaphore&>;
-        return boost::accumulate(_semaphores | boost::adaptors::map_values | boost::adaptors::transformed([=] (weighted_reader_concurrency_semaphore& wrcs) { return std::invoke(member, wrcs.sem); }), ret_type(0));
+        return std::ranges::fold_left(_semaphores | std::views::values | std::views::transform([=] (weighted_reader_concurrency_semaphore& wrcs) { return std::invoke(member, wrcs.sem); }), ret_type(0), std::plus{});
     }
 };

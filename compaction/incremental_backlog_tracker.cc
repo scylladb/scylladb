@@ -31,7 +31,7 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
 
     if (!all.empty()) {
       auto freeze = [] (const sstable_run& run) { return make_lw_shared<const sstable_run>(run); };
-      for (auto& bucket : incremental_compaction_strategy::get_buckets(boost::copy_range<std::vector<frozen_sstable_run>>(all | boost::adaptors::map_values | boost::adaptors::transformed(freeze)), options)) {
+      for (auto& bucket : incremental_compaction_strategy::get_buckets(all | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>(), options)) {
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }

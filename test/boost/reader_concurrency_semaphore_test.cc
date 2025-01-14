@@ -1245,8 +1245,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_group) {
     const auto max_sched_groups = 8;
 
     auto check_sem_group = [&] {
-        const auto total_shares = boost::accumulate(scheduling_groups
-                | boost::adaptors::transformed([] (const scheduling_group_with_shares& sgs) { return sgs.shares; }), size_t(0));
+        const auto total_shares = std::ranges::fold_left(scheduling_groups
+                | std::views::transform([] (const scheduling_group_with_shares& sgs) { return sgs.shares; }), size_t(0), std::plus{});
         ssize_t total_memory = 0;
         sem_group.foreach_semaphore([&] (scheduling_group sg, reader_concurrency_semaphore& sem) {
             const auto res = sem.available_resources();

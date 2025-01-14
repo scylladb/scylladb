@@ -146,8 +146,9 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
             });
 
             BOOST_REQUIRE(desc.sstables.size() == expected_input);
-            auto sstable_run = boost::copy_range<std::set<sstables::generation_type>>(desc.sstables
-                | boost::adaptors::transformed([] (auto& sst) { return sst->generation(); }));
+            auto sstable_run = desc.sstables
+                | std::views::transform([] (auto& sst) { return sst->generation(); })
+                | std::ranges::to<std::set>();
             auto expected_sst = sstable_run.begin();
             auto closed_sstables_tracker = sstable_run.begin();
             auto replacer = [&] (compaction_completion_desc ccd) {
@@ -223,7 +224,7 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
 
         double space_amplification() const {
             auto sstables = _cf->get_sstables();
-            auto total = boost::accumulate(*sstables | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
+            auto total = std::ranges::fold_left(*sstables | std::views::transform(std::mem_fn(&sstable::data_size)), uint64_t(0), std::plus{});
             return double(total) / data_set_size;
         }
 
@@ -255,7 +256,7 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
                 if (desc.sstables.empty()) {
                     break;
                 }
-                auto total = boost::accumulate(desc.sstables | boost::adaptors::transformed(std::mem_fn(&sstable::data_size)), uint64_t(0));
+                auto total = std::ranges::fold_left(desc.sstables | std::views::transform(std::mem_fn(&sstable::data_size)), uint64_t(0), std::plus{});
                 std::vector<shared_sstable> new_ssts = { make_sstable_with_size(std::min(total, data_set_size)) };
                 column_family_test(_cf).rebuild_sstable_list(table_s, new_ssts, desc.sstables).get();
             }
