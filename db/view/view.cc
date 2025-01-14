@@ -2349,7 +2349,7 @@ static future<> announce_with_raft(
 
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
@@ -2359,7 +2359,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
                     {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
                     "view builder: mark view build STARTED");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
@@ -2369,7 +2369,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
 
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
@@ -2379,7 +2379,7 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
                     {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
                     "view builder: mark view build SUCCESS");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
@@ -2389,14 +2389,14 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
 
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
                     db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
                     {std::move(ks_name), std::move(view_name)},
                     "view builder: delete view build status");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
         }
     );
