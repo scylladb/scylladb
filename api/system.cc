@@ -13,6 +13,7 @@
 #include "db/sstables-format-selector.hh"
 
 #include <rapidjson/document.h>
+#include <boost/lexical_cast.hpp>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
