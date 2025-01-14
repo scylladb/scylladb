@@ -608,3 +608,49 @@ sstring to_json_string(const abstract_type& t, bytes_view bv) {
 sstring to_json_string(const abstract_type& t, const managed_bytes_view& mbv) {
     return visit(t, to_json_string_visitor{linearized(mbv)});
 }
+
+namespace {
+struct to_json_type_visitor {
+    managed_bytes_view bv;
+    rjson::type operator()(const reversed_type_impl& t) { return to_json_type(*t.underlying_type(), bv); }
+    template <typename T> rjson::type operator()(const integer_type_impl<T>& t) { return rjson::type::kNumberType; }
+    template <typename T> rjson::type operator()(const floating_type_impl<T>& t) {
+        if (bv.empty()) {
+            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+        }
+        auto v = t.deserialize(linearized(bv));
+        T d = value_cast<T>(v);
+        if (std::isnan(d) || std::isinf(d)) {
+            return rjson::type::kNullType;
+        }
+        return rjson::type::kNumberType;
+    }
+    rjson::type operator()(const uuid_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const inet_addr_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const string_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const bytes_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const boolean_type_impl& t) {
+        const auto val = t.to_string(linearized(bv));
+        return val == "true" ? rjson::type::kTrueType : rjson::type::kFalseType;
+    }
+    rjson::type operator()(const timestamp_date_base_class& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const timeuuid_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const map_type_impl& t) { return rjson::type::kObjectType; }
+    rjson::type operator()(const set_type_impl& t) { return rjson::type::kArrayType; }
+    rjson::type operator()(const list_type_impl& t) { return rjson::type::kArrayType; }
+    rjson::type operator()(const tuple_type_impl& t) { return rjson::type::kArrayType; }
+    rjson::type operator()(const vector_type_impl& t) { return rjson::type::kArrayType; }
+    rjson::type operator()(const user_type_impl& t) { return rjson::type::kObjectType; }
+    rjson::type operator()(const simple_date_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const time_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const empty_type_impl& t) { return rjson::type::kNullType; }
+    rjson::type operator()(const duration_type_impl& t) { return rjson::type::kStringType; }
+    rjson::type operator()(const counter_type_impl& t) { return rjson::type::kNumberType; }
+    rjson::type operator()(const decimal_type_impl& t) { return rjson::type::kNumberType; }
+    rjson::type operator()(const varint_type_impl& t) { return rjson::type::kNumberType; }
+};
+}
+
+rjson::type to_json_type(const abstract_type &t, managed_bytes_view bv) {
+    return visit(t, to_json_type_visitor(bv));
+}
