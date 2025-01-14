@@ -966,7 +966,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
 
         // modify schemas for tables holding sensitive data to use encryption w. key described
         // by the opts.
-        // since schemas are duplicated across shards, we must call to each shard and augument
+        // since schemas are duplicated across shards, we must call to each shard and augment
         // them all.
         // Since we are in pre-init phase, this should be safe.
         f = f.then([opts = *opts, &exts] {
