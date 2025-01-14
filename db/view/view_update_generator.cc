@@ -331,7 +331,7 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
 future<> view_update_generator::populate_views(const replica::table& table,
-        std::vector<view_and_base> views,
+        std::vector<view_ptr> views,
         dht::token base_token,
         mutation_reader&& reader,
         gc_clock::time_point now) {
@@ -404,7 +404,7 @@ struct view_update_generation_timeout_exception : public seastar::timed_out_erro
 future<> view_update_generator::generate_and_propagate_view_updates(const replica::table& table,
         const schema_ptr& base,
         reader_permit permit,
-        std::vector<view_and_base>&& views,
+        std::vector<view_ptr>&& views,
         mutation&& m,
         mutation_reader_opt existings,
         tracing::trace_state_ptr tr_state,
