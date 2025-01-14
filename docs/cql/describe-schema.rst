@@ -107,5 +107,5 @@ following form:
     CREATE ROLE [IF NOT EXISTS] <role_name> WITH HASHED PASSWORD = '<hashed_password>' AND LOGIN = <boolean> AND SUPERUSER = <boolean>
 
 The semantics of this statement is analogous to the regular ``CREATE ROLE`` statement except that it circumvents
-the encryption phase of the execution and inserts the hashed password directly into ``system.roles``. You should not use
-this statement unless it was returned by ``DESCRIBE SCHEMA``.
+the encryption phase of the execution and inserts the hashed password directly into the database.
+See :doc:`the article on authorization in ScyllaDB </operating-scylla/security/authorization>` to learn more about it.
