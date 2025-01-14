@@ -854,7 +854,7 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
 
         // existing snapshots expected to remain after dropping the table
         testlog.debug("Dropping table {}.{}", ks_name, table_name);
-        replica::database::drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name).get();
+        replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name).get();
         BOOST_REQUIRE_EQUAL(fs::exists(snapshots_dir / snapshot_name(num_snapshots)), true);
 
         // clear all tags
@@ -1521,7 +1521,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 s->full_slice(),
                 nullptr);
 
-        auto f = replica::database::drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");
+        auto f = replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");
 
         // we add a querier to the querier cache while the drop is ongoing
         auto& qc = db.get_querier_cache();
@@ -1550,7 +1550,7 @@ static future<> test_drop_table_with_auto_snapshot(bool auto_snapshot) {
         // Pass `with_snapshot=true` to drop_table_on_all
         // to allow auto_snapshot (based on the configuration above).
         // The table directory should therefore exist after the table is dropped if auto_snapshot is disabled in the configuration.
-        co_await replica::database::drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, true);
+        co_await replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, true);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, auto_snapshot);
         co_return;
@@ -1575,7 +1575,7 @@ SEASTAR_TEST_CASE(drop_table_with_no_snapshot) {
         // Pass `with_snapshot=false` to drop_table_on_all
         // to disallow auto_snapshot.
         // The table directory should therefore not exist after the table is dropped.
-        co_await replica::database::drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, false);
+        co_await replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, false);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, false);
         co_return;
@@ -1594,7 +1594,7 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
         // With explicit snapshot and with_snapshot=false
         // dir should still be kept, regardless of the
         // with_snapshot parameter and auto_snapshot config.
-        co_await replica::database::drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, false);
+        co_await replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, false);
         auto cf_dir_exists = co_await file_exists(cf_dir);
         BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
         co_return;
