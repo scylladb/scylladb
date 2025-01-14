@@ -372,7 +372,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, str
         };
 
         auto total_size = [] (const size_bucket_t& bucket) -> uint64_t {
-            return boost::accumulate(bucket | boost::adaptors::transformed(std::mem_fn(&sstable_run::data_size)), uint64_t(0));
+            return std::ranges::fold_left(bucket | std::views::transform(std::mem_fn(&sstable_run::data_size)), uint64_t(0), std::plus{});
         };
 
         auto [s0, s1] = find_two_largest_tiers(std::move(buckets));
@@ -433,7 +433,7 @@ incremental_compaction_strategy::sstables_to_runs(std::vector<shared_sstable> ss
         (void)runs[sst->run_identifier()].insert(std::move(sst));
     }
     auto freeze = [] (const sstable_run& run) { return make_lw_shared<const sstable_run>(run); };
-    return boost::copy_range<std::vector<frozen_sstable_run>>(runs | boost::adaptors::map_values | boost::adaptors::transformed(freeze));
+    return runs | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>();
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
@@ -457,7 +457,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         offstrategy_threshold = max_sstables;
     }
 
-    auto run_count = boost::copy_range<std::unordered_set<run_id>>(input | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier))).size();
+    auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
     if (run_count >= offstrategy_threshold && mode == reshape_mode::strict) {
         std::sort(input.begin(), input.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));

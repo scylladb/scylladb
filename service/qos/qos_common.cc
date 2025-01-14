@@ -12,8 +12,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/result_set.hh"
 #include "cql3/untyped_result_set.hh"
-#include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <string_view>
 
 namespace qos {
@@ -212,11 +210,11 @@ static qos::service_level_options::shares_type get_shares(const cql3::untyped_re
     return *shares_opt;
 }
 
-static sstring get_columns(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name) {
+static std::string get_columns(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name) {
     auto schema = qp.db().find_schema(ks_name, cf_name);
-    return boost::algorithm::join(schema->all_columns() | boost::adaptors::transformed([] (const auto& col) {
+    return fmt::to_string(fmt::join(schema->all_columns() | std::views::transform([] (const auto& col) {
         return col.name_as_cql_string();
-    }), " ,");
+    }), " ,"));
 }
 
 future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl, qos::query_context ctx) {

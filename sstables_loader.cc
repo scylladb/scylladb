@@ -28,8 +28,6 @@
 #include <cfloat>
 #include <algorithm>
 
-#include <boost/range/adaptor/transformed.hpp>
-
 static logging::logger llog("sstables_loader");
 
 namespace {
@@ -398,7 +396,7 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
         auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};
         llog.info("load_and_stream: started ops_uuid={}, process [{}-{}] out of {} sstables=[{}]",
             ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total,
-            fmt::join(sst_processed | boost::adaptors::transformed([] (auto sst) { return sst->get_filename(); }), ", "));
+            fmt::join(sst_processed | std::views::transform([] (auto sst) { return sst->get_filename(); }), ", "));
         nr_sst_current += sst_processed.size();
         co_await stream_sstable_mutations(ops_uuid, pr, std::move(sst_processed));
         if (progress) {

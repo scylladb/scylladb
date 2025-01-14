@@ -13,7 +13,6 @@
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include <seastar/coroutine/maybe_yield.hh>
-#include <boost/range/adaptor/transformed.hpp>
 
 namespace service {
 
