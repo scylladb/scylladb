@@ -11,6 +11,7 @@
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
 #include "utils/chunked_vector.hh"
+#include "schema/schema.hh"
 #include "schema/schema_fwd.hh"
 #include "gc_clock.hh"
 
@@ -51,7 +52,6 @@ using allow_hints = bool_class<allow_hints_tag>;
 namespace db::view {
 
 class stats;
-struct view_and_base;
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 
@@ -104,7 +104,7 @@ public:
 
     // Reader's schema must be the same as the base schema of each of the views.
     future<> populate_views(const replica::table& base,
-            std::vector<view_and_base>,
+            std::vector<view_ptr>,
             dht::token base_token,
             mutation_reader&&,
             gc_clock::time_point);
@@ -112,7 +112,7 @@ public:
     future<> generate_and_propagate_view_updates(const replica::table& table,
             const schema_ptr& base,
             reader_permit permit,
-            std::vector<view_and_base>&& views,
+            std::vector<view_ptr>&& views,
             mutation&& m,
             mutation_reader_opt existings,
             tracing::trace_state_ptr tr_state,

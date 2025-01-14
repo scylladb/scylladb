@@ -294,7 +294,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
         [view_schema, base_schema] (table_schema_version) -> base_and_view_schemas { return {frozen_schema(view_schema), base_schema}; });
     auto view_registry_schema = local_schema_registry().get_or_null(view_schema->version());
     BOOST_REQUIRE(view_registry_schema);
-    BOOST_REQUIRE(view_registry_schema->view_info()->base_info());
+    BOOST_REQUIRE(view_registry_schema->view_info()->base_info().base_schema()->version() == base_schema->version());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

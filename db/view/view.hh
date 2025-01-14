@@ -67,15 +67,6 @@ public:
     base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base);
 };
 
-// Immutable snapshot of view's base-schema-dependent part.
-using base_info_ptr = lw_shared_ptr<const base_dependent_view_info>;
-
-// Snapshot of the view schema and its base-schema-dependent part.
-struct view_and_base {
-    view_ptr view;
-    base_info_ptr base;
-};
-
 // An immutable representation of a clustering or static row of the base table.
 struct clustering_or_static_row {
 private:
@@ -207,18 +198,11 @@ class view_updates final {
     view_ptr _view;
     const view_info& _view_info;
     schema_ptr _base;
-    base_info_ptr _base_info;
+    const base_dependent_view_info& _base_info;
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
     size_t _op_count = 0;
 public:
-    explicit view_updates(view_and_base vab)
-            : _view(std::move(vab.view))
-            , _view_info(*_view->view_info())
-            , _base(vab.base->base_schema())
-            , _base_info(vab.base)
-            , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view))
-    {
-    }
+    explicit view_updates(view_ptr vab);
 
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
@@ -308,7 +292,7 @@ view_update_builder make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,
         const schema_ptr& base_schema,
-        std::vector<view_and_base>&& views_to_update,
+        std::vector<view_ptr>&& views_to_update,
         mutation_reader&& updates,
         mutation_reader_opt&& existings,
         gc_clock::time_point now);
@@ -318,9 +302,9 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_and_base>& views);
+        const std::vector<view_ptr>& views);
 
-bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_ptr>& views);
 
 // Whether this node and shard should generate and send view updates for the given token.
 // Checks that the node is one of the replicas (not a pending replicas), and is ready for reads.
@@ -342,13 +326,6 @@ size_t memory_usage_of(const frozen_mutation_and_schema& mut);
  *        When type is a multi-cell collection, so will be the virtual column.
  */
  void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type);
-
-/**
- * Converts a collection of view schema snapshots into a collection of
- * view_and_base objects, which are snapshots of both the view schema
- * and the base-schema-dependent part of view description.
- */
-std::vector<view_and_base> with_base_info_snapshot(std::vector<view_ptr>);
 
 std::optional<locator::host_id> get_view_natural_endpoint(
     locator::host_id node,
