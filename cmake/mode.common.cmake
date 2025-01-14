@@ -83,7 +83,39 @@ function(get_padded_dynamic_linker_option output length)
   set(${output} "${dynamic_linker_option}=${padded_dynamic_linker}" PARENT_SCOPE)
 endfunction()
 
+# We want to strip the absolute build paths from the binary,
+# so that logs and debuggers show e.g. ./main.cc,
+# not /var/lib/jenkins/workdir/scylla/main.cc, or something.
+#
+# The base way to do that is -ffile-prefix-map=${CMAKE_SOURCE_DIR}/=
+# But by itself, it results in *both* DW_AT_name and DW_AT_comp_dir being
+# subject to the substitution.
+# For example, if table::query() is located
+# in /home/user/scylla/replica/table.cc,
+# and the compiler working directory is /home/user/scylla/build,
+# then after the ffile-prefix-map substitution it will
+# have DW_AT_comp_dir equal to ./build
+# and DW_AT_name equal to ./replica/table.cc
+#
+# If DW_AT_name is a relative path, gdb looks for the source files in $DW_AT_comp_dir/$DW_AT_name.
+# This results in e.g. gdb looking for seastar::thread_context::main
+# in ./build/./replica/table.cc
+# instead of replica/table.cc as we would like.
+# To unscrew this, we have to add a rule which will 
+# convert the /absolute/path/to/build to `.`,
+# which will result in gdb looking in ././replica/table.cc, which is fine.
+#
+# The build rule which converts `/absolute/path/to/build/` (note trailing slash)
+# to `build/` exists just so that any DW_AT_name under build (e.g. in generated sources)
+# is excluded from the first rule.
+#
+# Note that the order of these options is important.
+# Each is strictly more specific than the previous one.
+# If they were the other way around, only the most general rule would be used.
+add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}/=")
 add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}=.")
+cmake_path(GET CMAKE_BINARY_DIR FILENAME build_dir_name)
+add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}/=${build_dir_name}")
 
 default_target_arch(target_arch)
 if(target_arch)

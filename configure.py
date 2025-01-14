@@ -1861,6 +1861,29 @@ def configure_seastar(build_dir, mode, mode_config):
         for flag in COVERAGE_INST_FLAGS:
             seastar_cxx_ld_flags = seastar_cxx_ld_flags.replace(' ' + flag, '')
             seastar_cxx_ld_flags = seastar_cxx_ld_flags.replace(flag, '')
+    # There is a global `-ffile-prefix-map={curdir}=.` above.
+    # By itself, it results in *both* DW_AT_name and DW_AT_comp_dir being
+    # subject to the substitution.
+    # For example, if seastar::thread_context::main is located
+    # in /home/user/scylla/seastar/src/core/thread.cc,
+    # and the compiler working directory is /home/user/scylla/seastar/build/seastar,
+    # then after the ffile-prefix-map substitution it will
+    # have DW_AT_comp_dir equal to ./build/seastar
+    # and DW_AT_name equal to ./seastar/src/core/thread.cc
+    #
+    # If DW_AT_name is a relative path, gdb looks for the source files in $DW_AT_comp_dir/$DW_AT_name.
+    # This results in e.g. gdb looking for seastar::thread_context::main
+    # in ./build/seastar/./seastar/src/core/thread.cc,
+    # instead of seastar/src/core/thread.cc as we would like.
+    # To unscrew this, we have to add a rule which will 
+    # convert the /absolute/path/to/build/seastar to `.`,
+    # which will result in gdb looking in ././seastar/src/core/thread.cc, which is fine.
+    #
+    # The second build rule, which converts `/absolute/path/to/build/seastar/` (note trailing slash)
+    # to seastar/ exists just so any possible DW_AT_name under build (e.g. if there are some generated
+    # sources) is excluded from the first rule.
+    seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
+    extra_file_prefix_map = f' -ffile-prefix-map={seastar_build_dir}=. -ffile-prefix-map={seastar_build_dir}/=seastar/'
     seastar_cmake_args = [
         '-DCMAKE_BUILD_TYPE={}'.format(mode_config['cmake_build_type']),
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
@@ -1868,7 +1891,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
         '-DCMAKE_CXX_STANDARD=23',
         '-DCMAKE_CXX_EXTENSIONS=ON',
-        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
+        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags'] + extra_file_prefix_map),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_API_LEVEL=7',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
@@ -1897,7 +1920,6 @@ def configure_seastar(build_dir, mode, mode_config):
         seastar_cmake_args += ['-DBUILD_SHARED_LIBS=ON']
 
     cmake_args = seastar_cmake_args[:]
-    seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
     seastar_cmd = ['cmake', '-G', 'Ninja', real_relpath(args.seastar_path, seastar_build_dir)] + cmake_args
     cmake_dir = seastar_build_dir
     if dpdk:
