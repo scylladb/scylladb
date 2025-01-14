@@ -653,8 +653,8 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
         for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
-            co_await coroutine::maybe_yield();
         }
+        co_await coroutine::maybe_yield();
         auto it = columns_changed.begin();
         auto notify = [&] (auto& r, auto&& f) -> future<> {
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
