@@ -11,6 +11,8 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
+
 #include <unordered_map>
 #include <iosfwd>
 #include <string_view>

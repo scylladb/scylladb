@@ -204,14 +204,6 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         int value = cm.local().throughput_mbs();
         return make_ready_future<json::json_return_type>(value);
     });
-
-    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto value = req->get_query_param("value");
-        return make_ready_future<json::json_return_type>(json_void());
-    });
-
 }
 
 void unset_compaction_manager(http_context& ctx, routes& r) {
@@ -227,7 +219,6 @@ void unset_compaction_manager(http_context& ctx, routes& r) {
     cm::get_compaction_history.unset(r);
     cm::get_compaction_info.unset(r);
     ss::get_compaction_throughput_mb_per_sec.unset(r);
-    ss::set_compaction_throughput_mb_per_sec.unset(r);
 }
 
 }
