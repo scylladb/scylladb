@@ -1497,6 +1497,10 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
+raft::server* storage_service::get_group_server_if_raft_topolgy_enabled() {
+    return raft_topology_change_enabled() ? &_group0->group0_server() : nullptr;
+}
+
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -1772,20 +1776,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
             raft_replace_info, *this, _qp, _migration_manager.local(), raft_topology_change_enabled(), join_params);
 
-    raft::server* raft_server = co_await [this] () -> future<raft::server*> {
-        if (!raft_topology_change_enabled()) {
-            co_return nullptr;
-        } else if (_sys_ks.local().bootstrap_complete()) {
-            auto [upgrade_lock_holder, upgrade_state] = co_await _group0->client().get_group0_upgrade_state();
-            co_return upgrade_state == group0_upgrade_state::use_post_raft_procedures ? &_group0->group0_server() : nullptr;
-        } else {
-            auto upgrade_state = (co_await _group0->client().get_group0_upgrade_state()).second;
-            if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
-                on_internal_error(rtlogger, "cluster not upgraded to use group 0 after setup_group0");
-            }
-            co_return &_group0->group0_server();
-        }
-    } ();
+    raft::server* raft_server = get_group_server_if_raft_topolgy_enabled();
 
     if (!raft_topology_change_enabled()) {
         co_await _gossiper.wait_for_gossip_to_settle();
