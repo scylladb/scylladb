@@ -420,7 +420,7 @@ class std_variant:
     def get(self):
         index = self.index()
         current_type = self.member_types[index].strip_typedefs()
-        return self.get_with_type(index, current_type)
+        return self.get_with_type(current_type)
 
 
 class std_map:
