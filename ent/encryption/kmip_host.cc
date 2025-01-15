@@ -147,7 +147,7 @@ public:
 
     inline static constexpr size_t def_max_pooled_connections_per_host = 8;
 
-    impl(encryption_context& ctxt, const sstring& name, const host_options& options)
+    impl(encryption_context& ctxt, const std::string& name, const host_options& options)
                     : _ctxt(ctxt), _name(name), _options(options), _attr_cache(
                                     utils::loading_cache_config{
                                         .max_size = std::numeric_limits<size_t>::max(),
@@ -182,8 +182,8 @@ public:
     future<std::tuple<shared_ptr<symmetric_key>, id_type>> get_or_create_key(const key_info&, const key_options& = {});
     future<shared_ptr<symmetric_key>> get_key_by_id(const id_type&, const std::optional<key_info>& = {});
 
-    id_type kmip_id_to_id(const sstring&) const;
-    sstring id_to_kmip_string(const id_type&) const;
+    id_type kmip_id_to_id(const std::string&) const;
+    std::string id_to_kmip_string(const id_type&) const;
 private:
     future<key_and_id_type> create_key(const kmip_key_info&);
     future<shared_ptr<symmetric_key>> find_key(const id_type&);
@@ -218,20 +218,20 @@ private:
     future<int> do_cmd(KMIP_CMD*, con_ptr, Func&, bool retain_connection_after_command = false);
 
     future<con_ptr> get_connection(KMIP_CMD*);
-    future<con_ptr> get_connection(const sstring&);
-    future<> clear_connections(const sstring& host);
+    future<con_ptr> get_connection(const std::string&);
+    future<> clear_connections(const std::string& host);
 
     future<> release(KMIP_CMD*, con_ptr, bool retain_connection = false);
 
     size_t max_pooled_connections_per_host() const {
         return _options.max_pooled_connections_per_host.value_or(def_max_pooled_connections_per_host);
     }
-    bool is_current_host(const sstring& host) {
+    bool is_current_host(const std::string& host) {
         return host == _options.hosts.at(_index % _options.hosts.size());
     }
 
     encryption_context& _ctxt;
-    sstring _name;
+    std::string _name;
     host_options _options;
     utils::loading_cache<kmip_key_info, key_and_id_type, 2,
                     utils::loading_cache_reload_enabled::yes,
@@ -243,7 +243,7 @@ private:
                     utils::simple_entry_size<::shared_ptr<symmetric_key>>> _id_cache;
 
     using connections = std::deque<con_ptr>;
-    using host_to_connections = std::unordered_map<sstring, connections>;
+    using host_to_connections = std::unordered_map<std::string, connections>;
 
     host_to_connections _host_connections;
     // current default host. If a host fails, incremented and
@@ -261,14 +261,14 @@ namespace encryption {
 
 class kmip_host::impl::connection {
 public:
-    connection(const sstring& host, host_options& options)
+    connection(const std::string& host, host_options& options)
         : _host(host)
         , _options(options)
     {}
     ~connection()
     {}
 
-    const sstring& host() const {
+    const std::string& host() const {
         return _host;
     }
 
@@ -287,7 +287,7 @@ private:
         return os << me._host;
     }
 
-    sstring _host;
+    std::string _host;
     host_options& _options;
     output_stream<char> _output;
     input_stream<char> _input;
@@ -659,7 +659,7 @@ future<kmip_host::impl::kmip_cmd> kmip_host::impl::do_cmd(kmip_cmd cmd_in, Func 
     });
 }
 
-future<kmip_host::impl::con_ptr> kmip_host::impl::get_connection(const sstring& host) {
+future<kmip_host::impl::con_ptr> kmip_host::impl::get_connection(const std::string& host) {
     // TODO: if a pooled connection is stale, the command run will fail,
     // and the connection will be discarded. Would be good if we could detect this case
     // and re-run command with a new connection. Maybe always verify connection, even if
@@ -724,7 +724,7 @@ future<kmip_host::impl::con_ptr> kmip_host::impl::get_connection(KMIP_CMD* cmd) 
     });
 }
 
-future<> kmip_host::impl::clear_connections(const sstring& host) {
+future<> kmip_host::impl::clear_connections(const std::string& host) {
     auto q = std::exchange(_host_connections[host], {});
     return parallel_for_each(q.begin(), q.end(), [](con_ptr c) {
         return c->close().handle_exception([c](auto ep) {
@@ -734,7 +734,7 @@ future<> kmip_host::impl::clear_connections(const sstring& host) {
 }
 
 future<> kmip_host::impl::connect() {
-    return do_for_each(_options.hosts, [this](const sstring& host) {
+    return do_for_each(_options.hosts, [this](const std::string& host) {
         return get_connection(host).then([this](auto cp) {
             return release(nullptr, cp);
         });
@@ -742,18 +742,18 @@ future<> kmip_host::impl::connect() {
 }
 
 future<> kmip_host::impl::disconnect() {
-    co_await do_for_each(_options.hosts, [this](const sstring& host) {
+    co_await do_for_each(_options.hosts, [this](const std::string& host) {
         return clear_connections(host);
     });
     co_await _attr_cache.stop();
     co_await _id_cache.stop();
 }
 
-static unsigned from_str(unsigned (*f)(char*, int, int*), const sstring& s, const sstring& what) {
+static unsigned from_str(unsigned (*f)(char*, int, int*), const std::string& s, const std::string& what) {
     int found = 0;
     auto res = f(const_cast<char *>(s.c_str()), CODE2STR_FLAG_STR_CASE, &found);
     if (!found) {
-        throw std::invalid_argument(format("Unsupported {}: {}", what, s));
+        throw std::invalid_argument(fmt::format("Unsupported {}: {}", what, s));
     }
     return res;
 }
@@ -773,7 +773,8 @@ std::tuple<kmip_host::impl::kmip_data_list, unsigned int> kmip_host::impl::make_
                         const_cast<char*>(info.options.key_namespace.c_str()))
                         );
     }
-    auto [type, mode, padding] = parse_key_spec_and_validate_defaults(info.info.alg);
+    std::string type, mode, padd;
+    std::tie(type, mode, padd) = parse_key_spec_and_validate_defaults(info.info.alg);
 
     try {
         auto crypt_alg = from_str(&KMIP_string_to_CRYPTOGRAPHIC_ALGORITHM, type, "cryptographic algorithm");
@@ -783,7 +784,7 @@ std::tuple<kmip_host::impl::kmip_data_list, unsigned int> kmip_host::impl::make_
     }
 }
 
-kmip_host::id_type kmip_host::impl::kmip_id_to_id(const sstring& s) const {
+kmip_host::id_type kmip_host::impl::kmip_id_to_id(const std::string& s) const {
     try {
         // #2205 - we previously made all ID:s into uuids (because the literal functions
         // are called KMIP_CMD_get_uuid etc). This has issues with Keysecure which apparently
@@ -791,7 +792,7 @@ kmip_host::id_type kmip_host::impl::kmip_id_to_id(const sstring& s) const {
         // Could just always store ascii as bytes instead, but that would now
         // break existing installations, so we check for UUID, and if it does not
         // match we encode it.
-        utils::UUID uuid(s);
+        utils::UUID uuid(std::string_view{s});
         return uuid.serialize();
     } catch (marshal_exception&) {
         // very simple exncoding scheme: add a "len" byte at the end.
@@ -808,7 +809,7 @@ kmip_host::id_type kmip_host::impl::kmip_id_to_id(const sstring& s) const {
     }
 }
 
-sstring kmip_host::impl::id_to_kmip_string(const id_type& id) const {
+std::string kmip_host::impl::id_to_kmip_string(const id_type& id) const {
     // see comment above for encoding scheme.
     if (id.size() == 16) {
         // if byte size is UUID it must be a UUID. No "old" id:s are
@@ -817,7 +818,7 @@ sstring kmip_host::impl::id_to_kmip_string(const id_type& id) const {
         return fmt::format("{}", uuid);
     }
     auto len = id.size() - id.back();
-    return sstring(id.begin(), id.begin() + len);
+    return std::string(id.begin(), id.begin() + len);
 }
 
 future<kmip_host::impl::key_and_id_type> kmip_host::impl::create_key(const kmip_key_info& info) {
@@ -852,7 +853,7 @@ future<kmip_host::impl::key_and_id_type> kmip_host::impl::create_key(const kmip_
                 /* now get the details (the value of the key) */
                 char* new_id;
                 kmip_chk(KMIP_CMD_get_uuid(cmd, 0, &new_id), cmd);
-                sstring uuid(new_id);
+                std::string uuid(new_id);
 
                 kmip_log.debug("{}: Created {}:{}", _name, info, uuid);
 
@@ -971,9 +972,9 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
                 throw malformed_response_error("Invalid batch count in response: " + std::to_string(nb));
             }
 
-            sstring alg;
-            sstring mode;
-            sstring padding;
+            std::string alg;
+            std::string mode;
+            std::string padding;
 
             // "Get" result
             auto kdl_res = KMIP_CMD_get_batch(cmd, 0);
@@ -989,7 +990,7 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
                 if (!found) {
                     throw malformed_response_error("Invalid tag: " + std::to_string(val));
                 }
-                return sstring(p);
+                return std::string(p);
             };
 
             int crypto_alg;
@@ -1122,7 +1123,7 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::get_key_by_id(const id_type& 
     }
 }
 
-kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const std::unordered_map<sstring, sstring>& map)
+kmip_host::kmip_host(encryption_context& ctxt, const std::string& name, const std::unordered_map<sstring, sstring>& map)
     : kmip_host(ctxt, name, [&ctxt, &map] {
         host_options opts;
         map_wrapper<std::unordered_map<sstring, sstring>> m(map);
@@ -1161,7 +1162,7 @@ kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const std::u
     }())
 {}
 
-kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const host_options& opts)
+kmip_host::kmip_host(encryption_context& ctxt, const std::string& name, const host_options& opts)
     : _impl(std::make_unique<impl>(ctxt, name, opts))
 {}
 
@@ -1183,7 +1184,7 @@ future<shared_ptr<symmetric_key>> kmip_host::get_key_by_id(const id_type& id, st
     return _impl->get_key_by_id(id, info);
 }
 
-future<shared_ptr<symmetric_key>> kmip_host::get_key_by_name(const sstring& name) {
+future<shared_ptr<symmetric_key>> kmip_host::get_key_by_name(const std::string& name) {
     return _impl->get_key_by_id(_impl->kmip_id_to_id(name));    
 }
 
@@ -1202,11 +1203,11 @@ namespace encryption {
 class kmip_host::impl {
 };
 
-kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const std::unordered_map<sstring, sstring>& map) {
+kmip_host::kmip_host(encryption_context& ctxt, const std::string& name, const std::unordered_map<sstring, sstring>& map) {
     throw std::runtime_error("KMIP support not enabled");
 }
 
-kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const host_options& opts) {
+kmip_host::kmip_host(encryption_context& ctxt, const std::string& name, const host_options& opts) {
     throw std::runtime_error("KMIP support not enabled");
 }
 
@@ -1228,7 +1229,7 @@ future<shared_ptr<symmetric_key>> kmip_host::get_key_by_id(const id_type& id, st
     throw std::runtime_error("KMIP support not enabled");
 }
 
-future<shared_ptr<symmetric_key>> kmip_host::get_key_by_name(const sstring& name) {
+future<shared_ptr<symmetric_key>> kmip_host::get_key_by_name(const std::string& name) {
     throw std::runtime_error("KMIP support not enabled");
 }
 
