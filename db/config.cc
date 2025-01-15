@@ -27,6 +27,7 @@
 #include "cdc/cdc_extension.hh"
 #include "tombstone_gc_extension.hh"
 #include "db/per_partition_rate_limit_extension.hh"
+#include "db/paxos_grace_seconds_extension.hh"
 #include "db/tags/extension.hh"
 #include "config.hh"
 #include "extensions.hh"
@@ -1190,6 +1191,18 @@ void db::config::add_tags_extension() {
 
 void db::config::add_tombstone_gc_extension() {
     _extensions->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
+}
+
+void db::config::add_paxos_grace_seconds_extension() {
+    _extensions->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
+}
+
+void db::config::add_all_default_extensions() {
+    add_cdc_extension();
+    add_per_partition_rate_limit_extension();
+    add_tags_extension();
+    add_tombstone_gc_extension();
+    add_paxos_grace_seconds_extension();
 }
 
 void db::config::setup_directories() {
