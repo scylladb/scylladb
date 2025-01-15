@@ -54,7 +54,6 @@ struct keyspace;
 struct table;
 
 struct database {
-    db::extensions extensions;
     const db::config& cfg;
     gms::feature_service& features;
     std::list<keyspace> keyspaces;
@@ -194,7 +193,7 @@ private:
         return unwrap(db).cfg;
     }
     virtual const db::extensions& get_extensions(data_dictionary::database db) const override {
-        return unwrap(db).extensions;
+        return get_config(db).extensions();
     }
     virtual const gms::feature_service& get_features(data_dictionary::database db) const override {
         return unwrap(db).features;
