@@ -13,6 +13,7 @@
 #include <optional>
 #include <chrono>
 #include <iosfwd>
+#include <string>
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -34,15 +35,15 @@ struct key_info;
 class kmip_host {
 public:
     struct host_options {
-        std::vector<sstring> hosts;
+        std::vector<std::string> hosts;
 
-        sstring username;
-        sstring password;
+        std::string username;
+        std::string password;
 
-        sstring certfile;
-        sstring keyfile;
-        sstring truststore;
-        sstring priority_string;
+        std::string certfile;
+        std::string keyfile;
+        std::string truststore;
+        std::string priority_string;
 
         std::optional<std::chrono::milliseconds> key_cache_expiry;
         std::optional<std::chrono::milliseconds> key_cache_refresh;
@@ -51,13 +52,13 @@ public:
         std::optional<size_t> max_command_retries;
     };
     struct key_options {
-        sstring template_name;
-        sstring key_namespace;
+        std::string template_name;
+        std::string key_namespace;
     };
     using id_type = bytes;
 
-    kmip_host(encryption_context&, const sstring& name, const host_options&);
-    kmip_host(encryption_context&, const sstring& name, const std::unordered_map<sstring, sstring>&);
+    kmip_host(encryption_context&, const std::string& name, const host_options&);
+    kmip_host(encryption_context&, const std::string& name, const std::unordered_map<sstring, sstring>&);
     ~kmip_host();
 
     future<> connect();
@@ -66,7 +67,7 @@ public:
     future<shared_ptr<symmetric_key>> get_key_by_id(const id_type&, std::optional<key_info> = std::nullopt);
 
     /** for system key(s) */
-    future<shared_ptr<symmetric_key>> get_key_by_name(const sstring&);
+    future<shared_ptr<symmetric_key>> get_key_by_name(const std::string&);
 
 private:
     class impl;
