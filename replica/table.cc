@@ -983,6 +983,12 @@ sstables::compaction_type_options::split tablet_storage_group_manager::split_com
 future<> tablet_storage_group_manager::split_all_storage_groups() {
     sstables::compaction_type_options::split opt = split_compaction_options();
 
+    co_await utils::get_local_injector().inject("split_storage_groups_wait", [] (auto& handler) -> future<> {
+        dblog.info("split_storage_groups_wait: waiting");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dblog.info("split_storage_groups_wait: done");
+    }, false);
+
     co_await for_each_storage_group_gently([opt] (storage_group& storage_group) {
         return storage_group.split(opt);
     });
