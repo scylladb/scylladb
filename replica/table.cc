@@ -920,8 +920,10 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(_storage_groups | boost::adaptors::map_values,
-        std::mem_fn(&storage_group::set_split_mode));
+    bool split_ready = true;
+    for (const storage_group_ptr& sg : _storage_groups | boost::adaptors::map_values) {
+        split_ready &= sg->set_split_mode();
+    }
 
     // The table replica will say to coordinator that its split status is ready by
     // mirroring the sequence number from tablet metadata into its local state,
