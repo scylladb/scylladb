@@ -660,7 +660,7 @@ public:
                             sstables::component_type::Statistics,
                             sstables::component_type::TemporaryStatistics,
             }) {
-                if (mask & int(c)) {
+                if (mask & (1 << int(c))) {
                     ccs.emplace_back(c);
                 }
             }
