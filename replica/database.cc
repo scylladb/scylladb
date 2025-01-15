@@ -2514,6 +2514,12 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         });
     });
 
+    co_await utils::get_local_injector().inject("truncate_compaction_disabled_wait", [] (auto& handler) -> future<> {
+        dblog.info("truncate_compaction_disabled_wait: wait");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dblog.info("truncate_compaction_disabled_wait: done");
+    }, false);
+
     const auto should_flush = with_snapshot && cf.can_flush();
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
     std::function<future<>(replica::table&)> flush_or_clear = should_flush ?
