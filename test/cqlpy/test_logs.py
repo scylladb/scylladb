@@ -32,7 +32,7 @@ import re
 
 from cassandra import InvalidRequest
 
-from .util import new_test_table, local_process_id
+from .util import new_test_keyspace, new_test_table, local_process_id
 from .test_batch import generate_big_batch
 
 # A fixture to find the Scylla log file, returning the log file's path.
@@ -116,6 +116,13 @@ def test_log_table_operations(cql, test_keyspace, logfile):
     with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
         wait_for_log(logfile, f'Creating {table}')
     wait_for_log(logfile, f'Dropping {table}')
+
+
+def test_log_alter_keyspace_operation(cql, this_dc, logfile):
+    ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+        wait_for_log(logfile, r'Update Keyspace.*name=%s.*tablets={\"initial\":\d+' % keyspace)
 
 
 @pytest.fixture(scope="module")
