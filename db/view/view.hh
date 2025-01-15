@@ -210,13 +210,15 @@ class view_updates final {
     base_info_ptr _base_info;
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
     size_t _op_count = 0;
+    seastar::gate::holder _holder;
 public:
-    explicit view_updates(view_and_base vab)
+    explicit view_updates(view_and_base vab, seastar::gate::holder&& h)
             : _view(std::move(vab.view))
             , _view_info(*_view->view_info())
             , _base(vab.base->base_schema())
             , _base_info(vab.base)
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view))
+            , _holder(std::move(h))
     {
     }
 
@@ -305,7 +307,7 @@ private:
 };
 
 view_update_builder make_view_update_builder(
-        data_dictionary::database db,
+        replica::database& db,
         const replica::table& base_table,
         const schema_ptr& base_schema,
         std::vector<view_and_base>&& views_to_update,
