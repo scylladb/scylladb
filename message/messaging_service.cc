@@ -571,7 +571,10 @@ future<> messaging_service::stop_client() {
             });
         });
     };
-    co_await coroutine::all(std::bind(stop_clients, _clients), std::bind(stop_clients, _clients_with_host_id));
+    co_await coroutine::all(
+        [&] { return stop_clients(_clients); },
+        [&] { return stop_clients(_clients_with_host_id); }
+    );
 }
 
 future<> messaging_service::shutdown() {
