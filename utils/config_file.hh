@@ -51,6 +51,9 @@ public:
     json::json_return_type to_json(const void* value) const;
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wexplicit-specialization-storage-class"
+
 template <typename T>
 extern const config_type config_type_for;
 
@@ -68,6 +71,8 @@ extern const config_type config_type_for<std::unordered_map<sstring, sstring>>;
 
 template<>
 extern const config_type config_type_for<std::unordered_map<sstring, std::unordered_map<sstring, sstring>>>;
+
+#pragma GCC diagnostic pop
 
 class config_file {
     static thread_local unsigned s_shard_id;
