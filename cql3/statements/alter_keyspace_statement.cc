@@ -144,7 +144,6 @@ void add_prefixed_key(const sstring& prefix, const std::map<sstring, sstring>& i
 };
 
 std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::statements::ks_prop_defs>& ks,
-                                                         bool include_tablet_options,
                                                          const gms::feature_service& feat) {
     std::map<sstring, sstring> all_options;
 
@@ -152,7 +151,7 @@ std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::
     add_prefixed_key(ks->KW_STORAGE, ks->get_storage_options().to_map(), all_options);
     // if no tablet options are specified in ATLER KS statement,
     // we want to preserve the old ones and hence cannot overwrite them with defaults
-    if (include_tablet_options) {
+    if (ks->has_property(ks->KW_TABLETS)) {
         auto initial_tablets = ks->get_initial_tablets(std::nullopt);
         add_prefixed_key(ks->KW_TABLETS,
                          {{"enabled", initial_tablets ? "true" : "false"},
@@ -166,13 +165,13 @@ std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::
     return all_options;
 }
 
-std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keyspace& ks, bool include_tablet_options) {
+std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keyspace& ks) {
     std::map<sstring, sstring> all_options;
 
     using namespace cql3::statements;
     add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
     add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
-    if (include_tablet_options) {
+    if (ks.metadata()->initial_tablets()) {
         add_prefixed_key(ks_prop_defs::KW_TABLETS,
                          {{"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
                           {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
@@ -198,9 +197,8 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, tm, feat);
         std::vector<mutation> muts;
         std::vector<sstring> warnings;
-        bool include_tablet_options = _attrs->get_map(_attrs->KW_TABLETS).has_value();
-        auto old_ks_options = get_old_options_flattened(ks, include_tablet_options);
-        auto ks_options = get_current_options_flattened(_attrs, include_tablet_options, feat);
+        auto old_ks_options = get_old_options_flattened(ks);
+        auto ks_options = get_current_options_flattened(_attrs, feat);
         ks_options.merge(old_ks_options);
 
         auto ts = mc.write_timestamp();
