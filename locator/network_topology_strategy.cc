@@ -307,7 +307,7 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, token_m
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
     for (const auto& dc : tm->get_datacenter_token_owners()) {
         unsigned shards_in_dc = 0;
-        unsigned rf_in_dc = 1;
+        unsigned rf_in_dc = 0;
 
         for (const auto& ep : dc.second) {
             const auto* node = tm->get_topology().find_node(ep);
