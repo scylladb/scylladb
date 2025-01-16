@@ -57,7 +57,7 @@ storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
-        _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
+        _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<aws::s3::endpoint_config>(std::move(ecfg))));
     }
 }
 
@@ -75,7 +75,7 @@ future<> storage_manager::stop() {
 
 void storage_manager::update_config(const db::config& cfg) {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
-        auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(ecfg));
+        auto s3_cfg = make_lw_shared<aws::s3::endpoint_config>(std::move(ecfg));
         auto [it, added] = _s3_endpoints.try_emplace(ep, std::move(s3_cfg));
         if (!added) {
             if (it->second.client != nullptr) {

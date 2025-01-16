@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <yaml-cpp/yaml.h>
 #include <fmt/ranges.h>
 
 #include <seastar/util/closeable.hh>
@@ -22,7 +21,6 @@
 #include <seastar/core/timer.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "tasks/task_manager.hh"
-#include "utils/assert.hh"
 #include "utils/build_id.hh"
 #include "supervisor.hh"
 #include "replica/database.hh"
@@ -61,9 +59,7 @@
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
 #include <cstdio>
-#include <seastar/core/file.hh>
 #include <unistd.h>
-#include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
 #include "tracing/tracing.hh"
@@ -97,7 +93,6 @@
 #include "tombstone_gc_extension.hh"
 #include "db/tags/extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
-#include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
 #include "alternator/controller.hh"
@@ -118,6 +113,7 @@
 #include "utils/shared_dict.hh"
 #include "message/dictionary_service.hh"
 #include "utils/disk_space_monitor.hh"
+#include "tools/utils.hh"
 
 
 #define P11_KIT_FUTURE_UNSTABLE_API
@@ -175,90 +171,6 @@ public:
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
 
-struct object_storage_endpoint_param {
-    sstring endpoint;
-    s3::endpoint_config config;
-};
-
-namespace YAML {
-template<>
-struct convert<::object_storage_endpoint_param> {
-    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
-        ep.endpoint = node["name"].as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        if (node["aws_region"] || std::getenv("AWS_DEFAULT_REGION")) {
-            ep.config.aws.emplace();
-
-            // https://github.com/scylladb/scylla-pkg/issues/3845
-            // Allow picking up aws values via standard env vars as well.
-            // Value in config has prio, but fall back to env.
-            // This has the added benefit of potentially reducing the amount of
-            // sensitive data in config files (i.e. credentials)
-            auto get_node_value_or_env = [&](const char* key, const char* var) {
-                auto child = node[key];
-                if (child) {
-                    return child.as<std::string>();
-                }
-                auto val = std::getenv(var);
-                if (val) {
-                    return std::string(val);
-                }
-                return std::string{};
-            };
-            ep.config.aws->region = get_node_value_or_env("aws_region", "AWS_DEFAULT_REGION");
-            ep.config.aws->access_key_id = get_node_value_or_env("aws_access_key_id", "AWS_ACCESS_KEY_ID");
-            ep.config.aws->secret_access_key = get_node_value_or_env("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY");
-            ep.config.aws->session_token = get_node_value_or_env("aws_session_token", "AWS_SESSION_TOKEN");
-        }
-        return true;
-    }
-};
-}
-
-static future<> read_object_storage_config(db::config& db_cfg) {
-    sstring cfg_name;
-    if (!db_cfg.object_storage_config_file().empty()) {
-        cfg_name = db_cfg.object_storage_config_file();
-    } else {
-        cfg_name = db::config::get_conf_sub("object_storage.yaml").native();
-        if (!co_await file_accessible(cfg_name, access_flags::exists)) {
-            co_return;
-        }
-    }
-
-    auto cfg_file = co_await open_file_dma(cfg_name, open_flags::ro);
-    sstring data;
-    std::exception_ptr ex;
-
-    try {
-        auto sz = co_await cfg_file.size();
-        data = seastar::to_sstring(co_await cfg_file.dma_read_exactly<char>(0, sz));
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await cfg_file.close();
-    if (ex) {
-        co_await coroutine::return_exception_ptr(ex);
-    }
-
-    std::unordered_map<sstring, s3::endpoint_config> cfg;
-    YAML::Node doc = YAML::Load(data.c_str());
-    for (auto&& section : doc) {
-        auto sec_name = section.first.as<std::string>();
-        if (sec_name != "endpoints") {
-            co_await coroutine::return_exception(std::runtime_error(fmt::format("While parsing object_storage config: section {} currently unsupported.", sec_name)));
-        }
-
-        auto endpoints = section.second.as<std::vector<object_storage_endpoint_param>>();
-        for (auto&& ep : endpoints) {
-            cfg[ep.endpoint] = std::move(ep.config);
-        }
-    }
-
-    db_cfg.object_storage_config.set(std::move(cfg));
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -278,7 +190,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
             }
             startlog.log(level, "{} : {}", msg, opt);
         });
-        co_await read_object_storage_config(cfg);
+        co_await tools::utils::read_object_storage_config(cfg);
     } catch (...) {
         auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);

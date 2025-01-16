@@ -10,6 +10,8 @@
 
 #include <boost/program_options.hpp>
 #include <seastar/core/app-template.hh>
+#include <yaml-cpp/yaml.h>
+#include "utils/s3/creds.hh"
 #include "seastarx.hh"
 
 namespace db {
@@ -186,4 +188,24 @@ public:
     int run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func);
 };
 
+future<> read_object_storage_config(db::config& db_cfg);
 } // namespace tools::utils
+
+struct object_storage_endpoint_param {
+    sstring endpoint;
+    aws::s3::endpoint_config config;
+};
+
+namespace YAML {
+template <>
+struct convert<object_storage_endpoint_param> {
+    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
+        ep.endpoint = node["name"].as<std::string>();
+        ep.config.port = node["port"].as<unsigned>();
+        ep.config.use_https = node["https"].as<bool>(false);
+        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
+        ep.config.role_arn = node["iam_role_arn"] ? std::make_optional(node["iam_role_arn"].as<std::string>()) : std::nullopt;
+        return true;
+    }
+};
+}

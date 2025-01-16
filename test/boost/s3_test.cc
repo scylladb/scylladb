@@ -28,6 +28,10 @@
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/exceptions.hh"
+#include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
+#include "utils/s3/credentials_providers/config_file_aws_credentials_provider.hh"
+#include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
+#include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "sstables/checksum_utils.hh"
 #include "gc_clock.hh"
 
@@ -46,31 +50,21 @@ using namespace std::string_view_literals;
 //   export AWS_DEFAULT_REGION="us-east-2"
 
 static shared_ptr<s3::client> make_proxy_client(semaphore& mem) {
-    s3::endpoint_config cfg = {
+    aws::s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("PROXY_S3_SERVER_PORT")),
         .use_https = false,
-        .aws = {{
-            .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-            .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-            .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
-            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
-        }},
+        .region = ::getenv("AWS_DEFAULT_REGION") ?: "local",
     };
-    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem);
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<aws::s3::endpoint_config>(std::move(cfg)), mem);
 }
 
 static shared_ptr<s3::client> make_minio_client(semaphore& mem) {
-    s3::endpoint_config cfg = {
+    aws::s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
-        .aws = {{
-            .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-            .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-            .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
-            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
-        }},
+        .region = ::getenv("AWS_DEFAULT_REGION") ?: "local",
     };
-    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem);
+    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<aws::s3::endpoint_config>(std::move(cfg)), mem);
 }
 
 using client_maker_function = std::function<shared_ptr<s3::client>(semaphore&)>;
@@ -629,4 +623,87 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
             BOOST_REQUIRE_EQUAL(st.size, object_size);
         }
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_creds) {
+    /*
+     * Note: This test does not cover the functionality of the `aws::environment_aws_credentials_provider` class because proper testing requires altering
+     * environment variables. Therefore, running such a test in parallel is not feasible. However, all S3-based tests will use
+     * `aws::environment_aws_credentials_provider` to obtain credentials. As a result, if this functionality fails, all S3-related tests will fail immediately.
+     */
+
+    auto host = tests::getenv_safe("MOCK_S3_SERVER_HOST");
+    auto port = std::stoul(tests::getenv_safe("MOCK_S3_SERVER_PORT"));
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test_s3_config_file.yaml";
+    constexpr std::string_view data = R"(endpoints:
+  - name: s3.us-east-1.amazonaws.com
+    port: 443
+    https: true
+    aws_region: us-east-1
+    aws_access_key_id: CF_AWS_ACCESS_KEY_ID
+    aws_secret_access_key: CF_AWS_SECRET_ACCESS_KEY
+    aws_session_token: CF_AWS_SESSION_TOKEN
+    iam_role_arn:)";
+
+    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
+    auto output = make_file_output_stream(std::move(f)).get();
+
+    output.write(data.data(), data.size()).get();
+    output.close().get();
+
+    auto cf_provider = std::make_unique<aws::config_file_aws_credentials_provider>(file_path);
+    auto creds = cf_provider->get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "CF_AWS_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "CF_AWS_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token, "CF_AWS_SESSION_TOKEN");
+
+    auto sts_provider = std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false);
+    creds = sts_provider->get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
+
+    auto md_provider = std::make_unique<aws::instance_profile_credentials_provider>(host, port);
+    creds = md_provider->get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
+
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain
+        .add_credentials_provider(std::move(cf_provider))
+        // .add_credentials_provider(std::move(sts_provider))
+        .add_credentials_provider(std::move(md_provider));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "CF_AWS_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "CF_AWS_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token, "CF_AWS_SESSION_TOKEN");
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(host, port, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "STS_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "STS_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "INSTANCE_FROFILE_EXAMPLE_SECRET_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
+
+    provider_chain = {};
+    provider_chain.add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>("foobar.yaml"))
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0));
+    creds = provider_chain.get_aws_credentials().get();
+    BOOST_REQUIRE_EQUAL(creds.access_key_id, "");
+    BOOST_REQUIRE_EQUAL(creds.secret_access_key, "");
+    BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }

@@ -28,19 +28,13 @@ class tester {
     utils::estimated_histogram _reads_hist;
     unsigned _errors = 0;
 
-    static s3::endpoint_config_ptr make_config() {
-        s3::endpoint_config cfg;
+    static aws::s3::endpoint_config_ptr make_config() {
+        aws::s3::endpoint_config cfg;
         cfg.port = 443;
         cfg.use_https = true;
-        cfg.aws.emplace();
-        cfg.aws->access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID");
-        cfg.aws->secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY");
-        if (auto token = ::getenv("AWS_SESSION_TOKEN"); token) {
-            cfg.aws->session_token = token;
-        }
-        cfg.aws->region = tests::getenv_safe("AWS_DEFAULT_REGION");
+        cfg.region = tests::getenv_safe("AWS_DEFAULT_REGION");
 
-        return make_lw_shared<s3::endpoint_config>(std::move(cfg));
+        return make_lw_shared<aws::s3::endpoint_config>(std::move(cfg));
     }
 
     static constexpr unsigned chunk_size = 1000;

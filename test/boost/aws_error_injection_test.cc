@@ -37,18 +37,13 @@ static std::string get_address() {
     return tests::getenv_safe("MOCK_S3_SERVER_HOST");
 }
 
-static s3::endpoint_config_ptr make_minio_config() {
-    s3::endpoint_config cfg = {
+static aws::s3::endpoint_config_ptr make_minio_config() {
+    aws::s3::endpoint_config cfg = {
         .port = get_port(),
         .use_https = false,
-        .aws = {{
-            .access_key_id = "foo",
-            .secret_access_key = "bar",
-            .session_token = "baz",
-            .region = "us-east-1",
-        }},
+        .region = "us-east-1",
     };
-    return make_lw_shared<s3::endpoint_config>(std::move(cfg));
+    return make_lw_shared<aws::s3::endpoint_config>(std::move(cfg));
 }
 
 static void register_policy(const std::string& key, failure_policy policy) {

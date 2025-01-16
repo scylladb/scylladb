@@ -47,14 +47,14 @@ static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 class storage_manager : public peering_sharded_service<storage_manager> {
     struct config_updater {
         serialized_action action;
-        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
+        utils::observer<std::unordered_map<sstring, aws::s3::endpoint_config>> observer;
         config_updater(const db::config& cfg, storage_manager&);
     };
 
     struct s3_endpoint {
-        s3::endpoint_config_ptr cfg;
+        aws::s3::endpoint_config_ptr cfg;
         shared_ptr<s3::client> client;
-        s3_endpoint(s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
+        s3_endpoint(aws::s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
     };
 
     semaphore _s3_clients_memory;
