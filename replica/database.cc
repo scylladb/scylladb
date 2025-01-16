@@ -964,7 +964,6 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         }
     }
     schema = local_schema_registry().learn(schema);
-    schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
     if (auto pt_rs = rs.maybe_as_per_table()) {
@@ -996,6 +995,8 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         co_await cf->stop();
         co_await coroutine::return_exception_ptr(f.get_exception());
     }
+    // Table must be added before entry is marked synced.
+    schema->registry_entry()->mark_synced();
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
