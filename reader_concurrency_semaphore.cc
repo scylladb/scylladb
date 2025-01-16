@@ -1460,11 +1460,10 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
-            // This is a contradiction: the semaphore could admit waiters yet it has waiters.
-            // Normally, the semaphore should admit waiters as soon as it can.
-            // So at any point in time, there should either be no waiters, or it
-            // shouldn't be able to admit new reads. Otherwise something went wrong.
-            maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters", nullptr);
+            // Enters the case where the semaphore can admit waiters yet it has waiters.
+            // Hence, wake the execution loop to process the waiters. Since readers are
+            // no longer admitted as soon as they can, the resource release could be delayed
+            // as well.
             maybe_wake_execution_loop();
         } else if (admit == can_admit::maybe) {
             tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] evicting inactive reads in the background to free up resources", _name);
