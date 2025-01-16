@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 import pytest
-from test.alternator.conftest import new_dynamodb_session
 from test.alternator.test_metrics import metrics, get_metrics, check_increases_metric
 from contextlib import contextmanager
 from cassandra.auth import PlainTextAuthProvider

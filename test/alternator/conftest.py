@@ -108,7 +108,7 @@ def dynamodb(request):
     # because boto3 checks them before we can get the server to check them.
     boto_config = botocore.client.Config(parameter_validation=False)
     if request.config.getoption('aws'):
-        return boto3.resource('dynamodb', config=boto_config)
+        res = boto3.resource('dynamodb', config=boto_config)
     else:
         # Even though we connect to the local installation, Boto3 still
         # requires us to specify dummy region and credential parameters,
@@ -124,9 +124,11 @@ def dynamodb(request):
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
         user, secret = get_valid_alternator_role(local_url)
-        return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
+        res = boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
+    yield res
+    res.meta.client.close()
 
 def new_dynamodb_session(request, dynamodb, user='cassandra', password='secret_pass'):
     ses = boto3.Session()
@@ -148,7 +150,7 @@ def dynamodbstreams(request):
     # because boto3 checks them before we can get the server to check them.
     boto_config = botocore.client.Config(parameter_validation=False)
     if request.config.getoption('aws'):
-        return boto3.client('dynamodbstreams', config=boto_config)
+        res = boto3.client('dynamodbstreams', config=boto_config)
     else:
         # Even though we connect to the local installation, Boto3 still
         # requires us to specify dummy region and credential parameters,
@@ -164,9 +166,11 @@ def dynamodbstreams(request):
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
         user, secret = get_valid_alternator_role(local_url)
-        return boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
+        res = boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
+    yield res
+    res.close()
 
 # A function-scoped autouse=True fixture allows us to test after every test
 # that the server is still alive - and if not report the test which crashed
