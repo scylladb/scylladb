@@ -45,7 +45,10 @@ task_stats
 - *sequence_number* - an operation number (per module). It is shared by all tasks in a tree. Irrelevant for cluster tasks;
 - *keyspace* - optional, name of a keyspace on which the task operates;
 - *table* - optional, name of a table on which the task operates;
-- *entity* - optional, additional info specific to the task.
+- *entity* - optional, additional info specific to the task;
+- *shard* - optional, shard id on which the task operates;
+- *start_time* - relevant only if state != created;
+- *end_time* - relevant only if the task is finished (state in [done, failed]).
 
 
 task_status
@@ -54,11 +57,8 @@ task_status
 All fields from task_stats and additionally:
 
 - *is_abortable* - a flag that decides whether the task can be aborted through API;
-- *start_time* - relevant only if state == created;
-- *end_time* - relevant only if the task is finished (state in [done, failed]);
 - *error* - relevant only if the task failed;
 - *parent_id* - relevant only if the task has a parent;
-- *shard* - optional, shard id on which the task operates;
 - *progress_units* - a unit of progress;
 - *progress_total* - job size in progress_units;
 - *progress_completed* - current progress in progress_units;

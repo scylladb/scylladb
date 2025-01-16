@@ -344,6 +344,18 @@
             "sequence_number":{
                "type":"long",
                "description":"The running sequence number of the task"
+            },
+            "shard":{
+               "type":"long",
+               "description":"The shard the task is running on"
+            },
+            "start_time":{
+               "type":"datetime",
+               "description":"The start time of the task; unspecified (equal to epoch) when state == created"
+            },
+            "end_time":{
+               "type":"datetime",
+               "description":"The end time of the task; unspecified (equal to epoch) when the task is not completed"
             }
          }
       },
