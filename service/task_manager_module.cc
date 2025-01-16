@@ -37,7 +37,8 @@ static std::optional<tasks::task_stats> maybe_make_task_stats(const locator::tab
         .scope = task_info.is_user_repair_request() ? "table" : "tablet",
         .state = tasks::task_manager::task_state::running,
         .keyspace = schema->ks_name(),
-        .table = schema->cf_name()
+        .table = schema->cf_name(),
+        .start_time = task_info.request_time
     };
 }
 
