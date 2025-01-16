@@ -4,6 +4,7 @@
 
 
 
+#include <bits/types/struct_iovec.h>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
@@ -26,8 +27,10 @@
 #include <fmt/ranges.h>
 
 #include "ent/encryption/encryption.hh"
+#include "ent/encryption/encrypted_file_impl.hh"
 #include "ent/encryption/symmetric_key.hh"
 #include "ent/encryption/local_file_provider.hh"
+#include "test/lib/log.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
@@ -1096,3 +1099,62 @@ SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMI
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/22236
+SEASTAR_TEST_CASE(test_encryption_on_block_boundary) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "keyfile";
+    key_info kinfo {"AES/CBC/PKCSPadding", 128};
+    co_await create_key_file(keyfile, { kinfo});
+    shared_ptr<symmetric_key> k = make_shared<symmetric_key>(kinfo);
+    testlog.info("Created symmetric key: info={} key={} ", k->info(), k->key());
+
+    size_t encryption_block_size = 4096;
+    size_t buf_size = encryption_block_size - 1;
+
+    const auto& filename = tmp.path() / "encrypted-file";
+
+    testlog.info("Creating encrypted file {}", filename);
+    {
+        auto file = co_await open_file_dma(filename.string(), open_flags::create | open_flags::wo);
+        auto encrypted_file = seastar::file(encryption::make_encrypted_file(file, k));
+        auto ostream = co_await make_file_output_stream(encrypted_file);
+
+        auto wbuf = seastar::temporary_buffer<char>::aligned(file.memory_dma_alignment(), buf_size);
+        co_await ostream.write(wbuf.get(), wbuf.size());
+        testlog.info("Wrote {} bytes to encrypted file {}", wbuf.size(), filename);
+
+        co_await ostream.close();
+        testlog.info("Length of {}: {} bytes", filename, co_await file.size());
+    }
+
+    testlog.info("Testing DMA reads from file {} beyond the decrypted data length and block boundary", filename);
+    {
+        auto file = co_await open_file_dma(filename.string(), open_flags::ro);
+        auto encrypted_file = seastar::file(encryption::make_encrypted_file(file, k));
+
+        // Triggering the bug requires:
+        // `buf_size < align_up(buf_size, 4096) <= read_pos < file.size()`
+        //
+        // For `dma_read()`, we have the additional requirement that `read_pos` must be aligned.
+        // For `dma_read_bulk()`, it doesn't have to.
+        uint64_t read_pos = encryption_block_size;
+        size_t read_len = encryption_block_size;
+        auto rbuf = seastar::temporary_buffer<char>::aligned(file.memory_dma_alignment(), read_len);
+        std::vector<iovec> iov {{static_cast<void*>(rbuf.get_write()), rbuf.size()}};
+
+        auto res = co_await encrypted_file.dma_read_bulk<char>(read_pos, read_len);
+        BOOST_CHECK_MESSAGE(res.size() == 0, seastar::format(
+                "Bulk DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res.size()));
+
+        auto res_len = co_await encrypted_file.dma_read(read_pos, iov);
+        BOOST_CHECK_MESSAGE(res_len == 0, seastar::format(
+                "IOV DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res_len));
+
+        res_len = co_await encrypted_file.dma_read<char>(read_pos, rbuf.get_write(), read_len);
+        BOOST_CHECK_MESSAGE(res_len == 0, seastar::format(
+                "DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res_len));
+
+        co_await file.close();
+    }
+}
