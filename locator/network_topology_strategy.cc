@@ -305,22 +305,18 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 
 static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
-    for (const auto& dc : tm->get_datacenter_token_owners()) {
-        unsigned shards_in_dc = 0;
-        unsigned rf_in_dc = 0;
-
-        for (const auto& ep : dc.second) {
-            const auto* node = tm->get_topology().find_node(ep);
-            if (node != nullptr && node->is_normal()) {
-                shards_in_dc += node->get_shard_count();
-            }
+    std::unordered_map<sstring, unsigned> shards_per_dc_map;
+    tm->for_each_token_owner([&] (const node& node) {
+        if (node.is_normal()) {
+            shards_per_dc_map[node.dc_rack().dc] += node.get_shard_count();
         }
-
-        if (auto it = rf.find(dc.first); it != rf.end()) {
-            rf_in_dc = it->second;
+    });
+    for (const auto& [dc, rf_in_dc] : rf) {
+        if (!rf_in_dc) {
+            continue;
         }
-
-        unsigned tablets_in_dc = rf_in_dc > 0 ? (shards_in_dc + rf_in_dc - 1) / rf_in_dc : 0;
+        unsigned shards_in_dc = shards_per_dc_map[dc];
+        unsigned tablets_in_dc = (shards_in_dc + rf_in_dc - 1) / rf_in_dc;
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
