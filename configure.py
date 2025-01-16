@@ -1027,7 +1027,13 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/gz/crc_combine_table.cc',
                 'utils/s3/aws_error.cc',
                 'utils/s3/client.cc',
+                'utils/s3/retryable_http_client.cc',
                 'utils/s3/retry_strategy.cc',
+                'utils/s3/credentials_providers/config_file_aws_credentials_provider.cc',
+                'utils/s3/credentials_providers/environment_aws_credentials_provider.cc',
+                'utils/s3/credentials_providers/instance_profile_credentials_provider.cc',
+                'utils/s3/credentials_providers/sts_assume_role_credentials_provider.cc',
+                'utils/s3/credentials_providers/aws_credentials_provider_chain.cc',
                 'utils/advanced_rpc_compressor.cc',
                 'gms/version_generator.cc',
                 'gms/versioned_value.cc',
@@ -2062,13 +2068,13 @@ def kmiplib():
 
 def target_cpu():
     cpu, _, _ = subprocess.check_output([cxx, '-dumpmachine']).decode('utf-8').partition('-')
-    return cpu    
+    return cpu
 
 def kmip_arch():
     arch = target_cpu()
     if arch == 'x86_64':
         return '64'
-    return arch 
+    return arch
 
 kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
 kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
