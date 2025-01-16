@@ -2637,19 +2637,18 @@ future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_stat
 
 future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     const auto& tm = get_token_metadata();
-    const auto tm_host_id_opt = tm.get_host_id_if_known(endpoint);
-    slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, tm_host_id_opt, pid);
+    const auto host_id = state->get_host_id();
+    slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, host_id, pid);
     const auto* node = tm.get_topology().find_node(endpoint);
     if (node && node->is_member()) {
         co_await notify_up(endpoint);
     } else if (raft_topology_change_enabled()) {
         slogger.debug("ignore on_alive since topology changes are using raft and "
-                      "endpoint {}/{} is not a topology member", endpoint, tm_host_id_opt);
+                      "endpoint {}/{} is not a topology member", endpoint, host_id);
     } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
         const auto dc_rack = get_dc_rack_for(endpoint);
-        const auto host_id = _gossiper.get_host_id(endpoint);
         tmptr->update_host_id(host_id, endpoint);
         tmptr->update_topology(host_id, dc_rack);
         co_await replicate_to_all_cores(std::move(tmptr));
@@ -2740,15 +2739,26 @@ future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id p
         co_return;
     }
 
+    locator::host_id host_id;
+
+    try {
+        // It seems gossiper does not check for endpoint existence before calling the callback
+        // so the lookup may fail, but there is nothing to do in this case.
+        host_id = _gossiper.get_host_id(endpoint);
+    } catch (...) {
+        co_return;
+    }
+
+    // We should handle the case when the host id is mapped to a different address.
+    // This could happen when an address for the host id changes and the callback here is called
+    // with the old ip. We should just skip the remove in that case.
+    if (_address_map.get(host_id) != endpoint) {
+        co_return;
+    }
+
     auto tmlock = co_await get_token_metadata_lock();
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    // We should handle the case when we aren't able to find endpoint -> ip mapping in token_metadata.
-    // This could happen e.g. when the new endpoint has bigger generation in handle_state_normal - the code
-    // in handle_state_normal will remap host_id to the new IP and we won't find
-    // old IP here. We should just skip the remove in that case.
-    if (const auto host_id = tmptr->get_host_id_if_known(endpoint); host_id) {
-        tmptr->remove_endpoint(*host_id);
-    }
+    tmptr->remove_endpoint(host_id);
     co_await update_topology_change_info(tmptr, ::format("on_remove {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
