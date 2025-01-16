@@ -37,6 +37,9 @@ class TaskStats(NamedTuple):
     table: str
     entity: str
     sequence_number: SequenceNum
+    shard: int
+    start_time: str
+    end_time: str
 
 
 class TaskStatus(NamedTuple):

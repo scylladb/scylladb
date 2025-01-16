@@ -549,7 +549,10 @@ future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_int
                 .sequence_number = task->get_sequence_number(),
                 .keyspace = task->get_status().keyspace,
                 .table = task->get_status().table,
-                .entity = task->get_status().entity
+                .entity = task->get_status().entity,
+                .shard = task->get_status().shard,
+                .start_time = task->get_status().start_time,
+                .end_time = task->get_status().end_time,
             });
         }
     }

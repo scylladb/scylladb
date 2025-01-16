@@ -2887,7 +2887,7 @@ void tasks_print_trees(const std::vector<rjson::value>& res) {
 void tasks_print_stats_list(const rjson::value& res) {
     auto stats = res.GetArray();
     Tabulate table;
-    table.add("task_id", "type", "kind", "scope", "state", "sequence_number", "keyspace", "table", "entity");
+    table.add("task_id", "type", "kind", "scope", "state", "sequence_number", "keyspace", "table", "entity", "shard", "start_time", "end_time");
     for (auto& element : stats) {
         const auto& s = element.GetObject();
 
@@ -2899,7 +2899,10 @@ void tasks_print_stats_list(const rjson::value& res) {
                 s["sequence_number"].GetUint64(),
                 rjson::to_string_view(s["keyspace"]),
                 rjson::to_string_view(s["table"]),
-                rjson::to_string_view(s["entity"]));
+                rjson::to_string_view(s["entity"]),
+                s["shard"].GetUint(),
+                get_time(rjson::to_string_view(s["start_time"])),
+                get_time(rjson::to_string_view(s["end_time"])));
     }
     table.print();
 }
@@ -4322,7 +4325,7 @@ For more information, see: {}"
                             "Gets a list of tasks in a given module",
 fmt::format(R"(
 Lists short stats (including id, type, kind, scope, state, sequence_number,
-keyspace, table, and entity) of tasks in a specified module.
+keyspace, table, entity, shard, start_time, and end_time) of tasks in a specified module.
 
 Allows to monitor tasks for extended time.
 

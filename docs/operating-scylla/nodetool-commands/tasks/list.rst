@@ -42,21 +42,21 @@ For single list:
 
 .. code-block:: shell
 
-    task_id                              type   kind scope    state sequence_number keyspace table entity
-    5116ddb6-85b5-4c3e-94fb-72128f15d7b4 repair node keyspace done  3               abc
+    task_id                              type   kind scope    state sequence_number keyspace table entity shard start_time           end_time
+    5116ddb6-85b5-4c3e-94fb-72128f15d7b4 repair node keyspace done  3               abc                   0     2025-01-16T16:12:11Z 2025-01-16T16:12:13Z
 
 With repetition:
 
 .. code-block:: shell
 
-    task_id                              type   kind scope    state sequence_number keyspace table entity
-    d8926ee7-0faf-47b7-bfeb-82477e0c7b33 repair node keyspace done  5               abc
-    1e028cb8-31a3-45ed-8728-af7a1ab586f6 repair node keyspace done  4               abc
+    task_id                              type   kind scope    state   sequence_number keyspace table entity shard start_time           end_time
+    d8926ee7-0faf-47b7-bfeb-82477e0c7b33 repair node keyspace running 5               abc                   0     2025-01-16T16:12:57Z
+    1e028cb8-31a3-45ed-8728-af7a1ab586f6 repair node keyspace done    4               abc                   0     2025-01-16T16:12:45Z 2025-01-16T16:12:47Z
 
-    task_id                              type   kind scope    state sequence_number keyspace table entity
-    1e535f9b-97fa-4788-a956-8f3216a6ea8d repair node keyspace done  6               abc
-    d8926ee7-0faf-47b7-bfeb-82477e0c7b33 repair node keyspace done  5               abc
-    1e028cb8-31a3-45ed-8728-af7a1ab586f6 repair node keyspace done  4               abc
+    task_id                              type   kind scope    state   sequence_number keyspace table entity shard start_time           end_time
+    1e535f9b-97fa-4788-a956-8f3216a6ea8d repair node keyspace created 6               abc                   0
+    d8926ee7-0faf-47b7-bfeb-82477e0c7b33 repair node keyspace running 5               abc                   0     2025-01-16T16:12:57Z
+    1e028cb8-31a3-45ed-8728-af7a1ab586f6 repair node keyspace done    4               abc                   0     2025-01-16T16:12:45Z 2025-01-16T16:12:47Z
 
 See also
 --------
