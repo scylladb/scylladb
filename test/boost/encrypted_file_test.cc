@@ -15,12 +15,14 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/fstream.hh>
 
 #include <seastar/testing/test_case.hh>
 
 #include "ent/encryption/encryption.hh"
 #include "ent/encryption/symmetric_key.hh"
 #include "ent/encryption/encrypted_file_impl.hh"
+#include "test/lib/log.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/exception_utils.hh"
@@ -263,3 +265,60 @@ SEASTAR_TEST_CASE(test_truncating_extend) {
     co_await f.close();
 }
 
+// Reproducer for https://github.com/scylladb/scylladb/issues/22236
+SEASTAR_TEST_CASE(test_read_from_padding) {
+    key_info kinfo {"AES/CBC/PKCSPadding", 128};
+    shared_ptr<symmetric_key> k = make_shared<symmetric_key>(kinfo);
+    testlog.info("Created symmetric key: info={} key={} ", k->info(), k->key());
+
+    size_t block_size;
+    size_t buf_size;
+
+    constexpr auto& filename = "encrypted_file";
+    const auto& filepath = dir.path() / filename;
+
+    testlog.info("Creating encrypted file {}", filepath.string());
+    {
+        auto [file, _] = co_await make_file(filename, open_flags::create | open_flags::wo, k);
+        auto ostream = co_await make_file_output_stream(file);
+
+        block_size = file.disk_write_dma_alignment();
+        buf_size = block_size - 1;
+
+        auto wbuf = seastar::temporary_buffer<char>::aligned(file.memory_dma_alignment(), buf_size);
+        co_await ostream.write(wbuf.get(), wbuf.size());
+        testlog.info("Wrote {} bytes to encrypted file {}", wbuf.size(), filepath.string());
+
+        co_await ostream.close();
+        testlog.info("Length of {}: {} bytes", filename, co_await file.size());
+    }
+
+    testlog.info("Testing DMA reads from padding area of file {}", filepath.string());
+    {
+        auto [file, _] = co_await make_file(filename, open_flags::ro, k);
+
+        // Triggering the bug requires reading from the padding area:
+        // `buf_size < read_pos < file.size()`
+        //
+        // For `dma_read()`, we have the additional requirement that `read_pos` must be aligned.
+        // For `dma_read_bulk()`, it doesn't have to.
+        uint64_t read_pos = block_size;
+        size_t read_len = block_size;
+        auto rbuf = seastar::temporary_buffer<char>::aligned(file.memory_dma_alignment(), read_len);
+        std::vector<iovec> iov {{static_cast<void*>(rbuf.get_write()), rbuf.size()}};
+
+        auto res = co_await file.dma_read_bulk<char>(read_pos, read_len);
+        BOOST_CHECK_MESSAGE(res.size() == 0, seastar::format(
+                "Bulk DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res.size()));
+
+        auto res_len = co_await file.dma_read(read_pos, iov);
+        BOOST_CHECK_MESSAGE(res_len == 0, seastar::format(
+                "IOV DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res_len));
+
+        res_len = co_await file.dma_read<char>(read_pos, rbuf.get_write(), read_len);
+        BOOST_CHECK_MESSAGE(res_len == 0, seastar::format(
+                "DMA read on pos {}, len {}: returned {} bytes instead of zero", read_pos, read_len, res_len));
+
+        co_await file.close();
+    }
+}
