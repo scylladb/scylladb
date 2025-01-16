@@ -2786,3 +2786,15 @@ def test_describe_udf_with_udt(cql, test_keyspace, scylla_only):
 
             expected_stmt = f"CREATE FUNCTION {test_keyspace}.{fn}{fn_content}"
             assert udf_stmt == expected_stmt
+
+# Test that the Scylla-only "tombstone_gc" option appears in the output of
+# "desc table". Reproduces issue #14390.
+# The test is marked scylla_only because Cassandra doesn't have this
+# "tombstone_gc" option.
+def test_desc_table_tombstone_gc(cql, test_keyspace, scylla_only):
+        with_clause = "tombstone_gc = {'mode': 'timeout', 'propagation_delay_in_seconds': '73'}"
+        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH " + with_clause) as table:
+            desc = cql.execute(f"DESCRIBE TABLE {table} WITH INTERNALS").one()
+            # ignore spaces in comparison, as different versions of Scylla
+            # add spaces in different places
+            assert with_clause.replace(' ','') in desc.create_statement.replace(' ','')
