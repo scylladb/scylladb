@@ -1663,7 +1663,14 @@ defines = ' '.join(['-D' + d for d in defines])
 globals().update(vars(args))
 
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+# assuming each link job takes around 7GiB of memory without LTO
 link_pool_depth = max(int(total_memory / 7e9), 1)
+if args.lto:
+    # ThinLTO provides its own parallel linking, use 16GiB for RAM size used
+    # by each link job
+    depth_with_lto = max(int(total_memory / 16e9), 2)
+    if depth_with_lto < link_pool_depth:
+        link_pool_depth = depth_with_lto
 
 selected_modes = args.selected_modes or modes.keys()
 default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items() if mode_cfg["default"]]
