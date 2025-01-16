@@ -650,10 +650,6 @@ resize_decision::seq_number_t resize_decision::next_sequence_number() const {
     return (sequence_number == std::numeric_limits<seq_number_t>::max()) ? 0 : sequence_number + 1;
 }
 
-bool resize_decision::initial_decision() const {
-    return sequence_number == 0;
-}
-
 table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexcept {
     size_in_bytes = size_in_bytes + s.size_in_bytes;
     split_ready_seq_number = std::min(split_ready_seq_number, s.split_ready_seq_number);
