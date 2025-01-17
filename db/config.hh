@@ -526,6 +526,12 @@ public:
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
+    named_value<bool> enforce_tablets;
+
+    bool enable_tablets_by_default() const noexcept {
+        return enable_tablets() || enforce_tablets();
+    }
+
     named_value<uint32_t> view_flow_control_delay_limit_in_ms;
 
     named_value<int> disk_space_monitor_normal_polling_interval_in_seconds;
