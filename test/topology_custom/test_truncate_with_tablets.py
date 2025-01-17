@@ -5,6 +5,7 @@
 #
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
+from cassandra.cluster import OperationTimedOut, NoHostAvailable
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
 from test.topology.util import get_topology_coordinator
@@ -211,4 +212,50 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
     # Check if we have any data
     row = await cql.run_async(SimpleStatement('SELECT COUNT(*) FROM test.test', consistency_level=ConsistencyLevel.ALL))
+    assert row[0].count == 0
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_truncate_while_truncate_already_running(manager: ManagerClient):
+
+    # This checks truncate re-using existing global topology requests
+    # for already running truncates on the same table
+
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True }
+
+    servers = []
+    servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async('CREATE TABLE test.test (pk int PRIMARY KEY, c int);')
+
+    keys = range(1024)
+    await asyncio.gather(*[cql.run_async(f'INSERT INTO test.test (pk, c) VALUES ({k}, {k});') for k in keys])
+
+    s0_log = await manager.server_open_log(servers[0].server_id)
+
+    # wait in truncate processing
+    await manager.api.enable_injection(servers[0].ip_addr, 'truncate_table_wait', one_shot=True)
+
+    # run a truncate and wait for it to timeout
+    with pytest.raises((OperationTimedOut, NoHostAvailable), match='Timeout during TRUNCATE TABLE of test.test'):
+        await cql.run_async('TRUNCATE TABLE test.test USING TIMEOUT 100ms')
+
+    # run another truncate on the same table while the timedout one is still waiting
+    truncate_future = cql.run_async('TRUNCATE TABLE test.test')
+
+    # make sure the second truncate re-used the existing global topology request
+    await s0_log.wait_for('Ongoing TRUNCATE for table test.test')
+
+    # release the truncate started in the first attempt
+    await manager.api.message_injection(servers[0].ip_addr, 'truncate_table_wait')
+
+    await truncate_future
+
+    # check if we have any data
+    row = await cql.run_async('SELECT COUNT(*) FROM test.test')
     assert row[0].count == 0
