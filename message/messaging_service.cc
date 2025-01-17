@@ -257,16 +257,6 @@ const uint64_t* messaging_service::get_dropped_messages() const {
     return _dropped_messages;
 }
 
-int32_t messaging_service::get_raw_version(const gms::inet_address& endpoint) const {
-    // FIXME: messaging service versioning
-    return current_version;
-}
-
-bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
-    // FIXME: messaging service versioning
-    return true;
-}
-
 future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
@@ -309,8 +299,9 @@ future<> messaging_service::start() {
     return make_ready_future<>();
 }
 
-future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
+future<> messaging_service::start_listen(locator::shared_token_metadata& stm, std::function<locator::host_id(gms::inet_address)> address_to_host_id_mapper) {
     _token_metadata = &stm;
+    _address_to_host_id_mapper = std::move(address_to_host_id_mapper);
     do_start_listen();
     return make_ready_future<>();
 }
@@ -318,20 +309,21 @@ future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
 bool messaging_service::topology_known_for(inet_address addr) const {
     // The token metadata pointer is nullptr before
     // the service is start_listen()-ed and after it's being shutdown()-ed.
+    const locator::node* node;
     return _token_metadata
-        && _token_metadata->get()->get_topology().has_endpoint(addr);
+        && (node = _token_metadata->get()->get_topology().find_node(_address_to_host_id_mapper(addr))) && !node->is_none();
 }
 
 // Precondition: `topology_known_for(addr)`.
 bool messaging_service::is_same_dc(inet_address addr) const {
     const auto& topo = _token_metadata->get()->get_topology();
-    return topo.get_datacenter(addr) == topo.get_datacenter();
+    return topo.get_datacenter(_address_to_host_id_mapper(addr)) == topo.get_datacenter();
 }
 
 // Precondition: `topology_known_for(addr)`.
 bool messaging_service::is_same_rack(inet_address addr) const {
     const auto& topo = _token_metadata->get()->get_topology();
-    return topo.get_rack(addr) == topo.get_rack();
+    return topo.get_rack(_address_to_host_id_mapper(addr)) == topo.get_rack();
 }
 
 // The socket metrics domain defines the way RPC metrics are grouped
@@ -344,12 +336,15 @@ bool messaging_service::is_same_rack(inet_address addr) const {
 //   that the isolation cookie suits very well, because these cookies
 //   are different for different indices and are more informative than
 //   plain numbers
-sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr) const {
+sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr, std::optional<locator::host_id> id) const {
     sstring ret = _scheduling_info_for_connection_index[idx].isolation_cookie;
+    if (!id) {
+        id = _address_to_host_id_mapper(addr);
+    }
     if (_token_metadata) {
         const auto& topo = _token_metadata->get()->get_topology();
-        if (topo.has_endpoint(addr)) {
-            ret += ":" + topo.get_datacenter(addr);
+        if (topo.has_node(*id)) {
+            ret += ":" + topo.get_datacenter(*id);
         }
     }
     return ret;
@@ -1119,7 +1114,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
     opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
-    opts.metrics_domain = client_metrics_domain(idx, id.addr); // not just `addr` as the latter may be internal IP
+    opts.metrics_domain = client_metrics_domain(idx, id.addr, host_id); // not just `addr` as the latter may be internal IP
 
     SCYLLA_ASSERT(!must_encrypt || _credentials);
 

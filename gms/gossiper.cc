@@ -924,7 +924,7 @@ future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_live_members();
+        co_return g.get_live_members_helper();
     });
 }
 
@@ -1175,7 +1175,7 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members() const {
+std::set<inet_address> gossiper::get_live_members_helper() const {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
@@ -1186,22 +1186,15 @@ std::set<inet_address> gossiper::get_live_members() const {
     return live_members;
 }
 
+std::set<locator::host_id> gossiper::get_live_members() const {
+    return get_live_members_helper() | std::views::transform([this] (inet_address ip) { return get_host_id(ip); }) | std::ranges::to<std::set>();
+}
+
 std::set<locator::host_id> gossiper::get_live_token_owners() const {
     std::set<locator::host_id> token_owners;
     auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners();
     for (auto& node: normal_token_owners) {
         if (is_alive(node)) {
-            token_owners.insert(node);
-        }
-    }
-    return token_owners;
-}
-
-std::set<inet_address> gossiper::get_unreachable_token_owners() const {
-    std::set<inet_address> token_owners;
-    auto normal_token_owners = get_token_metadata_ptr()->get_normal_token_owners_ips();
-    for (auto& node: normal_token_owners) {
-        if (!is_alive(node)) {
             token_owners.insert(node);
         }
     }
@@ -1503,6 +1496,14 @@ endpoint_state_ptr gossiper::get_endpoint_state_ptr(inet_address ep) const noexc
     } else {
         return it->second;
     }
+}
+
+endpoint_state_ptr gossiper::get_endpoint_state_ptr(locator::host_id id) const noexcept {
+    auto ip = _address_map.find(id);
+    if (!ip) {
+        return nullptr;
+    }
+    return get_endpoint_state_ptr(*ip);
 }
 
 void gossiper::update_timestamp(const endpoint_state_ptr& eps) noexcept {

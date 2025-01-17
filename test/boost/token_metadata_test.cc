@@ -50,16 +50,12 @@ namespace {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_everywhere_strategy) {
-    const auto e1 = inet_address("192.168.0.1");
-    const auto e2 = inet_address("192.168.0.2");
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
     const auto t1 = dht::token::from_int64(10);
     const auto t2 = dht::token::from_int64(20);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
@@ -74,16 +70,12 @@ SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_everywhere_strategy
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
-    const auto e1 = inet_address("192.168.0.1");
     const auto t1 = dht::token::from_int64(1);
-    const auto e2 = inet_address("192.168.0.2");
     const auto t2 = dht::token::from_int64(100);
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
@@ -107,17 +99,11 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
     const auto t1000 = dht::token::from_int64(1000);
-    const auto e1 = inet_address("192.168.0.1");
-    const auto e2 = inet_address("192.168.0.2");
-    const auto e3 = inet_address("192.168.0.3");
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_host_id(e3_id, e3);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -143,17 +129,11 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
     const auto t1000 = dht::token::from_int64(1000);
-    const auto e1 = inet_address("192.168.0.1");
-    const auto e2 = inet_address("192.168.0.2");
-    const auto e3 = inet_address("192.168.0.3");
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_host_id(e3_id, e3);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -180,20 +160,12 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
     const auto t1000 = dht::token::from_int64(1000);
-    const auto e1 = inet_address("192.168.0.1");
-    const auto e2 = inet_address("192.168.0.2");
-    const auto e3 = inet_address("192.168.0.3");
-    const auto e4 = inet_address("192.168.0.4");
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
     const auto e4_id = gen_id(4);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_host_id(e3_id, e3);
-    token_metadata->update_host_id(e4_id, e4);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -225,17 +197,11 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
     const auto t1000 = dht::token::from_int64(1000);
-    const auto e1 = inet_address("192.168.0.1");
-    const auto e2 = inet_address("192.168.0.2");
-    const auto e3 = inet_address("192.168.0.3");
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
     auto token_metadata = create_token_metadata(e1_id);
-    token_metadata->update_host_id(e1_id, e1);
-    token_metadata->update_host_id(e2_id, e2);
-    token_metadata->update_host_id(e3_id, e3);
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -285,22 +251,18 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
 
 SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     const auto t1 = dht::token::from_int64(1);
-    const auto e1 = inet_address("192.168.0.1");
     const auto e1_id1 = gen_id(1);
     const auto e1_id2 = gen_id(2);
 
     auto token_metadata = create_token_metadata(e1_id2);
-    token_metadata->update_host_id(e1_id1, e1);
     token_metadata->update_topology(e1_id1, get_dc_rack(e1_id1), node::state::being_replaced);
     token_metadata->update_normal_tokens({t1}, e1_id1).get();
 
     token_metadata->update_topology(e1_id2, get_dc_rack(e1_id2), node::state::replacing);
-    token_metadata->update_host_id(e1_id2, e1);
 
     token_metadata->add_replacing_endpoint(e1_id1, e1_id2);
 
     auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
-    BOOST_REQUIRE_EQUAL(token_metadata->get_host_id(e1), e1_id1);
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
         host_id_vector_topology_change{e1_id2});
     BOOST_REQUIRE_EQUAL(erm->get_natural_replicas(dht::token::from_int64(1)),

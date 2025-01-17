@@ -2080,7 +2080,7 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
     if (!hid) {
         on_internal_error(slogger, format("update_peer_info called with empty host_id, ep {}", ep));
     }
-    if (_db.get_token_metadata().get_topology().is_me(ep)) {
+    if (_db.get_token_metadata().get_topology().is_me(hid)) {
         on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
     }
 

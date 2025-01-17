@@ -10,6 +10,7 @@
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "locator/token_metadata.hh"
+#include "gms/gossiper.hh"
 
 using namespace seastar::httpd;
 
@@ -18,7 +19,7 @@ namespace api {
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
-void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_token_metadata>& tm) {
+void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_token_metadata>& tm, sharded<gms::gossiper>& g) {
     ss::local_hostid.set(r, [&tm](std::unique_ptr<http::request> req) {
         auto id = tm.local().get()->get_my_id();
         if (!bool(id)) {
@@ -33,22 +34,25 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         }));
     });
 
-    ss::get_node_tokens.set(r, [&tm] (std::unique_ptr<http::request> req) {
+    ss::get_node_tokens.set(r, [&tm, &g] (std::unique_ptr<http::request> req) {
         gms::inet_address addr(req->get_path_param("endpoint"));
         auto& local_tm = *tm.local().get();
-        const auto host_id = local_tm.get_host_id_if_known(addr);
+        std::optional<locator::host_id> host_id;
+        try {
+            host_id = g.local().get_host_id(addr);
+        } catch (...) {}
         return make_ready_future<json::json_return_type>(stream_range_as_array(host_id ? local_tm.get_tokens(*host_id): std::vector<dht::token>{}, [](const dht::token& i) {
             return fmt::to_string(i);
         }));
     });
 
-    ss::get_leaving_nodes.set(r, [&tm](const_req req) {
+    ss::get_leaving_nodes.set(r, [&tm, &g](const_req req) {
         const auto& local_tm = *tm.local().get();
         const auto& leaving_host_ids = local_tm.get_leaving_endpoints();
         std::unordered_set<gms::inet_address> eps;
         eps.reserve(leaving_host_ids.size());
         for (const auto host_id: leaving_host_ids) {
-            eps.insert(local_tm.get_endpoint_for_host_id(host_id));
+            eps.insert(g.local().get_address_map().get(host_id));
         }
         return container_to_vec(eps);
     });
@@ -58,20 +62,23 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         return container_to_vec(addr);
     });
 
-    ss::get_joining_nodes.set(r, [&tm](const_req req) {
+    ss::get_joining_nodes.set(r, [&tm, &g](const_req req) {
         const auto& local_tm = *tm.local().get();
         const auto& points = local_tm.get_bootstrap_tokens();
         std::unordered_set<gms::inet_address> eps;
         eps.reserve(points.size());
         for (const auto& [token, host_id]: points) {
-            eps.insert(local_tm.get_endpoint_for_host_id(host_id));
+            eps.insert(g.local().get_address_map().get(host_id));
         }
         return container_to_vec(eps);
     });
 
-    ss::get_host_id_map.set(r, [&tm](const_req req) {
+    ss::get_host_id_map.set(r, [&tm, &g](const_req req) {
         std::vector<ss::mapper> res;
-        return map_to_key_value(tm.local().get()->get_endpoint_to_host_id_map(), res);
+        auto map = tm.local().get()->get_host_ids() |
+            std::views::transform([&g] (locator::host_id id) { return std::make_pair(g.local().get_address_map().get(id), id); }) |
+            std::ranges::to<std::unordered_map>();
+        return map_to_key_value(std::move(map), res);
     });
 
     static auto host_or_broadcast = [&tm](const_req req) {
@@ -79,26 +86,34 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         return host.empty() ? tm.local().get()->get_topology().my_address() : gms::inet_address(host);
     };
 
-    httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&tm](const_req req) {
+    httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&tm, &g](const_req req) {
         auto& topology = tm.local().get()->get_topology();
         auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep)) {
+        std::optional<locator::host_id> host_id;
+        try {
+            host_id = g.local().get_host_id(ep);
+        } catch (...) {}
+        if (!host_id || !topology.has_node(*host_id)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
             return locator::endpoint_dc_rack::default_location.dc;
         }
-        return topology.get_datacenter(ep);
+        return topology.get_datacenter(*host_id);
     });
 
-    httpd::endpoint_snitch_info_json::get_rack.set(r, [&tm](const_req req) {
+    httpd::endpoint_snitch_info_json::get_rack.set(r, [&tm, &g](const_req req) {
         auto& topology = tm.local().get()->get_topology();
         auto ep = host_or_broadcast(req);
-        if (!topology.has_endpoint(ep)) {
+        std::optional<locator::host_id> host_id;
+        try {
+            host_id = g.local().get_host_id(ep);
+        } catch (...) {}
+        if (!host_id || !topology.has_node(*host_id)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
             return locator::endpoint_dc_rack::default_location.rack;
         }
-        return topology.get_rack(ep);
+        return topology.get_rack(*host_id);
     });
 }
 

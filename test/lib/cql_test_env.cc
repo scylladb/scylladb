@@ -698,11 +698,10 @@ private:
                 host_id = linfo.host_id;
                 _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location(), my_address, my_address).get();
             }
-            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id, &cfg_in] (locator::token_metadata& tm) {
+            locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
                 auto& topo = tm.get_topology();
                 topo.set_host_id_cfg(hostid);
                 topo.add_or_update_endpoint(hostid,
-                                            cfg_in.broadcast_address,
                                             std::nullopt,
                                             locator::node::state::normal,
                                             smp::count);
@@ -755,7 +754,7 @@ private:
                         // Once the seastar issue is fixed, we can just keep the tmp socket aliva across
                         // the listen invoke below.
                         tmp = {};
-                        _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata)).get();
+                        _ms.invoke_on_all(&netw::messaging_service::start_listen, std::ref(_token_metadata), [host_id] (gms::inet_address ip) {return host_id; }).get();
                     }
                 } catch (std::system_error& e) {
                     // if we still hit a used port (quick other process), just shut down ms and try again.

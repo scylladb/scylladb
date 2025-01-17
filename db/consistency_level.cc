@@ -113,11 +113,10 @@ bool is_datacenter_local(consistency_level l) {
     return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
 }
 
-template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         const locator::effective_replication_map& erm,
-        const Range& live_endpoints,
-        const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
+        const host_id_vector_replica_set& live_endpoints,
+        const host_id_vector_topology_change& pending_endpoints = host_id_vector_topology_change()) {
     using namespace locator;
 
     auto& rs = erm.get_replication_strategy();
@@ -148,12 +147,11 @@ std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
     return dc_endpoints;
 }
 
-template<typename Range, typename PendingRange>
 bool assure_sufficient_live_nodes_each_quorum(
         consistency_level cl,
         const locator::effective_replication_map& erm,
-        const Range& live_endpoints,
-        const PendingRange& pending_endpoints) {
+        const host_id_vector_replica_set& live_endpoints,
+        const host_id_vector_topology_change& pending_endpoints) {
     using namespace locator;
 
     auto& rs = erm.get_replication_strategy();
@@ -175,12 +173,11 @@ bool assure_sufficient_live_nodes_each_quorum(
     return false;
 }
 
-template<typename Range, typename PendingRange>
 void assure_sufficient_live_nodes(
         consistency_level cl,
         const locator::effective_replication_map& erm,
-        const Range& live_endpoints,
-        const PendingRange& pending_endpoints) {
+        const host_id_vector_replica_set& live_endpoints,
+        const host_id_vector_topology_change& pending_endpoints) {
     size_t need = block_for(erm, cl);
 
     auto adjust_live_for_error = [] (size_t live, size_t pending) {
@@ -227,10 +224,6 @@ void assure_sufficient_live_nodes(
         break;
     }
 }
-
-template void assure_sufficient_live_nodes(consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
-template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set&, const host_id_vector_topology_change&);
 
 host_id_vector_replica_set
 filter_for_query(consistency_level cl,

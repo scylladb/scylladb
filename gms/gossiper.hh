@@ -296,7 +296,7 @@ public:
      */
     future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
-    std::set<inet_address> get_live_members() const;
+    std::set<locator::host_id> get_live_members() const;
 
     std::set<locator::host_id> get_live_token_owners() const;
 
@@ -305,11 +305,6 @@ public:
      */
     std::set<inet_address> get_unreachable_members() const;
     std::set<locator::host_id> get_unreachable_host_ids() const;
-
-    /**
-     * @return a list of unreachable token owners
-     */
-    std::set<inet_address> get_unreachable_token_owners() const;
 
     /**
      * @return a list of unreachable nodes
@@ -435,6 +430,7 @@ public:
     // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
     // the endpoint_state_ptr is held.
     endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
+    endpoint_state_ptr get_endpoint_state_ptr(locator::host_id ep) const noexcept;
 
     // Return this node's endpoint_state_ptr
     endpoint_state_ptr get_this_endpoint_state_ptr() const noexcept {
@@ -527,6 +523,7 @@ public:
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
+    std::set<inet_address> get_live_members_helper() const;
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);

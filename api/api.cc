@@ -153,8 +153,8 @@ future<> unset_server_sstables_loader(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_sstables_loader(ctx, r); });
 }
 
-future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb) {
-    return ctx.http_server.set_routes([&ctx, &vb] (routes& r) { set_view_builder(ctx, r, vb); });
+future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {
+    return ctx.http_server.set_routes([&ctx, &vb, &g] (routes& r) { set_view_builder(ctx, r, vb, g); });
 }
 
 future<> unset_server_view_builder(http_context& ctx) {
@@ -188,8 +188,8 @@ future<> unset_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
 }
 
-future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm) {
-    return ctx.http_server.set_routes([&ctx, &tm] (routes& r) { set_token_metadata(ctx, r, tm); });
+future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm, sharded<gms::gossiper>& g) {
+    return ctx.http_server.set_routes([&ctx, &tm, &g] (routes& r) { set_token_metadata(ctx, r, tm, g); });
 }
 
 future<> unset_server_token_metadata(http_context& ctx) {
@@ -273,10 +273,10 @@ future<> unset_server_cache(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_cache_service(ctx, r); });
 }
 
-future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy) {
+future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy, sharded<gms::gossiper>& g) {
     return register_api(ctx, "hinted_handoff",
-                "The hinted handoff API", [&proxy] (http_context& ctx, routes& r) {
-                    set_hinted_handoff(ctx, r, proxy);
+                "The hinted handoff API", [&proxy, &g] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r, proxy, g);
                 });
 }
 

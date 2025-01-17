@@ -100,7 +100,7 @@ future<> set_server_storage_service(http_context& ctx, sharded<service::storage_
 future<> unset_server_storage_service(http_context& ctx);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
 future<> unset_server_sstables_loader(http_context& ctx);
-future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb);
+future<> set_server_view_builder(http_context& ctx, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g);
 future<> unset_server_view_builder(http_context& ctx);
 future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am);
 future<> unset_server_repair(http_context& ctx);
@@ -112,7 +112,7 @@ future<> set_server_authorization_cache(http_context& ctx, sharded<auth::service
 future<> unset_server_authorization_cache(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl);
 future<> unset_server_snapshot(http_context& ctx);
-future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm);
+future<> set_server_token_metadata(http_context& ctx, sharded<locator::shared_token_metadata>& tm, sharded<gms::gossiper>& g);
 future<> unset_server_token_metadata(http_context& ctx);
 future<> set_server_gossip(http_context& ctx, sharded<gms::gossiper>& g);
 future<> unset_server_gossip(http_context& ctx);
@@ -124,7 +124,7 @@ future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_pr
 future<> unset_server_storage_proxy(http_context& ctx);
 future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_manager>& sm);
 future<> unset_server_stream_manager(http_context& ctx);
-future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& p);
+future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& p, sharded<gms::gossiper>& g);
 future<> unset_hinted_handoff(http_context& ctx);
 future<> set_server_cache(http_context& ctx);
 future<> unset_server_cache(http_context& ctx);

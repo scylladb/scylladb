@@ -37,6 +37,10 @@ namespace replica {
 class keyspace;
 }
 
+namespace gms {
+class gossiper;
+}
+
 namespace locator {
 
 class abstract_replication_strategy;
@@ -75,8 +79,8 @@ struct host_id_or_endpoint {
 
     // Map the host_id to endpoint or vice verse, using the token_metadata.
     // Throws runtime error if failed to resolve.
-    host_id resolve_id(const token_metadata&) const;
-    gms::inet_address resolve_endpoint(const token_metadata&) const;
+    host_id resolve_id(const gms::gossiper&) const;
+    gms::inet_address resolve_endpoint(const gms::gossiper&) const;
 };
 
 using host_id_or_endpoint_list = std::vector<host_id_or_endpoint>;
@@ -223,29 +227,11 @@ public:
     const topology& get_topology() const;
     void debug_show() const;
 
-    /**
-     * Store an end-point to host ID mapping.  Each ID must be unique, and
-     * cannot be changed after the fact.
-     *
-     * @param hostId
-     * @param endpoint
-     */
-    void update_host_id(const locator::host_id& host_id, inet_address endpoint);
-
     /** Return the unique host ID for an end-point. */
     host_id get_host_id(inet_address endpoint) const;
 
-    /// Return the unique host ID for an end-point or nullopt if not found.
-    std::optional<host_id> get_host_id_if_known(inet_address endpoint) const;
-
-    /** Return the end-point for a unique host ID or nullopt if not found. */
-    std::optional<inet_address> get_endpoint_for_host_id_if_known(locator::host_id host_id) const;
-
-    /** Return the end-point for a unique host ID */
-    inet_address get_endpoint_for_host_id(locator::host_id host_id) const;
-
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map() const;
+    std::unordered_set<host_id> get_host_ids() const;
 
     /// Returns host_id of the local node.
     host_id get_my_id() const;
@@ -327,23 +313,18 @@ public:
 
     const std::unordered_set<host_id>& get_normal_token_owners() const;
 
-    std::unordered_set<gms::inet_address> get_normal_token_owners_ips() const;
-
     void for_each_token_owner(std::function<void(const node&)> func) const;
 
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 
-    // Returns the map: DC -> addresses of token owners in that DC.
+    // Returns the map: DC -> host_id of token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_set<inet_address>> get_datacenter_token_owners_ips() const;
     std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
 
-    // Returns the map: DC -> (map: rack -> addresses of token owners in that rack).
+    // Returns the map: DC -> (map: rack -> host_id of token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<inet_address>>>
-    get_datacenter_racks_token_owners_ips() const;
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
     get_datacenter_racks_token_owners() const;
 

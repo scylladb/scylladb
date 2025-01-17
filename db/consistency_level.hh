@@ -61,15 +61,9 @@ is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,
                          const host_id_vector_replica_set& live_endpoints);
 
-template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 void assure_sufficient_live_nodes(
         consistency_level cl,
         const locator::effective_replication_map& erm,
-        const Range& live_endpoints,
-        const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>());
-
-extern template void assure_sufficient_live_nodes(consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const std::array<gms::inet_address, 0>&);
-extern template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set&, const utils::small_vector<gms::inet_address, 1ul>&);
-extern template void assure_sufficient_live_nodes(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set&, const host_id_vector_topology_change&);
-
+        const host_id_vector_replica_set& live_endpoints,
+        const host_id_vector_topology_change& pending_endpoints = host_id_vector_topology_change());
 }

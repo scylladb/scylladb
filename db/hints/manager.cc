@@ -266,21 +266,14 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     }
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(std::span<const gms::inet_address> target_eps) const {
+sync_point::shard_rps manager::calculate_current_sync_point(std::span<const locator::host_id> target_eps) const {
     sync_point::shard_rps rps;
-    const auto tmptr = _proxy.get_token_metadata_ptr();
 
     for (auto addr : target_eps) {
-        const auto hid = tmptr->get_host_id_if_known(addr);
-        // Ignore the IPs that we cannot map.
-        if (!hid) {
-            continue;
-        }
-
-        auto it = _ep_managers.find(*hid);
+        auto it = _ep_managers.find(addr);
         if (it != _ep_managers.end()) {
             const hint_endpoint_manager& ep_man = it->second;
-            rps[*hid] = ep_man.last_written_replay_position();
+            rps[addr] = ep_man.last_written_replay_position();
         }
     }
 
@@ -342,10 +335,11 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 
     for (const auto& [addr, rp] : rps) {
         if (std::holds_alternative<gms::inet_address>(addr)) {
-            const auto maybe_hid = tmptr->get_host_id_if_known(std::get<gms::inet_address>(addr));
-            // Ignore the IPs we cannot map.
-            if (maybe_hid) [[likely]] {
-                hid_rps.emplace(*maybe_hid, rp);
+            try {
+                const auto hid = _gossiper_anchor->get_host_id(std::get<gms::inet_address>(addr));
+                hid_rps.emplace(hid, rp);
+            } catch (...) {
+                // Ignore the IPs we cannot map.
             }
         } else {
             hid_rps.emplace(std::get<locator::host_id>(addr), rp);
@@ -436,11 +430,11 @@ bool manager::have_ep_manager(const std::variant<locator::host_id, gms::inet_add
     return _hint_directory_manager.has_mapping(std::get<gms::inet_address>(ep));
 }
 
-bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
+bool manager::store_hint(endpoint_id host_id, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm,
         tracing::trace_state_ptr tr_state) noexcept
 {
     if (utils::get_local_injector().enter("reject_incoming_hints")) {
-        manager_logger.debug("Rejecting a hint to {} / {} due to an error injection", host_id, ip);
+        manager_logger.debug("Rejecting a hint to {} due to an error injection", host_id);
         ++_stats.dropped;
         return false;
     }
@@ -450,6 +444,8 @@ bool manager::store_hint(endpoint_id host_id, gms::inet_address ip, schema_ptr s
         ++_stats.dropped;
         return false;
     }
+
+    auto ip = _gossiper_anchor->get_address_map().get(host_id);
 
     try {
         manager_logger.trace("Going to store a hint to {}", host_id);
@@ -599,9 +595,9 @@ future<> manager::change_host_filter(host_filter filter) {
                     // been created by mistake and they're invalid. The same for pre-host-ID hinted handoff
                     // -- hint directories representing host IDs are NOT valid.
                     if (hid_or_ep.has_host_id() && _uses_host_id) {
-                        return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*tmptr)});
+                        return std::make_optional(pair_type{hid_or_ep.id(), hid_or_ep.resolve_endpoint(*_gossiper_anchor)});
                     } else if (hid_or_ep.has_endpoint() && !_uses_host_id) {
-                        return std::make_optional(pair_type{hid_or_ep.resolve_id(*tmptr), hid_or_ep.endpoint()});
+                        return std::make_optional(pair_type{hid_or_ep.resolve_id(*_gossiper_anchor), hid_or_ep.endpoint()});
                     } else {
                         return std::nullopt;
                     }
@@ -822,7 +818,7 @@ future<> manager::initialize_endpoint_managers() {
 
         const auto maybe_host_id = std::invoke([&] () -> std::optional<locator::host_id> {
             try {
-                return maybe_host_id_or_ep->resolve_id(*tmptr);
+                return maybe_host_id_or_ep->resolve_id(*_gossiper_anchor);
             } catch (...) {
                 return std::nullopt;
             }
@@ -874,7 +870,7 @@ future<> manager::migrate_ip_directories() {
                     continue;
                 }
 
-                const locator::host_id host_id = hid_or_ep.resolve_id(*tmptr);
+                const locator::host_id host_id = hid_or_ep.resolve_id(*_gossiper_anchor);
                 dirs_to_rename.push_back({.current_name = std::move(directory), .new_name = host_id.to_sstring()});
             } catch (...) {
                 // We cannot map the IP to the corresponding host ID either because

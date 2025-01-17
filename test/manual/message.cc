@@ -224,7 +224,7 @@ int main(int ac, char ** av) {
             auto deinit_testers = deferred_action([&testers] {
                 testers.invoke_on_all(&tester::deinit_handler).get();
             });
-            messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata)).get();
+            messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata), [] (gms::inet_address ip){ return locator::host_id{}; }).get();
             if (config.contains("server")) {
                 auto ip = config["server"].as<std::string>();
                 auto cpuid = config["cpuid"].as<uint32_t>();

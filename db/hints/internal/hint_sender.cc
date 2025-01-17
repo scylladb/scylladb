@@ -82,33 +82,16 @@ bool hint_sender::can_send() noexcept {
     }
 
     const auto tmptr = _shard_manager._proxy.get_token_metadata_ptr();
-    const auto maybe_ep = std::invoke([&] () noexcept -> std::optional<gms::inet_address> {
-        try {
-            return tmptr->get_endpoint_for_host_id_if_known(_ep_key);
-        } catch (...) {
-            return std::nullopt;
-        }
-    });
 
-    try {
-        // `hint_sender` can never target this node, so if the returned optional is empty,
-        // that must mean the current locator::token_metadata doesn't store the information
-        // about the target node.
-        if (maybe_ep && _gossiper.is_alive(*maybe_ep)) {
-            _state.remove(state::ep_state_left_the_ring);
-            return true;
-        } else {
-            if (!_state.contains(state::ep_state_left_the_ring)) {
-                _state.set_if<state::ep_state_left_the_ring>(!tmptr->is_normal_token_owner(_ep_key));
-            }
-            // If the node is not part of the ring, we will send hints to all new replicas.
-            // Note that if the optional -- `maybe_ep` -- is empty, that could mean that `_ep_key`
-            // is the locator::host_id of THIS node. However, that's impossible because instances
-            // of `hint_sender` are only created for OTHER nodes, so this logic is correct.
-            return _state.contains(state::ep_state_left_the_ring);
+    if (_gossiper.is_alive(_ep_key)) {
+        _state.remove(state::ep_state_left_the_ring);
+        return true;
+    } else {
+        if (!_state.contains(state::ep_state_left_the_ring)) {
+            _state.set_if<state::ep_state_left_the_ring>(!tmptr->is_normal_token_owner(_ep_key));
         }
-    } catch (...) {
-        return false;
+        // If the node is not part of the ring, we will send hints to all new replicas.
+        return _state.contains(state::ep_state_left_the_ring);
     }
 }
 

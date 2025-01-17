@@ -1103,7 +1103,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //    token_metadata.stop().get();
             //});
 
-            api::set_server_token_metadata(ctx, token_metadata).get();
+            api::set_server_token_metadata(ctx, token_metadata, gossiper).get();
             auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
                 api::unset_server_token_metadata(ctx).get();
             });
@@ -1475,12 +1475,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
-          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id, endpoint = broadcast_addr] (locator::token_metadata& tm) {
+          shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.
               // Raft topology discard the endpoint-to-id map, so the local id can
               // still be found in the config.
               tm.get_topology().set_host_id_cfg(host_id);
-              tm.get_topology().add_or_update_endpoint(host_id, endpoint);
               return make_ready_future<>();
           }).get();
 
@@ -2128,7 +2127,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
+                return messaging.invoke_on_all([&] (auto& ms) {
+                        return ms.start_listen(token_metadata.local(), [&gossiper] (gms::inet_address ip)  {
+                            if (ip == gossiper.local().get_broadcast_address()) {
+                                return gossiper.local().my_host_id();
+                            }
+                            try {
+                                return gossiper.local().get_host_id(ip);
+                            } catch (...) {
+                                return locator::host_id{};
+                            }
+                        });
+                    });
             }).get();
 
             const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
@@ -2272,7 +2282,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
-            api::set_hinted_handoff(ctx, proxy).get();
+            api::set_hinted_handoff(ctx, proxy, gossiper).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });
@@ -2291,7 +2301,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_builder.invoke_on_all(&db::view::view_builder::drain).get();
             });
 
-            api::set_server_view_builder(ctx, view_builder).get();
+            api::set_server_view_builder(ctx, view_builder, gossiper).get();
             auto stop_vb_api = defer_verbose_shutdown("view builder API", [&ctx] {
                 api::unset_server_view_builder(ctx).get();
             });

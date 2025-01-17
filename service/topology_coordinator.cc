@@ -3057,11 +3057,11 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     rtlogger.info("building initial raft topology state and CDC generation");
     guard = co_await start_operation();
 
-    auto get_application_state = [&] (locator::host_id host_id, gms::inet_address ep, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
+    auto get_application_state = [&] (locator::host_id host_id, const gms::application_state_map& epmap, gms::application_state app_state) -> sstring {
         const auto it = epmap.find(app_state);
         if (it == epmap.end()) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{}: application state {} is missing in gossip",
-                    host_id, ep, app_state));
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}: application state {} is missing in gossip",
+                    host_id, app_state));
         }
         // it's versioned_value::value(), not std::optional::value() - it does not throw
         return it->second.value();
@@ -3069,17 +3069,13 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
 
     // Create a new CDC generation
     auto get_sharding_info_for_host_id = [&] (locator::host_id host_id) -> std::pair<size_t, uint8_t> {
-        const auto ep = tmptr->get_endpoint_for_host_id_if_known(host_id);
-        if (!ep) {
-            throw std::runtime_error(format("IP of node with ID {} is not known", host_id));
-        }
-        const auto eptr = _gossiper.get_endpoint_state_ptr(*ep);
+        const auto eptr = _gossiper.get_endpoint_state_ptr(host_id);
         if (!eptr) {
-            throw std::runtime_error(format("no gossiper endpoint state for node {}/{}", host_id, *ep));
+            throw std::runtime_error(format("no gossiper endpoint state for node {}", host_id));
         }
         const auto& epmap = eptr->get_application_state_map();
-        const auto shard_count = std::stoi(get_application_state(host_id, *ep, epmap, gms::application_state::SHARD_COUNT));
-        const auto ignore_msb = std::stoi(get_application_state(host_id, *ep, epmap, gms::application_state::IGNORE_MSB_BITS));
+        const auto shard_count = std::stoi(get_application_state(host_id, epmap, gms::application_state::SHARD_COUNT));
+        const auto ignore_msb = std::stoi(get_application_state(host_id, epmap, gms::application_state::IGNORE_MSB_BITS));
         return std::make_pair<size_t, uint8_t>(shard_count, ignore_msb);
     };
     auto [cdc_gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), std::nullopt, get_sharding_info_for_host_id);
@@ -3096,23 +3092,22 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
         }
 
         const auto& host_id = node.get().host_id();
-        const auto& ep = node.get().endpoint();
-        const auto eptr = _gossiper.get_endpoint_state_ptr(ep);
+        const auto eptr = _gossiper.get_endpoint_state_ptr(host_id);
         if (!eptr) {
-            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {}/{} as gossip contains no data for it", host_id, ep));
+            throw std::runtime_error(format("failed to build initial raft topology state from gossip for node {} as gossip contains no data for it", host_id));
         }
 
         const auto& epmap = eptr->get_application_state_map();
 
-        const auto datacenter = get_application_state(host_id, ep, epmap, gms::application_state::DC);
-        const auto rack = get_application_state(host_id, ep, epmap, gms::application_state::RACK);
+        const auto datacenter = get_application_state(host_id, epmap, gms::application_state::DC);
+        const auto rack = get_application_state(host_id, epmap, gms::application_state::RACK);
         const auto tokens_v = tmptr->get_tokens(host_id);
         const std::unordered_set<dht::token> tokens(tokens_v.begin(), tokens_v.end());
-        const auto release_version = get_application_state(host_id, ep, epmap, gms::application_state::RELEASE_VERSION);
+        const auto release_version = get_application_state(host_id, epmap, gms::application_state::RELEASE_VERSION);
         const auto num_tokens = tokens.size();
-        const auto shard_count = get_application_state(host_id, ep, epmap, gms::application_state::SHARD_COUNT);
-        const auto ignore_msb = get_application_state(host_id, ep, epmap, gms::application_state::IGNORE_MSB_BITS);
-        const auto supported_features_s = get_application_state(host_id, ep, epmap, gms::application_state::SUPPORTED_FEATURES);
+        const auto shard_count = get_application_state(host_id, epmap, gms::application_state::SHARD_COUNT);
+        const auto ignore_msb = get_application_state(host_id, epmap, gms::application_state::IGNORE_MSB_BITS);
+        const auto supported_features_s = get_application_state(host_id, epmap, gms::application_state::SUPPORTED_FEATURES);
         const auto supported_features = gms::feature_service::to_feature_set(supported_features_s);
 
         if (enabled_features.empty()) {

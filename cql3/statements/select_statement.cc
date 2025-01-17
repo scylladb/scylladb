@@ -1820,7 +1820,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
                 throw exceptions::invalid_request_exception(seastar::format(
                             "Moving between coordinators is not allowed in SELECT FROM MUTATION_FRAGMENTS() statements, last page's coordinator was {}{}",
                             last_host,
-                            last_node ? fmt::format("({})", last_node->endpoint()) : ""));
+                            last_node ? fmt::format("({})", last_node->host_id()) : ""));
             }
         }
     }

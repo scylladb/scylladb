@@ -327,7 +327,7 @@ private:
         return get_token_metadata_ptr()->get_topology().my_host_id();
     }
     bool is_me(inet_address addr) const noexcept {
-        return get_token_metadata_ptr()->get_topology().is_me(addr);
+        return addr == get_broadcast_address();
     }
     bool is_me(locator::host_id id) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(id);
@@ -428,8 +428,6 @@ private:
 
 public:
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm,
-            const std::vector<token>& sorted_tokens) const;
 
     /**
      * The same as {@code describeRing(String)} but converts TokenRange to the String for JMX compatibility
@@ -466,15 +464,6 @@ public:
      */
     future<std::map<token, inet_address>> get_tablet_to_endpoint_map(table_id table);
 
-    /**
-     * Construct the range to endpoint mapping based on the true view
-     * of the world.
-     * @param ranges
-     * @return mapping of ranges to the replicas responsible for them.
-    */
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> construct_range_to_endpoint_map(
-            locator::effective_replication_map_ptr erm,
-            const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
     /*
@@ -541,7 +530,7 @@ private:
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
-    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(inet_address endpoint);
+    std::optional<locator::endpoint_dc_rack> get_dc_rack_for(locator::host_id endpoint);
 private:
     // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
@@ -615,6 +604,9 @@ private:
     future<std::unordered_multimap<dht::token_range, locator::host_id>> get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, locator::host_id endpoint);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
+
+    // Return ip of the peers table entry with given host id
+    future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 public:
 
     sstring get_release_version();

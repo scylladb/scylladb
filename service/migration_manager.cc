@@ -932,15 +932,11 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
     try {
         using namespace std::placeholders;
         auto all_live = _gossiper.get_live_members();
-        auto live_members = all_live | std::views::filter([this, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint) {
+        auto live_members = all_live | std::views::filter([my_address = _gossiper.my_host_id()] (const locator::host_id& endpoint) {
             // only push schema to nodes with known and equal versions
-            return endpoint != my_address &&
-                _messaging.knows_version(endpoint) &&
-                _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
+            return endpoint != my_address;
         });
-        // FIXME: gossiper should return host id set
-        auto live_host_ids = live_members | std::views::transform([&] (const gms::inet_address& ip) { return _gossiper.get_host_id(ip); });
-        co_await coroutine::parallel_for_each(live_host_ids,
+        co_await coroutine::parallel_for_each(live_members,
             std::bind(std::mem_fn(&migration_manager::push_schema_mutation), this, std::placeholders::_1, schema));
     } catch (...) {
         mlogger.error("failed to announce migration to all nodes: {}", std::current_exception());

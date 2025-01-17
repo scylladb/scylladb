@@ -272,10 +272,6 @@ public:
 
     const uint64_t* get_dropped_messages() const;
 
-    int32_t get_raw_version(const gms::inet_address& endpoint) const;
-
-    bool knows_version(const gms::inet_address& endpoint) const;
-
     enum class encrypt_what {
         none,
         rack,
@@ -341,6 +337,8 @@ private:
 private:
     config _cfg;
     locator::shared_token_metadata* _token_metadata = nullptr;
+    // a function that maps from ip to host id if known (returns default constructable host_id if there is no mapping)
+    std::function<locator::host_id(gms::inet_address)> _address_to_host_id_mapper;
     // map: Node broadcast address -> Node internal IP, and the reversed mapping, for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache, _preferred_to_endpoint;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
@@ -382,7 +380,7 @@ public:
     ~messaging_service();
 
     future<> start();
-    future<> start_listen(locator::shared_token_metadata& stm);
+    future<> start_listen(locator::shared_token_metadata& stm, std::function<locator::host_id(gms::inet_address)> address_to_host_id_mapper);
     uint16_t port() const noexcept {
         return _cfg.port;
     }
@@ -459,7 +457,7 @@ private:
 
     bool is_host_banned(locator::host_id);
 
-    sstring client_metrics_domain(unsigned idx, inet_address addr) const;
+    sstring client_metrics_domain(unsigned idx, inet_address addr, std::optional<locator::host_id> id) const;
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.

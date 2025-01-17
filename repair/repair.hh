@@ -143,9 +143,6 @@ public:
     explicit repair_neighbors(std::vector<locator::host_id> a)
         : all(std::move(a)) {
     }
-    explicit repair_neighbors(const std::unordered_map<locator::host_id, gms::inet_address>& a)
-        : all(a | std::views::keys | std::ranges::to<std::vector<locator::host_id>>()) {
-    }
     repair_neighbors(std::vector<locator::host_id> a, std::vector<locator::host_id> m)
         : all(std::move(a))
         , mandatory(std::move(m)) {

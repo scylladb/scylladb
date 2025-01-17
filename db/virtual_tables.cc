@@ -75,7 +75,7 @@ public:
             std::vector<frozen_mutation> muts;
             muts.reserve(gossiper.num_endpoints());
 
-            gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state&) {
+            gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
                 static thread_local auto s = build_schema();
                 mutation m(s, partition_key::from_single_value(*s, data_value(endpoint).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
@@ -86,16 +86,15 @@ public:
                 }
                 set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                auto hostid = tm.get_host_id_if_known(endpoint);
-                if (hostid) {
-                    if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
-                        set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(*hostid))));
-                    }
-                    set_cell(cr, "host_id", hostid->uuid());
+                auto hostid = eps.get_host_id();
+                if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
+                    set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
                 }
+                set_cell(cr, "host_id", hostid.uuid());
 
-                if (hostid) {
-                    sstring dc = tm.get_topology().get_location(endpoint).dc;
+                if (tm.get_topology().has_node(hostid)) {
+                    // Not all entries in gossiper are present in the topology
+                    sstring dc = tm.get_topology().get_location(hostid).dc;
                     set_cell(cr, "dc", dc);
                 }
 
@@ -103,7 +102,7 @@ public:
                     set_cell(cr, "owns", ownership[endpoint]);
                 }
 
-                set_cell(cr, "tokens", int32_t(hostid ? tm.get_tokens(*hostid).size() : 0));
+                set_cell(cr, "tokens", int32_t(tm.get_tokens(hostid).size()));
 
                 muts.push_back(freeze(std::move(m)));
             });
