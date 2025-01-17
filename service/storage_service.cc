@@ -63,6 +63,7 @@
 #include "locator/local_strategy.hh"
 #include "utils/user_provided_param.hh"
 #include "version.hh"
+#include "streaming/stream_blob.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>
 #include <boost/range/join.hpp>
@@ -93,10 +94,12 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
+#include "utils/pretty_printers.hh"
 #include "utils/stall_free.hh"
 #include "utils/error_injection.hh"
 #include "locator/util.hh"
 #include "idl/storage_service.dist.hh"
+#include "idl/streaming.dist.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/join_node.hh"
 #include "idl/join_node.dist.hh"
@@ -6072,6 +6075,53 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         });
 
+        if (trinfo->transition != locator::tablet_transition_kind::intranode_migration && _feature_service.file_stream && _db.local().get_config().enable_file_stream()) {
+            co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
+                rtlogger.info("migration_streaming_wait: start");
+                return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
+            });
+
+            auto dst_node = trinfo->pending_replica->host;
+            auto dst_shard_id = trinfo->pending_replica->shard;
+            auto transition = trinfo->transition;
+
+            // Release token_metadata_ptr early so it will no block barriers for other migrations
+            // Don't access trinfo after this.
+            tm = {};
+
+            co_await utils::get_local_injector().inject("stream_sstable_files", [&] (auto& handler) -> future<> {
+                slogger.info("stream_sstable_files: waiting");
+                while (!handler.poll_for_message()) {
+                    co_await sleep_abortable(std::chrono::milliseconds(5), guard.get_abort_source());
+                }
+                slogger.info("stream_sstable_files: released");
+            });
+
+            for (auto src : streaming_info.read_from) {
+                // Use file stream for tablet to stream data
+                auto ops_id = streaming::file_stream_id::create_random_id();
+                auto start_time = std::chrono::steady_clock::now();
+                size_t stream_bytes = 0;
+                try {
+                    auto& table = _db.local().find_column_family(tablet.table);
+                    slogger.debug("stream_sstables[{}] Streaming for tablet {} of {} started table={}.{} range={} src={}",
+                            ops_id, transition, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, src);
+                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard);
+                    stream_bytes = resp.stream_bytes;
+                    slogger.debug("stream_sstables[{}] Streaming for tablet migration of {} successful", ops_id, tablet);
+                    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
+                    auto bw = utils::pretty_printed_throughput(stream_bytes, duration);;
+                    slogger.info("stream_sstables[{}] Streaming for tablet migration of {} finished table={}.{} range={} stream_bytes={} stream_time={} stream_bw={}",
+                            ops_id, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, stream_bytes, duration, bw);
+                } catch (...) {
+                    slogger.warn("stream_sstables[{}] Streaming for tablet migration of {} from {} failed: {}", ops_id, tablet, leaving_replica, std::current_exception());
+                    throw;
+                }
+            }
+
+      } else { // Caution: following code is intentionally unindented to be in sync with OSS
+
+
         if (trinfo->transition == locator::tablet_transition_kind::intranode_migration) {
             if (!leaving_replica || leaving_replica->host != tm->get_my_id()) {
                 throw std::runtime_error(fmt::format("Invalid leaving replica for intra-node migration, tablet: {}, leaving: {}",
@@ -6122,6 +6172,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             co_await streamer->stream_async();
             slogger.info("Streaming for tablet migration of {} finished table={}.{} range={}", tablet, table.schema()->ks_name(), table.schema()->cf_name(), range);
         }
+
+      } // Traditional streaming vs file-based streaming.
 
         // If new pending tablet replica needs splitting, streaming waits for it to complete.
         // That's to provide a guarantee that once migration is over, the coordinator can finalize
@@ -7031,6 +7083,21 @@ void storage_service::init_messaging_service() {
             return handler(ss);
         });
     };
+    ser::streaming_rpc_verbs::register_tablet_stream_files(&_messaging.local(),
+            [this] (const rpc::client_info& cinfo, streaming::stream_files_request req) -> future<streaming::stream_files_response> {
+        streaming::stream_files_response resp;
+        resp.stream_bytes = co_await container().map_reduce0([req] (storage_service& ss) -> future<size_t> {
+            auto res = co_await streaming::tablet_stream_files_handler(ss._db.local(), ss._messaging.local(), req, [&ss] (locator::host_id host) -> future<gms::inet_address> {
+                return ss.container().invoke_on(0, [host] (storage_service& ss) {
+                    return ss.host2ip(host);
+                });
+            });
+            co_return res.stream_bytes;
+        },
+        size_t(0),
+        std::plus<size_t>());
+        co_return resp;
+    });
     ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
         return handle_raft_rpc(dst_id, [cmd = std::move(cmd), term, cmd_index] (auto& ss) {
             return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
@@ -7165,7 +7232,8 @@ future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         ser::node_ops_rpc_verbs::unregister(&_messaging.local()),
         ser::storage_service_rpc_verbs::unregister(&_messaging.local()),
-        ser::join_node_rpc_verbs::unregister(&_messaging.local())
+        ser::join_node_rpc_verbs::unregister(&_messaging.local()),
+        ser::streaming_rpc_verbs::unregister_tablet_stream_files(&_messaging.local())
     ).discard_result();
 }
 

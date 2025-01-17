@@ -251,6 +251,8 @@ add_scylla_test(string_format_test
   KIND BOOST)
 add_scylla_test(summary_test
   KIND BOOST)
+add_scylla_test(file_stream_test
+  KIND SEASTAR)
 add_scylla_test(tagged_integer_test
   KIND SEASTAR)
 add_scylla_test(token_metadata_test
