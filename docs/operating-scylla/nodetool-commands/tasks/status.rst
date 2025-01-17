@@ -23,10 +23,10 @@ Example output
    type: repair
    kind: node
    scope: keyspace
-   state: done
+   state: running
    is_abortable: true
    start_time: 2024-07-29T15:48:55Z
-   end_time: 2024-07-29T15:48:55Z
+   end_time:
    error:
    parent_id: none
    sequence_number: 5
