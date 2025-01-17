@@ -468,6 +468,7 @@ public:
         try {
             co_await sem->wait(timeout_in_ms, 1);
         } catch (seastar::semaphore_timed_out&) {
+            slogger.warn("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name);
             throw std::runtime_error(format("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name));
         }
     }
@@ -1105,7 +1106,10 @@ private:
                         }
                     }
                 }
-                throw exceptions::invalid_request_exception("Another global topology request is ongoing, please retry.");
+                slogger.warn("Another global topology request ({}) is ongoing during attempt to TRUNCATE table {}.{}",
+                                *global_request, ks_name, cf_name);
+                throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
+                                                                        ks_name, cf_name));
             }
 
             global_request_id = guard.new_group0_state_id();
@@ -1121,6 +1125,8 @@ private:
                                     .set("done", false)
                                     .set("start_time", db_clock::now())
                                     .build());
+
+            slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
 
             topology_change change{std::move(updates)};
             sstring reason = "Truncating table";
