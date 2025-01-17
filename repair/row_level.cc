@@ -3294,7 +3294,6 @@ future<> repair_service::stop() {
         rlogger.debug("Unregistering gossiper helper");
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
-    co_await async_gate().close();
     _stopped = true;
     rlogger.info("Stopped repair_service");
   } catch (...) {
