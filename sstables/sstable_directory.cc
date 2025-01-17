@@ -225,11 +225,8 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 }
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
-        noncopyable_function<data_dictionary::storage_options()>&& get_storage_options,
-        sstables::sstable_open_config cfg) const {
-    shared_sstable sst;
-    auto storage_opts = std::invoke(get_storage_options);
-    sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+        const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg) const {
+    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -242,7 +239,15 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         _max_version_seen = desc.version;
     }
 
-    auto sst = co_await load_sstable(desc, std::move(get_storage_options), flags.sstable_open_config);
+    auto storage_opts = get_storage_options();
+    auto shards = co_await get_shards_for_this_sstable(desc, storage_opts, flags);
+    if (flags.sort_sstables_according_to_owner && shards.size() == 1 && shards[0] != this_shard_id()) {
+        // identified a remote unshared sstable
+        _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
+        co_return;
+    }
+
+    auto sst = co_await load_sstable(desc, storage_opts, flags.sstable_open_config);
     validate(sst, flags);
 
     if (flags.need_mutate_level) {
@@ -250,24 +255,17 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
         co_await sst->mutate_sstable_level(0);
     }
 
-    if (!flags.sort_sstables_according_to_owner) {
-        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
-        _unsorted_sstables.push_back(std::move(sst));
-        co_return;
-    }
-
-    auto shards = sst->get_shards_for_this_sstable();
-    if (shards.size() == 1) {
-        if (shards[0] == this_shard_id()) {
+    if (flags.sort_sstables_according_to_owner) {
+        if (shards.size() == 1) {
             dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
             _unshared_local_sstables.push_back(std::move(sst));
         } else {
-            dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sst->get_filename(), shards[0]);
-            _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
+            dirlog.trace("{} identified as a shared SSTable, shards={}", sst->get_filename(), shards);
+            _shared_sstable_info.push_back(co_await sst->get_open_info());
         }
     } else {
-        dirlog.trace("{} identified as a shared SSTable, shards={}", sst->get_filename(), shards);
-        _shared_sstable_info.push_back(co_await sst->get_open_info());
+        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
+        _unsorted_sstables.push_back(std::move(sst));
     }
 }
 
@@ -514,11 +512,19 @@ future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_o
 future<>
 sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_vec) {
     co_await _manager.dir_semaphore().parallel_for_each(info_vec, [this] (const sstables::entry_descriptor& info) {
-        return load_sstable(info, [this] { return *_storage_opts; }).then([this] (auto sst) {
+        return load_sstable(info, *_storage_opts).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
         });
     });
+}
+
+future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(
+        const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const {
+    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    co_await sst->load_owner_shards(_sharder);
+    validate(sst, flags);
+    co_return sst->get_shards_for_this_sstable();
 }
 
 future<>

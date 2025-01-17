@@ -197,10 +197,13 @@ private:
             noncopyable_function<data_dictionary::storage_options()>&& get_storage_options);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc,
-            noncopyable_function<data_dictionary::storage_options()>&& get_storage_options,
-            sstables::sstable_open_config cfg = {}) const;
+            const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg = {}) const;
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
+
+    // Compute owner of shards for a particular SSTable.
+    future<std::vector<shard_id>> get_shards_for_this_sstable(
+            const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const;
 
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
