@@ -239,7 +239,8 @@ class storage_proxy::remote {
     raft_group0_client& _group0_client;
     topology_state_machine& _topology_state_machine;
     abort_source _group0_as;
-    future<> _truncate_table_fiber = make_ready_future<>();
+
+    seastar::gate _truncate_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -277,7 +278,7 @@ public:
     // Must call before destroying the `remote` object.
     future<> stop() {
         _group0_as.request_abort();
-        co_await std::move(_truncate_table_fiber);
+        co_await _truncate_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -452,20 +453,12 @@ public:
     }
 
     future<> truncate_with_tablets(sstring ks_name, sstring cf_name, std::chrono::milliseconds timeout_in_ms) {
-        if (!_truncate_table_fiber.available()) {
-            throw std::runtime_error("Another TRUNCATE TABLE is ongoing, please retry.");
-        }
-        auto sem = make_lw_shared<seastar::semaphore>(0);
-        _truncate_table_fiber = request_truncate_with_tablets(ks_name, cf_name).then_wrapped([sem] (auto f) {
-            if (f.failed()) {
-                sem->broken(f.get_exception());
-            } else {
-                sem->signal(1);
-            }
-        });
+        // We want timeout on truncate to return an error to the client, but the truncate fiber to continue running
         try {
-            co_await sem->wait(timeout_in_ms, 1);
-        } catch (seastar::semaphore_timed_out&) {
+            co_await with_timeout(std::chrono::steady_clock::now() + timeout_in_ms, seastar::with_gate(_truncate_gate, [=, this] () -> future<> {
+                co_await request_truncate_with_tablets(ks_name, cf_name);
+            }));
+        } catch (seastar::timed_out_error&) {
             throw std::runtime_error(format("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name));
         }
     }
