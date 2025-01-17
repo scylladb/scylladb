@@ -71,10 +71,7 @@ The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, 
 
 Audit System Activity
 ~~~~~~~~~~~~~~~~~~~~~
-
-Auditing is available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
-
-Using the `auditing feature <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html>`_ allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the ScyllaDB cluster.
+Using the :doc:`auditing feature</operating-scylla/security/auditing/>` allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the ScyllaDB cluster.
 
 General Recommendations
 ~~~~~~~~~~~~~~~~~~~~~~~

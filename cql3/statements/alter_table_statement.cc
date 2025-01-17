@@ -455,7 +455,7 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
-    return std::make_unique<prepared_statement>(::make_shared<alter_table_statement>(
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_table_statement>(
                 ctx.bound_variables_size(),
                 *_cf_name,
                 _type,

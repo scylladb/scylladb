@@ -41,7 +41,7 @@ std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary:
     auto ctx = get_prepare_context();
     prepared_attributes->fill_prepare_context(ctx);
     auto stmt = ::make_shared<cql3::statements::truncate_statement>(std::move(schema), std::move(prepared_attributes));
-    return std::make_unique<prepared_statement>(std::move(stmt));
+    return std::make_unique<prepared_statement>(audit_info(), std::move(stmt));
 }
 
 } // namespace raw
@@ -99,6 +99,10 @@ truncate_statement::execute(query_processor& qp, service::query_state& state, co
     }).then([] {
         return ::shared_ptr<cql_transport::messages::result_message>{};
     });
+}
+
+audit::statement_category raw::truncate_statement::category() const {
+    return audit::statement_category::DML;
 }
 
 db::timeout_clock::duration truncate_statement::get_timeout(const service::client_state& state, const query_options& options) const {

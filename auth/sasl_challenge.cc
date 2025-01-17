@@ -68,4 +68,11 @@ future<authenticated_user> plain_sasl_challenge::get_authenticated_user() const 
     return _when_complete(*_username, *_password);
 }
 
+const sstring& plain_sasl_challenge::get_username() const {
+    if (!_username) {
+        throw std::logic_error("plain_sasl_challenge::get_username() called without username");
+    }
+    return *_username;
+}
+
 }

@@ -332,7 +332,7 @@ def verify_snapshot_details(rest_api, expected):
             assert not found
             found = True
             sort_key = lambda v: f"{v['ks']}-{v['cf']}"
-            value = sorted([v for v in data['value'] if not v['ks'].startswith('system')], key=sort_key)
+            value = sorted([v for v in data['value'] if not v['ks'].startswith('system') and not v['ks'] == 'audit'], key=sort_key)
             expected_value = sorted(expected['value'], key=sort_key)
             assert len(value) == len(expected_value), f"length mismatch: expected {expected_value} but got {value}"
             for i in range(len(value)):

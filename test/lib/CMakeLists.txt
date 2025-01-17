@@ -28,6 +28,7 @@ target_link_libraries(test-lib
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    audit
     auth
     cdc
     compaction

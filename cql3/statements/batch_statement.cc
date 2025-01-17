@@ -434,6 +434,10 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats) {
             have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
         }
         statements.emplace_back(parsed->prepare(db, meta, stats));
+        auto audit_info = statements.back().statement->get_audit_info();
+        if (audit_info) {
+            audit_info->set_query_string(parsed->get_raw_cql());
+        }
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
@@ -445,9 +449,13 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
                                                      meta.get_variable_specifications(),
                                                      std::move(partition_key_bind_indices));
+}
+
+audit::statement_category batch_statement::category() const {
+    return audit::statement_category::DML;
 }
 
 }

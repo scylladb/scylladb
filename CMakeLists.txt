@@ -261,6 +261,7 @@ add_custom_target(compiler-training)
 
 add_subdirectory(api)
 add_subdirectory(alternator)
+add_subdirectory(audit)
 add_subdirectory(db)
 add_subdirectory(auth)
 add_subdirectory(cdc)
@@ -300,6 +301,7 @@ add_version_library(scylla_version
 add_executable(scylla
   main.cc)
 set(scylla_libs
+    audit
     scylla-main
     api
     auth

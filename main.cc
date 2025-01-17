@@ -67,6 +67,7 @@
 #include <sys/resource.h>
 #include <sys/prctl.h>
 #include "tracing/tracing.hh"
+#include "audit/audit.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include "db/sstables-format-selector.hh"
@@ -1379,6 +1380,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
                 tracing.stop().get();
             });
+            audit::audit::create_audit(*cfg, token_metadata).handle_exception([&] (auto&& e) {
+                startlog.error("audit creation failed: {}", e);
+            }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
@@ -2330,6 +2334,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             notify_set.notify_all(configurable::system_state::started).get();
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
+
+            audit::audit::start_audit(*cfg, qp, mm).get();
+            auto audit_stop = defer([] {
+                audit::audit::stop_audit().get();
+            });
 
             // Create controllers before drain_on_shutdown() below, so that it destructs
             // after drain stops them in stop_transport()

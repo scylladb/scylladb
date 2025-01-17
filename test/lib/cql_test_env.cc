@@ -407,6 +407,10 @@ public:
         return _task_manager;
     }
 
+    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() override {
+        return _token_metadata;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();

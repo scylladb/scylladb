@@ -16,6 +16,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 
 static logging::logger tlogger("table_helper");
 
@@ -139,7 +140,8 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
     co_await _insert_stmt->execute(qp, qs, opts, std::nullopt);
 }
 
-future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
+                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -165,6 +167,15 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(keyspace_name)) {
+            std::map<sstring, sstring> opts;
+            if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+                for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
+                    opts[dc] = replication_factor;
+            }
+            else {
+                opts["replication_factor"] = replication_factor;
+            }
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));

@@ -36,6 +36,9 @@ class create_aggregate_statement final : public create_function_statement_base {
     std::optional<sstring> _ffunc;
     std::optional<expr::expression> _ival;
 
+protected:
+    virtual audit::audit_info_ptr audit_info() const override;
+    virtual audit::statement_category category() const override;
 public:
     create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
             sstring sfunc, shared_ptr<cql3_type::raw> stype, std::optional<sstring> rfunc, std::optional<sstring> ffunc, std::optional<expr::expression> ival, bool or_replace, bool if_not_exists);

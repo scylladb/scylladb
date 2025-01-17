@@ -51,6 +51,10 @@ public:
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
 protected:
+    virtual audit::statement_category category() const override;
+
+    virtual audit::audit_info_ptr audit_info() const override;
+
     void validate_shares_option(const query_processor& qp, const qos::service_level_options& slo) const;
 };
 

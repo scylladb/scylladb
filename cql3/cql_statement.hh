@@ -12,6 +12,7 @@
 
 #include "timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "audit/audit.hh"
 
 namespace service {
 
@@ -45,6 +46,7 @@ using cql_warnings_vec = std::vector<sstring>;
 
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
+    audit::audit_info_ptr _audit_info;
 public:
     // CQL statement text
     seastar::sstring raw_cql_statement;
@@ -55,7 +57,8 @@ public:
     }
 
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
-
+    cql_statement(cql_statement&& o) = default;
+    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr) { }
     virtual ~cql_statement()
     { }
 
@@ -111,6 +114,11 @@ public:
     virtual bool is_conditional() const {
         return false;
     }
+
+    audit::audit_info* get_audit_info() { return _audit_info.get(); }
+    void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
+
+    virtual void sanitize_audit_info() {}
 };
 
 class cql_statement_no_metadata : public cql_statement {

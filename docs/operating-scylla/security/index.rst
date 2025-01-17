@@ -14,6 +14,7 @@ Security
    authorization
    certificate-authentication
    rbac-usecase
+   auditing
    client-node-encryption
    node-node-encryption
    generate-certificate
@@ -28,6 +29,7 @@ Security
   :class: my-panel
    
   * :doc:`ScyllaDB Security Checklist </operating-scylla/security/security-checklist/>`
+  * :doc:`ScyllaDB Auditing Guide </operating-scylla/security/auditing/>`
 
 .. panel-box::
   :title: Authentication and Authorization

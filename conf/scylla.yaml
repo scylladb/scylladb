@@ -564,6 +564,28 @@ commitlog_total_space_in_mb: -1
 # it to 0.0.0.0 to listen on all interfaces.
 # prometheus_address: 1.2.3.4
 
+# audit settings
+# By default, Scylla does not audit anything.
+# 'audit' config option controls if and where to output audited events:
+#   - "none": auditing is disabled (default)
+#   - "table": save audited events in audit.audit_log column family
+#   - "syslog": send audited events via syslog (depends on OS, but usually to /dev/log)
+# audit: "none"
+#
+# List of statement categories that should be audited.
+# audit_categories: "DCL,DDL,AUTH"
+#
+# List of tables that should be audited.
+# audit_tables: "<keyspace_name>.<table_name>,<keyspace_name>.<table_name>"
+#
+# List of keyspaces that should be fully audited.
+# All tables in those keyspaces will be audited
+# audit_keyspaces: "<keyspace_name>,<keyspace_name>"
+#
+# Overrides the Unix socket path used to connect to syslog. If left unset, it'll
+# use the default on the build system, which is usually "/dev/log"
+# audit_unix_socket_path: "/dev/log"
+
 # Distribution of data among cores (shards) within a node
 #
 # Scylla distributes data within a node among shards, using a round-robin

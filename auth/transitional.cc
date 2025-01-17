@@ -146,6 +146,10 @@ public:
                         }
                     });
                 });
+	    }
+
+            const sstring& get_username() const override {
+                return _sasl->get_username();
             }
 
         private:

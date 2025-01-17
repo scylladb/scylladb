@@ -22,7 +22,7 @@ drop_service_level_statement::drop_service_level_statement(sstring service_level
 std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::drop_service_level_statement::prepare(
         data_dictionary::database db, cql_stats &stats) {
-    return std::make_unique<prepared_statement>(::make_shared<drop_service_level_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<drop_service_level_statement>(*this));
 }
 
 future<> drop_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {

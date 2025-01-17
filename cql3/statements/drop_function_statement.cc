@@ -20,8 +20,18 @@ namespace cql3 {
 
 namespace statements {
 
+audit::statement_category
+drop_function_statement::category() const {
+    return audit::statement_category::DDL;
+}
+
+audit::audit_info_ptr
+drop_function_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), sstring(), sstring());
+}
+
 std::unique_ptr<prepared_statement> drop_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(make_shared<drop_function_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_function_statement>(*this));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_function_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {

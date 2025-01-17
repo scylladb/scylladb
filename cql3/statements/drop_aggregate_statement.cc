@@ -20,7 +20,7 @@ namespace cql3 {
 namespace statements {
 
 std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats) {
-    return std::make_unique<prepared_statement>(make_shared<drop_aggregate_statement>(*this));
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_aggregate_statement>(*this));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
@@ -47,6 +47,15 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
 drop_aggregate_statement::drop_aggregate_statement(functions::function_name name,
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : drop_function_statement_base(std::move(name), std::move(arg_types), args_present, if_exists) {}
+
+audit::statement_category drop_aggregate_statement::category() const {
+    return audit::statement_category::DDL;
+}
+
+audit::audit_info_ptr
+drop_aggregate_statement::audit_info() const {
+    return audit::audit::create_audit_info(category(), sstring(), sstring());
+}
 
 }
 }

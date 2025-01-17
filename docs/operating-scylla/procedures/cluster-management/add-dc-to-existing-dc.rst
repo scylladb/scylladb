@@ -161,6 +161,7 @@ Add New DC
 
    * Keyspace created by the user (which needed to replicate to the new DC).
    * System: ``system_distributed``, ``system_traces``, for example, replicate the data to three nodes in the new DC.
+   * ``audit`` - if enabled - replicate the data to three nodes in the new DC.
 
    For example:
 
