@@ -13,6 +13,11 @@
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
 #include "interval.hh"
+#include "utils/chunked_vector.hh"
+
+namespace replica {
+class database;
+}
 
 namespace dht {
 
@@ -49,6 +54,12 @@ class tombstone_gc_options;
 
 using gc_time_min_source = std::function<gc_clock::time_point(const table_id&)>;
 
+struct range_repair_time {
+    dht::token_range range;
+    gc_clock::time_point time;
+    shard_id shard;
+};
+
 class tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     per_table_history_maps* _reconcile_history_maps;
@@ -61,6 +72,9 @@ class tombstone_gc_state {
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_or_create_group0_gc_time();
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+
+private:
+    std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 public:
     tombstone_gc_state() = delete;
@@ -94,6 +108,9 @@ public:
 
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
     [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_reconcile_history_maps); }
+
+    void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
+    future<> flush_pending_repair_time_update(replica::database& db);
 };
 
 std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);

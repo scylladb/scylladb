@@ -78,7 +78,7 @@ void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::
         update_tablet_metadata_change_hint(hint, mut);
     }
 
-    update_tablet_metadata(env.local_qp(), tm, hint).get();
+    update_tablet_metadata(db, env.local_qp(), tm, hint).get();
 
     auto tm_reload = read_tablet_metadata(env.local_qp()).get();
     BOOST_REQUIRE_EQUAL(tm, tm_reload);

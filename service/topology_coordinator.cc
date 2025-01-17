@@ -46,6 +46,7 @@
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/tablet_allocator.hh"
+#include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
@@ -1159,6 +1160,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         background_action_holder cleanup;
         background_action_holder repair;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
+        // Record the repair_time returned by the repair_tablet rpc call
+        db_clock::time_point repair_time;
     };
 
     std::unordered_map<locator::global_tablet_id, tablet_migration_state> _tablets;
@@ -1571,10 +1574,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto dst = primary.host;
                         auto tablet = gid;
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
-                        co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                        auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
                                 dst, _as, raft::server_id(dst.uuid()), gid);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
-                        rtlogger.info("Finished tablet repair host={} tablet={} duration={}", dst, tablet, duration);
+                        auto& tablet_state = _tablets[tablet];
+                        tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
+                        rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
+                                dst, tablet, duration, res.repair_time);
                     })) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
@@ -1584,7 +1590,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         .del_repair_task_info(last_token)
                                         .del_session(last_token);
                         if (valid) {
-                            auto time = tinfo.repair_task_info.sched_time;
+                            auto sched_time = tinfo.repair_task_info.sched_time;
+                            auto time = tablet_state.repair_time;
+                            rtlogger.debug("Set tablet repair time sched_time={} return_time={} set_time={}",
+                                    sched_time, tablet_state.repair_time, time);
                             update.set_repair_time(last_token, time);
                         }
                         updates.emplace_back(update.build());
