@@ -203,15 +203,8 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
     , _ss(ss)
 {}
 
-std::set<gms::inet_address> task_manager_module::get_nodes() const noexcept {
-    return std::ranges::join_view(std::to_array({
-            std::views::all(_ss._topology_state_machine._topology.normal_nodes),
-            std::views::all(_ss._topology_state_machine._topology.transition_nodes)})
-        ) | std::views::transform([&ss = _ss] (auto& node) {
-            return ss.host2ip(locator::host_id{node.first.uuid()});
-        }) | std::views::filter([&ss = _ss] (gms::inet_address ip) {
-            return ss._gossiper.is_alive(ip);
-        }) | std::ranges::to<std::set<gms::inet_address>>();
+std::set<gms::inet_address> task_manager_module::get_nodes() const {
+    return get_task_manager().get_nodes(_ss);
 }
 
 }

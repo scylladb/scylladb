@@ -150,6 +150,7 @@ public:
     gms::feature tablet_merge { *this, "TABLET_MERGE"sv };
 
     gms::feature tablet_migration_virtual_task { *this, "TABLET_MIGRATION_VIRTUAL_TASK"sv };
+    gms::feature tablet_resize_virtual_task { *this, "TABLET_RESIZE_VIRTUAL_TASK"sv };
 
     // A feature just for use in tests. It must not be advertised unless
     // the "features_enable_test_feature" injection is enabled.

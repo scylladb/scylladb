@@ -283,6 +283,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 decision.way = locator::resize_decision::split{},
                 decision.sequence_number = 1;
                 tmap.set_resize_decision(decision);
+                tmap.set_resize_task_info(locator::tablet_task_info::make_split_request());
                 tm.set_tablet_map(table1, std::move(tmap));
             }
 
@@ -980,7 +981,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3},
             });
             b.del_transition(last_token);
-            b.set_resize_decision(resize_decision);
+            b.set_resize_decision(resize_decision, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -1003,6 +1004,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             expected_tmap.set_resize_decision(resize_decision);
 
             auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            expected_tmap.set_resize_task_info(tm_from_disk.get_tablet_map(table1).resize_task_info());
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
     }, tablet_cql_test_config());
@@ -2774,7 +2776,7 @@ SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
         e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             testlog.info("sstable count: {}", table.sstables_count());
-            return table.split_all_storage_groups();
+            return table.split_all_storage_groups(tasks::task_info{});
         }).get();
 
         testlog.info("Verifying sstables are split...");

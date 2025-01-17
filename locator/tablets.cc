@@ -425,6 +425,10 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
+void tablet_map::set_resize_task_info(tablet_task_info task_info) {
+    _resize_task_info = std::move(task_info);
+}
+
 void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
     _repair_scheduler_config = std::move(config);
 }
@@ -558,6 +562,8 @@ static const std::unordered_map<tablet_task_type, sstring> tablet_task_type_to_n
     {locator::tablet_task_type::auto_repair, "auto_repair"},
     {locator::tablet_task_type::migration, "migration"},
     {locator::tablet_task_type::intranode_migration, "intranode_migration"},
+    {locator::tablet_task_type::split, "split"},
+    {locator::tablet_task_type::merge, "merge"},
 };
 
 static const std::unordered_map<sstring, tablet_task_type> tablet_task_type_from_name = std::invoke([] {
@@ -602,6 +608,10 @@ bool tablet_map::needs_merge() const {
 
 const locator::resize_decision& tablet_map::resize_decision() const {
     return _resize_decision;
+}
+
+const tablet_task_info& tablet_map::resize_task_info() const {
+    return _resize_task_info;
 }
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
@@ -1157,4 +1167,16 @@ locator::tablet_task_info locator::tablet_task_info::make_intranode_migration_re
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::intranode_migration, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_split_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::split, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
 }

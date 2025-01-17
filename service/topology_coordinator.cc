@@ -1283,7 +1283,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            table_id, resize_decision.type_name(), resize_decision.sequence_number);
             out.emplace_back(
                 replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
-                    .set_resize_decision(std::move(resize_decision))
+                    .set_resize_decision(std::move(resize_decision), _db.features())
                     .build());
     }
 
