@@ -1,4 +1,4 @@
-FROM docker.io/fedora:40
+FROM docker.io/fedora:41
 
 ARG CLANG_BUILD="SKIP"
 ARG CLANG_ARCHIVES

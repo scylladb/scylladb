@@ -112,7 +112,7 @@ fedora_packages=(
     rust
     cargo
     rapidxml-devel
-    rust-std-static-wasm32-wasi
+    rust-std-static-wasm32-wasip1
     wabt
     binaryen
     lcov
