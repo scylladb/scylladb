@@ -307,34 +307,62 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 //    initial_tablets = max(nr_shards_in(dc) / RF_in(dc) for dc in datacenters)
 //
 
-static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf) {
-    unsigned initial_tablets = std::numeric_limits<unsigned>::min();
+static future<unsigned> calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm,
+                                                        const std::unordered_map<sstring, size_t>& rf,
+                                                        unsigned initial_scale) {
+    unsigned initial_tablets = 0;
     for (const auto& dc : tm->get_datacenter_token_owners_ips()) {
+        auto& dc_name = dc.first;
         unsigned shards_in_dc = 0;
         unsigned rf_in_dc = 1;
 
         for (const auto& ep : dc.second) {
             const auto* node = tm->get_topology().find_node(ep);
-            if (node != nullptr) {
+            if (node != nullptr && node->is_normal()) {
                 shards_in_dc += node->get_shard_count();
             }
+            co_await coroutine::maybe_yield();
         }
 
         if (auto it = rf.find(dc.first); it != rf.end()) {
             rf_in_dc = it->second;
         }
 
-        unsigned tablets_in_dc = rf_in_dc > 0 ? (shards_in_dc + rf_in_dc - 1) / rf_in_dc : 0;
+        if (rf_in_dc == 0 || shards_in_dc == 0) {
+            continue;
+        }
+
+        uint64_t existing_replicas = 0;
+        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+            existing_replicas += tmap->tablet_count() * rf_in_dc;
+            co_await coroutine::maybe_yield();
+        }
+
+        // As existing load approaches the limit of tablets per shard, scale down
+        // the initial number of tablets to avoid exceeding the limit.
+        // The tablet scheduler may later fix this by shrinking other tables.
+        // The way it works is that if with an empty cluster initial_scale takes 10%
+        // of shard's budget, then after creating the table the next table
+        // will take 10% of the remaining budget.
+        auto existing_load = double(existing_replicas) / shards_in_dc;
+        double budget = tm->tablets().tablets_per_shard_goal() - existing_load;
+        budget = std::max(budget, 0.0);
+        auto budget_scale = budget / tm->tablets().tablets_per_shard_goal();
+
+        double per_shard_load = budget_scale * shards_in_dc * initial_scale;
+        unsigned tablets_in_dc = std::max(1.0, std::ceil(per_shard_load / rf_in_dc));
+        rslogger.debug("Estimated {} initial tablets for table {}.{} in DC {}, tablets/shard: {:.3f}, existing: {:.3f}, budget: {:.3f}",
+                       tablets_in_dc, s.ks_name(), s.cf_name(), dc_name, per_shard_load, existing_load, budget);
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
-    return initial_tablets;
+    co_return initial_tablets;
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
     auto tablet_count = get_initial_tablets();
     if (tablet_count == 0) {
-        tablet_count = calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale;
+        tablet_count = co_await calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor, initial_scale);
     }
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
@@ -342,7 +370,7 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
         tablet_count = aligned_tablet_count;
     }
 
-    return reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {

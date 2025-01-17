@@ -46,6 +46,21 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+async def test_tablet_scaling_option_is_respected(manager: ManagerClient):
+    # 32 is high enough to ensure we demand more tablets than the default choice.
+    cfg = {'enable_tablets': True, 'tablets_initial_scale_factor': 32}
+    servers = await manager.servers_add(1, config=cfg, cmdline=['--smp', '2'])
+
+    cql = manager.get_cql()
+
+    await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    tablets = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
+    assert len(tablets) == 64
+
+
+@pytest.mark.asyncio
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}

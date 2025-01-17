@@ -195,6 +195,11 @@ topology_mutation_builder& topology_mutation_builder::set_tablet_balancing_enabl
     return *this;
 }
 
+topology_mutation_builder& topology_mutation_builder::set_tablets_per_shard_goal(uint32_t value) {
+    _m.set_static_cell("tablets_per_shard_goal", int32_t(value), _ts);
+    return *this;
+}
+
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
     return del("transition_state");
 }

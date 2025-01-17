@@ -947,6 +947,7 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> set_tablet_balancing_enabled(bool);
+    future<> set_tablets_per_shard_goal(uint32_t);
     future<> await_topology_quiesced();
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining

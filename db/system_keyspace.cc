@@ -267,6 +267,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
+            .with_column("tablets_per_shard_goal", int32_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
@@ -3231,6 +3232,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
         } else {
             ret.tablet_balancing_enabled = true;
+        }
+
+        if (some_row.has("tablets_per_shard_goal")) {
+            ret.tablets_per_shard_goal = some_row.get_as<int32_t>("tablets_per_shard_goal");
+        } else {
+            ret.tablets_per_shard_goal = locator::tablet_metadata::default_tablets_per_shard_goal;
         }
 
         if (some_row.has("upgrade_state")) {
