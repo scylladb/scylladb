@@ -252,10 +252,9 @@ discard, or trim, any blocks no longer in use by the filesystem.
 Experimental Features
 =====================
 
-ScyllaDB Open Source uses experimental flags to expose non-production-ready features safely. These features are not stable enough to be used in production, and their API will likely change, breaking backward or forward compatibility.
+ScyllaDB uses experimental flags to expose non-production-ready features safely. These features are not stable enough to be used in production, and their API will likely change, breaking backward or forward compatibility.
 
 In recent ScyllaDB versions, these features are controlled by the ``experimental_features`` list in scylla.yaml, allowing one to choose which experimental to enable.
-For example, some of the experimental features in ScyllaDB Open Source 4.5 are: ``udf``, ``alternator-streams`` and ``raft``.
 Use ``scylla --help`` to get the list of experimental features.
 
 ScyllaDB Enterprise and ScyllaDB Cloud do not officially support experimental Features.
