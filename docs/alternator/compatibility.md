@@ -216,10 +216,6 @@ events appear in the Streams API as normal deletions - without the
 distinctive marker on deletions which are really expirations.
 See <https://github.com/scylladb/scylla/issues/5060>.
 
-<!--- REMOVE IN FUTURE VERSIONS - Remove the note below in version 5.3/2023.1 -->
-
-> **Note** This feature is experimental in versions earlier than ScyllaDB Open Source 5.2 and ScyllaDB Enterprise 2022.2.
-
 ## Scan ordering
 
 In DynamoDB, scanning the _entire_ table returns the partitions sorted by

@@ -58,7 +58,7 @@ ScyllaDB for Administrators
   :id: "getting-started"
   :class: my-panel
    
-  * :doc:`ScyllaDB Features </features/index>` - Feature list for ScyllaDB Open Source and ScyllaDB Enterprise
+  * :doc:`ScyllaDB Features </features/index>` - Feature list for ScyllaDB
 
 
 

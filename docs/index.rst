@@ -1,44 +1,54 @@
 :orphan:
 
 ====================================
-ScyllaDB Open Source Documentation
+ScyllaDB Documentation
 ====================================
 
 .. meta::
-   :title: ScyllaDB Open Source Documentation
-   :description: ScyllaDB Open Source Documentation
-   :keywords: ScyllaDB Open Source, ScyllaDB Open Source, ScyllaDB docs, ScyllaDB documentation, ScyllaDB Documentation
+   :title: ScyllaDB Documentation
+   :description: ScyllaDB  Documentation
+   :keywords: ScyllaDB docs, ScyllaDB documentation, ScyllaDB Documentation
 
 About This User Guide
 -----------------------
 
-ScyllaDB is a distributed NoSQL wide-column database for data-intensive apps that require 
+This user guide covers topics related to ScyllaDB - a distributed NoSQL
+wide-column database for data-intensive apps that require 
 high performance and low latency.
 
-This user guide covers topics related to ScyllaDB Open Source - an open-source project that allows you to evaluate 
-experimental features, review the `source code <https://github.com/scylladb/scylladb>`_, and add your contributions
-to the project.
+You can deploy ScyllaDB:
 
-For topics related to other ScyllaDB flavors, see the documentation for `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_ and 
-`ScyllaDB Cloud <https://cloud.docs.scylladb.com/>`_.
+* On AWS, GCP, and Azure.
+* On premises.
+* With `ScyllaDB Cloud <https://cloud.scylladb.com/>`_ - a fully managed DBaaS. 
+
+This user guide covers topics related to ScyllaDB cloud or on-premises
+self-managed deployments.
+For details about ScyllaDB Cloud, see the
+`ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_.
 
 Documentation Highlights
 --------------------------
 
-* :doc:`Install ScyllaDB Open Source </getting-started/install-scylla/index>`
-* :doc:`Configure ScyllaDB Open Source </getting-started/system-configuration/>`
+* :doc:`Install ScyllaDB </getting-started/install-scylla/index>`
+* :doc:`Configure ScyllaDB </getting-started/system-configuration/>`
 * :doc:`Cluster Management Procedures </operating-scylla/procedures/cluster-management/index>`
-* :doc:`Upgrade ScyllaDB Open Source </upgrade/index>`
+* :doc:`Upgrade ScyllaDB </upgrade/index>`
 * :doc:`CQL Reference </cql/index>`
 * :doc:`ScyllaDB Drivers </using-scylla/drivers/index>`
 * :doc:`Features </features/index>`
 
+ScyllaDB Support
+--------------------
+
+ScyllaDB customers can open or check on tickets in the
+`ScyllaDB Customer Portal <https://www.scylladb.com/customer-portal/#support>`_.
+
 ScyllaDB Community
 --------------------------
 
-Join the ScyllaDB Open Source community:
+Join the ScyllaDB community:
 
-* Contribute to the ScyllaDB Open Source `project <https://github.com/scylladb/scylladb>`_.
 * Join the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
 * Join our `Slack Channel <https://slack.scylladb.com/>`_.
 

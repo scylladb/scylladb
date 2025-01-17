@@ -61,7 +61,7 @@ Install ScyllaDB
                sudo apt-get update
                sudo apt-get install -y scylla 
 
-            Running the command installs the latest official version of ScyllaDB Open Source.
+            Running the command installs the latest official version of ScyllaDB.
             To install a specific patch version, list all the available patch versions:
           
             .. code-block:: console
