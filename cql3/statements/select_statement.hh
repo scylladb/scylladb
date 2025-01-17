@@ -19,6 +19,7 @@
 #include "index/secondary_index_manager.hh"
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
+#include "query_ranges_to_vnodes_async.hh"
 
 namespace service {
     class client_state;
@@ -225,9 +226,17 @@ private:
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
 
-    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
+    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>, size_t>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,
                                                                     const query_options& options) const;
+
+    // Generator coroutine that yields partition range vectors obtained from the index view.
+    // Relies on `find_index_partition_ranges()`.
+    partition_ranges_generator
+    make_index_partition_ranges(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options) const;
 
     future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_processor& qp,
                                                                 service::query_state& state,
@@ -246,22 +255,20 @@ private:
     prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,
             bool use_paging) const;
 
-    future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
+    future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>, lw_shared_ptr<const service::pager::paging_state>>>>
     do_execute_base_query(
             query_processor& qp,
-            dht::partition_range_vector&& partition_ranges,
+            partition_ranges_generator&& gen,
             service::query_state& state,
             const query_options& options,
-            gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            gc_clock::time_point now) const;
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             query_processor& qp,
-            dht::partition_range_vector&& partition_ranges,
+            partition_ranges_generator&& gen,
             service::query_state& state,
             const query_options& options,
-            gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            gc_clock::time_point now) const;
 
     // Function for fetching the selected columns from a list of clustering rows.
     // It is currently used only in our Secondary Index implementation - ordinary
