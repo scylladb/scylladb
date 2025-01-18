@@ -21,6 +21,7 @@ opt/scylladb/scyllatop/*
 opt/scylladb/scripts/libexec/*
 opt/scylladb/bin/*
 opt/scylladb/libreloc/*
+opt/scylladb/libreloc/.*.hmac
 opt/scylladb/libexec/*
 usr/lib/scylla/*
 var/lib/scylla/data
