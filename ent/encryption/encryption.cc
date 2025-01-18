@@ -936,17 +936,17 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
     
     auto maybe_get_options = [&](const utils::config_file::string_map& map, const sstring& what) -> std::optional<options> {
         options opts(map.begin(), map.end());
-        opt_wrapper sie(opts);
-        if (!::strcasecmp(sie("enabled").value_or("false").c_str(), "false")) {
+        opt_wrapper get_opt(opts);
+        if (!::strcasecmp(get_opt("enabled").value_or("false").c_str(), "false")) {
             return std::nullopt;
         }
         // commitlog/system table encryption/global user encryption should not use replicated keys,
         // We default to local keys, but KMIP/KMS is ok as well (better in fact).
-        opts[KEY_PROVIDER] = sie(KEY_PROVIDER).value_or(LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY);
-        if (opts[KEY_PROVIDER] == LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY && !sie(SECRET_KEY_FILE)) {
+        opts[KEY_PROVIDER] = get_opt(KEY_PROVIDER).value_or(LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY);
+        if (opts[KEY_PROVIDER] == LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY && !get_opt(SECRET_KEY_FILE)) {
             // system encryption uses different key folder than user tables.
             // explicitly set the key file path
-            opts[SECRET_KEY_FILE] = (bfs::path(cfg.system_key_directory()) / bfs::path("system") / bfs::path(sie("key_name").value_or("system_table_keytab"))).string();
+            opts[SECRET_KEY_FILE] = (bfs::path(cfg.system_key_directory()) / bfs::path("system") / bfs::path(get_opt("key_name").value_or("system_table_keytab"))).string();
         }
         // forbid replicated. we cannot guarantee being able to open sstables on populate
         if (opts[KEY_PROVIDER] == REPLICATED_KEY_PROVIDER_FACTORY) {
@@ -966,7 +966,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
 
         // modify schemas for tables holding sensitive data to use encryption w. key described
         // by the opts.
-        // since schemas are duplicated across shards, we must call to each shard and augument
+        // since schemas are duplicated across shards, we must call to each shard and augment
         // them all.
         // Since we are in pre-init phase, this should be safe.
         f = f.then([opts = *opts, &exts] {

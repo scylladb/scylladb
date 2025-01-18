@@ -334,7 +334,7 @@ future<> kmip_host::impl::connection::connect() {
         return seastar::net::dns::resolve_name(name).then([this, cred, port](seastar::net::inet_address addr) {
             return seastar::tls::connect(cred, seastar::ipv4_addr{addr, uint16_t(port)}).then([this](seastar::connected_socket s) {
                 kmip_log.debug("Successfully connected {}", _host);
-                // #998 Set keepalive to try avoiding connection going stale inbetween commands. 
+                // #998 Set keepalive to try avoiding connection going stale in between commands.
                 s.set_keepalive_parameters(net::tcp_keepalive_params{60s, 60s, 10});
                 s.set_keepalive(true);
                 _input = s.input();
@@ -564,7 +564,7 @@ future<int> kmip_host::impl::do_cmd(KMIP_CMD* cmd, con_ptr cp, Func& f, bool ret
             release(cmd, cp, retain_connection_after_command);
             return make_ready_future<opt_int>(res);
         default:
-            // error. connection is dicarded. close it.
+            // error. connection is discarded. close it.
             return cp->close().then_wrapped([cp, res](auto f) {
                 // ignore any exception thrown from the close.
                 // ensure we provide the kmip error instead.

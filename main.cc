@@ -2512,7 +2512,7 @@ int main(int ac, char** av) {
     }
 
     // We have to override p11-kit config path before p11-kit initialization.
-    // And the initialization will invoke on seastar initalization, so it has to
+    // And the initialization will invoke on seastar initialization, so it has to
     // be before app.run()
     // #3583 - need to potentially ensure this for tools as well, since at least
     // sstable* might need crypto libraries.

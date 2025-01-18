@@ -45,7 +45,7 @@ static inline bool is_aligned(size_t n, size_t a) {
  *
  * Since all writes are assumed to be done by us, and must be aligned,
  * we can assume in turn that any resizing should be made by our truncate
- * method. If we attept to truncate to a size not a multiple of our
+ * method. If we attempt to truncate to a size not a multiple of our
  * _key_ block size (typically 16), we add the same size to the actual
  * truncation size.
  * On read we then check the file size. If we're reading from a file
