@@ -1650,8 +1650,14 @@ defines = ' '.join(['-D' + d for d in defines])
 
 globals().update(vars(args))
 
-total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-link_pool_depth = max(int(total_memory / 7e9), 1)
+if args.lto:
+    # TinkLTO provides its own parallel linking, let's limit the number of
+    # link job to 2
+    link_pool_depth = 2
+else:
+    total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    # assuming each link job takes around 7GiB of memory
+    link_pool_depth = max(int(total_memory / 7e9), 1)
 
 selected_modes = args.selected_modes or modes.keys()
 default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items() if mode_cfg["default"]]
