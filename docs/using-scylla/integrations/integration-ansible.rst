@@ -5,7 +5,7 @@ Install ScyllaDB with Ansible
 You can use the Ansible roles and the playbook examples that follow to deploy and maintain ScyllaDB clusters.
 There are roles for creating a ScyllaDB cluster, a ScyllaDB Manager, ScyllaDB Monitoring Stack, and a Loader.
 These roles can be used independently or together, using each role's outputs.
-You can use these roles with ScyllaDB (Open Source and Enterprise), ScyllaDB Manager, and ScyllaDB Monitoring Stack.
+You can use these roles with ScyllaDB, ScyllaDB Manager, and ScyllaDB Monitoring Stack.
 
 To get started, visit the `GitHub project <https://github.com/scylladb/scylla-ansible-roles/>`_.
 

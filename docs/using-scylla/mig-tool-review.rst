@@ -3,7 +3,7 @@ ScyllaDB Migration Tools: An Overview
 =======================================
 
 The following migration tools are available for migrating to ScyllaDB from compatible databases, 
-such as Apache Cassandra, or from other ScyllaDB clusters (ScyllaDB Open Source or Enterprise):
+such as Apache Cassandra, or from other ScyllaDB clusters:
 
 * From SSTable to SSTable
     - Using nodetool refresh, :ref:`Load and Stream <nodetool-refresh-load-and-stream>` option.

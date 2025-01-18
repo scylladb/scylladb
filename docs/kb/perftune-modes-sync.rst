@@ -2,7 +2,7 @@
 Updating the Mode in perftune.yaml After a ScyllaDB Upgrade
 ==============================================================
 
-In versions 5.1 (ScyllaDB Open Source) and 2022.2 (ScyllaDB Enterprise), we improved ScyllaDB's performance by `removing the rx_queues_count from the mode 
+We improved ScyllaDB's performance by `removing the rx_queues_count from the mode 
 condition <https://github.com/scylladb/seastar/pull/949>`_. As a result, ScyllaDB operates in 
 the ``sq_split`` mode instead of the ``mq`` mode (see :doc:`Seastar Perftune </operating-scylla/admin-tools/perftune>` for information about the modes).
 If you upgrade from an earlier version of ScyllaDB, your cluster's existing nodes may use the ``mq`` mode, 

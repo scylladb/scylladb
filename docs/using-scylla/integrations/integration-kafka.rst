@@ -9,7 +9,7 @@ Integrate ScyllaDB with Kafka
    scylla-cdc-source-connector
 
 Apache Kafka is capable of delivering reliable, scalable, high-throughput data streams across a myriad of data sources and sinks.
-A great number of open source users and enterprise customers use ScyllaDB and Kafka together.
+A great number of customers use ScyllaDB and Kafka together.
 You can use ScyllaDB and Apache Kafka in integration solutions, such as creating a scalable backend for an IoT service.
 If you have tested your application with ScyllaDB and Kafka and want to publish the results, contact us using the `community forum <https://forum.scylladb.com>`_.
 

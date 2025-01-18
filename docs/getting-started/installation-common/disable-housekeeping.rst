@@ -3,7 +3,7 @@
 ScyllaDB Housekeeping and how to disable it
 ============================================
 
-It is always recommended to run the latest version of ScyllaDB Open Source or ScyllaDB Enterprise. 
+It is always recommended to run the latest version of ScyllaDB. 
 The latest stable release version is always available from the `Download Center <https://www.scylladb.com/download/>`_.
 
 When you install ScyllaDB, it installs by default two services: **scylla-housekeeping-restart** and **scylla-housekeeping-daily**. These services check for the latest ScyllaDB version and prompt the user if they are using a version that is older than what is publicly available.

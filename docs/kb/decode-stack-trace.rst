@@ -31,27 +31,11 @@ Install the Debug binaries according to your OS distribution
 
    .. group-tab:: RPM based distributions
 
-      For ScyllaDB Enterprise:
-
-      .. code-block:: none
-
-         yum install scylla-enterprise-debuginfo
-
-      For ScyllaDB Open Source:
-
       .. code-block:: none
 
          yum install scylla-debuginfo
 
    .. group-tab:: DEB based distributions
-
-      For ScyllaDB Enterprise:
-
-      .. code-block:: none
-
-         apt-get install scylla-enterprise-server-dbg
-
-      For ScyllaDB Open Source:
 
       .. code-block:: none
 

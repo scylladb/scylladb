@@ -4,8 +4,8 @@ Replacing a Dead Seed Node
 ===========================
 
 .. note::
-    The seed concept in gossip has been removed. Starting with ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1, 
-    a seed node is only used by a new node during startup to learn about the cluster topology. As a result, there's no need 
+    The seed concept in gossip has been removed. 
+    A seed node is only used by a new node during startup to learn about the cluster topology. As a result, there's no need 
     to replace the node configured with the ``seeds`` parameter in the ``scylla.yaml`` file.
 
 In ScyllaDB, it is not possible to bootstrap a seed node. The following steps describe how to replace a dead seed node.
