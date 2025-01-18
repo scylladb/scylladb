@@ -2151,6 +2151,15 @@ def get_release_cxxflags(scylla_product,
     return [f'-D{name}="\\"{value}\\""' for name, value in definitions.items()]
 
 
+def pick_rustc_target(*candidates):
+    output = subprocess.check_output(['rustc', '--print', 'target-list'], text=True)
+    target_list = output.splitlines()
+    for candidate in candidates:
+        if candidate in target_list:
+            return candidate
+    raise RuntimeError("none of the specified target is supported by rustc")
+
+
 def write_build_file(f,
                      arch,
                      ninja,
@@ -2159,6 +2168,7 @@ def write_build_file(f,
                      scylla_release,
                      args):
     warnings = get_warning_options(args.cxx)
+    rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2221,8 +2231,8 @@ def write_build_file(f,
             command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
             description = C2WASM $out
         rule rust2wasm
-            command = cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
-                && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
+            command = cargo build --target={rustc_target} --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+                && wasm-opt -Oz $builddir/wasm/{rustc_target}/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
                 && wasm-strip $builddir/wasm/$example.wasm
             description = RUST2WASM $out
         rule wasm2wat
@@ -2244,6 +2254,7 @@ def write_build_file(f,
                     linker_flags=linker_flags,
                     user_ldflags=user_ldflags,
                     libs=libs,
+                    rustc_target=rustc_target,
                     link_pool_depth=link_pool_depth,
                     seastar_path=args.seastar_path,
                     ninja=ninja,
