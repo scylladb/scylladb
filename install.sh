@@ -239,18 +239,17 @@ check_usermode_support() {
 . /etc/os-release
 
 is_redhat_variant() {
-    is_redhat=0
+    local is_redhat=0
     for i in $ID $ID_LIKE; do
-        if [ "$i" = "rhel" -o "$i" = "fedora" -o "$i" = "centos" ]; then
-            is_redhat=1
-            break
-        fi
+        case "$i" in
+          rhel|fedora|centos) is_redhat=1;;
+        esac
     done
     [ $is_redhat -eq 1 ]
 }
 
 is_debian_variant() {
-    [ "$ID_LIKE" = "debian" -o "$ID" = "debian" ]
+    [ "$ID_LIKE" = "debian" ] || [ "$ID" = "debian" ]
 }
 
 is_alpine() {
@@ -272,9 +271,9 @@ supervisor_conf() {
     local etcdir="$1"
     local service="$2"
     if is_debian_variant; then
-        echo `supervisor_dir "$etcdir"`/"$service".conf
+        echo "$(supervisor_dir "$etcdir")"/"$service".conf
     else
-        echo `supervisor_dir "$etcdir"`/"$service".ini
+        echo "$(supervisor_dir "$etcdir")"/"$service".ini
     fi
 }
 
@@ -455,13 +454,13 @@ if ! $without_systemd; then
 fi
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
-for i in $(find libreloc/ -maxdepth 1 -type f); do
+find libreloc/ -maxdepth 1 -type f | while read -r i; do
     install -m755 "$i" -Dt "$rprefix/libreloc"
 done
 for lib in libreloc/*; do
     remove_rpath "$rprefix/$lib"
 done
-for i in $(find libreloc/pkcs11/ -maxdepth 1 -type f); do
+find libreloc/pkcs11/ -maxdepth 1 -type f | while read -r i; do
     install -m755 "$i" -Dt "$rprefix/libreloc/pkcs11"
 done
 
@@ -604,13 +603,13 @@ EOS
     # without error, so we need to create symlink for each script on the
     # directory
     install -m755 -d "$rusr"/lib/scylla/scyllatop/views
-    for i in $(find "$rprefix"/scripts/ -maxdepth 1 -type f); do
+    find "$rprefix"/scripts/ -maxdepth 1 -type f | while read -r i; do
         ln -srf $i "$rusr"/lib/scylla/
     done
-    for i in $(find "$rprefix"/scyllatop/ -maxdepth 1 -type f); do
+    find "$rprefix"/scyllatop/ -maxdepth 1 -type f | while read -r i; do
         ln -srf $i "$rusr"/lib/scylla/scyllatop
     done
-    for i in $(find "$rprefix"/scyllatop/views -maxdepth 1 -type f); do
+    find "$rprefix"/scyllatop/views -maxdepth 1 -type f | while read -r i; do
         ln -srf $i "$rusr"/lib/scylla/scyllatop/views
     done
 else
@@ -640,33 +639,33 @@ relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
 relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then
-    install -d -m755 `supervisor_dir $retc`
+    install -d -m755 "$(supervisor_dir $retc)"
     for service in scylla-server scylla-jmx scylla-node-exporter; do
         if [ "$service" = "scylla-server" ]; then
             program="scylla"
         else
             program=$service
         fi
-        cat << EOS > `supervisor_conf $retc $service`
+        cat << EOS > "$(supervisor_conf $retc $service)"
 [program:$program]
 directory=$rprefix
 command=/bin/bash -c './supervisor/$service.sh'
 EOS
-        chmod 644 `supervisor_conf $retc $service`
+        chmod 644 "$(supervisor_conf $retc $service)"
         if [ "$service" != "scylla-server" ]; then
-            cat << EOS >> `supervisor_conf $retc $service`
+            cat << EOS >> "$(supervisor_conf $retc $service)"
 user=scylla
 EOS
-            chmod 644 `supervisor_conf $retc $service`
+            chmod 644 "$(supervisor_conf $retc $service)"
         fi
         if $supervisor_log_to_stdout; then
-            cat << EOS >> `supervisor_conf $retc $service`
+            cat << EOS >> "$(supervisor_conf $retc $service)"
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 EOS
-            chmod 644 `supervisor_conf $retc $service`
+            chmod 644 "$(supervisor_conf $retc $service)"
         fi
     done
 fi
