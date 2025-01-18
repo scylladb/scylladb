@@ -155,7 +155,10 @@ future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
             .sequence_number = 0,
             .keyspace = "",
             .table = "",
-            .entity = ""
+            .entity = "",
+            .shard = 0,
+            .start_time = entry.start_time,
+            .end_time = entry.end_time
         };
     }));
 }

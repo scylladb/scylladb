@@ -25,13 +25,14 @@ namespace tm = httpd::task_manager_json;
 using namespace json;
 using namespace seastar::httpd;
 
-tm::task_status make_status(tasks::task_status status) {
-    auto start_time = db_clock::to_time_t(status.start_time);
-    auto end_time = db_clock::to_time_t(status.end_time);
-    ::tm st, et;
-    ::gmtime_r(&end_time, &et);
-    ::gmtime_r(&start_time, &st);
+static ::tm get_time(db_clock::time_point tp) {
+    auto time = db_clock::to_time_t(tp);
+    ::tm t;
+    ::gmtime_r(&time, &t);
+    return t;
+}
 
+tm::task_status make_status(tasks::task_status status) {
     std::vector<tm::task_identity> tis{status.children.size()};
     std::ranges::transform(status.children, tis.begin(), [] (const auto& child) {
         tm::task_identity ident;
@@ -47,8 +48,8 @@ tm::task_status make_status(tasks::task_status status) {
     res.scope = status.scope;
     res.state = status.state;
     res.is_abortable = bool(status.is_abortable);
-    res.start_time = st;
-    res.end_time = et;
+    res.start_time = get_time(status.start_time);
+    res.end_time = get_time(status.end_time);
     res.error = status.error;
     res.parent_id = status.parent_id ? status.parent_id.to_sstring() : "none";
     res.sequence_number = status.sequence_number;
@@ -74,6 +75,9 @@ tm::task_stats make_stats(tasks::task_stats stats) {
     res.keyspace = stats.keyspace;
     res.table = stats.table;
     res.entity = stats.entity;
+    res.shard = stats.shard;
+    res.start_time = get_time(stats.start_time);
+    res.end_time = get_time(stats.end_time);;
     return res;
 }
 
