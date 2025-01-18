@@ -2793,11 +2793,20 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     }
 }
 
+std::string get_time(std::string_view time) {
+    static constexpr const char* epoch = "1970-01-01T00:00:00Z";
+    return time == epoch ? "" : std::string{time};
+}
+
 void tasks_print_status(const rjson::value& res) {
     auto status = res.GetObject();
     for (const auto& x: status) {
         if (x.value.IsString()) {
-            fmt::print("{}: {}\n", x.name.GetString(), x.value.GetString());
+            if (strcmp(x.name.GetString(), "start_time") == 0 || strcmp(x.name.GetString(), "end_time") == 0) {
+                fmt::print("{}: {}\n", x.name.GetString(), get_time(x.value.GetString()));
+            } else {
+                fmt::print("{}: {}\n", x.name.GetString(), x.value.GetString());
+            }
         } else if (x.value.IsArray()) {
             fmt::print("{}: [", x.name.GetString());
             sstring delim = "";
@@ -2845,8 +2854,8 @@ void tasks_add_tree_to_statuses_lists(Tabulate& table, const rjson::value& res) 
                 rjson::to_string_view(status["scope"]),
                 rjson::to_string_view(status["state"]),
                 status["is_abortable"].GetBool(),
-                rjson::to_string_view(status["start_time"]),
-                rjson::to_string_view(status["end_time"]),
+                get_time(rjson::to_string_view(status["start_time"])),
+                get_time(rjson::to_string_view(status["end_time"])),
                 rjson::to_string_view(status["error"]),
                 rjson::to_string_view(status["parent_id"]),
                 status["sequence_number"].GetUint64(),
