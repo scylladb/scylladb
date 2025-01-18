@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
-set -e
+set -eo pipefail
 
 if [ -z "$BASH_VERSION" ]; then
     echo "Unsupported shell, please run this script on bash."
@@ -227,18 +227,17 @@ check_usermode_support() {
 . /etc/os-release
 
 is_redhat_variant() {
-    is_redhat=0
+    local is_redhat=0
     for i in $ID $ID_LIKE; do
-        if [ "$i" = "rhel" -o "$i" = "fedora" -o "$i" = "centos" ]; then
-            is_redhat=1
-            break
-        fi
+        case "$i" in
+          rhel|fedora|centos) is_redhat=1;;
+        esac
     done
     [ $is_redhat -eq 1 ]
 }
 
 is_debian_variant() {
-    [ "$ID_LIKE" = "debian" -o "$ID" = "debian" ]
+    [ "$ID_LIKE" = "debian" ] || [ "$ID" = "debian" ]
 }
 
 is_alpine() {
@@ -443,7 +442,7 @@ if ! $without_systemd; then
 fi
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/scripts
-for i in $(find libreloc/ -maxdepth 1 -type f); do
+find libreloc/ -maxdepth 1 -type f | while read -r i; do
     install -m755 "$i" -Dt "$rprefix/libreloc"
 done
 for i in $(find libreloc/fipscheck/ -maxdepth 1 -type f); do
