@@ -12,6 +12,7 @@ import time
 from test.pylib.internal_types import IPAddress
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
+from test.topology.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)
@@ -44,22 +45,20 @@ async def test_query_rebounce(manager: ManagerClient):
     servers = await manager.running_servers()
     cql = manager.get_cql()
 
-    await cql.run_async("create keyspace ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
-                        "and tablets = {'enabled': false};")
+    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1} and tablets = {'enabled': false};") as ks:
+        await cql.run_async(f"create table {ks}.lwt (a int, b int, primary key(a));")
 
-    await cql.run_async("create table ks.lwt (a int, b int, primary key(a));")
+        await cql.run_async(f"insert into {ks}.lwt (a,b ) values (1, 10);")
+        await cql.run_async(f"insert into {ks}.lwt (a,b ) values (2, 20);")
 
-    await cql.run_async("insert into ks.lwt (a,b ) values (1, 10);")
-    await cql.run_async("insert into ks.lwt (a,b ) values (2, 20);")
+        errs = [manager.api.enable_injection(s.ip_addr, "forced_bounce_to_shard_counter", one_shot=False,
+                                            parameters={'value': '2'})
+                for s in servers]
 
-    errs = [manager.api.enable_injection(s.ip_addr, "forced_bounce_to_shard_counter", one_shot=False,
-                                         parameters={'value': '2'})
-            for s in servers]
+        await asyncio.gather(*errs)
 
-    await asyncio.gather(*errs)
+        await cql.run_async(f"update {ks}.lwt set b = 11 where a = 1 if b = 10;")
 
-    await cql.run_async("update ks.lwt set b = 11 where a = 1 if b = 10;")
+        rows = await cql.run_async(f"select b from {ks}.lwt where a = 1;")
 
-    rows = await cql.run_async("select b from ks.lwt where a = 1;")
-
-    assert rows[0].b == 11
+        assert rows[0].b == 11
