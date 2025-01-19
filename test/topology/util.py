@@ -490,7 +490,10 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
     keyspace = await create_new_test_keyspace(manager.get_cql(), opts, host)
     try:
         yield keyspace
-    finally:
+    except:
+        logger.info(f"Error happened while using keyspace '{keyspace}', the keyspace is left in place for investigation")
+        raise
+    else:
         await manager.get_cql().run_async("DROP KEYSPACE " + keyspace, host=host)
 
 previously_used_table_names = []
