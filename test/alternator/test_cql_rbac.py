@@ -655,7 +655,6 @@ def test_rbac_updatetable(dynamodb, cql):
 # to create a completely separate and independent table.
 # Below we also have two additional tests for auto-grant when creating a GSI,
 # and auto-revoke when deleting it.
-@pytest.mark.xfail(reason="#11567")
 def test_rbac_updatetable_gsi(dynamodb, cql):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -713,7 +712,6 @@ def test_rbac_updatetable_gsi(dynamodb, cql):
 # Test the "autogrant" feature of UpdateTable's GSI Create feature: If a role
 # is allowed to create a GSI, this role is automatically given full (SELECT)
 # permissions to the newly-created GSI.
-@pytest.mark.xfail(reason="#11567")
 def test_rbac_updatetable_gsi_autogrant(dynamodb, cql):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -760,7 +758,6 @@ def test_rbac_updatetable_gsi_autogrant(dynamodb, cql):
 # on the deleted GSI are revoked. If we forgot to do this revocation, it is
 # possible for role1 to create a GSI, delete it, and then role2 creates a
 # different GSI with the same name and role1 might be able to read it.
-@pytest.mark.xfail(reason="#11567")
 def test_rbac_updatetable_gsi_autorevoke(dynamodb, cql):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],

@@ -12,58 +12,8 @@ import pytest
 import time
 from botocore.exceptions import ClientError
 from .util import random_string, full_scan, full_query, multiset, \
-    new_test_table
+    new_test_table, wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-
-# UpdateTable for creating a GSI is an asynchronous operation. The table's
-# TableStatus changes from ACTIVE to UPDATING for a short while, and then
-# goes back to ACTIVE, but the new GSI's IndexStatus appears as CREATING,
-# until eventually (in Amazon DynamoDB - it tests a *long* time...) it
-# becomes ACTIVE. During the CREATING phase, at some point the Backfilling
-# attribute also appears, until it eventually disappears. We need to wait
-# until all three markers indicate completion.
-# Unfortunately, while boto3 has a client.get_waiter('table_exists') to
-# wait for a table to exists, there is no such function to wait for an
-# index to come up, so we need to code it ourselves.
-def wait_for_gsi(table, gsi_name):
-    start_time = time.time()
-    # The timeout needs to be long because on Amazon DynamoDB, even on a
-    # a tiny table, it sometimes takes minutes.
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-        assert len(index_desc) == 1
-        index_status = index_desc[0]['IndexStatus']
-        if index_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        # When the index is ACTIVE, this must be after backfilling completed
-        assert not 'Backfilling' in index_desc[0]
-        return
-    raise AssertionError("wait_for_gsi did not complete")
-
-# Similarly to how wait_for_gsi() waits for a GSI to finish adding,
-# this function waits for a GSI to be finally deleted.
-def wait_for_gsi_gone(table, gsi_name):
-    start_time = time.time()
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        if 'GlobalSecondaryIndexes' in desc['Table']:
-            index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-            if len(index_desc) != 0:
-                index_status = index_desc[0]['IndexStatus']
-                time.sleep(0.1)
-                continue
-        return
-    raise AssertionError("wait_for_gsi_gone did not complete")
 
 # All tests in test_gsi.py involved creating a new table with a GSI up-front.
 # This test will be about creating a base table *without* a GSI, putting data
@@ -73,7 +23,6 @@ def wait_for_gsi_gone(table, gsi_name):
 # the wrong type are silently ignored and not added to the index. We also
 # check that after adding the GSI, it is no longer possible to add more
 # items with wrong types to the base table.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill(dynamodb):
     # First create, and fill, a table without GSI. The items in items1
     # will have the appropriate string type for 'x' and will later get
@@ -141,7 +90,6 @@ def test_gsi_backfill(dynamodb):
 # check that the new GSI works. In Alternator's implementation, the LSI key
 # column will become a real column in the schema, and the GSI needs to use
 # that instead of the usual computed column.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_lsi(dynamodb):
     # First create, and fill, a table with an LSI but without GSI.
     with new_test_table(dynamodb,
@@ -208,7 +156,6 @@ def test_gsi_backfill_with_lsi(dynamodb):
 # checked the case of a new GSI key being a real column because it was an
 # LSI key. In this test the GSI key is a real column because it was a
 # key column of the base table itself.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_real_column(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[
@@ -237,7 +184,6 @@ def test_gsi_backfill_with_real_column(dynamodb):
         assert multiset(items) == multiset(full_scan(table, ConsistentRead=False, IndexName='gsi'))
 
 # Test deleting an existing GSI using UpdateTable
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -285,7 +231,6 @@ def test_gsi_delete(dynamodb):
 # still enforced because it is still an LSI key. In Alternator's
 # implementation this happens because the LSI key column was - and remains -
 # a real column in the schema.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete_with_lsi(dynamodb):
     # A table whose non-key column "x" serves as a range key in an LSI,
     # and partition key in a GSI.
@@ -315,6 +260,10 @@ def test_gsi_delete_with_lsi(dynamodb):
                 'Projection': { 'ProjectionType': 'ALL' }
             }
         ]) as table:
+        # We shouldn't need to wait for a GSI created together with the
+        # table, but let's do it anyway to work around bug #9059 (which
+        # isn't what this test is trying to reproduce).
+        wait_for_gsi(table, 'gsi')
         items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
         with table.batch_writer() as batch:
             for item in items:
@@ -362,7 +311,6 @@ def test_gsi_delete_with_lsi(dynamodb):
 # operation on a table set up by CreateTable. In this test we try several
 # of these operations in sequence, to check we can add more than one GSI,
 # delete a GSI that we just added, recreate a GSI that we just deleted, etc.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_creates_and_deletes(dynamodb):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -491,7 +439,6 @@ def test_gsi_backfill_empty_string(dynamodb):
 # happens during the table creation, and one here where the second GSI is
 # added after the table already exists with the first GSI.
 # Reproduces #13870.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_key_type_conflict_on_update(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -532,7 +479,6 @@ def table1(dynamodb):
         yield table
 
 # An empty update_table() call, without any parameters changed, is not allowed.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_empty(dynamodb, table1):
     with pytest.raises(ClientError, match='ValidationException.*UpdateTable'):
         dynamodb.meta.client.update_table(TableName=table1.name)
@@ -543,7 +489,6 @@ def test_updatetable_empty(dynamodb, table1):
             GlobalSecondaryIndexUpdates=[])
 
 # Test various invalid cases of UpdateTable's GlobalSecondaryIndexUpdates.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_errors(dynamodb, table1):
     client = dynamodb.meta.client
 
@@ -637,7 +582,6 @@ def test_gsi_updatetable_errors(dynamodb, table1):
 # In Alternator, we decided to detect this case anyway - it can help users
 # notice problems (see #19784). So because we differ from DynamoDB on this,
 # this test is marked scylla_only.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
     with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
         table1.meta.client.update_table(TableName=table1.name,
@@ -654,7 +598,6 @@ def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
 
 # Check that attempting to delete a GSI that doesn't exist results in
 # the expected ResourceNotFoundException.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_delete_missing_gsi(dynamodb, table1):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.update_table(TableName=table1.name,
