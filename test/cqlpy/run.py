@@ -384,6 +384,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--kernel-page-cache=1')
         cmd.remove('--flush-schema-tables-after-modification=false')
         cmd.remove('--strict-allow-filtering=true')
+    if major <= [6,2] or (enterprise and major <= [2025,1]):
+        cmd.remove('--experimental-features=views-with-tablets')
     if major <= [4,5]:
         cmd.remove('--max-networking-io-control-blocks=1000')
     if major == [5,4] or major == [2024,1]:
