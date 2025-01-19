@@ -2044,7 +2044,6 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         // the view build information.
         fail.cancel();
         co_await barrier.arrive_and_wait();
-        units.return_all();
 
         co_await calculate_shard_build_step(vbi);
         _mnotifier.register_listener(this);
@@ -2349,7 +2348,7 @@ static future<> announce_with_raft(
 
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
@@ -2359,7 +2358,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
                     {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
                     "view builder: mark view build STARTED");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
@@ -2369,7 +2368,7 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
 
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
@@ -2379,7 +2378,7 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
                     {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
                     "view builder: mark view build SUCCESS");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success",
                     [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5)); });
             co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
@@ -2389,14 +2388,14 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
 
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
                     db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
                     {std::move(ks_name), std::move(view_name)},
                     "view builder: delete view build status");
         },
-        [&] () -> future<> {
+        [this, ks_name, view_name] () -> future<> {
             co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2444,11 +2443,11 @@ view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
 
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
+    if (this_shard_id() == 0) {
+        co_await mark_view_build_started(view->ks_name(), view->cf_name());
+    }
+    co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
-    auto f = this_shard_id() == 0 ? mark_view_build_started(view->ks_name(), view->cf_name()) : make_ready_future<>();
-    return when_all_succeed(
-            std::move(f),
-            _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
 }
 
 static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
