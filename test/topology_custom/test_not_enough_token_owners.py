@@ -9,6 +9,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.topology.util import new_test_keyspace
 
 
 @pytest.mark.asyncio
@@ -52,20 +53,18 @@ async def test_not_enough_token_owners(manager: ManagerClient):
 
     await wait_for_cql_and_get_hosts(cql, [server_a], time.time() + 60)
 
-    ks_name = unique_name()
-    await cql.run_async(f"""CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy',
-                             'replication_factor': 2}} AND tablets = {{ 'enabled': true }}""")
-    await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
-    await cql.run_async(f'INSERT INTO {ks_name}.tbl (pk, v) VALUES (1, 1)')
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks_name:
+        await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
+        await cql.run_async(f'INSERT INTO {ks_name}.tbl (pk, v) VALUES (1, 1)')
 
-    # FIXME: Once scylladb/scylladb#16195 is fixed, we will have to replace the expected error message.
-    # A similar change may be needed for remove_node below.
-    logging.info(f'Trying to decommission {server_a} - one of the two token owners')
-    await manager.decommission_node(server_a.server_id, expected_error='Unable to find new replica for tablet')
+        # FIXME: Once scylladb/scylladb#16195 is fixed, we will have to replace the expected error message.
+        # A similar change may be needed for remove_node below.
+        logging.info(f'Trying to decommission {server_a} - one of the two token owners')
+        await manager.decommission_node(server_a.server_id, expected_error='Unable to find new replica for tablet')
 
-    logging.info(f'Stopping {server_a}')
-    await manager.server_stop_gracefully(server_a.server_id)
+        logging.info(f'Stopping {server_a}')
+        await manager.server_stop_gracefully(server_a.server_id)
 
-    logging.info(f'Trying to remove {server_a}, one of the two token owners, by {server_b}')
-    await manager.remove_node(server_b.server_id, server_a.server_id,
-                              expected_error='Unable to find new replica for tablet')
+        logging.info(f'Trying to remove {server_a}, one of the two token owners, by {server_b}')
+        await manager.remove_node(server_b.server_id, server_a.server_id,
+                                  expected_error='Unable to find new replica for tablet')
