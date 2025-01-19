@@ -302,11 +302,12 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2]{};
+    static thread_local schema_ptr schemas[2][2]{};
 
     bool has_group0_schema_versioning = features.contains(schema_feature::GROUP0_SCHEMA_VERSIONING);
+    bool has_in_memory = features.contains(schema_feature::IN_MEMORY_TABLES);
 
-    schema_ptr& s = schemas[has_group0_schema_versioning];
+    schema_ptr& s = schemas[has_in_memory][has_group0_schema_versioning];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -318,6 +319,10 @@ schema_ptr scylla_tables(schema_features features) {
 
         // PER_TABLE_PARTITIONERS
         sb.with_column("partitioner", utf8_type);
+
+        if (has_in_memory) {
+            sb.with_column("in_memory", boolean_type);
+        }
 
         if (has_group0_schema_versioning) {
             // If true, this table's latest schema was committed by group 0.
@@ -1728,6 +1733,9 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
         auto& cdef = *scylla_tables()->get_column_definition("partitioner");
         m.set_clustered_cell(ckey, cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
+    // In-memory tables are deprecated since scylla-2024.1.0
+    // FIXME: delete the column when there's no live version supporting it anymore.
+    // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
     return m;
 }
 
@@ -2197,6 +2205,18 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     prepare_builder_from_table_row(ctxt, builder, table_row);
 
+    if (sm.scylla_tables()) {
+        table_rs = query::result_set(*sm.scylla_tables());
+        if (!table_rs.empty()) {
+            query::result_set_row table_row = table_rs.row(0);
+            auto in_mem = table_row.get<bool>("in_memory");
+            auto in_mem_enabled = in_mem.value_or(false);
+            if (in_mem_enabled) {
+                slogger.warn("Support for in_memory tables has been deprecated.");
+            }
+            builder.set_in_memory(in_mem_enabled);
+        }
+    }
     v3_columns columns(std::move(column_defs), is_dense, is_compound);
     columns.apply_to(builder);
 

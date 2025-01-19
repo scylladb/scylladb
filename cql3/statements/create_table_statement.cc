@@ -464,6 +464,9 @@ std::optional<sstring> check_restricted_table_properties(
     // Evaluate whether the strategy to evaluate was explicitly passed
     auto cs = (strategy) ? strategy : current_strategy;
 
+    if (cs == sstables::compaction_strategy_type::in_memory) {
+        throw exceptions::configuration_exception(format("{} has been deprecated.", sstables::compaction_strategy::name(*cs)));
+    }
     if (cs == sstables::compaction_strategy_type::time_window) {
         std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
         sstables::time_window_compaction_strategy_options twcs_options(options);

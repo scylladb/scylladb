@@ -70,6 +70,8 @@ public:
             return "LeveledCompactionStrategy";
         case compaction_strategy_type::time_window:
             return "TimeWindowCompactionStrategy";
+        case compaction_strategy_type::in_memory:
+            return "InMemoryCompactionStrategy";
         case compaction_strategy_type::incremental:
             return "IncrementalCompactionStrategy";
         default:
@@ -88,6 +90,8 @@ public:
             return compaction_strategy_type::leveled;
         } else if (short_name == "TimeWindowCompactionStrategy") {
             return compaction_strategy_type::time_window;
+        } else if (short_name == "InMemoryCompactionStrategy") {
+            return compaction_strategy_type::in_memory;
         } else if (short_name == "IncrementalCompactionStrategy") {
             return compaction_strategy_type::incremental;
         } else {

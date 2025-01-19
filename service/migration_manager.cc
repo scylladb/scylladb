@@ -121,6 +121,7 @@ void migration_manager::init_messaging_service()
                 _feature_listeners.push_back(feature.when_enabled(reload_schema_in_bg));
             }
         }
+        _feature_listeners.push_back(_feat.in_memory_tables.when_enabled(reload_schema_in_bg));
     }
 
     ser::migration_manager_rpc_verbs::register_definitions_update(&_messaging, [this] (const rpc::client_info& cinfo, std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>> cm) {
