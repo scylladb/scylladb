@@ -271,16 +271,39 @@ def put_item_binary_data_in_non_key(dynamodb, test_table_b, item_data):
 # was allowed in Scylla.
 def test_base64_missing_padding(dynamodb, test_table_b):
     r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
-    assert r.status_code == 400
+    assert r.status_code == 400 and 'SerializationException' in r.text
     r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJjZGVmZ2g")
-    assert r.status_code == 400
+    assert r.status_code == 400 and 'SerializationException' in r.text
 
 # Tests the case where non base64 text is placed as binary data value.
 def test_base64_malformed(dynamodb, test_table_b):
     r = put_item_binary_data_in_key(dynamodb, test_table_b, "YWJj??!!")
-    assert r.status_code == 400
+    assert r.status_code == 400 and 'SerializationException' in r.text
     r = put_item_binary_data_in_non_key(dynamodb, test_table_b, "YWJj??!!")
-    assert r.status_code == 400
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def update_item_binary_data(dynamodb, test_table_b, item_data):
+    payload ='''{
+        "TableName": "%s",
+        "Key": { "p": { "B": "%s" } },
+        "UpdateExpression": "SET a = :val",
+        "ExpressionAttributeValues": {":val": {"B": "%s"} }
+    }''' % (test_table_b.name, base64.b64encode(random_bytes()).decode(), item_data)
+    req = get_signed_request(dynamodb, 'UpdateItem', payload)
+    return requests.post(req.url, headers=req.headers, data=req.body, verify=True)
+
+# The same tests as above for invalid B (binary) values, just for UpdateItem
+# instead of PutItem, attempting to reproduce issue #17539.
+# An UpdateExpression's SET operation contains the value already in JSON
+# encoding, but it should not be trusted implicitly without verifying it is
+# valid.
+def test_base64_missing_padding_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "fakebase64")
+    assert r.status_code == 400 and 'SerializationException' in r.text
+
+def test_base64_malformed_updateitem(dynamodb, test_table_b):
+    r = update_item_binary_data(dynamodb, test_table_b, "YWJj??!!")
+    assert r.status_code == 400 and 'SerializationException' in r.text
 
 def scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, filter_expr, expr_attr_values):
     payload ='''{
