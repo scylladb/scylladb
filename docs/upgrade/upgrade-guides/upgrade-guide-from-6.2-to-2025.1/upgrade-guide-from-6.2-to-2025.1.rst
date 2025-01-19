@@ -1,35 +1,13 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 6.1
-.. |NEW_VERSION| replace:: 6.2
-
-.. |DEBIAN_SRC_REPO| replace:: Debian
-.. _DEBIAN_SRC_REPO: https://www.scylladb.com/download/?platform=debian-11&version=scylla-6.1
-
-.. |UBUNTU_SRC_REPO| replace:: Ubuntu
-.. _UBUNTU_SRC_REPO: https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-6.1
-
-.. |SCYLLA_DEB_SRC_REPO| replace:: ScyllaDB deb repo (|DEBIAN_SRC_REPO|_, |UBUNTU_SRC_REPO|_)
-
-.. |SCYLLA_RPM_SRC_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_SRC_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.1
-
-.. |DEBIAN_NEW_REPO| replace:: Debian
-.. _DEBIAN_NEW_REPO: https://www.scylladb.com/download/?platform=debian-11&version=scylla-6.2
-
-.. |UBUNTU_NEW_REPO| replace:: Ubuntu
-.. _UBUNTU_NEW_REPO: https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-6.2
-
-.. |SCYLLA_DEB_NEW_REPO| replace:: ScyllaDB deb repo (|DEBIAN_NEW_REPO|_, |UBUNTU_NEW_REPO|_)
-
-.. |SCYLLA_RPM_NEW_REPO| replace:: ScyllaDB rpm repo
-.. _SCYLLA_RPM_NEW_REPO: https://www.scylladb.com/download/?platform=centos&version=scylla-6.1
+.. |SRC_VERSION| replace:: 6.2
+.. |NEW_VERSION| replace:: 2025.1
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.1 to 6.2
-.. _SCYLLA_METRICS: ../metric-update-6.1-to-6.2
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.2 to 2025.1
+.. _SCYLLA_METRICS: ../metric-update-6.2-to-2025.1
 
 =============================================================================
 Upgrade |SCYLLA_NAME| from |SRC_VERSION| to |NEW_VERSION|
@@ -161,7 +139,11 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
    .. group-tab:: Debian/Ubuntu
 
-        #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
+        #. Update the ScyllaDB deb repo to |NEW_VERSION|.
+
+            .. code-block:: console
+
+               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.1.list
 
         #. Install the new ScyllaDB version:
 
@@ -171,37 +153,22 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
                sudo apt-get update
                sudo apt-get dist-upgrade scylla
 
-        #. Remove old scylla-jmx package since the package is not used anymore:
-
-            .. code-block:: console
-
-               sudo apt-get purge scylla-jmx
-
-            scylla-jmx becomes optional package from ScyllaDB 6.2.
-            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>` and get new version.
-
-
         Answer ‘y’ to the first two questions.
 
    .. group-tab:: RHEL/CentOS
 
-        #. Update the |SCYLLA_RPM_NEW_REPO|_  to |NEW_VERSION|.
+        #. Update the ScyllaDB rpm repo to |NEW_VERSION|.
+
+            .. code-block:: console
+
+               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.1.repo
+
         #. Install the new ScyllaDB version:
 
             .. code:: sh
 
                sudo yum clean all
                sudo yum update scylla\* -y
-
-        #. Remove old scylla-jmx package since the package is not used anymore:
-
-            .. code:: sh
-
-               sudo yum remove scylla-jmx
-
-            scylla-jmx becomes optional package from ScyllaDB 6.2.
-            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>` and get new version.
-
 
    .. group-tab:: EC2/GCP/Azure Ubuntu Image
 
@@ -211,7 +178,7 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
       If you’re using your own image and installed ScyllaDB packages for Ubuntu or Debian, 
       you need to apply an extended upgrade procedure:
 
-      #. Update the |SCYLLA_DEB_NEW_REPO| to |NEW_VERSION|.
+      #. Update the ScyllaDB deb repo (see the **Debian/Ubuntu** tab).
       #. Install the new ScyllaDB version with the additional ``scylla-machine-image`` package:
 
             .. code-block:: console
@@ -221,18 +188,13 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
                sudo apt-get dist-upgrade scylla
                sudo apt-get dist-upgrade scylla-machine-image
 
-      #. Remove old scylla-jmx package since the package is not used anymore:
-
-            .. code-block:: console
-
-               sudo apt-get purge scylla-jmx
-
-            scylla-jmx becomes optional package from ScyllaDB 6.2.
-            If you still need JMX server, see :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>` and get new version.
-
-
       #. Run ``scylla_setup`` without ``running io_setup``.
       #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
+
+
+If you need JMX server, see
+:doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`
+and get new version. 
 
 Start the node
 --------------
