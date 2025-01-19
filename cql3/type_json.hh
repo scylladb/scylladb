@@ -22,3 +22,5 @@ inline sstring to_json_string(const abstract_type &t, const bytes& b) {
 inline sstring to_json_string(const abstract_type& t, const bytes_opt& b) {
     return b ? to_json_string(t, *b) : "null";
 }
+
+rjson::type to_json_type(const abstract_type &t, managed_bytes_view bv);
