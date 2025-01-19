@@ -11,6 +11,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 from cassandra.protocol import WriteTimeout
 from test.topology.conftest import skip_mode
+from test.topology.util import new_test_keyspace
 
 @pytest.mark.asyncio
 @skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
@@ -20,20 +21,21 @@ async def test_cas_semaphore(manager):
 
     host = await wait_for_cql_and_get_hosts(manager.cql, {servers[0]}, time.time() + 60)
 
-    await manager.cql.run_async("CREATE KEYSPACE test WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-    await manager.cql.run_async("CREATE TABLE test.test (a int PRIMARY KEY, b int)")
+    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+        table = f"{ks}.test"
+        await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
 
-    async with inject_error(manager.api, servers[0].ip_addr, 'cas_timeout_after_lock'):
-        res = [manager.cql.run_async(f"INSERT INTO test.test (a) VALUES (0) IF NOT EXISTS", host=host[0]) for r in range(10)]
-        try:
-            await asyncio.gather(*res)
-        except WriteTimeout:
-            pass
+        async with inject_error(manager.api, servers[0].ip_addr, 'cas_timeout_after_lock'):
+            res = [manager.cql.run_async(f"INSERT INTO {table} (a) VALUES (0) IF NOT EXISTS", host=host[0]) for r in range(10)]
+            try:
+                await asyncio.gather(*res)
+            except WriteTimeout:
+                pass
 
-    res = [manager.cql.run_async(f"INSERT INTO test.test (a) VALUES (0) IF NOT EXISTS", host=host[0]) for r in range(10)]
-    await asyncio.gather(*res)
+        res = [manager.cql.run_async(f"INSERT INTO {table} (a) VALUES (0) IF NOT EXISTS", host=host[0]) for r in range(10)]
+        await asyncio.gather(*res)
 
-    metrics = await manager.metrics.query(servers[0].ip_addr)
-    contention = metrics.get(name="scylla_storage_proxy_coordinator_cas_write_contention_count")
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        contention = metrics.get(name="scylla_storage_proxy_coordinator_cas_write_contention_count")
 
-    assert contention == None
+        assert contention == None
