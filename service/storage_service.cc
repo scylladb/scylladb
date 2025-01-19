@@ -510,7 +510,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
-future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal) {
+future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal) {
     nodes_to_notify_after_sync nodes_to_notify;
 
     rtlogger.trace("Start sync_raft_topology_nodes");
@@ -623,44 +623,30 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
 
-    if (target_node) {
-        raft::server_id raft_id{target_node->uuid()};
-        auto ip = _address_map.get(*target_node);
-        if (t.left_nodes.contains(raft_id)) {
-            co_await process_left_node(raft_id, *target_node, ip);
-        } else if (auto it = t.normal_nodes.find(raft_id); it != t.normal_nodes.end()) {
-            co_await process_normal_node(raft_id, *target_node, ip, it->second);
-        } else if ((it = t.transition_nodes.find(raft_id)) != t.transition_nodes.end()) {
-            co_await process_transition_node(raft_id, *target_node, ip, it->second);
-        }
-        sys_ks_futures.push_back(raft_topology_update_ip(*target_node, ip, &nodes_to_notify));
-    } else {
-        for (const auto& id: t.left_nodes) {
-            locator::host_id host_id{id.uuid()};
-            auto ip = _address_map.find(host_id);
-            co_await process_left_node(id, host_id, ip);
-            if (ip) {
-                sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, nullptr));
-            }
-        }
-        for (const auto& [id, rs]: t.normal_nodes) {
-            locator::host_id host_id{id.uuid()};
-            auto ip = _address_map.find(host_id);
-            co_await process_normal_node(id, host_id, ip, rs);
-            if (ip) {
-                sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, prev_normal.contains(id) ? nullptr : &nodes_to_notify));
-            }
-        }
-        for (const auto& [id, rs]: t.transition_nodes) {
-            locator::host_id host_id{id.uuid()};
-            auto ip = _address_map.find(host_id);
-            co_await process_transition_node(id, host_id, ip, rs);
-            if (ip) {
-                sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, nullptr));
-            }
+    for (const auto& id: t.left_nodes) {
+        locator::host_id host_id{id.uuid()};
+        auto ip = _address_map.find(host_id);
+        co_await process_left_node(id, host_id, ip);
+        if (ip) {
+            sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, nullptr));
         }
     }
-
+    for (const auto& [id, rs]: t.normal_nodes) {
+        locator::host_id host_id{id.uuid()};
+        auto ip = _address_map.find(host_id);
+        co_await process_normal_node(id, host_id, ip, rs);
+        if (ip) {
+            sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, prev_normal.contains(id) ? nullptr : &nodes_to_notify));
+        }
+    }
+    for (const auto& [id, rs]: t.transition_nodes) {
+        locator::host_id host_id{id.uuid()};
+        auto ip = _address_map.find(host_id);
+        co_await process_transition_node(id, host_id, ip, rs);
+        if (ip) {
+            sys_ks_futures.push_back(raft_topology_update_ip(host_id, *ip, nullptr));
+        }
+    }
     for (auto id : t.get_excluded_nodes()) {
         locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
         if (n) {
@@ -788,7 +774,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }, _topology_state_machine._topology.tstate);
         tmptr->set_read_new(read_new);
 
-        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::nullopt, std::move(prev_normal));
+        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::move(prev_normal));
 
         std::optional<locator::tablet_metadata> tablets;
         if (hint.tablets_hint) {
@@ -977,14 +963,12 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
             // If we call sync_raft_topology_nodes here directly, a gossiper lock and
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)futurize_invoke(ensure_alive([this, id, h = _ss._async_gate.hold()]() -> future<> {
+            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                storage_service::nodes_to_notify_after_sync nodes_to_notify;
-                auto lock = co_await _ss.get_token_metadata_lock();
-                co_await _ss.mutate_token_metadata([this, id, &nodes_to_notify](mutable_token_metadata_ptr t) -> future<> {
-                    nodes_to_notify = co_await _ss.sync_raft_topology_nodes(std::move(t), id, {});
-                }, storage_service::acquire_merge_lock::no);
+                // Set notify_join to true since here we detected address change and drivers have to be notified
+                nodes_to_notify_after_sync nodes_to_notify;
+                co_await _ss.raft_topology_update_ip(id, endpoint, &nodes_to_notify);
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
         }
