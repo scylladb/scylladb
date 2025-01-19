@@ -35,8 +35,8 @@ async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bo
     _ = [await manager.server_add() for _ in range(2)]
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
-    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
-        async with new_test_table(cql, keyspace, "p int primary key, x int") as table:
+    async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key, x int") as table:
             check_tombstone_gc_mode(cql, table, get_expected_tombstone_gc_mode(rf, tablets))
 
 
@@ -47,8 +47,8 @@ async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf
     _ = [await manager.server_add() for _ in range(2)]
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
-    async with new_test_keyspace(cql, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
-        async with new_test_table(cql, keyspace, "p int primary key, x int", " with tombstone_gc = {'mode': 'disabled'}") as table:
+    async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key, x int", " with tombstone_gc = {'mode': 'disabled'}") as table:
             await cql.run_async(f"ALTER TABLE {table} add y int")
             check_tombstone_gc_mode(cql, table, "disabled")
 
@@ -103,12 +103,12 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
     # create/alter/drop a few tables
     async def alter_system_schema(keyspace=None, table_count=3):
         if not keyspace:
-            async with new_test_keyspace(cql, "with replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 2}", host=host_primary) as keyspace:
+            async with new_test_keyspace(manager, "with replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 2}", host=host_primary) as keyspace:
                 alter_system_schema(keyspace, table_count)
                 return
 
         for _ in range(table_count):
-            async with new_test_table(cql, keyspace, "p int primary key, x int", host=host_primary, reuse_tables=False) as table:
+            async with new_test_table(manager, keyspace, "p int primary key, x int", host=host_primary, reuse_tables=False) as table:
                 await cql.run_async(f"ALTER TABLE {table} add y int")
 
     def get_tombstone(row):
@@ -164,7 +164,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
         await wait_for(partial(tombstone_gc_completed, tombstone_mark), deadline)
 
     with disable_schema_agreement_wait(cql):
-        async with new_test_keyspace(cql, "with replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 2}", host=host_primary) as keyspace:
+        async with new_test_keyspace(manager, "with replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 2}", host=host_primary) as keyspace:
             await alter_system_schema(keyspace)
             tombstone_mark = datetime.now(timezone.utc)
 
