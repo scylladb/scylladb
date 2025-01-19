@@ -186,7 +186,7 @@ async def manager(request, manager_internal, record_property, build_mode):
                         )
     test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
     # this should be consistent with scylla_cluster.py handler name in _before_test method
-    test_py_log_test = suite_testpy_log.parent / f"{test_case_name}.log"
+    test_py_log_test = suite_testpy_log.parent / f"{suite_testpy_log.stem}.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
     await manager_client.before_test(test_case_name, test_log)
