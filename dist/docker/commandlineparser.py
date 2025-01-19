@@ -29,4 +29,5 @@ def parse():
     parser.add_argument('--endpoint-snitch', default=None, dest='endpointSnitch', help="Set endpoint snitch")
     parser.add_argument('--replace-node-first-boot', default=None, dest='replaceNodeFirstBoot', help="Host ID of a dead node to replace.")
     parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="[[deprecated]] IP address of a dead node to replace.")
+    parser.add_argument('--update-scylla-yaml', default=None, dest='updateScyllaYaml', help="Update default scylla.yaml")
     return parser.parse_known_args()

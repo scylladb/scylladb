@@ -2,6 +2,24 @@ import subprocess
 import logging
 import yaml
 import os
+from ruamel.yaml import YAML # Unlike standard yaml library ruamel preserves original document structure
+import base64
+
+
+def update_yaml_file_from_base64_string(file_name: str, diff: str) -> None:
+    yaml = YAML()
+    yaml.preserve_quotes = True  # Preserve quotes if present in the YAML
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    with open(file_name, 'r') as file:
+        data = yaml.load(file)
+    try:
+        update = yaml.load(base64.b64decode(diff))
+    except Exception as exc:
+        raise AttributeError("`--update-scylla-yaml` should contain base64 encoded yaml") from exc
+
+    data.update(update)
+    with open(file_name, 'w') as file:
+        yaml.dump(data, file)
 
 
 class ScyllaSetup:
@@ -13,6 +31,7 @@ class ScyllaSetup:
         self._rpcAddress = arguments.rpcAddress
         self._alternatorAddress = arguments.alternatorAddress
         self._broadcastAddress = arguments.broadcastAddress
+        self._updateScyllaYaml = arguments.updateScyllaYaml
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._apiAddress = arguments.apiAddress
         self._alternatorPort = arguments.alternatorPort
@@ -162,6 +181,9 @@ class ScyllaSetup:
             args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
 
         args += ["--blocked-reactor-notify-ms 999999999"]
+
+        if self._updateScyllaYaml:
+            update_yaml_file_from_base64_string("/etc/scylla/scylla.yaml", self._updateScyllaYaml)
 
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
             cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))

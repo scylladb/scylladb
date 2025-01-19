@@ -106,7 +106,7 @@ run apt-get -y update
 run apt-get -y upgrade
 run apt-get -y --no-install-suggests install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
-run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl sudo systemd
+run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl sudo systemd python3-ruamel.yaml
 run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
@@ -126,6 +126,7 @@ bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --env LANG=C.UTF-8
 bconfig --env LANGUAGE=
 bconfig --env LC_ALL=C.UTF-8
+bconfig --env PYTHONPATH=/usr/lib/python3/dist-packages
 bconfig --entrypoint  '["/docker-entrypoint.py"]'
 bconfig --cmd  ''
 bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001 --port 22
