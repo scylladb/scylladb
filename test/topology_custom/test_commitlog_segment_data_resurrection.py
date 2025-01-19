@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.pylib.manager_client import ManagerClient
+from test.topology.util import new_test_keyspace
 
 import pytest
 import os
@@ -52,78 +53,80 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
     def get_cl_segments():
         return {os.path.basename(s) for s in glob.glob(os.path.join(cl_path, "CommitLog-*"))}
 
-    await cql.run_async("create keyspace ks1 with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-    await cql.run_async("create keyspace ks2 with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-    await cql.run_async("create table ks1.tbl1 (pk int, ck int, primary key(pk, ck))")
-    await cql.run_async("create table ks2.tbl2 (pk int, ck int, v text, primary key(pk, ck)) WITH gc_grace_seconds = 0")
+    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks1, \
+               new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks2:
+        tbl1 = f"{ks1}.tbl1"
+        tbl2 = f"{ks2}.tbl2"
+        await cql.run_async(f"create table {tbl1} (pk int, ck int, primary key(pk, ck))")
+        await cql.run_async(f"create table {tbl2} (pk int, ck int, v text, primary key(pk, ck)) WITH gc_grace_seconds = 0")
 
-    cl_path = commitlog_path()
-    segments_before_writes = await get_segments_num()
-    segments_after_writes = segments_before_writes
+        cl_path = commitlog_path()
+        segments_before_writes = await get_segments_num()
+        segments_after_writes = segments_before_writes
 
-    logger.debug(f"Have {segments_after_writes} segments before writing data")
+        logger.debug(f"Have {segments_after_writes} segments before writing data")
 
-    insert_id_tbl1 = cql.prepare("INSERT INTO ks1.tbl1 (pk, ck) VALUES (?, ?)")
-    insert_id_tbl2 = cql.prepare("INSERT INTO ks2.tbl2 (pk, ck, v) VALUES (?, ?, ?)")
-    pk1 = 0
-    pk2 = 1
-    ck = 0
-    value = "v" * 1024
+        insert_id_tbl1 = cql.prepare(f"INSERT INTO {tbl1} (pk, ck) VALUES (?, ?)")
+        insert_id_tbl2 = cql.prepare(f"INSERT INTO {tbl2} (pk, ck, v) VALUES (?, ?, ?)")
+        pk1 = 0
+        pk2 = 1
+        ck = 0
+        value = "v" * 1024
 
-    logger.debug(f"Filling segment with mixed data from ks1.tbl1 and ks2.tbl2")
+        logger.debug(f"Filling segment with mixed data from {tbl1} and {tbl2}")
 
-    # Ensure at least one segment with writes from both tables
-    while segments_after_writes < segments_before_writes + 1:
-        cql.execute(insert_id_tbl1, (pk1, ck))
-        cql.execute(insert_id_tbl2, (pk1, ck, value))
-        ck = ck + 1
-        segments_after_writes = await get_segments_num()
+        # Ensure at least one segment with writes from both tables
+        while segments_after_writes < segments_before_writes + 1:
+            cql.execute(insert_id_tbl1, (pk1, ck))
+            cql.execute(insert_id_tbl2, (pk1, ck, value))
+            ck = ck + 1
+            segments_after_writes = await get_segments_num()
 
-    logger.debug(f"Filling segment(s) with ks2.tbl2 only")
+        logger.debug(f"Filling segment(s) with {tbl2} only")
 
-    while segments_after_writes < segments_before_writes + 3:
-        cql.execute(insert_id_tbl2, (pk1, ck, value))
-        ck = ck + 1
-        segments_after_writes = await get_segments_num()
+        while segments_after_writes < segments_before_writes + 3:
+            cql.execute(insert_id_tbl2, (pk1, ck, value))
+            ck = ck + 1
+            segments_after_writes = await get_segments_num()
 
-    cql.execute(f"DELETE FROM ks2.tbl2 WHERE pk = {pk1}")
+        cql.execute(f"DELETE FROM {tbl2} WHERE pk = {pk1}")
 
-    # We need to make sure the segment in which the above delete landed in
-    # is full, otherwise the memtable flush will not be able to destroy it.
-    logger.debug(f"Filling another segment with ks2.tbl2 (pk={pk2})")
+        # We need to make sure the segment in which the above delete landed in
+        # is full, otherwise the memtable flush will not be able to destroy it.
+        logger.debug(f"Filling another segment with {tbl2} (pk={pk2})")
 
-    while segments_after_writes < segments_before_writes + 4:
-        cql.execute(insert_id_tbl2, (pk2, ck, value))
-        ck = ck + 1
-        segments_after_writes = await get_segments_num()
+        while segments_after_writes < segments_before_writes + 4:
+            cql.execute(insert_id_tbl2, (pk2, ck, value))
+            ck = ck + 1
+            segments_after_writes = await get_segments_num()
 
-    segments_before = get_cl_segments()
-    logger.debug(f"Wrote {ck} rows, now have {segments_after_writes} segments ({segments_before}")
+        segments_before = get_cl_segments()
+        logger.debug(f"Wrote {ck} rows, now have {segments_after_writes} segments ({segments_before}")
 
-    logger.debug("Flush ks2.tbl2")
-    await manager.api.keyspace_flush(node_ip=server.ip_addr, keyspace="ks2", table="tbl2")
-    await manager.api.keyspace_compaction(node_ip=server.ip_addr, keyspace="ks2", table="tbl2")
+        logger.debug(f"Flush {tbl2}")
+        await manager.api.keyspace_flush(node_ip=server.ip_addr, keyspace=ks2, table="tbl2")
+        await manager.api.keyspace_compaction(node_ip=server.ip_addr, keyspace=ks2, table="tbl2")
 
-    segments_after = get_cl_segments()
-    logger.debug(f"After flush+compact, now have {await get_segments_num()} segments ({segments_after})")
+        segments_after = get_cl_segments()
+        logger.debug(f"After flush+compact, now have {await get_segments_num()} segments ({segments_after})")
 
-    assert len(list(cql.execute(f"SELECT * FROM ks1.tbl1 WHERE pk = {pk1}"))) > 0
-    assert len(list(cql.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0
+        assert len(list(cql.execute(f"SELECT * FROM {tbl1} WHERE pk = {pk1}"))) > 0
+        assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0
 
-    # Need to ensure at least one segment was freed.
-    # We assume the last segment, containing the tombstone, was among the freed ones.
-    logger.debug(f"before seg {segments_before}, after seg {segments_after}")
-    removed_segments = segments_before - segments_after
-    assert len(removed_segments) > 0
+        # Need to ensure at least one segment was freed.
+        # We assume the last segment, containing the tombstone, was among the freed ones.
+        logger.debug(f"before seg {segments_before}, after seg {segments_after}")
+        removed_segments = segments_before - segments_after
+        assert len(removed_segments) > 0
 
-    logger.debug(f"The following segments were removed: {removed_segments}")
+        logger.debug(f"The following segments were removed: {removed_segments}")
 
-    logger.debug("Kill + restart the node")
-    await manager.server_stop(server.server_id)
-    await manager.server_start(server.server_id)
+        logger.debug("Kill + restart the node")
+        await manager.server_stop(server.server_id)
+        await manager.server_start(server.server_id)
 
-    manager.driver_close()
-    await manager.driver_connect()
-    cql = manager.cql
+        manager.driver_close()
+        await manager.driver_connect()
+        cql = manager.cql
 
-    assert len(list(cql.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0
+        assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0
