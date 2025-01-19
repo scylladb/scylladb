@@ -464,7 +464,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             }
             const auto qsz = db::view::view_update_generator::registration_queue_size;
             when_all(register_futures.begin(), register_futures.end()).get();
-            REQUIRE_EVENTUALLY_EQUAL(view_update_generator.available_register_units(), qsz);
+            REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return view_update_generator.available_register_units(); }, qsz);
         };
         register_and_check_semaphore(ssts.begin(), ssts.begin() + 10);
         register_and_check_semaphore(ssts.begin() + 10, ssts.end());
