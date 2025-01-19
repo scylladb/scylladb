@@ -14,6 +14,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
+from test.topology.util import create_new_test_keyspace
 
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,8 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
 
     # Use RF=2 keyspace and below CL=ALL so that performing an INSERT requires
     # communicating with another node.
-    await cql.run_async("create keyspace ks with replication = "
-                        "{'class': 'SimpleStrategy', 'replication_factor': 2}")
-    await cql.run_async("create table ks.t (pk int primary key)")
+    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
+    await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
     # Pause one of the servers so other nodes mark it as dead and we can remove it.
     # We deliberately don't shut it down, but only pause it - we want to test
@@ -55,7 +55,7 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
     with manager.con_gen([srvs[2].ip_addr], manager.port, manager.use_ssl) as c:
         with c.connect() as s:
             logger.info(f"Connected, sending request")
-            q = SimpleStatement('insert into ks.t (pk) values (0)', consistency_level=ConsistencyLevel.ALL)
+            q = SimpleStatement(f'insert into {ks}.t (pk) values (0)', consistency_level=ConsistencyLevel.ALL)
             # Before introducing host banning, a removed node was able to participate
             # as if it was a normal node and, for example, could insert data into the cluster.
             # Now other nodes refuse to communicate so we'll get an exception.
