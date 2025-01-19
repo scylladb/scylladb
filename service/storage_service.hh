@@ -847,6 +847,7 @@ private:
     topology_state_machine& _topology_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
+    future<> _view_building_coordinator = make_ready_future<>();
     future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, cdc::generation_service&, sharded<db::system_distributed_keyspace>&, abort_source&);
 
     // Those futures hold results of streaming for various operations
