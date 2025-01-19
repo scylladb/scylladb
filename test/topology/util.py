@@ -286,7 +286,7 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
     await cql.run_async(f"USE {ks_name}")
     await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
 
@@ -322,7 +322,7 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
     await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
 
     stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
@@ -477,7 +477,9 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
         async with new_test_keyspace(ManagerClient, '...') as keyspace:
     """
     keyspace = unique_name()
-    await manager.get_cql().run_async("CREATE KEYSPACE " + keyspace + " " + opts, host=host)
+    # Use CREATE KEYSPACE IF NOT EXISTS as a workaround for
+    # https://github.com/scylladb/python-driver/issues/317
+    await manager.get_cql().run_async(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {opts}", host=host)
     try:
         yield keyspace
     finally:
