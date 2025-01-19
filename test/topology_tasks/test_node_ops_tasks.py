@@ -12,6 +12,7 @@ from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 from test.topology_tasks.task_manager_client import TaskManagerClient
+from test.topology.util import new_test_keyspace
 
 import asyncio
 import logging
@@ -204,17 +205,17 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
     assert module_name in await tm.list_modules(servers[0].ip_addr), "node_ops module wasn't registered"
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
-    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({1}, {1});")
-    await cql.run_async(f"TRUNCATE test.test;")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")
+        await cql.run_async(f"TRUNCATE {ks}.test;")
 
 
-    servers, vt_ids = await check_bootstrap_tasks_tree(tm, module_name, servers)
-    servers, vt_ids = await check_replace_tasks_tree(manager, tm, module_name, servers, vt_ids)
-    servers, vt_ids = await check_rebuild_tasks_tree(manager, tm, module_name, servers, vt_ids)
-    servers, vt_ids = await check_remove_node_tasks_tree(manager, tm, module_name, servers, vt_ids)
-    servers, vt_ids = await check_decommission_tasks_tree(manager, tm, module_name, servers, vt_ids)
+        servers, vt_ids = await check_bootstrap_tasks_tree(tm, module_name, servers)
+        servers, vt_ids = await check_replace_tasks_tree(manager, tm, module_name, servers, vt_ids)
+        servers, vt_ids = await check_rebuild_tasks_tree(manager, tm, module_name, servers, vt_ids)
+        servers, vt_ids = await check_remove_node_tasks_tree(manager, tm, module_name, servers, vt_ids)
+        servers, vt_ids = await check_decommission_tasks_tree(manager, tm, module_name, servers, vt_ids)
 
 @pytest.mark.asyncio
 async def test_node_ops_tasks_ttl(manager: ManagerClient):
