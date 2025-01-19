@@ -469,6 +469,17 @@ async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_e
 
     await wait_for(new_coordinator_elected, deadline=deadline)
 
+async def create_new_test_keyspace(cql: Session, opts, host=None):
+    """
+    A utility function for creating a new temporary keyspace with given
+    options.
+    """
+    keyspace = unique_name()
+    # Use CREATE KEYSPACE IF NOT EXISTS as a workaround for
+    # https://github.com/scylladb/python-driver/issues/317
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {opts}", host=host)
+    return keyspace
+
 @asynccontextmanager
 async def new_test_keyspace(manager: ManagerClient, opts, host=None):
     """
@@ -476,10 +487,7 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
     options. It can be used in a "async with", as:
         async with new_test_keyspace(ManagerClient, '...') as keyspace:
     """
-    keyspace = unique_name()
-    # Use CREATE KEYSPACE IF NOT EXISTS as a workaround for
-    # https://github.com/scylladb/python-driver/issues/317
-    await manager.get_cql().run_async(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {opts}", host=host)
+    keyspace = await create_new_test_keyspace(manager.get_cql(), opts, host)
     try:
         yield keyspace
     finally:
