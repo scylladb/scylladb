@@ -74,13 +74,13 @@ API calls
 	- *keyspace* - if set, tasks are filtered to contain only the ones working on this keyspace;
 	- *table* - if set, tasks are filtered to contain only the ones working on this table;
 
-* ``/task_manager/task_status/{task_id}`` - gets the task's status, unregisters the task if it's finished;
+* ``/task_manager/task_status/{task_id}`` - gets the task's status;
 * ``/task_manager/abort_task/{task_id}`` - aborts the task if it's abortable, otherwise 403 status code is returned;
-* ``/task_manager/wait_task/{task_id}`` - waits for the task and gets its status (does not unregister the tasks); query params:
+* ``/task_manager/wait_task/{task_id}`` - waits for the task and gets its status; query params:
 
 	- *timeout* - timeout in seconds; if set - 408 status code is returned if waiting times out;
 
-* ``/task_manager/task_status_recursive/{task_id}`` - gets statuses of the task and all its descendants in BFS order, unregisters the root task;
+* ``/task_manager/task_status_recursive/{task_id}`` - gets statuses of the task and all its descendants in BFS order;
 * ``/task_manager/ttl`` - gets or sets new ttl; query params (if setting):
 
 	- *ttl* - new ttl value.
@@ -88,6 +88,8 @@ API calls
 * ``/task_manager/user_ttl`` - gets or sets new user ttl; query params (if setting):
 
 	- *user_ttl* - new user ttl value.
+
+* ``/task_manager/drain/{module}`` - unregisters all finished local tasks in the module.
 
 Cluster tasks are not unregistered from task manager with API calls.
 
