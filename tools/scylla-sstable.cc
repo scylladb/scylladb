@@ -1499,7 +1499,7 @@ const char* to_string(sstables::ext_timestamp_stats_type t) {
     std::abort();
 }
 
-class scylla_metadata_visitor : public boost::static_visitor<> {
+class scylla_metadata_visitor {
     json_writer& _writer;
 
 public:
@@ -1620,7 +1620,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
             continue;
         }
         for (const auto& [k, v] : m->data.data) {
-            boost::apply_visitor(scylla_metadata_visitor(writer), v);
+            std::visit(scylla_metadata_visitor(writer), v);
         }
         writer.EndObject();
     }
