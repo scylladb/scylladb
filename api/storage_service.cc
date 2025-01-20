@@ -1799,13 +1799,14 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto bucket = req->get_query_param("bucket");
         auto prefix = req->get_query_param("prefix");
         auto snapshot_name = req->get_query_param("snapshot");
+        auto move_files = req_param<bool>(*req, "move_files", false);
         if (snapshot_name.empty()) {
             // TODO: If missing, snapshot should be taken by scylla, then removed
             throw httpd::bad_param_exception("The snapshot name must be specified");
         }
 
         auto& ctl = snap_ctl.local();
-        auto task_id = co_await ctl.start_backup(std::move(endpoint), std::move(bucket), std::move(prefix), std::move(keyspace), std::move(table), std::move(snapshot_name));
+        auto task_id = co_await ctl.start_backup(std::move(endpoint), std::move(bucket), std::move(prefix), std::move(keyspace), std::move(table), std::move(snapshot_name), move_files);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 

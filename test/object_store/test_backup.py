@@ -90,6 +90,40 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("move_files", [False, True])
+async def test_backup_move(manager: ManagerClient, s3_server, move_files):
+    '''check that backing up a snapshot by _moving_ sstable to object storage'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    ks, cf = await prepare_snapshot_for_backup(manager, server)
+
+    workdir = await manager.server_get_workdir(server.server_id)
+    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
+    assert len(files) > 0
+
+    print('Backup snapshot')
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', s3_server.address, s3_server.bucket_name, prefix,
+                                   move_files=move_files)
+    print(f'Started task {tid}')
+    status = await manager.api.get_task_status(server.ip_addr, tid)
+    print(f'Status: {status}, waiting to finish')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+    assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
+
+    # all components in the "backup" snapshot should have been moved into bucket if move_files
+    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
+
+
+@pytest.mark.asyncio
 async def test_backup_to_non_existent_bucket(manager: ManagerClient, s3_server):
     '''backup should fail if the destination bucket does not exist'''
 

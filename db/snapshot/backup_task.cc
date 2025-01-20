@@ -30,13 +30,15 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    sstring bucket,
                                    sstring prefix,
                                    sstring ks,
-                                   std::filesystem::path snapshot_dir) noexcept
+                                   std::filesystem::path snapshot_dir,
+                                   bool move_files) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
     , _client(std::move(client))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
-    , _snapshot_dir(std::move(snapshot_dir)) {
+    , _snapshot_dir(std::move(snapshot_dir))
+    , _remove_on_uploaded(move_files) {
     _status.progress_units = "bytes ('total' may grow along the way)";
 }
 
@@ -78,6 +80,22 @@ future<> backup_task_impl::upload_component(sstring name) {
     } catch (...) {
         snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
         throw;
+    }
+
+    if (!_remove_on_uploaded) {
+        co_return;
+    }
+
+    // Delete the uploaded component to:
+    // 1. Free up disk space immediately
+    // 2. Avoid costly S3 existence checks on future backup attempts
+    try {
+        co_await remove_file(component_name.native());
+    } catch (...) {
+        // If deletion of an uploaded file fails, the backup process will continue.
+        // While this doesn't halt the backup, it may indicate filesystem permissions
+        // issues or system constraints that should be investigated.
+        snap_log.warn("Failed to remove {}: {}", component_name, std::current_exception());
     }
 }
 
