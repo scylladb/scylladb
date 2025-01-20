@@ -181,6 +181,66 @@ SEASTAR_TEST_CASE(test_short) {
     }
 }
 
+SEASTAR_TEST_CASE(test_read_across_size_boundary) {
+    auto name = "test_read_across_size_boundary";
+
+    auto [dst, k] = co_await make_file(name, open_flags::rw|open_flags::create);
+    auto size = dst.disk_write_dma_alignment() - 1;
+    co_await dst.truncate(size);
+    co_await dst.close();
+
+    auto [f, _] = co_await make_file(name, open_flags::ro, k);
+    auto a = f.disk_write_dma_alignment();
+    auto m = f.memory_dma_alignment();
+
+    auto buf = temporary_buffer<char>::aligned(m, a);
+    auto n = co_await f.dma_read(0, buf.get_write(), buf.size());
+
+    auto buf2 = temporary_buffer<char>::aligned(m, a);
+    auto n2 = co_await f.dma_read(a, buf2.get_write(), buf2.size());
+
+    auto buf3 = temporary_buffer<char>::aligned(m, a);
+    std::vector<iovec> iov({{buf3.get_write(), buf3.size()}});
+    auto n3 = co_await f.dma_read(a, std::move(iov));
+
+    auto buf4 = co_await f.dma_read_bulk<char>(a, size_t(a));
+
+    co_await f.close();
+
+    BOOST_REQUIRE_EQUAL(size, n);
+    buf.trim(n);
+    for (auto c : buf) {
+        BOOST_REQUIRE_EQUAL(c, 0);
+    }
+
+    BOOST_REQUIRE_EQUAL(0, n2);
+    BOOST_REQUIRE_EQUAL(0, n3);
+    BOOST_REQUIRE_EQUAL(0, buf4.size());
+}
+
+static future<> test_read_across_size_boundary_unaligned_helper(int64_t size_off, int64_t read_off) {
+    auto name = "test_read_across_size_boundary_unaligned";
+    auto [dst, k] = co_await make_file(name, open_flags::rw|open_flags::create);
+    auto size = dst.disk_write_dma_alignment() + size_off;
+    co_await dst.truncate(size);
+    co_await dst.close();
+
+    auto [f, k2] = co_await make_file(name, open_flags::ro, k);
+    auto buf = co_await f.dma_read_bulk<char>(f.disk_write_dma_alignment() + read_off, size_t(f.disk_write_dma_alignment()));
+
+    co_await f.close();
+
+    BOOST_REQUIRE_EQUAL(0, buf.size());
+}
+
+SEASTAR_TEST_CASE(test_read_across_size_boundary_unaligned) {
+    co_await test_read_across_size_boundary_unaligned_helper(-1, 1);
+}
+
+SEASTAR_TEST_CASE(test_read_across_size_boundary_unaligned2) {
+    co_await test_read_across_size_boundary_unaligned_helper(-2, -1);
+}
+
 SEASTAR_TEST_CASE(test_truncating_empty) {
     auto name = "test_truncating_empty";
     auto t = co_await make_file(name, open_flags::rw|open_flags::create);
