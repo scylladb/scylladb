@@ -5962,6 +5962,7 @@ future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
         slogger.debug("Executing repair for tablet={}", tablet);
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+        tasks::task_info global_tablet_repair_task_info{tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
 
         // Check if the request is still valid.
         // If there is mismatch, it means this repair was canceled and the coordinator moved on.
@@ -5981,7 +5982,7 @@ future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
         co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) {
-            return local_repair.repair_tablet(_address_map, guard, tablet);
+            return local_repair.repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info);
         });
         co_return;
     });
