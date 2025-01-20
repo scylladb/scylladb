@@ -6,7 +6,7 @@
 """
 Tests for materialized views that need a three-node cluster.
 Note that most materialized-view functional tests can make due with a single
-node, and belong cql-pytest. We also have topology_experimental_raft/
+node, and belong in cqlpy. We also have topology_experimental_raft/
 test_mv_tablets.py for tests that each needs a cluster of a different
 size, and/or special Scylla parameters.
 """
@@ -29,7 +29,7 @@ async def test_mv_tombstone_gc_setting(manager):
 
     tombstone_gc=repair is not supported on a table with RF=1, and RF>1
     is not supported on a single node, which is why this test needs to
-    be here and not in the single-node cql-pytest.
+    be here and not in the single-node cqlpy.
     """
     cql = manager.cql
     async with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }") as keyspace:
