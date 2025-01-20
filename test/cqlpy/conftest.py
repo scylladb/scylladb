@@ -21,7 +21,7 @@ import tempfile
 import time
 import random
 
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
@@ -262,3 +262,14 @@ def has_tablets(cql, this_dc):
 def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
+
+@pytest.fixture(scope="function")
+def compact_storage(cql):
+    try:
+        with config_value_context(cql, 'enable_create_table_with_compact_storage', 'true') as ctx:
+            yield ctx
+    except:
+        # enable_create_table_with_compact_storage is a scylla only feature
+        # so the above may fail on cassandra.
+        # This is fine since compact storage is enabled there by default.
+        pass

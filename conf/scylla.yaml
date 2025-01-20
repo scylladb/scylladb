@@ -674,6 +674,9 @@ maintenance_socket: ignore
 #  - SimpleStrategy
 # replication_strategy_fail_list:
 
+# Guardrail to enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.
+# enable_create_table_with_compact_storage: false
+
 # Enable tablets for new keyspaces.
 # When enabled, newly created keyspaces will have tablets enabled by default.
 # That can be explicitly disabled in the CREATE KEYSPACE query

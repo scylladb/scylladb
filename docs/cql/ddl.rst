@@ -597,6 +597,11 @@ options of a table are described in the following sections.
 Compact tables
 ``````````````
 
+Support for compact tables has been deprecated.
+By default, new tables cannot be created with the ``COMPACT STORAGE`` option, but existing tables continue to work as before.
+To allow creating new COMPACT STORAGE tables, set the ``enable_create_table_with_compact_storage`` option to ``true`` in ``scylla.yaml``,
+yet beware that support for compact tables is planned to be permanently removed in a future version.
+
 ..
    .. caution:: Since Apache Cassandra 3.0, compact tables have the exact same layout internally than non compact ones (for the
       same schema obviously), and declaring a table compact **only** creates artificial limitations on the table definition
