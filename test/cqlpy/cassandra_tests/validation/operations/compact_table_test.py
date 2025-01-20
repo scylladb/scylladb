@@ -21,6 +21,10 @@
 
 from ...porting import *
 
+@pytest.fixture(scope="function", autouse=True)
+def all_tests_in_this_file_use_compact_storage(compact_storage):
+     pass
+
 # ALTER ... DROP COMPACT STORAGE was recently dropped (unless a special
 # flag is used) by Cassandra, and it was never implemented in Scylla, so
 # let's skip its test.

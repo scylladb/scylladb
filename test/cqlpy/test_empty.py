@@ -52,7 +52,7 @@ def test_insert_empty_string_key_with_flush(cql, table1, scylla_only):
 # in a WITH COMPACT STORAGE table, an empty clustering key is not allowed.
 # As usual, an empty partition key is not allowed either.
 @pytest.mark.xfail(reason="issue #12749, misleading error message")
-def test_insert_empty_string_key_compact(cql, test_keyspace):
+def test_insert_empty_string_key_compact(compact_storage, cql, test_keyspace):
     schema = 'p text, c text, v text, primary key (p, c)'
     with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
         s = unique_key_string()
@@ -64,7 +64,7 @@ def test_insert_empty_string_key_compact(cql, test_keyspace):
 # However, in a COMPACT STORAGE table with a *compound* clustering key (more
 # than one clustering key column), setting one of them to empty *is* allowed.
 @pytest.mark.xfail(reason="issue #12749")
-def test_insert_empty_string_compound_clustering_key_compact(cql, test_keyspace):
+def test_insert_empty_string_compound_clustering_key_compact(compact_storage, cql, test_keyspace):
     schema = 'p text, c1 text, c2 text, v text, primary key (p, c1, c2)'
     with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
         s = unique_key_string()

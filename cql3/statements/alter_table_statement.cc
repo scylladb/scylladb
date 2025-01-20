@@ -448,6 +448,8 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
     std::optional<schema_ptr> s = t ? std::make_optional(t->schema()) : std::nullopt;
     std::optional<sstring> warning = check_restricted_table_properties(db, s, keyspace(), column_family(), *_properties);
     if (warning) {
+        // FIXME: should this warning be returned to the caller?
+        // See https://github.com/scylladb/scylladb/issues/20945
         mylogger.warn("{}", *warning);
     }
 
