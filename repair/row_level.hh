@@ -109,6 +109,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     bool _stopped = false;
 
+    gate _gate;
+
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
     seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
@@ -191,6 +193,7 @@ public:
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
     gms::inet_address my_address() const noexcept;
+    gate& async_gate() noexcept { return _gate; }
 
     repair::task_manager_module& get_repair_module() noexcept {
         return *_repair_module;
