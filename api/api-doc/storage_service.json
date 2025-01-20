@@ -813,6 +813,14 @@
                           "allowMultiple":false,
                           "type":"string",
                           "paramType":"query"
+                      },
+                      {
+                          "name":"move_files",
+                          "description":"Move component files instead of copying them",
+                          "required":false,
+                          "allowMultiple":false,
+                          "type":"boolean",
+                          "paramType":"query"
                       }
                   ]
               }

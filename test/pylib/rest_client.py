@@ -318,7 +318,7 @@ class ScyllaRESTAPIClient():
         """Flush all keyspaces"""
         await self.client.post(f"/storage_service/flush", host=node_ip)
 
-    async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str) -> str:
+    async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str, **kwargs) -> str:
         """Backup keyspace's snapshot"""
         params = {"keyspace": ks,
                   "table": table,
@@ -326,6 +326,13 @@ class ScyllaRESTAPIClient():
                   "bucket": bucket,
                   "prefix": prefix,
                   "snapshot": tag}
+        # add optional args. for instance, "move_files".
+        for key, value in kwargs.items():
+            if isinstance(value, bool):
+                params[key] = 'true' if value else 'false'
+            else:
+                assert any(isinstance(value, t) for t in (str, int, float))
+                params[key] = value
         return await self.client.post_json(f"/storage_service/backup", host=node_ip, params=params)
 
     async def restore(self, node_ip: str, ks: str, cf: str, dest: str, bucket: str, prefix: str, sstables: list[str], scope: str = None) -> str:
