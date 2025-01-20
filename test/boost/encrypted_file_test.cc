@@ -181,6 +181,76 @@ SEASTAR_TEST_CASE(test_short) {
     }
 }
 
+SEASTAR_TEST_CASE(test_read_across_size_boundary) {
+    auto name = "test_read_across_size_boundary";
+    auto path = sstring(dir.path() / name);
+
+    auto [dst, k] = co_await make_file(path, open_flags::rw|open_flags::create);
+    auto size = dst.disk_write_dma_alignment() - 1;
+    co_await dst.truncate(size);
+    co_await dst.close();
+
+    auto [f, k2] = co_await make_file(path, open_flags::ro, k);
+
+    temporary_buffer<char> buf(f.disk_write_dma_alignment());
+    auto n = co_await f.dma_read(0, buf.get_write(), buf.size());
+
+    temporary_buffer<char> buf2(f.disk_write_dma_alignment());
+    auto n2 = co_await f.dma_read(f.disk_write_dma_alignment(), buf2.get_write(), buf2.size());
+
+    temporary_buffer<char> buf3(f.disk_write_dma_alignment());
+    std::vector<iovec> iov({{buf3.get_write(), buf3.size()}});
+    auto n3 = co_await f.dma_read(f.disk_write_dma_alignment(), std::move(iov));
+
+    auto buf4 = co_await f.dma_read_bulk<char>(uint64_t(f.disk_write_dma_alignment()), size_t(f.disk_write_dma_alignment()));
+
+    co_await f.close();
+
+    BOOST_REQUIRE_EQUAL(size, n);
+    buf.trim(n);
+    for (auto c : buf) {
+        BOOST_REQUIRE_EQUAL(c, 0);
+    }
+
+    BOOST_REQUIRE_EQUAL(0, n2);
+    BOOST_REQUIRE_EQUAL(0, n3);
+    BOOST_REQUIRE_EQUAL(0, buf4.size());
+}
+
+SEASTAR_TEST_CASE(test_read_across_size_boundary_unaligned) {
+    auto name = "test_read_across_size_boundary_unaligned";
+    auto path = sstring(dir.path() / name);
+
+    auto [dst, k] = co_await make_file(path, open_flags::rw|open_flags::create);
+    auto size = dst.disk_write_dma_alignment() - 1;
+    co_await dst.truncate(size);
+    co_await dst.close();
+
+    auto [f, k2] = co_await make_file(path, open_flags::ro, k);
+    auto buf = co_await f.dma_read_bulk<char>(uint64_t(f.disk_write_dma_alignment() + 1), size_t(f.disk_write_dma_alignment()));
+
+    co_await f.close();
+
+    BOOST_REQUIRE_EQUAL(0, buf.size());
+}
+
+SEASTAR_TEST_CASE(test_read_across_size_boundary_unaligned2) {
+    auto name = "test_read_across_size_boundary_unaligned";
+    auto path = sstring(dir.path() / name);
+
+    auto [dst, k] = co_await make_file(path, open_flags::rw|open_flags::create);
+    auto size = dst.disk_write_dma_alignment() - 2;
+    co_await dst.truncate(size);
+    co_await dst.close();
+
+    auto [f, k2] = co_await make_file(path, open_flags::ro, k);
+    auto buf = co_await f.dma_read_bulk<char>(uint64_t(f.disk_write_dma_alignment() - 1), size_t(f.disk_write_dma_alignment()));
+
+    co_await f.close();
+
+    BOOST_REQUIRE_EQUAL(0, buf.size());
+}
+
 SEASTAR_TEST_CASE(test_truncating_empty) {
     auto name = "test_truncating_empty";
     auto t = co_await make_file(name, open_flags::rw|open_flags::create);

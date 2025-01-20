@@ -223,7 +223,18 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
                 throw std::invalid_argument("Output data not aligned");
             }
             _key->transform_unpadded(m, i + off, align_down(rem, b), o + off, iv.data());
-            return l - pos;
+            // #22236 - ensure we don't wrap numbers here. 
+            // If reading past actual end of file (_file_length), we can be decoding
+            // 1-<key block size> bytes here, that are at the boundary of last 
+            // (fake) block of the file.
+            // Example:
+            // File data size: 4095 bytes
+            // Physical file size: 4095 + 16 (assume 16 bytes key block)
+            // Read 0:4096 -> 4095 bytes
+            // If caller now ignores this and just reads 4096 (or more)
+            // bytes at next block (4096), we read 15 bytes and decode.
+            // But would be past _file_length -> ensure we return zero here.
+            return std::max(l, pos) - pos;
         }
         _key->transform_unpadded(m, i + off, block_size, o + off, iv.data());
     }
@@ -305,7 +316,8 @@ future<temporary_buffer<uint8_t>> encrypted_file_impl::dma_read_bulk(uint64_t of
             auto s = transform(offset, result.get(), result.size(), result.get_write(), mode::decrypt);
             // never give back more than asked for.
             result.trim(std::min(s, range_size));
-            result.trim_front(front);
+            // #22236 - ensure we don't overtrim if we get a short read.
+            result.trim_front(std::min(front, result.size()));
             return result;
         });
     });
