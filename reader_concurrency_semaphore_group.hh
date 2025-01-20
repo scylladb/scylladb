@@ -28,6 +28,7 @@ class reader_concurrency_semaphore_group {
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     utils::updateable_value<uint32_t> _cpu_concurrency;
+    utils::updateable_value<float> _preemptive_abort_factor;
 
     friend class database_test_wrapper;
 
@@ -38,11 +39,12 @@ class reader_concurrency_semaphore_group {
         weighted_reader_concurrency_semaphore(size_t shares, int count, sstring name, size_t max_queue_length,
                 utils::updateable_value<uint32_t> serialize_limit_multiplier,
                 utils::updateable_value<uint32_t> kill_limit_multiplier,
-                utils::updateable_value<uint32_t> cpu_concurrency)
+                utils::updateable_value<uint32_t> cpu_concurrency,
+                utils::updateable_value<float> preemptive_abort_factor)
                 : weight(shares)
                 , memory_share(0)
                 , sem(utils::updateable_value(count), 0, name, max_queue_length, std::move(serialize_limit_multiplier), std::move(kill_limit_multiplier),
-                      std::move(cpu_concurrency), reader_concurrency_semaphore::register_metrics::yes) {}
+                      std::move(cpu_concurrency), std::move(preemptive_abort_factor), reader_concurrency_semaphore::register_metrics::yes) {}
     };
 
     std::unordered_map<scheduling_group, weighted_reader_concurrency_semaphore> _semaphores;
@@ -56,6 +58,7 @@ public:
             utils::updateable_value<uint32_t> serialize_limit_multiplier,
             utils::updateable_value<uint32_t> kill_limit_multiplier,
             utils::updateable_value<uint32_t> cpu_concurrency,
+            utils::updateable_value<float> preemptive_abort_factor,
             std::optional<sstring> name_prefix = std::nullopt)
             : _total_memory(memory)
             , _total_weight(0)
@@ -64,6 +67,7 @@ public:
             , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
             , _kill_limit_multiplier(std::move(kill_limit_multiplier))
             , _cpu_concurrency(std::move(cpu_concurrency))
+            , _preemptive_abort_factor(std::move(preemptive_abort_factor))
             , _operations_serializer(1)
             , _name_prefix(std::move(name_prefix)) { }
 
