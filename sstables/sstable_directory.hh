@@ -185,6 +185,9 @@ private:
 
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
+    // Compute owner of shards for a particular SSTable.
+    future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
+
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
