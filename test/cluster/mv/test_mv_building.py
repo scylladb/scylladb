@@ -6,9 +6,10 @@
 import asyncio
 import pytest
 import logging
+import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
-from test.pylib.util import unique_name, wait_for_view
+from test.pylib.util import wait_for, wait_for_view
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
@@ -115,3 +116,32 @@ async def test_view_building_with_tablet_move(manager: ManagerClient, build_mode
 
         for view in views:
             await wait_for_view(cql, view, len(servers))
+
+# While view building is in progress, drop the index (which changes the schema
+# of the base table). The state of the view table corresponding to the index
+# may become inconsistent with the base table because they got detached.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_view_building_during_drop_index(manager: ManagerClient):
+    server = await manager.server_add()
+    cql = manager.get_cql()
+    await manager.api.enable_injection(server.ip_addr, "view_builder_consume_end_of_partition_delay", one_shot=True)
+
+    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
+    await cql.run_async(f"CREATE TABLE ks.tab (p int, c int, PRIMARY KEY (p, c))")
+    await cql.run_async("INSERT INTO ks.tab (p,c) VALUES (123, 1000)")
+
+    await cql.run_async("CREATE INDEX idx1 ON ks.tab (c)")
+    # wait for view building to start
+    async def view_build_started():
+        started = await cql.run_async(f"SELECT COUNT(*) FROM system.view_build_status_v2 WHERE status = 'STARTED' AND view_name = 'idx1_index' ALLOW FILTERING")
+        all = await cql.run_async(f"SELECT * FROM system.view_build_status_v2")
+        logger.info(f"View build status: {all}")
+        return started[0][0] == 1 or None
+    await wait_for(view_build_started, time.time() + 60, 0.1)
+
+    # while view building is delayed, we drop the view and change the schema of the base table
+    await cql.run_async("DROP INDEX ks.idx1")
+    await manager.api.message_injection(server.ip_addr, "view_builder_consume_end_of_partition_delay")
+
+    await cql.run_async("DROP TABLE ks.tab")
