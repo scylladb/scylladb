@@ -761,7 +761,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             // We want to update the tablet metadata incrementally, so copy it
             // from the current token metadata and update only the changed parts.
             tablets = co_await get_token_metadata().tablets().copy();
-            co_await replica::update_tablet_metadata(_qp, *tablets, *hint.tablets_hint);
+            co_await replica::update_tablet_metadata(_db.local(), _qp, *tablets, *hint.tablets_hint);
         } else {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
@@ -3230,6 +3230,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             for (auto id : open_sessions) {
                 session_mgr.create_session(id);
             }
+
+            auto& gc_state = db.get_compaction_manager().get_tombstone_gc_state();
+            co_await gc_state.flush_pending_repair_time_update(db);
         });
     } catch (...) {
         // applying the changes on all shards should never fail
@@ -5396,7 +5399,7 @@ void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_c
 future<> storage_service::load_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     return mutate_token_metadata([this, &hint] (mutable_token_metadata_ptr tmptr) -> future<> {
         if (hint) {
-            co_await replica::update_tablet_metadata(_qp, tmptr->tablets(), hint);
+            co_await replica::update_tablet_metadata(_db.local(), _qp, tmptr->tablets(), hint);
         } else {
             tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
         }
@@ -5920,9 +5923,9 @@ inet_address storage_service::host2ip(locator::host_id host) const {
 // may receive stale triggers started in the previous stage, so that those nodes will
 // see tablet metadata which reflects group0 state. This will cut-off stale triggers
 // as soon as the coordinator moves to the next stage.
-future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
+future<tablet_operation_result> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
                                               sstring op_name,
-                                              std::function<future<>(locator::tablet_metadata_guard&)> op) {
+                                              std::function<future<tablet_operation_result>(locator::tablet_metadata_guard&)> op) {
     // The coordinator may not execute global token metadata barrier before triggering the operation, so we need
     // a barrier here to see the token metadata which is at least as recent as that of the sender.
     auto& raft_server = _group0->group0_server();
@@ -5930,8 +5933,8 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
 
     if (_tablet_ops.contains(tablet)) {
         rtlogger.debug("{} retry joining with existing session for tablet {}", op_name, tablet);
-        co_await _tablet_ops[tablet].done.get_future();
-        co_return;
+        auto result =  co_await _tablet_ops[tablet].done.get_future();
+        co_return result;
     }
 
     locator::tablet_metadata_guard guard(_db.local().find_column_family(tablet.table), tablet);
@@ -5941,18 +5944,19 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     });
 
     auto async_gate_holder = _async_gate.hold();
-    promise<> p;
+    promise<tablet_operation_result> p;
     _tablet_ops.emplace(tablet, tablet_operation {
-        op_name, seastar::shared_future<>(p.get_future())
+        op_name, seastar::shared_future<tablet_operation_result>(p.get_future())
     });
     auto erase_registry_entry = seastar::defer([&] {
         _tablet_ops.erase(tablet);
     });
 
     try {
-        co_await op(guard);
-        p.set_value();
+        auto result = co_await op(guard);
+        p.set_value(result);
         rtlogger.debug("{} for tablet migration of {} successful", op_name, tablet);
+        co_return result;
     } catch (...) {
         p.set_exception(std::current_exception());
         rtlogger.warn("{} for tablet migration of {} failed: {}", op_name, tablet, std::current_exception());
@@ -5960,8 +5964,8 @@ future<> storage_service::do_tablet_operation(locator::global_tablet_id tablet,
     }
 }
 
-future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
-    return do_tablet_operation(tablet, "Repair", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet) {
+    auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         slogger.debug("Executing repair for tablet={}", tablet);
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
@@ -5983,11 +5987,17 @@ future<> storage_service::repair_tablet(locator::global_tablet_id tablet) {
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) {
-            return local_repair.repair_tablet(_address_map, guard, tablet);
+        service::tablet_operation_repair_result result;
+        co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) -> future<> {
+            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet);
+            result = service::tablet_operation_repair_result{time};
         });
-        co_return;
+        co_return result;
     });
+    if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {
+        co_return std::get<service::tablet_operation_repair_result>(result);
+    }
+    on_internal_error(slogger, "Got wrong tablet_operation_repair_result");
 }
 
 future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
@@ -6035,7 +6045,7 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
 // Streams data to the pending tablet replica of a given tablet on this node.
 // The source tablet replica is determined from the current transition info of the tablet.
 future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
-    return do_tablet_operation(tablet, "Streaming", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<> {
+    co_await do_tablet_operation(tablet, "Streaming", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         auto tm = guard.get_token_metadata();
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
@@ -6191,7 +6201,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             return table.maybe_split_compaction_group_of(tablet.tablet);
         });
 
-        co_return;
+        co_return tablet_operation_result();
     });
 }
 
@@ -6201,7 +6211,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
         _exit(1);
     });
 
-    return do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) {
+    co_await do_tablet_operation(tablet, "Cleanup", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         shard_id shard;
 
         {
@@ -6237,10 +6247,11 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 throw std::runtime_error(fmt::format("Tablet {} stage is not at cleanup/cleanup_target", tablet));
             }
         }
-        return _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
+        co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks] (replica::database& db) {
             auto& table = db.find_column_family(tablet.table);
             return table.cleanup_tablet(db, sys_ks.local(), tablet.tablet);
         });
+        co_return tablet_operation_result();
     });
 }
 
@@ -7185,8 +7196,9 @@ void storage_service::init_messaging_service() {
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-        return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
-            return ss.repair_tablet(tablet);
+        return handle_raft_rpc(dst_id, [tablet] (auto& ss) -> future<service::tablet_operation_repair_result> {
+            auto res = co_await ss.repair_tablet(tablet);
+            co_return res;
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {

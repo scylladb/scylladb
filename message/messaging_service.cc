@@ -48,6 +48,7 @@
 #include "replica/exceptions.hh"
 #include "serializer.hh"
 #include "db/per_partition_rate_limit_info.hh"
+#include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
 #include "service/topology_guard.hh"
 #include "service/raft/join_node.hh"

@@ -93,7 +93,7 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
 ///
 /// The hint is used to determine what has changed and only reload the changed
 /// parts from disk, updating the passed-in metadata in-place accordingly.
-future<> update_tablet_metadata(cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
+future<> update_tablet_metadata(replica::database& db, cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
 future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);

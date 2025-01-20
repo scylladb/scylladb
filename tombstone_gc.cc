@@ -18,6 +18,8 @@
 #include "replica/database.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
+#include "compaction/compaction_manager.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 
 extern logging::logger dblog;
 
@@ -216,6 +218,30 @@ void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range&
     }
     *m += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
 }
+
+void tombstone_gc_state::insert_pending_repair_time_update(table_id id,
+        const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard) {
+    _pending_updates[id].push_back(range_repair_time{range, repair_time, shard});
+}
+
+future<> tombstone_gc_state::flush_pending_repair_time_update(replica::database& db) {
+    auto pending_updates = std::exchange(_pending_updates, {});
+
+    co_await db.container().invoke_on_all([&pending_updates] (replica::database &localdb) -> future<> {
+        auto& gc_state = localdb.get_compaction_manager().get_tombstone_gc_state();
+        for (auto& x : pending_updates) {
+            auto& table = x.first;
+            for (auto& update : x.second) {
+                co_await coroutine::maybe_yield();
+                if (update.shard == this_shard_id()) {
+                    gc_state.update_repair_time(table, update.range, update.time);
+                    dblog.debug("Flush pending repair time for tombstone gc: table={} range={} repair_time={}",
+                            table, update.range, update.time);
+                }
+            }
+        }
+    });
+};
 
 void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
     auto m = get_or_create_group0_gc_time();
