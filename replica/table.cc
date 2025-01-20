@@ -2202,6 +2202,12 @@ int64_t table::get_unleveled_sstables() const {
     return 0;
 }
 
+size_t table::compaction_group_count() const {
+    size_t num = 0;
+    for_each_compaction_group([&num] (const compaction_group&) { ++num; });
+    return num;
+}
+
 future<std::unordered_set<sstables::shared_sstable>> table::get_sstables_by_partition_key(const sstring& key) const {
     auto pk = partition_key::from_nodetool_style_string(_schema, key);
     auto dk = dht::decorate_key(*_schema, pk);

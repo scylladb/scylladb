@@ -1013,6 +1013,7 @@ public:
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
+    size_t compaction_group_count() const;
 
     void start_compaction();
     void trigger_compaction();
@@ -1705,6 +1706,7 @@ public:
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
+    std::vector<sstring> get_non_local_strategy_non_tablets_keyspaces() const;
     std::vector<sstring> get_non_local_vnode_based_strategy_keyspaces() const;
     std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
     std::vector<sstring> get_tablets_keyspaces() const;

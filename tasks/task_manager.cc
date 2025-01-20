@@ -64,22 +64,38 @@ future<> task_manager::task::children::mark_as_finished(task_id id, task_essenti
     }();
 }
 
-future<task_manager::task::progress> task_manager::task::children::get_progress(const std::string& progress_units) const {
+future<task_manager::task::progress> task_manager::task::children::get_progress(std::function<void(progress&, const progress&)> update_progress, std::function<bool(child_variant)> include_child, progress initial) const {
     rwlock::holder shared_holder = co_await _lock.hold_read_lock();
 
-    tasks::task_manager::task::progress progress{};
+    tasks::task_manager::task::progress progress = initial;
     co_await coroutine::parallel_for_each(_children, [&] (const auto& child_entry) -> future<> {
         const auto& child = child_entry.second;
-        auto local_progress = co_await smp::submit_to(child.get_owner_shard(), [&child, &progress_units] {
-            SCYLLA_ASSERT(child->get_status().progress_units == progress_units);
-            return child->get_progress();
+        auto local_progress = co_await smp::submit_to(child.get_owner_shard(), [child_ptr = co_await child.copy(), include_child, initial] mutable -> future<task::progress> {
+            auto child = child_ptr.release();
+            co_return include_child(child) ? co_await child->get_progress() : initial;
         });
-        progress += local_progress;
+        update_progress(progress, local_progress);
     });
     for (const auto& child: _finished_children) {
-        progress += child.task_progress;
+        auto child_progress = include_child(child) ? child.task_progress : initial;
+        update_progress(progress, child_progress);
     }
     co_return progress;
+}
+
+future<task_manager::task::progress> task_manager::task::children::get_progress(const std::string& progress_units) const {
+    return get_progress([] (progress& res, const progress& child_progress) { res += child_progress; }, [&progress_units] (child_variant child_v) {
+        return std::visit(overloaded_functor{
+            [&progress_units] (task_ptr child) {
+                SCYLLA_ASSERT(child->get_status().progress_units == progress_units);
+                return true;
+            },
+            [&progress_units] (task_essentials child) {
+                SCYLLA_ASSERT(child.task_status.progress_units == progress_units);
+                return true;
+            }
+        }, child_v);
+    }, progress{});
 }
 
 future<> task_manager::task::children::for_each_task(std::function<future<>(const foreign_task_ptr&)> f_children,
