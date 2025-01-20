@@ -313,6 +313,7 @@ future<> system_distributed_keyspace::create_tables(std::vector<schema_ptr> tabl
 
             // The service_levels table exists. Update it if it lacks new columns.
             if (table->cf_name() == SERVICE_LEVELS && !get_current_service_levels(db)->equal_columns(*table)) {
+                // We don't expect materialized views on the service_levels table, so we don't need to update them.
                 auto update_mutations = co_await service::prepare_column_family_update_announcement(_sp, table, std::vector<view_ptr>(), ts);
                 std::move(update_mutations.begin(), update_mutations.end(), std::back_inserter(mutations));
             }

@@ -67,9 +67,14 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
         modify(tags);
         schema_builder builder(s);
         builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags));
-
+        std::vector<view_ptr> view_updates;
+        auto table = mm.get_storage_proxy().data_dictionary().find_column_family(s);
+        // Update all view so that they use the new base schema version.
+        for (auto&& view : table.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
         auto m = co_await service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
-                builder.build(), std::vector<view_ptr>(), group0_guard.write_timestamp());
+                builder.build(), std::move(view_updates), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("Modify tags for {} table", cf));
     });

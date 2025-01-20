@@ -369,31 +369,45 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 
             validate_column_rename(db, *s, *from, *to);
             cfm.rename_column(from->name(), to->name());
-
-            // If the view includes a renamed column, it must be renamed in
-            // the view table and the definition.
-            for (auto&& view : cf.views()) {
+        }
+        // New view schemas contain the new column names, so we need to base them on the
+        // new base schema.
+        schema_ptr new_base_schema = cfm.build();
+        // If the view includes a renamed column, it must be renamed in
+        // the view table and the definition.
+        for (auto&& view : cf.views()) {
+            schema_builder builder(view);
+            auto new_where = view->view_info()->where_clause();
+            for (auto&& entry : _renames) {
+                auto from = entry.first->prepare_column_identifier(*s);
+                auto to = entry.second->prepare_column_identifier(*s);
                 if (view->get_column_definition(from->name())) {
-                    schema_builder builder(view);
-
                     auto view_from = entry.first->prepare_column_identifier(*view);
                     auto view_to = entry.second->prepare_column_identifier(*view);
                     validate_column_rename(db, *view, *view_from, *view_to);
                     builder.rename_column(view_from->name(), view_to->name());
 
-                    auto new_where = util::rename_column_in_where_clause(
-                            view->view_info()->where_clause(),
+                    new_where = util::rename_column_in_where_clause(
+                            new_where,
                             column_identifier::raw(view_from->text(), true),
                             column_identifier::raw(view_to->text(), true),
                             cql3::dialect{});
-                    builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
-                            view->view_info()->include_all_columns(), std::move(new_where));
-
-                    view_updates.push_back(view_ptr(builder.build()));
                 }
             }
+            // Even if no column is changed in the view, push an view update with the original where clause
+            // so that a new view schema is created with the new base schema.
+            builder.with_view_info(new_base_schema, view->view_info()->include_all_columns(), std::move(new_where));
+            view_updates.push_back(view_ptr(builder.build()));
         }
         break;
+    }
+    if (_type != alter_table_statement::type::rename) {
+        // If we're renaming columns, we don't want to update the view schema again
+        // because that would overwrite the new where clause with the original one.
+        // Otherwise, we always want to update all views with the new base schema version.
+        for (auto&& view : cf.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
     }
 
     return make_pair(std::move(cfm), std::move(view_updates));

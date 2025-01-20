@@ -380,7 +380,13 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
     std::vector<mutation> m;
 
     if (res) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
+        std::vector<view_ptr> view_updates;
+        auto cf = qp.db().find_column_family(res->schema);
+        // Update all view so that they use the new base schema version.
+        for (auto&& view : cf.views()) {
+            view_updates.push_back(view_ptr(schema_builder(view).build()));
+        }
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), std::move(view_updates), ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
