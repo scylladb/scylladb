@@ -1691,9 +1691,14 @@ table::stop() {
     co_await when_all(
         _pending_reads_phaser.close(),
         _pending_writes_phaser.close(),
-        _pending_streams_phaser.close(),
-        _pending_flushes_phaser.close());
-    co_await _sg_manager->stop_storage_groups();
+        _pending_streams_phaser.close());
+    // Allow parallel flushes from the commitlog path
+    // to synchronize with table::stop
+    {
+        auto op = _pending_flushes_phaser.start();
+        co_await _sg_manager->stop_storage_groups();
+    }
+    co_await _pending_flushes_phaser.close();
     co_await _sstable_deletion_gate.close();
     co_await std::move(gate_closed_fut);
     co_await get_row_cache().invalidate(row_cache::external_updater([this] {
@@ -3055,6 +3060,10 @@ size_t storage_group::memtable_count() const noexcept {
 
 future<> table::flush(std::optional<db::replay_position> pos) {
     if (pos && *pos < _flush_rp) {
+        co_return;
+    }
+    // There is nothing to flush if the table was stopped.
+    if (_pending_flushes_phaser.is_closed()) {
         co_return;
     }
     auto op = _pending_flushes_phaser.start();
