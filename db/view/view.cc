@@ -3248,6 +3248,9 @@ public:
 
     stop_iteration consume_end_of_partition() {
         inject_failure("view_builder_consume_end_of_partition");
+        if (utils::get_local_injector().enter("view_builder_consume_end_of_partition_delay_3s")) {
+            seastar::sleep(std::chrono::seconds(3)).get();
+        }
         flush_fragments();
         return stop_iteration(_step.build_status.empty());
     }
