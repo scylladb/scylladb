@@ -581,7 +581,7 @@ future<rjson::value> encryption::gcp_host::impl::send_request(std::string_view u
     rjson::value v;
     co_await send_request(uri, std::move(body), content_type, [&](const http::reply& rep, std::string_view s) {
         if (rep._status != http::reply::status_type::ok) {
-            gcp_log.trace("Got unexpected reponse ({})", rep._status);
+            gcp_log.trace("Got unexpected response ({})", rep._status);
             for (auto& [k, v] : rep._headers) {
                 gcp_log.trace("{}: {}", k, v);
             }
@@ -660,7 +660,7 @@ future<> encryption::gcp_host::impl::send_request(std::string_view uri, std::str
         auto&lh = handler;
         auto lin = std::move(in);
         auto result = co_await util::read_entire_stream_contiguous(lin);
-        gcp_log.trace("Got reponse {}: {}", int(rep._status), result);
+        gcp_log.trace("Got response {}: {}", int(rep._status), result);
         lh(rep, result);
     });
 
@@ -874,7 +874,7 @@ future<encryption::gcp_host::impl::key_and_id_type> encryption::gcp_host::impl::
      * I.e. something like:
      *   mykeyring:mykey:e56sadfafa3324ff=/wfsdfwssdf
      *
-     * The actual data key can be retreived by doing a KMS "Decrypt" of the data blob part
+     * The actual data key can be retrieved by doing a KMS "Decrypt" of the data blob part
      * using the KMS key referenced by the key ID. This gives back actual key data that can
      * be used to create a symmetric_key with algo, length etc as specified by metadata.
      *
