@@ -11,15 +11,17 @@ import time
 import logging
 from test.topology.conftest import skip_mode
 from test.pylib.util import wait_for_view
+from test.topology.util import new_test_keyspace
 from cassandra.cqltypes import Int32Type
 
 logger = logging.getLogger(__name__)
 
-async def insert_with_concurrency(cql, value_count, concurrency):
+async def insert_with_concurrency(cql, table, value_count, concurrency):
+    ks = table.split(".")[0]
     def serialize_int(i):
         return Int32Type.serialize(i, cql.cluster.protocol_version)
     def get_replicas(key):
-        return cql.cluster.metadata.get_replicas("ks", serialize_int(key))
+        return cql.cluster.metadata.get_replicas(ks, serialize_int(key))
     local_node = get_replicas(0)[0]
     logger.info(f"Starting writes with concurrency {concurrency}")
     async def do_inserts(m: int):
@@ -28,7 +30,7 @@ async def insert_with_concurrency(cql, value_count, concurrency):
             m_count += 1
         update_key = m
         # For each row in [0, value_count) with key % concurrency == m, insert a row with the same remainder m
-        insert_stmt = cql.prepare(f"INSERT INTO ks.tab (key, c) VALUES (?, ?)")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.tab (key, c) VALUES (?, ?)")
         inserted_count = 0
         while inserted_count < m_count:
             # Only remote updates hold on to memory, so try another key until the update is remote
@@ -61,16 +63,14 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
     node_count = 2
     await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
     cql = manager.get_cql()
-    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
-    await cql.run_async(f"CREATE TABLE ks.tab (key int, c int, PRIMARY KEY (key, c))")
-    await insert_with_concurrency(cql, 200, 100)
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
+        await insert_with_concurrency(cql, f"{ks}.tab", 200, 100)
 
-    await cql.run_async(f"CREATE MATERIALIZED VIEW ks.mv_cf_view AS SELECT * FROM ks.tab "
-                    "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key) ")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key) ")
 
-    await wait_for_view(cql, "mv_cf_view", node_count)
+        await wait_for_view(cql, "mv_cf_view", node_count)
 
-    logger.info(f"Deleting all rows from partition with key 0")
-    await cql.run_async(f"DELETE FROM ks.tab WHERE key = 0", timeout=300)
-
-    await cql.run_async(f"DROP KEYSPACE ks")
+        logger.info(f"Deleting all rows from partition with key 0")
+        await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", timeout=300)

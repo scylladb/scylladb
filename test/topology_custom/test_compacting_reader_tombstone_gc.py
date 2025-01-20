@@ -5,6 +5,7 @@
 #
 
 from test.pylib.manager_client import ManagerClient
+from test.topology.util import new_test_keyspace
 
 import pytest
 import asyncio
@@ -24,35 +25,36 @@ async def test_compacting_reader_tombstone_gc_with_data_in_memtable(manager: Man
     servers = [await manager.server_add(cmdline=cmdline)]
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds = 0;")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int) WITH gc_grace_seconds = 0;")
 
-    await manager.api.disable_autocompaction(servers[0].ip_addr, "test")
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks)
 
-    key = 7 # Whatever
+        key = 7 # Whatever
 
-    # Simulates scenario where node missed tombstone and has it written to sstable directly
-    # after repair, whereas the deleted data remains on memtable due to low write activity.
+        # Simulates scenario where node missed tombstone and has it written to sstable directly
+        # after repair, whereas the deleted data remains on memtable due to low write activity.
 
-    # write a expiring tombstone into a sstable (flushed below)
-    await cql.run_async(f'DELETE FROM test.test USING timestamp 10 WHERE pk = {key}')
+        # write a expiring tombstone into a sstable (flushed below)
+        await cql.run_async(f'DELETE FROM {table} USING timestamp 10 WHERE pk = {key}')
 
-    # waits for tombstone to expire
-    time.sleep(1)
+        # waits for tombstone to expire
+        time.sleep(1)
 
-    # system-wide flush to prevent CL segment from blocking tombstone GC in the read path.
-    await manager.api.flush_all_keyspaces(servers[0].ip_addr)
+        # system-wide flush to prevent CL segment from blocking tombstone GC in the read path.
+        await manager.api.flush_all_keyspaces(servers[0].ip_addr)
 
-    # write into memtable data shadowed by the tombstone now living in the sstable
-    await cql.run_async(f'INSERT INTO test.test (pk, c) VALUES ({key}, 0) USING timestamp 9')
+        # write into memtable data shadowed by the tombstone now living in the sstable
+        await cql.run_async(f'INSERT INTO {table} (pk, c) VALUES ({key}, 0) USING timestamp 9')
 
-    await manager.api.drop_sstable_caches(servers[0].ip_addr)
+        await manager.api.drop_sstable_caches(servers[0].ip_addr)
 
-    # Without cache, the compacting reader is bypassed; Verify that the data in memtable is discarded
-    bypass_cache_rows = cql.execute(f'SELECT pk, c FROM test.test WHERE pk = {key} BYPASS CACHE;')
-    assert len(list(bypass_cache_rows)) == 0
+        # Without cache, the compacting reader is bypassed; Verify that the data in memtable is discarded
+        bypass_cache_rows = cql.execute(f'SELECT pk, c FROM {table} WHERE pk = {key} BYPASS CACHE;')
+        assert len(list(bypass_cache_rows)) == 0
 
-    # With the cache, the compacting reader is involved;
-    # Verify that the tombstone is not purged, allowing it to shadow the data in memtable
-    through_cache_rows = cql.execute(f'SELECT pk, c FROM test.test WHERE pk = {key};')
-    assert len(list(through_cache_rows)) == 0
+        # With the cache, the compacting reader is involved;
+        # Verify that the tombstone is not purged, allowing it to shadow the data in memtable
+        through_cache_rows = cql.execute(f'SELECT pk, c FROM {table} WHERE pk = {key};')
+        assert len(list(through_cache_rows)) == 0

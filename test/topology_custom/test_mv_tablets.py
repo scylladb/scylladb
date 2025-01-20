@@ -11,6 +11,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.topology.conftest import skip_mode
+from test.topology.util import new_test_keyspace
 
 from .test_alternator import get_alternator, alternator_config, full_query
 
@@ -88,10 +89,9 @@ async def test_tablet_mv_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
-    await cql.run_async("DROP KEYSPACE test")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
 
 
 @pytest.mark.asyncio
@@ -106,13 +106,12 @@ async def test_tablet_mv_simple(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
-    await cql.run_async("INSERT INTO test.test (pk, c) VALUES (2, 3)")
-    # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
-    assert [(3,2)] == list(await cql.run_async("SELECT * FROM test.tv WHERE c=3"))
-    await cql.run_async("DROP KEYSPACE test")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (2, 3)")
+        # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
+        assert [(3,2)] == list(await cql.run_async(f"SELECT * FROM {ks}.tv WHERE c=3"))
 
 @pytest.mark.asyncio
 async def test_tablet_mv_simple_6node(manager: ManagerClient):
@@ -128,13 +127,12 @@ async def test_tablet_mv_simple_6node(manager: ManagerClient):
     """
     servers = await manager.servers_add(6)
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE MATERIALIZED VIEW test.tv AS SELECT * FROM test.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
-    await cql.run_async("INSERT INTO test.test (pk, c) VALUES (2, 3)")
-    # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
-    assert [(3,2)] == list(await cql.run_async("SELECT * FROM test.tv WHERE c=3"))
-    await cql.run_async("DROP KEYSPACE test")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (2, 3)")
+        # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
+        assert [(3,2)] == list(await cql.run_async(f"SELECT * FROM {ks}.tv WHERE c=3"))
 
 async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
@@ -228,11 +226,10 @@ async def test_tablet_si_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE INDEX my_idx ON test.test(c)")
-    await cql.run_async("DROP INDEX test.my_idx")
-    await cql.run_async("DROP KEYSPACE test")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE INDEX my_idx ON {ks}.test(c)")
+        await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
 async def test_tablet_lsi_create(manager: ManagerClient):
     """A basic test for creating a *local* secondary index on a table stored
@@ -243,11 +240,10 @@ async def test_tablet_lsi_create(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
 
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE INDEX my_idx ON test.test((pk),c)")
-    await cql.run_async("DROP INDEX test.my_idx")
-    await cql.run_async("DROP KEYSPACE test")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE INDEX my_idx ON {ks}.test((pk),c)")
+        await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -272,32 +268,30 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
     # Create a table with an LSI, using tablets. Use just 1 tablets,
     # which is silly in any real-world use case, but makes this test simpler
     # and faster.
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int)")
-    await cql.run_async("CREATE INDEX my_idx ON test.test((pk),c)")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE INDEX my_idx ON {ks}.test((pk),c)")
 
-    # Move the base tablet (there's just one) to node 0, and the view tablet
-    # (of the view backing the index) to node 1. In particular all view
-    # updates will then be remote: node 0 will send view updates to node 1.
-    await pin_the_only_tablet(manager, 'test', 'test', servers[0])
-    await pin_the_only_tablet(manager, 'test', 'my_idx_index', servers[1])
+        # Move the base tablet (there's just one) to node 0, and the view tablet
+        # (of the view backing the index) to node 1. In particular all view
+        # updates will then be remote: node 0 will send view updates to node 1.
+        await pin_the_only_tablet(manager, ks, 'test', servers[0])
+        await pin_the_only_tablet(manager, ks, 'my_idx_index', servers[1])
 
-    # Add a fixed (0.5 second) delay before view updates, to increase the
-    # likehood that if the write didn't wait for the view update, we can try
-    # reading before the view update happened and fail the test.
-    await inject_error_on(manager, "delay_before_remote_view_update", servers);
+        # Add a fixed (0.5 second) delay before view updates, to increase the
+        # likehood that if the write didn't wait for the view update, we can try
+        # reading before the view update happened and fail the {ks}.
+        await inject_error_on(manager, "delay_before_remote_view_update", servers);
 
-    # Write to the base table (whose only replica is on node 0).
-    zzz = time.time()
-    await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES (7, 42)")
-    # If synchronous update worked, this log message should say more
-    # than 0.5 seconds (the delay added by injection). If it didn't work,
-    # the time will be less than 0.5 seconds and the read is likely to fail.
-    logger.info(f"Insert took {time.time()-zzz}")
-    # Read using the index (whose only replica is on node 1, and delayed
-    # by the injection above). LSI should use synchronous view updates,
-    # so the data should be searchable through the local secondary index
-    # immediately after the previous INSERT returned.
-    assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM test.test WHERE pk=7 AND c=42"))
-
-    await cql.run_async("DROP KEYSPACE test")
+        # Write to the base table (whose only replica is on node 0).
+        zzz = time.time()
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (7, 42)")
+        # If synchronous update worked, this log message should say more
+        # than 0.5 seconds (the delay added by injection). If it didn't work,
+        # the time will be less than 0.5 seconds and the read is likely to fail.
+        logger.info(f"Insert took {time.time()-zzz}")
+        # Read using the index (whose only replica is on node 1, and delayed
+        # by the injection above). LSI should use synchronous view updates,
+        # so the data should be searchable through the local secondary index
+        # immediately after the previous INSERT returned.
+        assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk=7 AND c=42"))
