@@ -445,21 +445,27 @@ async def test_service_levels_over_limit(manager: ManagerClient):
 # Reproduces issue scylla-enterprise#4912
 @pytest.mark.asyncio
 async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
-    s = await manager.server_add()
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    servers = await manager.servers_add(2)
+    s = servers[0]
     cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     sl1 = unique_name()
     sl2 = unique_name()
 
+    # All service level commands need to run on the first node. It is the logic
+    # that is exercised during service level data reload from group0 which is
+    # prone to name reuse and, hence, could trigger the error fixed by 4912.
+
     # creates scheduling group `sl:sl1`
-    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}", host=h)
     # renames scheduling group `sl:sl1` to `sl_deleted:sl1`
-    await cql.run_async(f"DROP SERVICE LEVEL {sl1}")
+    await cql.run_async(f"DROP SERVICE LEVEL {sl1}", host=h)
     # renames scheduling group `sl_deleted:sl1` to `sl:sl2`
-    await cql.run_async(f"CREATE SERVICE LEVEL {sl2}")
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl2}", host=h)
     # creates scheduling group `sl:sl1`
-    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl1}", host=h)
     # In issue #4912, service_level_controller thought there was no room
     # for `sl:sl1` scheduling group because create_scheduling_group() failed due to
     # `seastar::metrics::double_registration (registering metrics twice for metrics: transport_cql_requests_count)`
@@ -467,7 +473,7 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     # When sl2 is dropped, service_level_controller tries to rename its
     # scheduling group to `sl:sl1`, triggering 
     # `seastar::metrics::double_registration (registering metrics twice for metrics: scheduler_runtime_ms)`
-    await cql.run_async(f"DROP SERVICE LEVEL {sl2}")
+    await cql.run_async(f"DROP SERVICE LEVEL {sl2}", host=h)
 
     # Check if group0 is healthy
     s2 = await manager.server_add()

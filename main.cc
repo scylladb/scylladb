@@ -1202,6 +1202,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::yes);
             auto maintenance_cql_sg_stats_key = scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get();
             scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_socket_enabled::no);
+            cql_sg_stats_cfg.rename = [] (void* ptr) {
+                reinterpret_cast<cql_transport::cql_sg_stats*>(ptr)->rename_metrics();
+            };
             auto cql_sg_stats_key = scheduling_group_key_create(cql_sg_stats_cfg).get();
 
             supervisor::notify("starting disk space monitor");
