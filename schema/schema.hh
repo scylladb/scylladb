@@ -30,6 +30,7 @@
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "db/tablet_hints.hh"
 #include "schema_fwd.hh"
 
 namespace dht {
@@ -740,6 +741,8 @@ public:
     const ::caching_options& caching_options() const {
         return _raw._caching_options;
     }
+
+    const db::tablet_hints& tablet_hints() const noexcept;
 
     static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;

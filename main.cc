@@ -98,6 +98,7 @@
 #include "tombstone_gc_extension.hh"
 #include "db/tags/extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
+#include "db/tablet_hints_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
@@ -730,6 +731,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
     ext->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
     ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
+    ext->add_schema_extension<db::tablet_hints_extension>(db::tablet_hints_extension::NAME);
 
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();

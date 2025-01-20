@@ -323,3 +323,52 @@ def test_alter_tablet_keyspace_rf(cql, this_dc):
             change_dc_rf(10)  # increase RF by 2+ should fail
         with pytest.raises(InvalidRequest):
             change_dc_rf(0)  # decrease RF by 2+ should fail
+
+
+def test_tablet_hints(cql, skip_without_tablets):
+    def describe_table(cql, table):
+        return cql.execute(f"DESC TABLE {table}").one().create_statement
+
+    ksdef = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'enabled': true};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        tablet_hints = "tablet_hints = {'min_tablet_count': '100'}"
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, c int", extra=f"WITH {tablet_hints}") as table:
+            assert tablet_hints in describe_table(cql, table)
+            # ALTER TABLE for other options does not affect existing tablet_hints
+            cql.execute(f"ALTER TABLE {table} WITH gc_grace_seconds = 42")
+            assert tablet_hints in describe_table(cql, table)
+            # Resetting tablet_hints to an empty map drops all hints
+            tablet_hints = "tablet_hints = {}"
+            cql.execute(f"ALTER TABLE {table} WITH {tablet_hints}")
+            assert tablet_hints in describe_table(cql, table)
+            # New tablet_hints can be added by ALTER TABLE
+            tablet_hints = "tablet_hints = {'expected_data_size_in_gb': '50', 'min_tablet_count': '100'}"
+            cql.execute(f"ALTER TABLE {table} WITH {tablet_hints}")
+            assert tablet_hints in describe_table(cql, table)
+            # tablet_hints with zero values are dropped
+            tablet_hints = "tablet_hints = {'expected_data_size_in_gb': '0', 'min_tablet_count': '100'}"
+            cql.execute(f"ALTER TABLE {table} WITH {tablet_hints}")
+            assert "tablet_hints = {'min_tablet_count': '100'}" in describe_table(cql, table)
+            # tablet_hints are set as a whole, replacing the previously set hints
+            # Also, verify that a floating point value works for min_per_shard_tablet_count
+            tablet_hints = "tablet_hints = {'min_per_shard_tablet_count': '3.14'}"
+            cql.execute(f"ALTER TABLE {table} WITH {tablet_hints}")
+            assert tablet_hints in describe_table(cql, table)
+
+
+def test_tablet_hints_with_vnodes_based_keyspace(cql, skip_without_tablets):
+    # Test that tablet_hints are disallowed when tablets are disabled for the keyspace
+    ksdef = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'enabled': false};"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        table = f"{keyspace}.{unique_name()}"
+        schema = "pk int PRIMARY KEY, c int"
+        tablet_hints = "tablet_hints = {'min_tablet_count': '100'}"
+        expected_msg = "tablet_hints cannot be used when tablets are disabled for the keyspace"
+        with pytest.raises(ConfigurationException, match=expected_msg):
+            cql.execute(f"CREATE TABLE {table} ({schema}) WITH {tablet_hints}")
+        cql.execute(f"CREATE TABLE {table} ({schema})")
+        try:
+            with pytest.raises(ConfigurationException, match=expected_msg):
+                cql.execute(f"ALTER TABLE {table} WITH {tablet_hints}")
+        finally:
+            cql.execute(f"DROP TABLE {table}")

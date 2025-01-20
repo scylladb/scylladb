@@ -229,7 +229,7 @@ Options:
 sub-option                             type  description
 ===================================== ====== =============================================
 ``'enabled'``                          bool  Whether or not to enable tablets for a keyspace
-``'initial'``                          int   The number of tablets to start with
+``'initial'``                          int   The number of tablets to start with (deprecated)
 ===================================== ====== =============================================
 
 .. scylladb_include_flag:: tablets-default.rst
@@ -250,6 +250,8 @@ An example that creates a keyspace with 2048 tablets per table::
         'initial': 2048
     };
 
+Note that the ``initial`` tablets option was deprecated.
+Please use :ref:`Per-table tablet hints <cql-tablet-hints-options>` instead.
 
 See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
 
@@ -348,9 +350,17 @@ Creating a new table uses the ``CREATE TABLE`` statement:
                    : | CLUSTERING ORDER BY '(' `clustering_order` ')' [ AND `table_options` ]
                    : | scylla_encryption_options: '=' '{'[`cipher_algorithm` : <hash>]','[`secret_key_strength` : <len>]','[`key_provider`: <provider>]'}'
                    : | caching  '=' ' {'caching_options'}'
+                   : | tablet_hints '=' '{' `tablet_hints` '}'
                    : | `options`
    
    clustering_order: `column_name` (ASC | DESC) ( ',' `column_name` (ASC | DESC) )*
+   
+   tablet_hints: `tablet_hint` [',' `tablet_hint`]
+   
+   tablet_hint: 'expected_data_size_in_gb' ':' <int>
+             : | 'min_per_shard_tablet_count' ':' <float>
+             : | 'min_tablet_count' ':' <int>
+             : |
 
 For instance::
 
@@ -712,6 +722,10 @@ A table supports the following options:
      - map
      - see below
      - :ref:`CDC Options <cdc-options>`
+   * - ``tablet_hints``
+     - map
+     - see below
+     - :ref:`Per-table tablet hints <cql-tablet-hints-options>`
 
 
 .. _speculative-retry-options:
@@ -896,6 +910,64 @@ The following modes are available:
      - Tombstone GC is never performed. This mode may be useful when loading data to the database, to avoid tombstone GC when part of the data is not yet available.
    * - ``immediate``
      - Tombstone GC is immediately performed. There is no wait time or repair requirement. This mode is useful for a table that uses the TWCS compaction strategy with no user deletes. After data is expired after TTL, ScyllaDB can perform compaction to drop the expired data immediately.
+
+.. _cql-tablet-hints-options:
+
+Per-table tablet hints
+######################
+
+By default, ScyllaDB will allocate the initial number of tablets automatically.
+Then on, tables may be automatically split if their average size is greater than twice
+the ``target_tablet_size_in_bytes``, or merged if the average tablet size is less than
+half the ``target_tablet_size_in_bytes``.
+
+Other considerations, like the total number of tablet replicas per-shard, may also affect the tablet count.
+Since each tablet replica has a constant memory overhead, ScyllaDB may limit the number of tablets to prevent
+shards from running out-of-memory, in the presence of many tables.
+
+The following per-table ``tablet_hints`` options can be used to tune the tablet allocation logic for the table
+if its data size, or performance requirements are known in advance.
+
+=============================== =============== ===================================================================================
+ Option                          Default         Description
+=============================== =============== ===================================================================================
+ ``expected_data_size_in_gb``   0               This option provides a hint for the number of tablets required for the anticipated
+                                                table size (before replication).  It is calculated by dividing the expected data
+                                                size by the ``target_tablet_size_in_bytes`` config option.
+                                                It can be set when the table is created to allocate more tablets for it,
+                                                as if it already occupies that size.  This will prevent unnecessary tablet splits
+                                                and tablet migrations during data ingestion.
+                                                It can also be changed later in the table life cycle to induce tablet splits or merges
+                                                to fit the new expected size.
+ ``min_per_shard_tablet_count`` 0               Used for ensuring that the table workload is well balanced in the whole cluster in a
+                                                topology-independent way. A higher number of tablet replicas per shard may help balance
+                                                the table workload more evenly across shards and across nodes in the cluster.
+                                                For example, setting this to 10 means that shard overcommit is limited to 10%, regardless
+                                                of cluster size.
+                                                Note that ``min_per_shard_tablet_count`` supports floating point values and can be set to
+                                                a value less than 1.  This is useful for clusters with large number of shards where the
+                                                average number of tablet replicas owned by each shard is less than 1.
+ ``min_tablet_count``           0               Determines the minimum number of tablets to allocate for the table.
+                                                The hint is based on the deprecated keyspace ``initial`` tablets option.
+                                                Note that the actual number of tablet replicas that are owned by each shard is a
+                                                function of the tablet count, the replication factor in the datacenter, and the number
+                                                of nodes and shards in the datacenter.  It is recommended to use higher-level hints
+                                                such as ``expected_data_size_in_gb`` or ``min_per_shard_tablet_count`` instead.
+=============================== =============== ===================================================================================
+
+When allocating tablets for a new table, ScyllaDB uses the maximum of the ``initial`` tablets configured for the keyspace
+and the minimum tablet count calculated from the table's ``tablet_hints``, if any.
+If multiple tablet hints are provided, ScyllaDB uses the maximum tablet count derived by each hint individually.
+If the keyspace ``initial`` tablets is set to zero and no ``tablet_hints`` are provided,
+ScyllaDB automatically calculates the number of tablets so that each shard would own at least one tablet replica,
+scaled up by the ``tablets_initial_scale_factor`` configuration option.
+
+Unlike the ``initial`` tablet count configured for the keyspace, ScyllaDB will not merge tablets when their
+average size drops below half the ``target_tablet_size_in_bytes`` if that would cause the table's tablet count
+to go below the minimum tablet count, or the per-shard tablet-count as per the above hints.
+This is useful for tables that go through rapid growth and shrink cycles.
+If the table is shrunk for the long term and there are no special performance needs for the tablet, it is recommended
+to drop the tablet hints or to adjust them respectively, to fit the new requirements.
 
 Other considerations:
 #####################

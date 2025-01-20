@@ -9,6 +9,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <map>
 #include "cql3/description.hh"
+#include "db/tablet_hints_extension.hh"
 #include "db/view/view.hh"
 #include "timestamp.hh"
 #include "utils/assert.hh"
@@ -1614,6 +1615,15 @@ const ::tombstone_gc_options& schema::tombstone_gc_options() const {
     return default_tombstone_gc_options;
 }
 
+const db::tablet_hints& schema::tablet_hints() const noexcept {
+    static const db::tablet_hints default_tablet_hints;
+    const auto& schema_extensions = _raw._extensions;
+    if (auto it = schema_extensions.find(db::tablet_hints_extension::NAME); it != schema_extensions.end()) {
+        return dynamic_pointer_cast<db::tablet_hints_extension>(it->second)->get_hints();
+    }
+    return default_tablet_hints;
+}
+
 schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
     add_extension(cdc::cdc_extension::NAME, ::make_shared<cdc::cdc_extension>(opts));
     return *this;
@@ -1626,6 +1636,11 @@ schema_builder& schema_builder::with_tombstone_gc_options(const tombstone_gc_opt
 
 schema_builder& schema_builder::with_per_partition_rate_limit_options(const db::per_partition_rate_limit_options& opts) {
     add_extension(db::per_partition_rate_limit_extension::NAME, ::make_shared<db::per_partition_rate_limit_extension>(opts));
+    return *this;
+}
+
+schema_builder& schema_builder::with_tablet_hints(const std::map<sstring, sstring>& hints) {
+    add_extension(db::tablet_hints_extension::NAME, ::make_shared<db::tablet_hints_extension>(hints));
     return *this;
 }
 

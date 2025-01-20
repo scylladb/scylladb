@@ -9,6 +9,7 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
@@ -20,9 +21,11 @@
 #include "tombstone_gc.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "db/tablet_hints_extension.hh"
 #include "utils/bloom_calculations.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <stdexcept>
 
 namespace cql3 {
 
@@ -68,12 +71,22 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
     return er;
 }
 
+data_dictionary::keyspace cf_prop_defs::find_keyspace(const data_dictionary::database db, std::string_view ks_name) {
+    try {
+        return db.find_keyspace(ks_name);
+    } catch (...) {
+        std::throw_with_nested(request_validations::invalid_request("Could not find keyspace {}", ks_name));
+    }
+}
+
 void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
     // Skip validation if the comapction strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
         return;
     }
+
+    const auto& ks = find_keyspace(db, ks_name);
 
     static std::set<sstring> keywords({
         KW_COMMENT,
@@ -162,6 +175,10 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     speculative_retry::from_sstring(get_string(KW_SPECULATIVE_RETRY, speculative_retry(speculative_retry::type::NONE, 0).to_sstring()));
+
+    if (!ks.uses_tablets() && schema_extensions.contains(db::tablet_hints_extension::NAME)) {
+        throw exceptions::configuration_exception(format("{} cannot be used when tablets are disabled for the keyspace", db::tablet_hints_extension::NAME));
+    }
 }
 
 std::map<sstring, sstring> cf_prop_defs::get_compaction_type_options() const {
@@ -250,6 +267,16 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
 
     auto ext = dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second);
     return &ext->get_options();
+}
+
+const db::tablet_hints* cf_prop_defs::get_tablet_hints(const schema::extensions_map& schema_exts) const {
+    auto it = schema_exts.find(db::tablet_hints_extension::NAME);
+    if (it == schema_exts.end()) {
+        return nullptr;
+    }
+
+    auto ext = dynamic_pointer_cast<db::tablet_hints_extension>(it->second);
+    return &ext->get_hints();
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
