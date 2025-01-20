@@ -10,7 +10,6 @@
 
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm.hpp>
-#include <boost/range/adaptor/uniqued.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -26,6 +25,7 @@
 #include "transport/messages/result_message.hh"
 #include "utils/assert.hh"
 #include "utils/big_decimal.hh"
+#include "utils/unique_view.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_functions) {
             msg->accept(v);
             // No boost::adaptors::sorted
             std::ranges::sort(v.res);
-            BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
+            BOOST_REQUIRE_EQUAL(std::ranges::distance(v.res | utils::views::unique), 3);
         }).then([&] {
             return e.execute_cql("select sum(c1), count(c1) from cf where p1 = 'key1';");
         }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
