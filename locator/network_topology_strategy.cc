@@ -311,16 +311,13 @@ static future<unsigned> calculate_initial_tablets_from_topology(const schema& s,
             shards_per_dc_map[node.dc_rack().dc] += node.get_shard_count();
         }
     });
+    min_per_shard_tablet_count = std::max(1.0, min_per_shard_tablet_count);
     for (const auto& [dc, rf_in_dc] : rf) {
         if (!rf_in_dc) {
             continue;
         }
         unsigned shards_in_dc = shards_per_dc_map[dc];
-        unsigned tablets_in_dc = (shards_in_dc + rf_in_dc - 1) / rf_in_dc;
-        if (min_per_shard_tablet_count) {
-            auto min_tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
-            tablets_in_dc = std::max<unsigned>(tablets_in_dc, min_tablets_in_dc);
-        }
+        unsigned tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
