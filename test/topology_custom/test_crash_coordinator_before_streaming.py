@@ -58,7 +58,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient) -> None:
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.decommission_node(server_id=other_nodes[-1].server_id, expected_error="Decommission failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, 2, time.time() + 60)
+    num_elections = await wait_new_coordinator_elected(manager, 2, time.time() + 60)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
@@ -78,7 +78,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient) -> None:
                               node_to_remove_srv_id,
                               expected_error="Removenode failed. See earlier errors")
 
-    await wait_new_coordinator_elected(manager, 3, time.time() + 60)
+    num_elections = await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + 60)
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
     logger.debug("Start old coordinator node with srv_id %s", coordinator_host.server_id)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
@@ -98,7 +98,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient) -> None:
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.server_start(new_node.server_id,
                                expected_error="Startup failed: std::runtime_error")
-    await wait_new_coordinator_elected(manager, 4, time.time() + 60)
+    num_elections = await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + 60)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
@@ -114,7 +114,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient) -> None:
     replace_cfg = ReplaceConfig(replaced_id = node_to_replace_srv_id, reuse_ip_addr = False, use_host_id = True)
     new_node = await manager.server_add(start=False, replace_cfg=replace_cfg, cmdline=cmdline)
     await manager.server_start(new_node.server_id, expected_error="Replace failed. See earlier errors")
-    await wait_new_coordinator_elected(manager, 5, time.time() + 60)
+    num_elections = await wait_new_coordinator_elected(manager, num_elections + 1, time.time() + 60)
     logger.debug("Start old coordinator node")
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
