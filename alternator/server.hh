@@ -24,7 +24,7 @@ namespace alternator {
 
 using chunked_content = rjson::chunked_content;
 
-class server {
+class server : public peering_sharded_service<server> {
     static constexpr size_t content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
             tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>)>;
@@ -51,6 +51,8 @@ class server {
 
     semaphore* _memory_limiter;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
+
+    ::shared_ptr<seastar::tls::server_credentials> _credentials;
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
