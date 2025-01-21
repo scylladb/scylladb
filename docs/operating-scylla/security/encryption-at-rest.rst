@@ -143,8 +143,6 @@ Depending on your key provider, you will either have the option of allowing Scyl
 * Replicated Key Provider - you must generate a system key yourself
 * Local Key Provider - If you do not generate your own secret key, ScyllaDB will create one for you
 
-When encrypting ScyllaDB config by ``configuration_encryptor``, you also need to generate a secret key and upload the key to all nodes.
-
 
 Use the key generator script
 ================================
@@ -820,32 +818,6 @@ Once this encryption is enabled, it is used for all system data.
 
    .. wasn't able to test this successfully
 
-.. Encrypt and Decrypt Configuration Files
-.. =======================================
-
-.. Using the Configuration Encryption tool, you can encrypt parts of the scylla.yaml file which contain encryption configuration settings. 
-
-.. **Procedure**
-
-.. 1.  Run the Configuration Encryption script:
-
-.. test code-block: none
-
-.. /bin/configuration_encryptor [options] [key-path]
-
-.. Where:
-
-.. * ``-c, --config`` - the path to the configuration file (/etc/scylla/scylla.yaml, for example)
-.. * ``-d, --decrypt`` - decrypts the configuration file at the specified path
-.. * ``-o, --output`` - (optional) writes the configuration file to a specified target. This can be the same location as the source file. 
-.. * ``-h. --help`` - help for this command
-
-.. For example:
-
-.. test code-block: none
-
-.. sudo -u scylla /bin/configuration_encryptor -c /etc/scylla/scylla.yaml /etc/scylla/encryption_keys/secret_key
-.. end of test
 
 When a Key is Lost
 ----------------------
