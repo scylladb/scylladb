@@ -18,9 +18,7 @@
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
 #include "tracing/trace_state.hh"
-
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/uniqued.hpp>
+#include "utils/unique_view.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -128,12 +126,12 @@ void batch_statement::validate()
 
     if (_has_conditions
             && !_statements.empty()
-            && (boost::distance(_statements
-                            | boost::adaptors::transformed([] (auto&& s) { return s.statement->keyspace(); })
-                            | boost::adaptors::uniqued) != 1
-                || (boost::distance(_statements
-                        | boost::adaptors::transformed([] (auto&& s) { return s.statement->column_family(); })
-                        | boost::adaptors::uniqued) != 1))) {
+            && (std::ranges::distance(_statements
+                            | std::views::transform([] (auto&& s) { return s.statement->keyspace(); })
+                            | utils::views::unique) != 1
+                || (std::ranges::distance(_statements
+                        | std::views::transform([] (auto&& s) { return s.statement->column_family(); })
+                        | utils::views::unique) != 1))) {
         throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
     }
     std::optional<bool> raw_counter;
