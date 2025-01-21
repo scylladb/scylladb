@@ -570,6 +570,7 @@ scylla_tests = set([
     'test/boost/wasm_alloc_test',
     'test/boost/wasm_test',
     'test/boost/wrapping_interval_test',
+    'test/boost/unique_view_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
