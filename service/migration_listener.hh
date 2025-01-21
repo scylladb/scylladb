@@ -99,7 +99,7 @@ public:
     void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
 
     void on_update_keyspace(const sstring& ks_name) override {}
-    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {}
+    // Updates to base table schemas change the view schemas, so leave on_update_column_family override
     void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
@@ -114,6 +114,7 @@ public:
 
 class migration_listener::empty_listener : public only_view_notifications {
 public:
+    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {};
     void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {};

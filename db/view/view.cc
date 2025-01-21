@@ -2329,7 +2329,7 @@ view_builder::build_step& view_builder::get_or_create_build_step(table_id base_i
     auto it = _base_to_build_step.find(base_id);
     if (it == _base_to_build_step.end()) {
         auto base = _db.find_column_family(base_id).shared_from_this();
-        auto p = _base_to_build_step.emplace(base_id, build_step{base, make_partition_slice(*base->schema())});
+        auto p = _base_to_build_step.emplace(base_id, build_step{base, base->schema(), make_partition_slice(*base->schema())});
         // Iterators could have been invalidated if there was rehashing, so just reset the cursor.
         _current_step = p.first;
         it = p.first;
@@ -2693,12 +2693,94 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
     }).discard_result();
 }
 
+future<> view_builder::update_base_schema(const replica::column_family& base) {
+    auto base_schema = base.schema();
+    auto& views = base.views();
+    if (views.empty()) {
+        co_return;
+    }
+    auto step_it = _base_to_build_step.find(base_schema->id());
+    if (step_it == _base_to_build_step.end()) {
+        co_return;// In case all the views for this CF have finished building already.
+    }
+    if (step_it->second.base_schema->version() == base_schema->version()) {
+        co_return;// Base schema was already updated, probably while creating an index.
+    }
+    step_it->second.base_schema = base_schema;
+    // Update view_ptrs in all build statuses with new view_ptr from the base table.
+    // If some were dropped, stop them as well, so we won't continue building them,
+    // especially as their schema is not updated with the new base schema.
+    // If some were added, we can handle them later, in on_create_view.
+    std::vector<view_ptr> views_to_remove;
+    for (auto& status : step_it->second.build_status) {
+        auto view_it = std::ranges::find_if(views, [&status] (const view_ptr& v) {
+            return v->id() == status.view->id();
+        });
+        if (view_it == views.end()) {
+            views_to_remove.push_back(status.view);
+        } else {
+            // This update will be performed again in on_update_view, but it will set the same
+            // view_ptr, and it's still needed there because not all view schema updates are
+            // caused by base schema updates.
+            status.view = *view_it;
+        }
+    }
+    for (auto& view : views_to_remove) {
+        co_await drop_view(base_schema->ks_name(), view->cf_name(), step_it->second);
+    }
+}
+
+future<> view_builder::drop_view(const sstring& ks_name, const sstring& view_name, build_step& step) {
+    // The view is absent from the database at this point, so find it by brute force.
+    for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
+        if (it->view->cf_name() == view_name) {
+            vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
+            _built_views.erase(it->view->id());
+            step.build_status.erase(it);
+            if (this_shard_id() != 0) {
+                // Shard 0 can't remove the entry in the build progress system table on behalf of the
+                // current shard, since shard 0 may have already processed the notification, and this
+                // shard may since have updated the system table if the drop happened concurrently
+                // with the build.
+                return _sys_ks.remove_view_build_progress(ks_name, view_name);
+            }
+            return when_all_succeed(
+                        _sys_ks.remove_view_build_progress(ks_name, view_name),
+                        _sys_ks.remove_built_view(ks_name, view_name),
+                        remove_view_build_status(ks_name, view_name))
+                            .discard_result()
+                            .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+                vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
+            });
+        }
+    }
+    return make_ready_future<>();
+}
+
+void view_builder::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) {
+    // Do it in the background, serialized.
+    (void)with_semaphore(_sem, 1, [ks_name, cf_name, this] {
+        return update_base_schema(_db.find_column_family(ks_name, cf_name));
+    }).handle_exception_type([] (replica::no_such_column_family&) { });
+}
+
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto& step = get_or_create_build_step(view->view_info()->base_id());
-        return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
+        future<> update_base = make_ready_future();
+        if (step.base_schema->version() != view->view_info()->base_info()->base_schema()->version()) {
+            if (step.base->schema()->version() != view->view_info()->base_info()->base_schema()->version()) {
+                on_internal_error(vlogger, format("View {}.{} was created with base schema version {} while the schema in the table had version {},",
+                                             ks_name, view_name, view->view_info()->base_info()->base_schema()->version(), step.base->schema()->version()));
+            }
+            // The base schema was updated at the same time as creating the view, probably because the view was an
+            // index. We need to build the index using the most up-to-date base schema, so we need to update the
+            // base schema and all view schemas that depend on it.
+            update_base = update_base_schema(*step.base);
+        }
+        return when_all(std::move(update_base), step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
             return flush_base(step.base, _as);
         }).then([this, view, &step] () mutable {
             // This resets the build step to the current token. It may result in views currently
@@ -2736,39 +2818,16 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
-    vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         // The view is absent from the database at this point, so find it by brute force.
-        ([&, this] {
-            for (auto& [_, step] : _base_to_build_step) {
-                if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
-                    continue;
-                }
-                for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
-                    if (it->view->cf_name() == view_name) {
-                        _built_views.erase(it->view->id());
-                        step.build_status.erase(it);
-                        return;
-                    }
-                }
+        for (auto& [_, step] : _base_to_build_step) {
+            if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
+                continue;
             }
-        })();
-        if (this_shard_id() != 0) {
-            // Shard 0 can't remove the entry in the build progress system table on behalf of the
-            // current shard, since shard 0 may have already processed the notification, and this
-            // shard may since have updated the system table if the drop happened concurrently
-            // with the build.
-            return _sys_ks.remove_view_build_progress(ks_name, view_name);
+            return drop_view(ks_name, view_name, step);
         }
-        return when_all_succeed(
-                    _sys_ks.remove_view_build_progress(ks_name, view_name),
-                    _sys_ks.remove_built_view(ks_name, view_name),
-                    remove_view_build_status(ks_name, view_name))
-                        .discard_result()
-                        .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
-            vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
-        });
+        return make_ready_future<>();
     });
 }
 
