@@ -724,7 +724,7 @@ def testOverflow(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT a + (int) ?, b + (tinyint) ?, c + (smallint) ? FROM %s", 2147483647, 127, 32767),
                    row(-2147483648, -128, -32768))
 
-@pytest.mark.xfail(reason="#20501, #2693")
+@pytest.mark.xfail(reason="#2693")
 def testOperationsWithDuration(cql, test_keyspace):
     # Test with timestamp type.
     with create_table(cql, test_keyspace, "(pk int, time timestamp, v int, primary key (pk, time))") as table:
