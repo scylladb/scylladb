@@ -288,11 +288,21 @@ int64_t timestamp_from_string(std::string_view s) {
         auto t = get_time(dsm);
 
         auto tz = dsm.suffix().str();
+        const auto str_begin = tz.find_first_not_of(" ");
+        bool is_tz_empty = str_begin == std::string::npos;
+
+        std::string_view tz_trim = tz;
+        if (!is_tz_empty) {
+            tz_trim.remove_prefix(str_begin);
+            const auto str_end = tz_trim.find_last_not_of(" ");
+            tz_trim.remove_suffix(tz_trim.size() - str_end - 1);
+        }
+
         static const boost::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
         boost::smatch tsm;
         if (boost::regex_match(tz, tsm, tz_re)) {
             t -= get_utc_offset(tsm.str());
-        } else if (tz.empty()) {
+        } else if (is_tz_empty) {
             typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
             // local_tz::local_to_utc(), where are you?
             auto t1 = local_tz::utc_to_local(t);
@@ -300,7 +310,7 @@ int64_t timestamp_from_string(std::string_view s) {
             auto t2 = local_tz::utc_to_local(t - tz_offset);
             auto dst_offset = t2 - t;
             t -= tz_offset + dst_offset;
-        } else if (tz != "z") {
+        } else if (tz_trim != "z" && tz_trim != "utc" && tz_trim != "gmt") {
             throw marshal_exception(seastar::format("Unable to parse timezone '{}'", tz));
         }
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
