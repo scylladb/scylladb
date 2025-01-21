@@ -2,9 +2,6 @@
 ScyllaDB Auditing Guide
 ========================
 
-:label-tip:`ScyllaDB Enterprise`
-
-
 Auditing allows the administrator to monitor activities on a Scylla cluster, including queries and data changes. 
 The information is stored in a Syslog or a Scylla table.
 

@@ -7,10 +7,6 @@ LDAP Authentication
 
    saslauthd
 
-:label-tip:`ScyllaDB Enterprise`
-
-.. versionadded:: 2021.1.2
-
 Scylla supports user authentication via an LDAP server by leveraging the SaslauthdAuthenticator.
 By configuring saslauthd correctly against your LDAP server, you enable Scylla to check the user’s credentials through it.
 
