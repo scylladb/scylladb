@@ -2318,7 +2318,7 @@ view_builder::build_step& view_builder::get_or_create_build_step(table_id base_i
     auto it = _base_to_build_step.find(base_id);
     if (it == _base_to_build_step.end()) {
         auto base = _db.find_column_family(base_id).shared_from_this();
-        auto p = _base_to_build_step.emplace(base_id, build_step{base, make_partition_slice(*base->schema())});
+        auto p = _base_to_build_step.emplace(base_id, build_step{base, base->schema(), make_partition_slice(*base->schema())});
         // Iterators could have been invalidated if there was rehashing, so just reset the cursor.
         _current_step = p.first;
         it = p.first;
@@ -2682,11 +2682,69 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
     }).discard_result();
 }
 
+void view_builder::update_base_schema(const replica::column_family& base) {
+    auto base_schema = base.schema();
+    auto& views = base.views();
+    if (views.empty()) {
+        return;
+    }
+    auto step_it = _base_to_build_step.find(base_schema->id());
+    if (step_it == _base_to_build_step.end()) {
+        return;// In case all the views for this CF have finished building already.
+    }
+    if (step_it->second.base_schema->version() == base_schema->version()) {
+        return;// Base schema was already updated, probably while creating an index.
+    }
+    step_it->second.base_schema = base_schema;
+    // Update view_ptrs in all build statuses with new view_ptr from the base table.
+    // If some were dropped, stop them as well, so we won't continue building them,
+    // especially as their schema is not updated with the new base schema.
+    // If some were added, we can handle them later, in on_create_view.
+    std::vector<view_ptr> views_to_remove;
+    for (auto& status : step_it->second.build_status) {
+        auto view_it = std::ranges::find_if(views, [&status] (const view_ptr& v) {
+            return v->id() == status.view->id();
+        });
+        if (view_it == views.end()) {
+            views_to_remove.push_back(status.view);
+        } else {
+            // This update will be performed again in on_update_view, but it will set the same
+            // view_ptr, and it's still needed there because not all view schema updates are
+            // caused by base schema updates.
+            status.view = *view_it;
+        }
+    }
+    for (auto& view : views_to_remove) {
+        _built_views.erase(view->id());
+        step_it->second.build_status.erase(std::ranges::find_if(step_it->second.build_status, [&view] (const view_build_status& bs) {
+            return bs.view->id() == view->id();
+        }));
+        // The cleanup operations will be done in on_drop_view.
+    }
+}
+
+void view_builder::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) {
+    // Do it in the background, serialized.
+    (void)with_semaphore(_sem, 1, [ks_name, cf_name, this] {
+        update_base_schema(_db.find_column_family(ks_name, cf_name));
+    }).handle_exception_type([] (replica::no_such_column_family&) { });
+}
+
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
         auto& step = get_or_create_build_step(view->view_info()->base_id());
+        if (step.base_schema->version() != view->view_info()->base_info().base_schema()->version()) {
+            if (step.base->schema()->version() != view->view_info()->base_info().base_schema()->version()) {
+                on_internal_error(vlogger, format("View {}.{} was created with base schema version {} while the schema in the table had version {},",
+                                             ks_name, view_name, view->view_info()->base_info().base_schema()->version(), step.base->schema()->version()));
+            }
+            // The base schema was updated at the same time as creating the view, probably because the view was an
+            // index. We need to build the index using the most up-to-date base schema, so we need to update the
+            // base schema and all view schemas that depend on it.
+            update_base_schema(*step.base);
+        }
         return when_all(step.base->await_pending_writes(), step.base->await_pending_streams()).discard_result().then([this, &step] {
             return flush_base(step.base, _as);
         }).then([this, view, &step] () mutable {
