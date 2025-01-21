@@ -202,18 +202,14 @@ An example that excludes a datacenter while using ``replication_factor``::
 
     DESCRIBE KEYSPACE excalibur
         CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
-
-
-
-.. only:: opensource
   
-  Keyspace storage options :label-caution:`Experimental`
-  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Keyspace storage options :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-  By default, SStables of a keyspace are stored locally.
-  As an alternative, you can configure your keyspace to be stored
-  on Amazon S3 or another S3-compatible object store.
-  See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
+By default, SStables of a keyspace are stored locally.
+As an alternative, you can configure your keyspace to be stored
+on Amazon S3 or another S3-compatible object store.
+See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
 
 .. _tablets:
 
