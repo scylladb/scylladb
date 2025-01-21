@@ -104,6 +104,7 @@ protected:
     };
     std::list<gentle_iterator> _gentle_iterators;
     std::vector<server_socket> _listeners;
+    shared_ptr<seastar::tls::server_credentials> _credentials;
 
 public:
     server(const sstring& server_name, logging::logger& logger);
@@ -119,7 +120,12 @@ public:
     future<> shutdown();
     future<> stop();
 
-    future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions);
+    future<> listen(socket_address addr, 
+        std::shared_ptr<seastar::tls::credentials_builder> creds, 
+        bool is_shard_aware, bool keepalive, 
+        std::optional<file_permissions> unix_domain_socket_permissions,
+        std::function<server&()> get_shard_instance = {}
+        );
 
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
 

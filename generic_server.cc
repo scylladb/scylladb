@@ -13,6 +13,7 @@
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/smp.hh>
 
 namespace generic_server {
 
@@ -167,16 +168,34 @@ future<> server::shutdown() {
 }
 
 future<>
-server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
-    shared_ptr<seastar::tls::server_credentials> creds = nullptr;
-    if (builder) {
-        creds = co_await builder->build_reloadable_server_credentials([this](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                _logger.warn("Exception loading {}: {}", files, ep);
-            } else {
-                _logger.info("Reloaded {}", files);
-            }
-        });
+server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, std::function<server&()> get_shard_instance) {
+    // Note: We are making the assumption that if builder is provided it will be the same for each
+    // invokation, regardless of address etc. In general, only CQL server will call this multiple times,
+    // and if TLS, it will use the same cert set.
+    // Could hold certs in a map<addr, certs> and ensure separation, but then we will for all
+    // current uses of this class create duplicate reloadable certs for shard 0, which is
+    // kind of what we wanted to avoid in the first place...
+    if (builder && !_credentials) {
+        if (!get_shard_instance || this_shard_id() == 0) {
+            _credentials = co_await builder->build_reloadable_server_credentials([this, get_shard_instance = std::move(get_shard_instance)](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                if (ep) {
+                    _logger.warn("Exception loading {}: {}", files, ep);
+                } else {
+                    if (get_shard_instance) {
+                        co_await smp::invoke_on_others([&]() {
+                            auto& s = get_shard_instance();
+                            if (s._credentials) {
+                                b.rebuild(*s._credentials);
+                            }
+                        });
+
+                    }
+                    _logger.info("Reloaded {}", files);
+                }
+            });
+        } else {
+            _credentials = builder->build_server_credentials();
+        }
     }
     listen_options lo;
     lo.reuse_address = true;
@@ -186,8 +205,8 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     }
     server_socket ss;
     try {
-        ss = creds
-            ? seastar::tls::listen(std::move(creds), addr, lo)
+        ss = builder
+            ? seastar::tls::listen(_credentials, addr, lo)
             : seastar::listen(addr, lo);
     } catch (...) {
         throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
