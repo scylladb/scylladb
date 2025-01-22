@@ -119,6 +119,7 @@ struct topology {
         tablet_resize_finalization,
         left_token_ring,
         rollback_to_normal,
+        truncate_table,
     };
 
     std::optional<transition_state> tstate;
