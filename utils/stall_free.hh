@@ -50,7 +50,7 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
 
 // The clear_gently functions are meant for
 // gently destroying the contents of containers.
-// The containers can be re-used after clear_gently
+// The containers can be reused after clear_gently
 // or may be destroyed.  But unlike e.g. std::vector::clear(),
 // clear_gently will not necessarily keep the object allocation.
 
