@@ -489,6 +489,13 @@ class ScyllaRESTAPIClient():
     async def get_config(self, node_ip: str, id: str):
         return await self.client.get_json(f'/v2/config/{id}', host=node_ip)
 
+    async def set_trace_probability(self, node_ip: str, probability: float) -> None:
+        await self.client.post(
+            resource_uri="/storage_service/trace_probability",
+            host=node_ip,
+            params={"probability": probability},
+        )
+
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
         self.lines: list[str] = lines
