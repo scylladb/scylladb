@@ -192,6 +192,11 @@ future<> sstables_manager::components_reloader_fiber() {
             co_return;
         }
 
+        co_await maybe_reload_components();
+    }
+}
+
+future<> sstables_manager::maybe_reload_components() {
         // Reload bloom filters from the smallest to largest so as to maximize
         // the number of bloom filters being reloaded.
         auto memory_available = get_memory_available_for_reclaimable_components();
@@ -224,7 +229,6 @@ future<> sstables_manager::components_reloader_fiber() {
             _total_memory_reclaimed -= reclaimed_memory;
             memory_available = get_memory_available_for_reclaimable_components();
         }
-    }
 }
 
 void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {

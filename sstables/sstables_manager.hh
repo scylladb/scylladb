@@ -218,6 +218,8 @@ private:
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
     // Fiber to reload reclaimed components back into memory when memory becomes available.
     future<> components_reloader_fiber();
+    // Reloads components from reclaimed SSTables if memory is available.
+    future<> maybe_reload_components();
     size_t get_memory_available_for_reclaimable_components();
     // Reclaim memory from the SSTable and remove it from the memory tracking metrics.
     // The method is idempotent and for an sstable that is deleted, it is called both
