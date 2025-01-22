@@ -32,6 +32,10 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+class NoSuchProcess(Exception):
+    ...
+
+
 class ManagerClient():
     """Helper Manager API client
     Args:
@@ -626,3 +630,12 @@ class ManagerClient():
 
     async def server_get_exe(self, server_id: ServerNum) -> str:
         return await self.client.get_json(f"/cluster/server/{server_id}/exe")
+
+    async def server_get_returncode(self, server_id: ServerNum) -> int | None:
+        match await self.client.get_json(f"/cluster/server/{server_id}/returncode"):
+            case "NO_SUCH_PROCESS":
+                raise NoSuchProcess(f"No process found for {server_id=}")
+            case "RUNNING":
+                return None
+            case returncode:
+                return int(returncode)
