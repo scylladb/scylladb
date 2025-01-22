@@ -122,8 +122,8 @@ class PythonTestSuite(TestSuite):
         return create_cluster
 
     @property
-    def pattern(self) -> str:
-        return ["*_test.py", "test_*.py"]
+    def pattern(self) -> str | list[str]:
+        return ["*_test.py", "*_tests.py", "test_*.py"]
 
     async def add_test(self, shortname, casename) -> None:
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, casename, self)
