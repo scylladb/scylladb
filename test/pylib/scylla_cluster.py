@@ -1482,6 +1482,7 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/wipe_sstables', self._cluster_server_wipe_sstables)
         add_get('/cluster/server/{server_id}/sstables_disk_usage', self._server_get_sstables_disk_usage)
         add_get('/cluster/server/{server_id}/process_status', self._server_get_process_status)
+        add_get('/cluster/server/{server_id}/returncode', self._server_get_returncode)
 
     async def _manager_up(self, _request) -> bool:
         return self.is_running
@@ -1820,6 +1821,14 @@ class ScyllaClusterManager:
 
     async def _server_get_exe(self, request: aiohttp.web.Request) -> str:
         return str(await self._server_get_attribute(request, "exe"))
+
+    async def _server_get_returncode(self, request: aiohttp.web.Request) -> str:
+        if cmd := await self._server_get_attribute(request=request, attribute="cmd"):
+            returncode = cmd.returncode
+            if returncode is None:
+                return "RUNNING"
+            return cmd.returncode
+        return "NO_SUCH_PROCESS"
 
     async def _cluster_server_wipe_sstables(self, request: aiohttp.web.Request):
         data = await request.json()
