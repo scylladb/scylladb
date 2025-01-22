@@ -1328,7 +1328,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/gossip.idl.hh',
         'idl/migration_manager.idl.hh',
         "idl/node_ops.idl.hh",
-
+        "idl/tasks.idl.hh"
         ]
 
 scylla_tests_generic_dependencies = [

@@ -25,6 +25,7 @@
 #include "task_manager.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
+#include "idl/tasks.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -417,7 +418,7 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
 
     auto nodes = module->get_nodes();
     co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
-        return ms->send_tasks_get_children(netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
+        return ser::tasks_rpc_verbs::send_tasks_get_children(ms, netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
             return resp | std::views::transform([addr] (auto id) {
                 return task_identity{
                     .node = addr,
@@ -802,14 +803,14 @@ void task_manager::unregister_virtual_task(task_group group) noexcept {
 void task_manager::init_ms_handlers(netw::messaging_service& ms) {
     _messaging = &ms;
 
-    ms.register_tasks_get_children([this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
+    ser::tasks_rpc_verbs::register_tasks_get_children(_messaging, [this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
         return get_virtual_task_children(task_id{req.id});
     });
 }
 
 future<> task_manager::uninit_ms_handlers() {
     if (auto* ms = std::exchange(_messaging, nullptr)) {
-        return ms->unregister_tasks_get_children().discard_result();
+        return ser::tasks_rpc_verbs::unregister(ms).discard_result();
     }
     return make_ready_future();
 }
