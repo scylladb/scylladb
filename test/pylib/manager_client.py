@@ -28,6 +28,8 @@ from cassandra.auth import AuthProvider
 import aiohttp
 import asyncio
 
+import universalasync
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,8 @@ class NoSuchProcess(Exception):
     ...
 
 
-class ManagerClient():
+@universalasync.wrap
+class ManagerClient:
     """Helper Manager API client
     Args:
         sock_path (str): path to an AF_UNIX socket where Manager server is listening
