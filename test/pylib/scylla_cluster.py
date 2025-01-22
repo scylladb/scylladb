@@ -590,19 +590,27 @@ class ScyllaServer:
     async def start(self,
                     api: ScyllaRESTAPIClient,
                     expected_error: Optional[str] = None,
-                    expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED) -> None:
-        """Start an installed server. May be used for restarts."""
+                    expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                    cmdline_options_override: list[str] | None = None,
+                    append_env_override: dict[str, str] | None = None) -> None:
+        """Start an installed server.
+
+        Use `cmdline_options_override` and `append_env_override` instead of `self.cmdline_options` and
+        `self.append_env` correspondingly if provided.
+
+        May be used for restarts.
+        """
 
         env = os.environ.copy()
         # remove from env to make sure user's SCYLLA_HOME has no impact
         env.pop('SCYLLA_HOME', None)
-        env.update(self.append_env)
+        env.update(self.append_env if append_env_override is None else append_env_override)
         env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
 
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
-            *self.cmdline_options,
+            *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
             cwd=self.workdir,
             stderr=self.log_file,
             stdout=self.log_file,
@@ -1148,9 +1156,20 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
-    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
-                           seeds: Optional[List[IPAddress]] = None) -> None:
-        """Start a server. No-op if already running."""
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           seeds: list[IPAddress] | None = None,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None) -> None:
+        """Start a server.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+
+        No-op if already running.
+        """
         if server_id in self.running:
             return
         assert server_id in self.stopped, f"Server {server_id} unknown"
@@ -1166,7 +1185,13 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        await server.start(self.api, expected_error)
+        await server.start(
+            api=self.api,
+            expected_error=expected_error,
+            expected_server_up_state=expected_server_up_state,
+            cmdline_options_override=cmdline_options_override,
+            append_env_override=append_env_override,
+        )
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
@@ -1489,9 +1514,12 @@ class ScyllaClusterManager:
         return self.cluster.servers[server_id].ip_addr
 
     async def _cluster_host_id(self, request) -> HostID:
-        """IP address of a server"""
-        server_id = ServerNum(int(request.match_info["server_id"]))
-        return self.cluster.servers[server_id].host_id
+        """Host ID of a server."""
+
+        server = self.cluster.servers[ServerNum(int(request.match_info["server_id"]))]
+        if not hasattr(server, "host_id") and not await server.get_host_id(api=self.cluster.api):
+            raise RuntimeError(f"Failed to get host_id for {server}")
+        return server.host_id
 
     async def _before_test_req(self, request) -> str:
         cluster_str = await self._before_test(request.match_info['test_case_name'])
@@ -1570,11 +1598,17 @@ class ScyllaClusterManager:
     async def _cluster_server_start(self, request) -> None:
         """Start a specified server (must be stopped)"""
         assert self.cluster
+
         server_id = ServerNum(int(request.match_info["server_id"]))
         data = await request.json()
-        expected_error = data["expected_error"]
-        seeds = data["seeds"]
-        await self.cluster.server_start(server_id, expected_error, seeds)
+        await self.cluster.server_start(
+            server_id=server_id,
+            expected_error=data.get("expected_error"),
+            seeds=data.get("seeds"),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
+            cmdline_options_override=data.get("cmdline_options_override"),
+            append_env_override=data.get("append_env_override"),
+        )
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
