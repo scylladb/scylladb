@@ -111,6 +111,18 @@ async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
         assert v > now
 
 @pytest.mark.asyncio
+async def test_tablet_manual_repair_async(manager: ManagerClient):
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    token = "-1"
+    log = await manager.server_open_log(servers[0].server_id)
+    res = await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token, await_completion=False)
+    tablet_task_id = res['tablet_task_id']
+    logging.info(f"{tablet_task_id=}")
+    res = await log.grep(rf'.*Issued tablet repair by API request table_id={table_id}.*tablet_task_id={tablet_task_id}.*')
+    logging.info(f"{res=}")
+    assert len(res) == 1
+
+@pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerClient):
     servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
