@@ -144,3 +144,46 @@ If a certain data center or rack has no functional nodes, or doesn't even
 exist, an empty list (`[]`) is returned by the `/localnodes` request.
 A client should be prepared to consider expanding the node search to an
 entire data center, or other data centers, in that case.
+
+## Tablets
+"Tablets" are ScyllaDB's new approach to replicating data across a cluster.
+It replaces the older approach which was named "vnodes". Compared to vnodes,
+tablets are smaller pieces of tables that are easier to move between nodes,
+and allow for faster growing or shrinking of the cluster when needed.
+
+In this version, tablet support is incomplete and not all of the features
+which Alternator needs are supported with tablets. So currently, new
+Alternator tables default to using vnodes - not tablets.
+
+However, if you do want to create an Alternator table which uses tablets,
+you can do this by specifying the `experimental:initial_tablets` tag in
+the CreateTable operation. The value of this tag can be:
+
+* Any valid integer as the value of this tag enables tablets.
+  Typically the number "0" is used - which tells ScyllaDB to pick a reasonable
+  number of initial tablets. But any other number can be used, and this
+  number overrides the default choice of initial number of tablets.
+
+* Any non-integer value - e.g., the string "none" - creates the table
+  without tablets - i.e., using vnodes.
+
+The `experimental:initial_tablets` tag only has any effect while creating
+a new table with CreateTable - changing it later has no effect.
+
+Because the tablets support is incomplete, when tablets are enabled for an
+Alternator table, the following features will not work for this table:
+
+* The table must have one of the write isolation modes which does not
+  not use LWT, because it's not supported with tablets. The allowed write
+  isolation modes are `forbid_rmw` or `unsafe_rmw`.
+  Setting the isolation mode to `always_use_lwt` will succeed, but the writes
+  themselves will fail with an InternalServerError. At that point you can
+  still change the write isolation mode of the table to a supported mode.
+  See <https://github.com/scylladb/scylladb/issues/18068>.
+
+* Enabling TTL with UpdateTableToLive doesn't work (results in an error).
+  See <https://github.com/scylladb/scylla/issues/16567>.
+
+* Enabling Streams with CreateTable or UpdateTable doesn't work
+  (results in an error).
+  See <https://github.com/scylladb/scylla/issues/16317>.
