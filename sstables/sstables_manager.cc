@@ -197,38 +197,38 @@ future<> sstables_manager::components_reloader_fiber() {
 }
 
 future<> sstables_manager::maybe_reload_components() {
-        // Reload bloom filters from the smallest to largest so as to maximize
-        // the number of bloom filters being reloaded.
-        auto memory_available = get_memory_available_for_reclaimable_components();
-        while (!_reclaimed.empty() && memory_available > 0) {
-            auto sstable_to_reload = _reclaimed.begin();
-            const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
-            if (reclaimed_memory > memory_available) {
-                // cannot reload anymore sstables
-                break;
-            }
-
-            // Increment the total memory before reloading to prevent any parallel
-            // fibers from loading new bloom filters into memory.
-            _total_reclaimable_memory += reclaimed_memory;
-            _reclaimed.erase(sstable_to_reload);
-            // Use a lw_shared_ptr to prevent the sstable from getting deleted when
-            // the components are being reloaded.
-            auto sstable_ptr = sstable_to_reload->shared_from_this();
-            try {
-                co_await sstable_ptr->reload_reclaimed_components();
-            } catch (...) {
-                // reload failed due to some reason
-                sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
-                // revert back changes made before the reload
-                _total_reclaimable_memory -= reclaimed_memory;
-                _reclaimed.insert(*sstable_to_reload);
-                break;
-            }
-
-            _total_memory_reclaimed -= reclaimed_memory;
-            memory_available = get_memory_available_for_reclaimable_components();
+    // Reload bloom filters from the smallest to largest so as to maximize
+    // the number of bloom filters being reloaded.
+    auto memory_available = get_memory_available_for_reclaimable_components();
+    while (!_reclaimed.empty() && memory_available > 0) {
+        auto sstable_to_reload = _reclaimed.begin();
+        const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
+        if (reclaimed_memory > memory_available) {
+            // cannot reload anymore sstables
+            break;
         }
+
+        // Increment the total memory before reloading to prevent any parallel
+        // fibers from loading new bloom filters into memory.
+        _total_reclaimable_memory += reclaimed_memory;
+        _reclaimed.erase(sstable_to_reload);
+        // Use a lw_shared_ptr to prevent the sstable from getting deleted when
+        // the components are being reloaded.
+        auto sstable_ptr = sstable_to_reload->shared_from_this();
+        try {
+            co_await sstable_ptr->reload_reclaimed_components();
+        } catch (...) {
+            // reload failed due to some reason
+            sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
+            // revert back changes made before the reload
+            _total_reclaimable_memory -= reclaimed_memory;
+            _reclaimed.insert(*sstable_to_reload);
+            break;
+        }
+
+        _total_memory_reclaimed -= reclaimed_memory;
+        memory_available = get_memory_available_for_reclaimable_components();
+    }
 }
 
 void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
