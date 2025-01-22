@@ -14,7 +14,9 @@
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 
-const sstring compressor::namespace_prefix = "org.apache.cassandra.io.compress.";
+sstring compressor::make_name(std::string_view short_name) {
+    return seastar::format("org.apache.cassandra.io.compress.{}", short_name);
+}
 
 class lz4_processor: public compressor {
 public:
@@ -66,7 +68,7 @@ compressor::ptr_type compressor::create(const sstring& name, const opt_getter& o
         return {};
     }
 
-    qualified_name qn(namespace_prefix, name);
+    qualified_name qn(make_name(""), name);
 
     for (auto& c : { lz4, snappy, deflate }) {
         if (c->name() == static_cast<const sstring&>(qn)) {
@@ -91,9 +93,9 @@ shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& opti
     return {};
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(namespace_prefix + "LZ4Compressor");
-thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(namespace_prefix + "SnappyCompressor");
-thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(namespace_prefix + "DeflateCompressor");
+thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(make_name("LZ4Compressor"));
+thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(make_name("SnappyCompressor"));
+thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(make_name("DeflateCompressor"));
 
 const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
