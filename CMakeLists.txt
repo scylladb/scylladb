@@ -66,24 +66,25 @@ if(is_multi_config)
     #   establishing proper dependencies between them
     include(ExternalProject)
 
+    # should be consistent with configure_seastar() in configure.py
+    set(seastar_build_dir "${CMAKE_BINARY_DIR}/$<CONFIG>/seastar")
     ExternalProject_Add(Seastar
         SOURCE_DIR "${PROJECT_SOURCE_DIR}/seastar"
-        BINARY_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>/seastar"
         CONFIGURE_COMMAND ""
-        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR>
+        BUILD_COMMAND ${CMAKE_COMMAND} --build "${seastar_build_dir}"
           --target seastar
           --target seastar_testing
           --target seastar_perf_testing
           --target app_iotune
         BUILD_ALWAYS ON
         BUILD_BYPRODUCTS
-          <BINARY_DIR>/libseastar.$<IF:$<CONFIG:Debug,Dev>,so,a>
-          <BINARY_DIR>/libseastar_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
-          <BINARY_DIR>/libseastar_perf_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
-          <BINARY_DIR>/apps/iotune/iotune
-          <BINARY_DIR>/gen/include/seastar/http/chunk_parsers.hh
-          <BINARY_DIR>/gen/include/seastar/http/request_parser.hh
-          <BINARY_DIR>/gen/include/seastar/http/response_parser.hh
+          ${seastar_build_dir}/libseastar.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          ${seastar_build_dir}/libseastar_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          ${seastar_build_dir}/libseastar_perf_testing.$<IF:$<CONFIG:Debug,Dev>,so,a>
+          ${seastar_build_dir}/apps/iotune/iotune
+          ${seastar_build_dir}/gen/include/seastar/http/chunk_parsers.hh
+          ${seastar_build_dir}/gen/include/seastar/http/request_parser.hh
+          ${seastar_build_dir}/gen/include/seastar/http/response_parser.hh
         INSTALL_COMMAND "")
     add_dependencies(Seastar::seastar Seastar)
     add_dependencies(Seastar::seastar_testing Seastar)
