@@ -565,7 +565,7 @@ class load_balancer {
             return [] (const table_id_and_size_desc& a, const table_id_and_size_desc& b) {
                 auto urgency = [] (const table_size_desc& d) -> double {
                     // FIXME: only takes into account split today.
-                    return double(d.avg_tablet_size) / d.target_max_tablet_size();
+                    return double(d.avg_tablet_size);
                 };
                 return urgency(a.second) < urgency(b.second);
             };
