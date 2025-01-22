@@ -6,16 +6,20 @@
 """Asynchronous helper for Scylla REST API operations.
 """
 from __future__ import annotations                           # Type hints as strings
-from abc import ABCMeta
-from collections.abc import Mapping
+
 import logging
 import os.path
-from typing import Any, Optional, AsyncIterator
+from abc import ABCMeta
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
-from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
+from typing import Any, Optional, AsyncIterator
+
 import pytest
-from test.pylib.internal_types import IPAddress, HostID
+import universalasync
+from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
+
+from test.pylib.internal_types import IPAddress, HostID
 
 
 logger = logging.getLogger(__name__)
@@ -145,7 +149,8 @@ class TCPRESTClient(RESTClient):
         self.default_port: int = port
 
 
-class ScyllaRESTAPIClient():
+@universalasync.wrap
+class ScyllaRESTAPIClient:
     """Async Scylla REST API client"""
 
     def __init__(self, port: int = 10000):
