@@ -9,11 +9,9 @@
 
 #pragma once
 
-#include <memory>
 #include <seastar/core/abort_source.hh>
 #include <stdexcept>
 
-#include "bytes.hh"
 #include "ent/ldap/ldap_connection.hh"
 #include "standard_role_manager.hh"
 

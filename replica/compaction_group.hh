@@ -8,7 +8,6 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/rwlock.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"

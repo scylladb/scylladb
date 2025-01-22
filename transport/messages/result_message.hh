@@ -19,6 +19,7 @@
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
 #include "exceptions/coordinator_result.hh"
+#include "types/types.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>

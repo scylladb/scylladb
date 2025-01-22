@@ -9,8 +9,6 @@
 #pragma once
 
 #include "types/types.hh"
-#include "types/tuple.hh"
-#include "types/list.hh"
 #include "timestamp.hh"
 #include "locator/tablets.hh"
 #include "schema/schema_fwd.hh"

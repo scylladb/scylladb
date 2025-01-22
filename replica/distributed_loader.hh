@@ -12,11 +12,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/file.hh>
-#include <seastar/util/bool_class.hh>
 #include <vector>
 #include <functional>
-#include <filesystem>
 #include "seastarx.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "db/system_keyspace.hh"

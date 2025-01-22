@@ -15,6 +15,7 @@
 #include "seastarx.hh"
 #include "locator/tablets.hh"
 #include "replica/tablets.hh"
+#include "types/tuple.hh"
 
 namespace cql_transport {
 namespace messages {
