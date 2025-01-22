@@ -293,8 +293,8 @@ future<> stream_manager::uninit_messaging_service_handler() {
     auto& ms = _ms.local();
     return when_all_succeed(
         ser::streaming_rpc_verbs::unregister(&ms),
-        ms.unregister_stream_mutation_fragments(),
-        ms.unregister_stream_blob()).discard_result();
+        ms.unregister_stream_blob(),
+        ms.unregister_stream_mutation_fragments()).discard_result();
 }
 
 stream_session::stream_session(stream_manager& mgr, locator::host_id peer_)

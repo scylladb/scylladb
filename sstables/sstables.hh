@@ -795,7 +795,6 @@ public:
     shareable_components& get_shared_components() const {
         return *_components;
     }
-
     schema_ptr get_schema() const {
         return _schema;
     }

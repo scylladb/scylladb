@@ -169,54 +169,54 @@ future<> stream_blob_handler(replica::database& db,
 
         bool got_end_of_stream = false;
         for (;;) {
-            try {
-                auto opt = co_await source();
-                if (!opt) {
-                    break;
-                }
-
-                co_await utils::get_local_injector().inject("stream_mutation_fragments", [&guard] (auto& handler) -> future<> {
-                    blogger.info("stream_mutation_fragments: waiting (tablets)");
-                    while (!handler.poll_for_message()) {
-                        guard.check();
-                        co_await sleep(std::chrono::milliseconds(5));
-                    }
-                    blogger.info("stream_mutation_fragments: released (tablets)");
-                });
-
-                stream_blob_cmd_data& cmd_data = std::get<0>(*opt);
-                auto cmd = cmd_data.cmd;
-                if (cmd == streaming::stream_blob_cmd::error) {
-                    blogger.warn("fstream[{}] Follower got stream_blob_cmd::error from peer={} file={}",
-                            meta.ops_id, from, meta.filename);
-                    throw std::runtime_error(format("Got stream_blob_cmd::error from peer={} file={}", from, meta.filename));
-                } else if (cmd == streaming::stream_blob_cmd::end_of_stream) {
-                    blogger.debug("fstream[{}] Follower got stream_blob_cmd::end_of_stream from peer={} file={}",
-                            meta.ops_id, from, meta.filename);
-                    got_end_of_stream = true;
-                } else if (cmd == streaming::stream_blob_cmd::data) {
-                    std::optional<streaming::stream_blob_data> data = std::move(cmd_data.data);
-                    if (data) {
-                        total_size += data->size();
-                        blogger.trace("fstream[{}] Follower received data from peer={} data={}", meta.ops_id, from, data->size());
-                        status->check_valid_stream();
-                        if (!data->empty()) {
-                            co_await fstream->write((char*)data->data(), data->size());
-                        }
-                    }
-                }
-            } catch (seastar::rpc::stream_closed) {
-                // After we get streaming::stream_blob_cmd::end_of_stream which
-                // is the last message from peer, it does not matter if the
-                // source() is closed or not.
-                if (got_end_of_stream) {
-                    break;
-                } else {
-                    throw;
-                }
-            } catch (...) {
-                throw;
+          try {
+            auto opt = co_await source();
+            if (!opt) {
+                break;
             }
+
+            co_await utils::get_local_injector().inject("stream_mutation_fragments", [&guard] (auto& handler) -> future<> {
+                blogger.info("stream_mutation_fragments: waiting (tablets)");
+                while (!handler.poll_for_message()) {
+                    guard.check();
+                    co_await sleep(std::chrono::milliseconds(5));
+                }
+                blogger.info("stream_mutation_fragments: released (tablets)");
+            });
+
+            stream_blob_cmd_data& cmd_data = std::get<0>(*opt);
+            auto cmd = cmd_data.cmd;
+            if (cmd == streaming::stream_blob_cmd::error) {
+                blogger.warn("fstream[{}] Follower got stream_blob_cmd::error from peer={} file={}",
+                        meta.ops_id, from, meta.filename);
+                throw std::runtime_error(format("Got stream_blob_cmd::error from peer={} file={}", from, meta.filename));
+            } else if (cmd == streaming::stream_blob_cmd::end_of_stream) {
+                blogger.debug("fstream[{}] Follower got stream_blob_cmd::end_of_stream from peer={} file={}",
+                        meta.ops_id, from, meta.filename);
+                got_end_of_stream = true;
+            } else if (cmd == streaming::stream_blob_cmd::data) {
+                std::optional<streaming::stream_blob_data> data = std::move(cmd_data.data);
+                if (data) {
+                    total_size += data->size();
+                    blogger.trace("fstream[{}] Follower received data from peer={} data={}", meta.ops_id, from, data->size());
+                    status->check_valid_stream();
+                    if (!data->empty()) {
+                        co_await fstream->write((char*)data->data(), data->size());
+                    }
+                }
+            }
+          } catch (seastar::rpc::stream_closed) {
+              // After we get streaming::stream_blob_cmd::end_of_stream which
+              // is the last message from peer, it does not matter if the
+              // source() is closed or not.
+              if (got_end_of_stream) {
+                  break;
+              } else {
+                  throw;
+              }
+          } catch (...) {
+              throw;
+          }
             may_inject_error(meta, inject_errors, "rx_data");
         }
 
@@ -497,35 +497,35 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                 co_await coroutine::parallel_for_each(ss, [&] (sink_and_source& s) mutable -> future<> {
                     bool got_cmd_ok = false;
                     while (!got_error_from_peer) {
-                        try {
-                            auto opt = co_await s.source();
-                            if (opt) {
-                                stream_blob_cmd_data& cmd_data = std::get<0>(*opt);
-                                if (cmd_data.cmd == streaming::stream_blob_cmd::error) {
-                                    got_error_from_peer = true;
-                                    blogger.warn("fstream[{}] Master got stream_blob_cmd::error file={} peer={}",
-                                            ops_id, filename, s.node);
-                                    throw std::runtime_error(format("Got stream_blob_cmd::error from peer {}", s.node));
-                                } if (cmd_data.cmd == streaming::stream_blob_cmd::ok) {
-                                    got_cmd_ok = true;
-                                }
-                                blogger.debug("fstream[{}] Master got stream_blob_cmd={} file={} peer={}",
-                                        ops_id, int(cmd_data.cmd), filename, s.node);
-                            } else {
-                                break;
+                      try {
+                        auto opt = co_await s.source();
+                        if (opt) {
+                            stream_blob_cmd_data& cmd_data = std::get<0>(*opt);
+                            if (cmd_data.cmd == streaming::stream_blob_cmd::error) {
+                                got_error_from_peer = true;
+                                blogger.warn("fstream[{}] Master got stream_blob_cmd::error file={} peer={}",
+                                        ops_id, filename, s.node);
+                                throw std::runtime_error(format("Got stream_blob_cmd::error from peer {}", s.node));
+                            } if (cmd_data.cmd == streaming::stream_blob_cmd::ok) {
+                                got_cmd_ok = true;
                             }
-                        } catch (seastar::rpc::stream_closed) {
-                            // After we get streaming::stream_blob_cmd::ok
-                            // which is the last message from peer, it does not
-                            // matter if the source() is closed or not.
-                            if (got_cmd_ok) {
-                                break;
-                            } else {
-                                throw;
-                            }
-                        } catch (...) {
-                            throw;
+                            blogger.debug("fstream[{}] Master got stream_blob_cmd={} file={} peer={}",
+                                    ops_id, int(cmd_data.cmd), filename, s.node);
+                        } else {
+                            break;
                         }
+                      } catch (seastar::rpc::stream_closed) {
+                          // After we get streaming::stream_blob_cmd::ok
+                          // which is the last message from peer, it does not
+                          // matter if the source() is closed or not.
+                          if (got_cmd_ok) {
+                              break;
+                          } else {
+                              throw;
+                          }
+                      } catch (...) {
+                          throw;
+                      }
                     }
                 });
             };
