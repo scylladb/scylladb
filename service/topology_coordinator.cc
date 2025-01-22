@@ -2462,6 +2462,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
             }
                 break;
+            case topology::transition_state::truncate_table:
+                break;
         }
         co_return true;
     };
