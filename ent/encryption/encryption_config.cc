@@ -82,7 +82,7 @@ Actual connection can be either an explicit endpoint (<host>:<port>), or selecte
 If aws_use_ec2_region is true, regions is instead queried from EC2 metadata.
 
 Authentication can be explicit with aws_access_key_id and aws_secret_access_key. Either secret or both can be omitted
-in which case the provider will try to read them from AWS credentials in ~/.aws/credentials
+in which case the provider will try to read them from the environment, and then from AWS credentials in ~/.aws/credentials
 
 If aws_use_ec2_credentials is true, authentication is instead queried from EC2 metadata.
 
