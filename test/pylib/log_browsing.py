@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+import universalasync
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@universalasync.wrap
 class ScyllaLogFile:
     """Browse a Scylla log file.
 
