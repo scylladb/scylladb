@@ -19,7 +19,6 @@
 #include "dht/auto_refreshing_sharder.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include "streaming/stream_blob.hh"
 #include "streaming/stream_session_state.hh"
 #include "service/migration_manager.hh"
 #include "mutation_writer/multishard_writer.hh"
@@ -279,22 +278,13 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             return make_ready_future<>();
         }
     });
-    ms.register_stream_blob([this] (const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
-        auto from = netw::messaging_service::get_source(cinfo).addr;
-        auto sink = _ms.local().make_sink_for_stream_blob(source);
-        (void)stream_blob_handler(_db.local(), _ms.local(), from, meta, sink, source).handle_exception([ms = _ms.local().shared_from_this()] (std::exception_ptr eptr) {
-            sslog.warn("Failed to run stream blob handler: {}", eptr);
-        });
-        return make_ready_future<rpc::sink<streaming::stream_blob_cmd_data>>(sink);
-    });
 }
 
 future<> stream_manager::uninit_messaging_service_handler() {
     auto& ms = _ms.local();
     return when_all_succeed(
         ser::streaming_rpc_verbs::unregister(&ms),
-        ms.unregister_stream_mutation_fragments(),
-        ms.unregister_stream_blob()).discard_result();
+        ms.unregister_stream_mutation_fragments()).discard_result();
 }
 
 stream_session::stream_session(stream_manager& mgr, locator::host_id peer_)

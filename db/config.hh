@@ -243,7 +243,6 @@ public:
     named_value<uint32_t> inter_dc_stream_throughput_outbound_megabits_per_sec;
     named_value<uint32_t> stream_io_throughput_mb_per_sec;
     named_value<double> stream_plan_ranges_fraction;
-    named_value<bool> enable_file_stream;
     named_value<bool> trickle_fsync;
     named_value<uint32_t> trickle_fsync_interval_in_kb;
     named_value<bool> auto_bootstrap;

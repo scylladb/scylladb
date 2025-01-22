@@ -11,7 +11,6 @@
 #include "query_id.hh"
 #include "locator/host_id.hh"
 #include "tasks/types.hh"
-#include "service/session.hh"
 
 namespace utils {
 class UUID final {

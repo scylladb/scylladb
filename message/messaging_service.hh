@@ -37,10 +37,6 @@
 namespace streaming {
     class prepare_message;
     enum class stream_mutation_fragments_cmd : uint8_t;
-    enum class stream_blob_cmd : uint8_t;
-    class stream_blob_data;
-    class stream_blob_meta;
-    class stream_blob_cmd_data;
 }
 
 namespace gms {
@@ -414,13 +410,6 @@ public:
     future<> unregister_stream_mutation_fragments();
     rpc::sink<int32_t> make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>>& source);
     future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>> make_sink_and_source_for_stream_mutation_fragments(table_schema_version schema_id, streaming::plan_id plan_id, table_id cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, service::session_id session, locator::host_id id);
-
-    // Wrapper for STREAM_BLOB
-    // The receiver of STREAM_BLOB sends streaming::stream_blob_cmd_data as status code to the sender to notify any error on the receiver side.
-    void register_stream_blob(std::function<future<rpc::sink<streaming::stream_blob_cmd_data>> (const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source)>&& func);
-    future<> unregister_stream_blob();
-    rpc::sink<streaming::stream_blob_cmd_data> make_sink_for_stream_blob(rpc::source<streaming::stream_blob_cmd_data>& source);
-    future<std::tuple<rpc::sink<streaming::stream_blob_cmd_data>, rpc::source<streaming::stream_blob_cmd_data>>> make_sink_and_source_for_stream_blob(streaming::stream_blob_meta meta, locator::host_id id);
 
     // Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM
     future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>> make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, shard_id dst_cpu_id, locator::host_id id);
