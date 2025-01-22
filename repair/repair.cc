@@ -389,6 +389,18 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
+            std::vector<locator::host_id> nodes_down;
+            for (auto& node : waiting_nodes) {
+                co_await coroutine::maybe_yield();
+                if (!get_gossiper().is_alive(node)) {
+                    nodes_down.push_back(node);
+                }
+            }
+            if (!nodes_down.empty()) {
+                rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to nodes_down={}, continue to run repair",
+                        nodes_down, uuid);
+                co_return std::make_tuple(hints_batchlog_flushed, flush_time);
+            }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.info("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
