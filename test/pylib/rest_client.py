@@ -225,6 +225,16 @@ class ScyllaRESTAPIClient():
         assert isinstance(data, list)
         return data
 
+    async def get_tokens(self, node_ip: str, endpoint: str | None = None) -> list:
+        """Get a list of the tokens for the specified node."""
+
+        data = await self.client.get_json(
+            resource_uri="/storage_service/tokens" if endpoint is None else f"/storage_service/tokens/{endpoint}",
+            host=node_ip,
+        )
+        assert isinstance(data, list)
+        return data
+
     async def enable_injection(self, node_ip: str, injection: str, one_shot: bool, parameters: dict[str, Any] = {}) -> None:
         """Enable error injection named `injection` on `node_ip`. Depending on `one_shot`,
            the injection will be executed only once or every time the process passes the injection point.
