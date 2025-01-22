@@ -295,7 +295,7 @@ size_t local_compression::compress_max_size(size_t input_len) const {
 
 void compression::set_compressor(compressor_ptr c) {
     if (c) {
-        unqualified_name uqn(compressor::namespace_prefix, c->name());
+        unqualified_name uqn(compressor::make_name(""), c->name());
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
         for (auto& [k, v] : c->options()) {
