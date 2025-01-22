@@ -88,6 +88,8 @@ fedora_packages=(
     python3-unidiff
     python3-humanfriendly
     python3-jinja2
+    python3-deepdiff
+    python3-cryptography
     dnf-utils
     pigz
     net-tools
@@ -151,14 +153,16 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]=
+    [scylla-driver]=""
     [geomet]="<0.3,>=0.1"
-    [traceback-with-variables]=
-    [scylla-api-client]=
-    [treelib]=
-    [allure-pytest]=
-    [pytest-xdist]=
-    [pykmip]=
+    [traceback-with-variables]=""
+    [scylla-api-client]=""
+    [treelib]=""
+    [allure-pytest]=""
+    [pytest-xdist]=""
+    [pykmip]=""
+    [universalasync]=""
+    [boto3-stubs[dynamodb]]=""
 )
 
 pip_symlinks=(
