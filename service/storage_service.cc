@@ -6279,13 +6279,13 @@ future<bool> storage_service::exec_tablet_update(service::group0_guard guard, st
 
 // Repair the tablets contain the tokens and wait for the repair to finish
 // This is used to run a manual repair requested by user from the restful API.
-future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant) {
+future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant, bool await_completion) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.add_repair_tablet_request(table, std::move(tokens_variant));
+            return ss.add_repair_tablet_request(table, std::move(tokens_variant), await_completion);
         });
     }
 
@@ -6339,6 +6339,13 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
             break;
         }
+    }
+
+    if (!await_completion) {
+        auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start);
+        slogger.info("Issued tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} duration={}",
+                table, tokens, all_tokens, repair_task_info.tablet_task_id, duration);
+        co_return res;
     }
 
     co_await _topology_state_machine.event.wait([&] {
