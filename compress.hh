@@ -69,7 +69,7 @@ public:
     static thread_local const ptr_type snappy;
     static thread_local const ptr_type deflate;
 
-    static const sstring namespace_prefix;
+    static sstring make_name(std::string_view short_name);
 };
 
 template<typename BaseType, typename... Args>

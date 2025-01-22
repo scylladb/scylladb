@@ -20,7 +20,7 @@
 #include <concepts>
 
 static const sstring COMPRESSION_LEVEL = "compression_level";
-static const sstring COMPRESSOR_NAME = compressor::namespace_prefix + "ZstdCompressor";
+static const sstring COMPRESSOR_NAME = compressor::make_name("ZstdCompressor");
 static const size_t DCTX_SIZE = ZSTD_estimateDCtxSize();
 
 class zstd_processor : public compressor {
