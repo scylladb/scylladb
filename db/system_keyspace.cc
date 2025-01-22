@@ -23,6 +23,7 @@
 #include "db/config.hh"
 #include "gms/feature_service.hh"
 #include "schema/schema.hh"
+#include "seastar/core/loop.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
@@ -97,6 +98,7 @@ namespace {
             system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
+            system_keyspace::BUILT_TABLET_VIEWS,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -122,6 +124,7 @@ namespace {
                 system_keyspace::SERVICE_LEVELS_V2,
                 system_keyspace::VIEW_BUILD_STATUS_V2,
                 system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
+                system_keyspace::BUILT_TABLET_VIEWS,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -1195,6 +1198,18 @@ schema_ptr system_keyspace::view_building_coordinator_tasks() {
                 .with_column("shard", int32_type, column_kind::clustering_key)
                 .with_column("start_token", long_type, column_kind::clustering_key)
                 .with_column("end_token", long_type, column_kind::clustering_key)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::built_tablet_views() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, BUILT_TABLET_VIEWS);
+        return schema_builder(NAME, BUILT_TABLET_VIEWS, id)
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("view_name", utf8_type, column_kind::clustering_key)
                 .with_hash_version()
                 .build();
     }();
@@ -2337,7 +2352,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_coordinator_tasks(),
+                    dicts(), view_building_coordinator_tasks(), built_tablet_views(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2700,6 +2715,29 @@ future<mutation> system_keyspace::make_vbc_task_done_mutation(api::timestamp_typ
 future<std::vector<mutation>> system_keyspace::make_vbc_remove_view_tasks_mutations(api::timestamp_type ts, system_keyspace_view_name view_name) {
     static const sstring query = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS);
     return _qp.get_mutations_internal(query, internal_system_query_state(), ts, {view_name.first, view_name.second});
+}
+
+future<std::vector<system_keyspace_view_name>> system_keyspace::load_built_tablet_views() {
+    static sstring query = format("SELECT * FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BUILT_TABLET_VIEWS);
+
+    std::vector<system_keyspace_view_name> views;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks = row.get_as<sstring>("keyspace_name");
+        auto view = row.get_as<sstring>("view_name");
+        views.emplace_back(std::move(ks), std::move(view));
+        co_return stop_iteration::no;
+    });
+    co_return views;
+}
+
+future<mutation> system_keyspace::make_tablet_view_built_mutation(api::timestamp_type ts, system_keyspace_view_name view_name) {
+    static sstring query = format("INSERT INTO {}.{} (keyspace_name, view_name) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::BUILT_TABLET_VIEWS);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {view_name.first, view_name.second});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
 }
 
 template <typename... Args>
