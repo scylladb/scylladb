@@ -344,14 +344,12 @@ future<size_t> network_topology_strategy::calculate_min_tablet_count(schema_ptr 
     co_return tablet_count;
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
-    size_t tablet_count = co_await calculate_min_tablet_count(s, tm, target_tablet_size, initial_scale);
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
         tablet_count = aligned_tablet_count;
     }
-
     co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
 }
 

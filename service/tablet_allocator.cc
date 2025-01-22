@@ -1067,7 +1067,7 @@ public:
         std::unordered_map<table_id, table_sizing> tables;
     };
 
-    future<sizing_plan> make_sizing_plan() {
+    future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
         sizing_plan plan;
 
         auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) -> future<> {
@@ -1126,6 +1126,10 @@ public:
         for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
             auto [s, rs] = get_schema_and_rs(table);
             co_await process_table(table, s, rs, tmap->tablet_count());
+        }
+
+        if (new_table) {
+            co_await process_table(new_table->id(), new_table, new_rs, 0);
         }
 
         co_return std::move(plan);
@@ -2765,6 +2769,18 @@ class tablet_allocator_impl : public tablet_allocator::impl
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
+private:
+    load_balancer make_load_balancer(token_metadata_ptr tm,
+            locator::load_stats_ptr table_load_stats,
+            std::unordered_set<host_id> skiplist) {
+        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats,
+            _db.get_config().target_tablet_size_in_bytes(),
+            _db.get_config().tablets_per_shard_goal(),
+            std::move(skiplist));
+        lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
+        lb.set_initial_scale(_config.initial_tablets_scale);
+        return lb;
+    }
 public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
             : _config(std::move(cfg))
@@ -2789,9 +2805,7 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
-        lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
-        lb.set_initial_scale(_config.initial_tablets_scale);
+        auto lb = make_load_balancer(tm, std::move(table_load_stats), std::move(skiplist));
         co_return co_await lb.make_plan();
     }
 
@@ -2805,7 +2819,15 @@ public:
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
             lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _db.get_config().target_tablet_size_in_bytes(), _config.initial_tablets_scale).get();
+            auto lb = make_load_balancer(tm, nullptr, {});
+            auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
+            auto& table_plan = plan.tables[s.id()];
+            if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
+                lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
+                        table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
+            }
+            auto tablet_count = table_plan.target_tablet_count_aligned;
+            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
         }
     }

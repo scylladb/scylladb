@@ -519,7 +519,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 "NetworkTopologyStrategy", params);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(tab_awr_ptr);
-        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), service::default_target_tablet_size).get();
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
         full_ring_check(tmap, ars_ptr, stm.get());
 
         // Test reallocate_tablets after randomizing a different set of options
@@ -611,7 +611,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto nts_ptr = dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, tmptr, 1).get();
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, tmptr, tablet_count).get();
     full_ring_check(tmap, ars_ptr, stm.get());
     check_tablets_balance(tmap, nts_ptr, topo);
 

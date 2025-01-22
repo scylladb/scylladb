@@ -3096,7 +3096,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         return make_ready_future<>();
     }).get();
 
-    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), 0).get();
+    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
 
     BOOST_REQUIRE_EQUAL(allocated_map.tablet_count(), tablet_count);
 
