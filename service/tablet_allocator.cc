@@ -618,6 +618,7 @@ class load_balancer {
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
+    int _initial_scale = 1;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -694,13 +695,13 @@ public:
         , _skiplist(std::move(skiplist))
     { }
 
-    future<migration_plan> make_plan(std::optional<unsigned> initial_scale) {
+    future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
-            auto dc_plan = co_await make_plan(dc, initial_scale);
+            auto dc_plan = co_await make_plan(dc);
             auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));
@@ -710,7 +711,7 @@ public:
         plan.set_repair_plan(co_await make_repair_plan(plan));
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
-        plan.merge_resize_plan(co_await make_resize_plan(plan, initial_scale));
+        plan.merge_resize_plan(co_await make_resize_plan(plan));
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
         lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
@@ -720,6 +721,10 @@ public:
 
     void set_use_table_aware_balancing(bool use_table_aware_balancing) {
         _use_table_aware_balancing = use_table_aware_balancing;
+    }
+
+    void set_initial_scale(int initial_scale) {
+        _initial_scale = initial_scale;
     }
 
     const locator::table_load_stats* load_stats_for_table(table_id id) const {
@@ -1073,7 +1078,7 @@ public:
         return {s, rs};
     }
 
-    future<table_resize_plan> make_resize_plan(const migration_plan& plan, std::optional<unsigned> initial_scale) {
+    future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
         if (!_tm->tablets().balancing_enabled()) {
@@ -1108,7 +1113,7 @@ public:
 
             auto [s, rs] = get_schema_and_rs(table);
             size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
-                co_await rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, initial_scale));
+                co_await rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, _initial_scale));
 
             resize_load.update(table, std::move(size_desc));
             lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
@@ -2415,7 +2420,7 @@ public:
         }
     };
 
-    future<migration_plan> make_plan(dc_name dc, std::optional<unsigned> initial_scale) {
+    future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
         _dc = dc;
@@ -2733,7 +2738,8 @@ public:
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
         load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
-        co_return co_await lb.make_plan(_config.initial_tablets_scale);
+        lb.set_initial_scale(_config.initial_tablets_scale);
+        co_return co_await lb.make_plan();
     }
 
     void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
