@@ -480,21 +480,21 @@ class load_balancer {
     // due to the average size dropping below the merge threshold, as tablet count doubles.
     const uint64_t _target_tablet_size = default_target_tablet_size;
 
+    uint64_t target_max_tablet_size() const noexcept {
+        return _target_tablet_size * 2;
+    }
+
+    uint64_t target_min_tablet_size() const noexcept {
+        return _target_tablet_size / 2;
+    }
+
     struct table_size_desc {
         uint64_t target_tablet_size;
         uint64_t avg_tablet_size;
         locator::resize_decision resize_decision;
+        locator::resize_decision new_resize_decision;
         size_t tablet_count;
         size_t shard_count;
-        size_t min_tablet_count;
-
-        uint64_t target_max_tablet_size() const noexcept {
-            return target_tablet_size * 2;
-        }
-
-        uint64_t target_min_tablet_size() const noexcept {
-            return target_tablet_size / 2;
-        }
     };
 
     struct cluster_resize_load {
@@ -503,31 +503,7 @@ class load_balancer {
         std::vector<table_id_and_size_desc> tables_being_resized;
 
         static locator::resize_decision to_resize_decision(const table_size_desc& d) {
-            locator::resize_decision decision;
-
-            auto target_tablet_count = d.tablet_count;
-            // Split based on min_tablet_count or avg_tablet_size, or
-            // if the current resize_decision is split, apply hysteresis,
-            // so it would get cancelled only when crossing back the half-way point.
-            if (d.tablet_count < d.min_tablet_count || d.avg_tablet_size > d.target_max_tablet_size() ||
-                (d.resize_decision.is_split() && d.avg_tablet_size >= d.target_tablet_size)) {
-                // TODO: extend to n-way split when needed
-                target_tablet_count *= 2;
-                decision.way = resize_decision::split{};
-            } else if (target_tablet_count / 2 >= d.min_tablet_count) {
-                // Consider merge, as long as it wouldn't violate min_tablet_count.
-                // If the current resize_decision is merge, apply hysteresis,
-                // so it would get cancelled only when crossing back the half-way point.
-                if (d.avg_tablet_size < d.target_min_tablet_size() ||
-                    (d.resize_decision.is_merge() && d.avg_tablet_size <= d.target_tablet_size)) {
-                    target_tablet_count /= 2;
-                    decision.way = resize_decision::merge{};
-                }
-            }
-
-            lblogger.debug("to_resize_decision: tablet_count={}, avg_tablet_size={}, min_tablet_count={}, target_tablet_count={}: decision={}",
-                           d.tablet_count, d.avg_tablet_size, d.min_tablet_count, target_tablet_count, decision.type_name());
-            return decision;
+            return d.new_resize_decision;
         }
 
         bool table_needs_resize(const table_size_desc& d) const {
@@ -1078,6 +1054,75 @@ public:
         return {s, rs};
     }
 
+    struct table_sizing {
+        size_t current_tablet_count; // Tablet count in group0.
+        size_t target_tablet_count; // Tablet count wanted by scheduler.
+        std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
+
+        size_t target_tablet_count_aligned; // target_tablet_count aligned to power of 2.
+        resize_decision::way_type resize_decision; // Decision which should be emitted to achieve target_tablet_count_aligned.
+    };
+
+    struct sizing_plan {
+        std::unordered_map<table_id, table_sizing> tables;
+    };
+
+    future<sizing_plan> make_sizing_plan() {
+        sizing_plan plan;
+
+        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) -> future<> {
+            table_sizing& table_plan = plan.tables[table];
+            table_plan.current_tablet_count = tablet_count;
+
+            locator::resize_decision_way decision;
+            auto target_tablet_count = tablet_count;
+
+            auto min_tablet_count = std::max<size_t>(1,
+                co_await rs->calculate_min_tablet_count(s, _tm, _target_tablet_size, _initial_scale));
+
+            const auto* table_stats = load_stats_for_table(table);
+            if (table_stats) {
+                auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
+                auto avg_tablet_size = table_stats->size_in_bytes / std::max<size_t>(table_plan.current_tablet_count, 1);
+
+                // Split based on min_tablet_count or avg_tablet_size, or
+                // if the current resize_decision is split, apply hysteresis,
+                // so it would get cancelled only when crossing back the half-way point.
+                if (tablet_count < min_tablet_count || avg_tablet_size > target_max_tablet_size() ||
+                    (cur_decision.is_split() && avg_tablet_size >= _target_tablet_size)) {
+                    // TODO: extend to n-way split when needed
+                    target_tablet_count *= 2;
+                    decision = resize_decision::split{};
+                } else if (target_tablet_count / 2 >= min_tablet_count) {
+                    // Consider merge, as long as it wouldn't violate min_tablet_count.
+                    // If the current resize_decision is merge, apply hysteresis,
+                    // so it would get cancelled only when crossing back the half-way point.
+                    if (avg_tablet_size < target_min_tablet_size() ||
+                        (cur_decision.is_merge() && avg_tablet_size <= _target_tablet_size)) {
+                        target_tablet_count /= 2;
+                        decision = resize_decision::merge{};
+                    }
+                }
+
+                table_plan.avg_tablet_size = avg_tablet_size;
+            }
+
+            table_plan.target_tablet_count = target_tablet_count;
+            table_plan.target_tablet_count_aligned = target_tablet_count;
+            table_plan.resize_decision = decision;
+
+            lblogger.debug("make_sizing_plan: table={}.{}, id={}, tablet_count={}, avg_tablet_size={}, min_tablet_count={}, target_tablet_count={}: decision={}",
+                           s->ks_name(), s->cf_name(), s->id(), tablet_count, table_plan.avg_tablet_size, min_tablet_count, target_tablet_count, table_plan.resize_decision);
+        };
+
+        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
+            auto [s, rs] = get_schema_and_rs(table);
+            co_await process_table(table, s, rs, tmap->tablet_count());
+        }
+
+        co_return std::move(plan);
+    }
+
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
@@ -1085,38 +1130,38 @@ public:
             co_return std::move(resize_plan);
         }
 
+        auto table_sizing_plan = co_await make_sizing_plan();
+
         cluster_resize_load resize_load;
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = *tmap_;
 
-            const auto* table_stats = load_stats_for_table(table);
-            if (!table_stats) {
+            table_sizing& table_plan = table_sizing_plan.tables[table];
+            if (!table_plan.avg_tablet_size) {
                 continue;
             }
 
-            auto avg_tablet_size = table_stats->size_in_bytes / std::max(tmap.tablet_count(), size_t(1));
             // shard presence of a table across the cluster
             size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
                 [] (size_t shard_count, const locator::tablet_info& info) {
                     return shard_count + info.replicas.size();
                 });
 
+            resize_decision new_resize_decision;
+            new_resize_decision.way = table_plan.resize_decision;
+
             table_size_desc size_desc {
-                .target_tablet_size = _target_tablet_size,
-                .avg_tablet_size = avg_tablet_size,
+                .avg_tablet_size = *table_plan.avg_tablet_size,
                 .resize_decision = tmap.resize_decision(),
-                .tablet_count = tmap.tablet_count(),
+                .new_resize_decision = new_resize_decision,
+                .tablet_count = table_plan.current_tablet_count,
                 .shard_count = shard_count,
-                .min_tablet_count = 1,
             };
 
-            auto [s, rs] = get_schema_and_rs(table);
-            size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
-                co_await rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, _initial_scale));
-
             resize_load.update(table, std::move(size_desc));
-            lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
+            lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(),
+                    *table_plan.avg_tablet_size);
             co_await coroutine::maybe_yield();
         }
 

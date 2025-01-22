@@ -325,10 +325,12 @@ struct resize_decision {
     struct merge {
         auto operator<=>(const merge&) const = default;
     };
+    using way_type = std::variant<none, split, merge>;
 
     using seq_number_t = int64_t;
 
-    std::variant<none, split, merge> way;
+    way_type way;
+
     // The sequence number globally identifies a resize decision.
     // It's monotonically increasing, globally.
     // Needed to distinguish stale decision from latest one, in case coordinator
