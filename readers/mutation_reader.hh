@@ -17,8 +17,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/mutation_consumer_concepts.hh"
 #include "reader_permit.hh"
-
-using seastar::future;
+#include "seastarx.hh"
 
 /// \brief Represents a stream of mutation fragments.
 ///
