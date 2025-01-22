@@ -63,7 +63,7 @@ Node2 is down. You login node3. You run ``nodetool decommission`` to remove n3 f
 
 * After three days have passed the ``LEFT`` status is expired and removed from gossip in the cluster.
 * Node2 restarts and goes back into the cluster.
-* Node2 will revive Node3 abd bring it back into the cluster because from Node2's point of view, Node3 should be part of the cluster.
+* Node2 will revive Node3 and bring it back into the cluster because from Node2's point of view, Node3 should be part of the cluster.
 
 **Lesson Learned** -  It is best to fix dead nodes before a ``nodetool decommission`` operation so that every node knows which nodes are decommissioned.
 If there is no way to fix the dead node and decommission is performed without it, do not bring that dead node.
