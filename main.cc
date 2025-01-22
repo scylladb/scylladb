@@ -758,7 +758,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     }
 
     // We have to override p11-kit config path before p11-kit initialization.
-    // And the initialization will invoke on seastar initalization, so it has to
+    // And the initialization will invoke on seastar initialization, so it has to
     // be before app.run()
     auto scylla_path = fs::read_symlink(fs::path("/proc/self/exe"));
     auto p11_modules = scylla_path.parent_path().parent_path().append("share/p11-kit/modules");

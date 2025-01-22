@@ -294,7 +294,7 @@ To use the `CMakeLists.txt` file with these programs, define the `FOR_IDE` CMake
 
 Scylla's compilations times can be long. Two tools help somewhat:
 
-- [ccache](https://ccache.samba.org/) caches compiled object files on disk and re-uses them when possible
+- [ccache](https://ccache.samba.org/) caches compiled object files on disk and reuses them when possible
 - [distcc](https://github.com/distcc/distcc) distributes compilation jobs to remote machines
 
 A reasonably-powered laptop acts as the coordinator for compilation. A second, more powerful, machine acts as a passive compilation server.
