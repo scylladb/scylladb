@@ -26,6 +26,7 @@ class tester {
     shared_ptr<s3::client> _client;
     utils::estimated_histogram _reads_hist;
     unsigned _errors = 0;
+    bool _remove_file;
 
     static s3::endpoint_config_ptr make_config(unsigned sockets) {
         s3::endpoint_config cfg;
@@ -42,15 +43,19 @@ class tester {
     std::chrono::steady_clock::time_point now() const { return std::chrono::steady_clock::now(); }
 
 public:
-    tester(std::chrono::seconds dur, unsigned sockets, size_t obj_size)
+    tester(std::chrono::seconds dur, unsigned sockets, sstring object_name, size_t obj_size)
             : _duration(dur)
-            , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
+            , _object_name(std::move(object_name))
             , _object_size(obj_size)
             , _mem(memory::stats().total_memory())
             , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(sockets), _mem))
+            , _remove_file(false)
     {}
 
-    future<> start() {
+private:
+    future<> make_temporary_file() {
+        _object_name = fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id());
+        _remove_file = true;
         plog.debug("Creating {} of {} bytes", _object_name, _object_size);
 
         auto out = output_stream<char>(_client->make_upload_sink(_object_name));
@@ -74,6 +79,11 @@ public:
     }
 
 public:
+    future<> start() {
+        if (_object_name.empty()) {
+            co_await make_temporary_file();
+        }
+    }
 
     future<> run() {
         auto until = now() + _duration;
@@ -91,8 +101,10 @@ public:
     }
 
     future<> stop() {
-        plog.debug("Removing {}", _object_name);
-        co_await _client->delete_object(_object_name);
+        if (_remove_file) {
+            plog.debug("Removing {}", _object_name);
+            co_await _client->delete_object(_object_name);
+        }
         co_await _client->close();
 
         auto print_percentiles = [] (const utils::estimated_histogram& hist) {
@@ -115,16 +127,18 @@ int main(int argc, char** argv) {
     app.add_options()
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
+        ("object_name", bpo::value<sstring>()->default_value(""), "use given object/file name")
         ("object_size", bpo::value<size_t>()->default_value(1 << 20), "size of test object")
     ;
 
     return app.run(argc, argv, [&app] () -> future<> {
         auto dur = std::chrono::seconds(app.configuration()["duration"].as<unsigned>());
         auto sks = app.configuration()["sockets"].as<unsigned>();
+        auto oname = app.configuration()["object_name"].as<sstring>();
         auto osz = app.configuration()["object_size"].as<size_t>();
         sharded<tester> test;
         plog.info("Creating");
-        co_await test.start(dur, sks, osz);
+        co_await test.start(dur, sks, oname, osz);
         plog.info("Starting");
         co_await test.invoke_on_all(&tester::start);
         try {
