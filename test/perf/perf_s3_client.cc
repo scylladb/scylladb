@@ -24,7 +24,7 @@ class tester {
     size_t _object_size;
     semaphore _mem;
     shared_ptr<s3::client> _client;
-    utils::estimated_histogram _reads_hist;
+    utils::estimated_histogram _latencies;
     unsigned _errors = 0;
     bool _remove_file;
 
@@ -85,7 +85,8 @@ public:
         }
     }
 
-    future<> run() {
+    future<> run_download() {
+        plog.info("Downloading");
         auto until = now() + _duration;
         uint64_t off = 0;
         do {
@@ -93,7 +94,7 @@ public:
             try {
                 co_await _client->get_object_contiguous(_object_name, s3::range{off, chunk_size});
                 off = (off + chunk_size) % (_object_size - chunk_size);
-                _reads_hist.add(std::chrono::duration_cast<std::chrono::milliseconds>(now() - start).count());
+                _latencies.add(std::chrono::duration_cast<std::chrono::milliseconds>(now() - start).count());
             } catch (...) {
                 _errors++;
             }
@@ -117,7 +118,7 @@ public:
                 hist.percentile(1.0)
             );
         };
-        plog.info("reads total: {:5}, errors: {:5}; latencies: {}", _reads_hist._count, _errors, print_percentiles(_reads_hist));
+        plog.info("requests total: {:5}, errors: {:5}; latencies: {}", _latencies._count, _errors, print_percentiles(_latencies));
     }
 };
 
@@ -143,7 +144,7 @@ int main(int argc, char** argv) {
         co_await test.invoke_on_all(&tester::start);
         try {
             plog.info("Running");
-            co_await test.invoke_on_all(&tester::run);
+            co_await test.invoke_on_all(&tester::run_download);
         } catch (...) {
             plog.error("Error running: {}", std::current_exception());
         }
