@@ -1487,7 +1487,16 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto& keyspace = _status.keyspace;
     auto& sharded_db = rs.get_db();
     auto& db = sharded_db.local();
-    auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
+    auto germs_fut = co_await coroutine::as_future(locator::make_global_effective_replication_map(sharded_db, keyspace));
+    if (germs_fut.failed()) {
+        auto ex = germs_fut.get_exception();
+        if (try_catch<data_dictionary::no_such_keyspace>(ex)) {
+            rlogger.warn("sync data: keyspace {} does not exist, skipping", keyspace);
+            co_return;
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    auto germs = make_lw_shared(germs_fut.get());
 
     auto id = get_repair_uniq_id();
 
