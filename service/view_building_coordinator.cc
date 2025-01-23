@@ -241,7 +241,7 @@ future<> view_building_coordinator::send_task(view_building_target target, table
     std::vector<table_id> views_ids = views | std::views::transform(name_to_id) | std::ranges::to<std::vector>();
 
     try {
-        co_await ser::view_rpc_verbs::send_build_views_range(&_messaging, target.host, _as, base_id, target.shard, range, std::move(views_ids));
+        co_await ser::view_rpc_verbs::send_build_views_range(&_messaging, target.host, _as, base_id, target.shard, range, std::move(views_ids), _term);
     } catch (...) {
         vbc_logger.warn("Building views for base: {}, range: {} on node: {}, shard: {} failed: {}", base_id, range, target.host, target.shard, std::current_exception());
         _cond.broadcast();
@@ -294,7 +294,7 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
 
 future<> view_building_coordinator::abort_work(locator::host_id host, unsigned shard) {
     try {
-        co_await ser::view_rpc_verbs::send_abort_view_building_work(&_messaging, host, shard);
+        co_await ser::view_rpc_verbs::send_abort_view_building_work(&_messaging, host, shard, _term);
     } catch (rpc::closed_error&) {
     } catch (...) {
         vbc_logger.warn("Error while aborting work on host {}, shard {}: {}", host, shard, std::current_exception());
