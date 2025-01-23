@@ -79,6 +79,8 @@ private:
     future<> build_view(vbc_state state);
     future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
     future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
+    future<> abort_work(locator::host_id host, unsigned shard);
+    future<> abort_previous_coordinator();
 };
 
 }

@@ -24,6 +24,7 @@
 #include "seastar/core/loop.hh"
 #include "seastar/coroutine/maybe_yield.hh"
 #include "seastar/coroutine/parallel_for_each.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -82,6 +83,8 @@ future<> view_building_coordinator::run() {
     auto abort = _as.subscribe([this] noexcept {
         _cond.broadcast();
     });
+
+    co_await abort_previous_coordinator();
 
     while (!_as.abort_requested()) {
         vbc_logger.debug("coordinator loop iteration");
@@ -278,6 +281,24 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
 
     auto cmd = _group0.client().prepare_command(write_mutations{.mutations = std::move(muts)}, guard, "finished view building step");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+}
+
+future<> view_building_coordinator::abort_work(locator::host_id host, unsigned shard) {
+    try {
+        co_await ser::view_rpc_verbs::send_abort_view_building_work(&_messaging, host, shard);
+    } catch (rpc::closed_error&) {
+    } catch (...) {
+        vbc_logger.warn("Error while aborting work on host {}, shard {}: {}", host, shard, std::current_exception());
+    }
+}
+
+future<> view_building_coordinator::abort_previous_coordinator() {
+    co_await coroutine::parallel_for_each(_topo_sm._topology.normal_nodes, [this] (auto& node) -> future<> {
+        auto id = node.first;
+        co_await coroutine::parallel_for_each(std::views::iota(0u, node.second.shard_count), [this, id] (auto shard) -> future<> {
+            co_await abort_work(locator::host_id{id.uuid()}, shard);
+        });
+    });
 }
 
 std::set<view_name> view_building_coordinator::get_views_to_add(const vbc_state& state, const std::vector<view_name>& views, const std::vector<view_name>& built) {
