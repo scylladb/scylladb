@@ -48,16 +48,19 @@ class view_building_coordinator : public migration_listener::only_view_notificat
     raft::server& _raft;
     raft_group0& _group0;
     db::system_keyspace& _sys_ks;
+    netw::messaging_service& _messaging;
     const topology_state_machine& _topo_sm;
     const raft::term_t _term;
     
     abort_source& _as;
     condition_variable _cond;
+    std::map<view_building_target, future<>> _remote_work_map;
 
 public:
-    view_building_coordinator(abort_source& as, replica::database& db, raft::server& raft, raft_group0& group0, db::system_keyspace& sys_ks, const topology_state_machine& topo_sm, const raft::term_t term); 
+    view_building_coordinator(abort_source& as, replica::database& db, raft::server& raft, raft_group0& group0, db::system_keyspace& sys_ks, netw::messaging_service& messaging, const topology_state_machine& topo_sm, const raft::term_t term); 
 
     future<> run();
+    future<> stop();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
@@ -80,6 +83,11 @@ private:
     std::set<table_id> get_views_to_add(const vbc_state& state, const std::vector<table_id>& views, const std::vector<table_id>& built);
     std::set<table_id> get_views_to_remove(const vbc_state& state, const std::vector<table_id>& views);
     std::set<table_id> get_built_views_to_remove(const std::vector<table_id>& built, const std::vector<table_id>& views);
+
+    future<> build_view(vbc_state state);
+    future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> abort_work(const view_building_target& target);
 };
 
 }
