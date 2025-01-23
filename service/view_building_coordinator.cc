@@ -57,8 +57,11 @@ future<> view_building_coordinator::await_event() {
 
 future<view_building_coordinator::vbc_state> view_building_coordinator::load_coordinator_state() {
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
+    auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
+
     co_return vbc_state {
-        .tasks = std::move(tasks)
+        .tasks = std::move(tasks),
+        .currently_processed_base_table = std::move(currently_processed_base_table),
     };
 }
 
@@ -109,6 +112,11 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
         for (auto& view: to_remove) {
             auto muts = co_await remove_view(guard, view);
             cmuts.insert(cmuts.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
+
+            if (state.currently_processed_base_table && *state.currently_processed_base_table == get_base_id(view)) {
+                auto mut = co_await _sys_ks.make_vbc_delete_processing_base_mutation(guard.write_timestamp());
+                cmuts.emplace_back(std::move(mut));
+            }
         }
     }
     if (auto built_to_remove = get_built_views_to_remove(built_views, views); !built_to_remove.empty()) {
@@ -116,6 +124,15 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
             auto mut = co_await remove_built_view(guard, view);
             cmuts.emplace_back(std::move(mut));
         }
+    }
+
+    // Since vbc_state is immutable, select new base table to process only if there are no other changes to the state.
+    if (!state.currently_processed_base_table && !state.tasks.empty() && cmuts.empty()) {
+        auto& base_id = state.tasks.cbegin()->first;
+        vbc_logger.info("Start building views for base table: {}", base_id);
+
+        auto mut = co_await _sys_ks.make_vbc_processing_base_mutation(guard.write_timestamp(), base_id);
+        cmuts.emplace_back(std::move(mut));
     }
 
     if (!cmuts.empty()) {

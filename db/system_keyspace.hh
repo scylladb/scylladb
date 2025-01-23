@@ -558,6 +558,10 @@ public:
     future<mutation> make_vbc_task_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, shard_id shard, dht::token_range range);
     future<mutation> make_vbc_task_done_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, shard_id shard, dht::token_range range);
     future<std::vector<mutation>> make_vbc_remove_view_tasks_mutations(api::timestamp_type ts, system_keyspace_view_name view_name);
+    future<mutation> make_vbc_processing_base_mutation(api::timestamp_type ts, table_id base_id);
+    future<std::optional<mutation>> get_vbc_processing_base_mutation();
+    future<mutation> make_vbc_delete_processing_base_mutation(api::timestamp_type ts);
+    future<std::optional<table_id>> get_vbc_processing_base();
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
