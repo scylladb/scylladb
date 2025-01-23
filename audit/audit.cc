@@ -126,18 +126,9 @@ future<> audit::create_audit(const db::config& cfg, sharded<locator::shared_toke
         throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", cfg.audit()));
     }
     category_set audited_categories = parse_audit_categories(cfg.audit_categories());
-    if (!audited_categories) {
-        return make_ready_future<>();
-    }
     std::map<sstring, std::set<sstring>> audited_tables = parse_audit_tables(cfg.audit_tables());
     std::set<sstring> audited_keyspaces = parse_audit_keyspaces(cfg.audit_keyspaces());
-    if (audited_tables.empty()
-        && audited_keyspaces.empty()
-        && !audited_categories.contains(statement_category::AUTH)
-        && !audited_categories.contains(statement_category::ADMIN)
-        && !audited_categories.contains(statement_category::DCL)) {
-        return make_ready_future<>();
-    }
+
     logger.info("Audit is enabled. Auditing to: \"{}\", with the following categories: \"{}\", keyspaces: \"{}\", and tables: \"{}\"",
                 cfg.audit(), cfg.audit_categories(), cfg.audit_keyspaces(), cfg.audit_tables());
 
