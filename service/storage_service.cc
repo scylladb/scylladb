@@ -7173,6 +7173,11 @@ void storage_service::init_messaging_service() {
                 mutations.emplace_back(*view_builder_version_mut);
             }
 
+            auto vbc_processing_base_mut = co_await ss._sys_ks.local().get_vbc_processing_base_mutation();
+            if (vbc_processing_base_mut) {
+                mutations.emplace_back(*vbc_processing_base_mut);
+            }
+
             co_return raft_snapshot{
                 .mutations = std::move(mutations),
             };
