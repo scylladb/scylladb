@@ -1055,6 +1055,24 @@ public:
         co_return std::move(plan);
     }
 
+    std::tuple<schema_ptr, const tablet_aware_replication_strategy*> get_schema_and_rs(table_id table) {
+        auto t = _db.get_tables_metadata().get_table_if_exists(table);
+        if (!t) {
+            on_internal_error(lblogger, format("Table {} does not exist", table));
+        }
+
+        auto s = t->schema();
+        auto erm = t->get_effective_replication_map();
+        auto rs = erm->get_replication_strategy().maybe_as_tablet_aware();
+        if (!rs) {
+            auto msg = format("Table {}.{} has no tablet_aware_replication_strategy: uses_tablets={}",
+                              s->ks_name(), s->cf_name(), erm->get_replication_strategy().uses_tablets());
+            on_internal_error(lblogger, msg);
+        }
+
+        return {s, rs};
+    }
+
     future<table_resize_plan> make_resize_plan(const migration_plan& plan, std::optional<unsigned> initial_scale) {
         table_resize_plan resize_plan;
 
@@ -1088,19 +1106,9 @@ public:
                 .min_tablet_count = 1,
             };
 
-            auto t = _db.get_tables_metadata().get_table_if_exists(table);
-            if (t) {
-                const auto& erm = t->get_effective_replication_map();
-                if (const auto* rs = erm->get_replication_strategy().maybe_as_tablet_aware()) {
-                    size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
-                            rs->calculate_min_tablet_count(t->schema(), erm->get_token_metadata_ptr(), size_desc.target_tablet_size, initial_scale));
-                } else {
-                    auto msg = format("Table {}.{} has no tablet_aware_replication_strategy: uses_tablets={}", t->schema()->ks_name(), t->schema()->cf_name(), erm->get_replication_strategy().uses_tablets());
-                    on_internal_error(lblogger, msg);
-                }
-            } else {
-                on_internal_error(lblogger, format("Table {} does not exist", table));
-            }
+            auto [s, rs] = get_schema_and_rs(table);
+            size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
+                rs->calculate_min_tablet_count(s, _tm, size_desc.target_tablet_size, initial_scale));
 
             resize_load.update(table, std::move(size_desc));
             lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
