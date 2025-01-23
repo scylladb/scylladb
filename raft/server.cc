@@ -12,7 +12,6 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
-#include <boost/range/join.hpp>
 #include <boost/lexical_cast.hpp>
 #include <map>
 #include <seastar/core/sleep.hh>
@@ -30,6 +29,7 @@
 #include "raft.hh"
 
 #include "utils/exceptions.hh"
+#include "utils/concat_view.hh"
 
 using namespace std::chrono_literals;
 
@@ -1667,11 +1667,11 @@ future<> server_impl::abort(sstring reason) {
 
     auto append_futures = _append_request_status | boost::adaptors::map_values |  boost::adaptors::transformed([] (append_request_queue& a) -> future<>& { return a.f; });
 
-    auto all_futures = boost::range::join(snp_futures, append_futures);
+    auto all_futures = utils::views::concat(snp_futures, append_futures);
 
     std::array<future<>, 1> gate{_do_on_leader_gate.close()};
 
-    auto all_with_gate = boost::range::join(all_futures, gate);
+    auto all_with_gate = utils::views::concat(all_futures, gate);
 
     co_await seastar::when_all_succeed(all_with_gate.begin(), all_with_gate.end()).discard_result();
 }

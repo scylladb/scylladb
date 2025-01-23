@@ -50,6 +50,7 @@
 #include "service/topology_state_machine.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
+#include "utils/concat_view.hh"
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
@@ -62,8 +63,6 @@
 #include "idl/storage_proxy.dist.hh"
 
 #include "service/topology_coordinator.hh"
-
-#include <boost/range/join.hpp>
 
 using token = dht::token;
 using inet_address = gms::inet_address;
@@ -422,7 +421,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
         rtlogger.info("executing global topology command {}, excluded nodes: {}", cmd.cmd, exclude_nodes);
-        auto nodes = boost::range::join(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
+        auto nodes = utils::views::concat(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
             | std::views::filter([&cmd, &exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
                 // We must send barrier and barrier_and_drain to the decommissioning node
                 // as it might be accepting or coordinating requests.

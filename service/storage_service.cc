@@ -66,13 +66,13 @@
 #include "streaming/stream_blob.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>
-#include <boost/range/join.hpp>
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
 #include "utils/exceptions.hh"
+#include "utils/concat_view.hh"
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
 #include "compaction/compaction_manager.hh"
@@ -7141,7 +7141,7 @@ void storage_service::init_messaging_service() {
                 }
             }
 
-            for (const auto& table : boost::join(params.tables, additional_tables)) {
+            for (const auto& table : utils::views::concat(params.tables, additional_tables)) {
                 auto schema = ss._db.local().find_schema(table);
                 auto muts = co_await ss.get_system_mutations(schema);
 

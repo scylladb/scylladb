@@ -16,8 +16,6 @@
 #include <assert.h>
 #include <algorithm>
 
-#include <boost/range/join.hpp>
-
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/coroutine.hh>
@@ -48,6 +46,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/pretty_printers.hh"
+#include "utils/concat_view.hh"
 #include "readers/multi_range.hh"
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
@@ -176,7 +175,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         timestamp = memtable_min_timestamp;
     }
     std::optional<utils::hashed_key> hk;
-    for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
+    for (auto&& sst : utils::views::concat(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
             continue;
         }
@@ -978,7 +977,7 @@ private:
         // Delete either partially or fully written sstables of a compaction that
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
-        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
+        for (auto& sst : utils::views::concat(_new_partial_sstables, _new_unused_sstables)) {
             log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
             sst->mark_for_deletion();
         }
