@@ -26,8 +26,9 @@ namespace audit {
 
 logging::logger logger("audit");
 
-sstring audit_info::category_string() const {
-    switch (_category) {
+static sstring category_to_string(statement_category category)
+{
+    switch (category) {
         case statement_category::QUERY: return "QUERY";
         case statement_category::DML: return "DML";
         case statement_category::DDL: return "DDL";
@@ -36,6 +37,10 @@ sstring audit_info::category_string() const {
         case statement_category::ADMIN: return "ADMIN";
     }
     return "";
+}
+
+sstring audit_info::category_string() const {
+    return category_to_string(_category);
 }
 
 audit::audit(locator::shared_token_metadata& token_metadata,
