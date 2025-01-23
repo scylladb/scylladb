@@ -38,6 +38,7 @@ using vbc_tasks = std::map<table_id, base_tasks>;
 class view_building_coordinator : public migration_listener::only_view_notifications {
     struct vbc_state {
         vbc_tasks tasks;
+        std::optional<table_id> currently_processed_base_table;
     };
 
     replica::database& _db;
