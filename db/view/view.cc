@@ -23,6 +23,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/view_building_worker.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -49,6 +51,7 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
@@ -69,6 +72,7 @@
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
+#include "idl/view.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -3593,5 +3597,175 @@ std::chrono::microseconds calculate_view_update_throttling_delay(db::view::updat
         return std::chrono::duration_cast<std::chrono::microseconds>(budget);
     }
 }
+
+static logging::logger vbw_logger("view_building_worker");
+
+// Called in the context of a seastar::thread.
+class view_building_worker::consumer : public view_consumer {
+    lw_shared_ptr<replica::table> _base;
+    dht::decorated_key _current_key;
+
+    mutation_reader& _reader;
+    reader_permit _permit;
+    abort_source& _as;
+
+protected:
+    virtual void check_abort_source() override {
+        _as.check();
+    }
+    virtual bool stop_consuming() override {
+        return _as.abort_requested();
+    }
+    virtual bool stop_consuming_end_of_partition() override {
+        return false;
+    }
+    // Returns if consumer should stop processing
+    virtual bool setup_new_partition() override {
+        return false;
+    }
+
+    virtual dht::decorated_key& get_current_key() override {
+        return _current_key;
+    }
+    virtual void set_current_key(dht::decorated_key key) override {
+        _current_key = std::move(key);
+    }
+
+    virtual lw_shared_ptr<replica::table> base() override {
+        return _base;
+    }
+    virtual mutation_reader& reader() override {
+        return _reader;
+    }
+    virtual reader_permit& permit() override {
+        return _permit;
+    }
+
+public:
+    consumer(std::vector<view_ptr> views_to_build, lw_shared_ptr<replica::table> base, mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, abort_source& as) 
+        : view_consumer(std::move(gen), now, std::move(views_to_build))
+        , _base(base)
+        , _current_key(dht::minimum_token(), partition_key::make_empty())
+        , _reader(reader)
+        , _permit(std::move(permit))
+        , _as(as)
+        {}
+
+    dht::token consume_end_of_stream() {
+        return _current_key.token();
+    }
+};
+
+view_building_worker::view_building_worker(replica::database& db, view_update_generator& vug, sharded<netw::messaging_service>& messaging) 
+    : _db(db)
+    , _vug(vug)
+    , _messaging(messaging)
+{
+    init_messaging_service();   
+}
+
+future<> view_building_worker::stop() {
+    co_await uninit_messaging_service();
+}
+
+future<> view_building_worker::build_views_range(table_id base_id, dht::token_range range, std::vector<table_id> views) {
+    _as = abort_source();
+    
+    auto base_cf = _db.find_column_family(base_id).shared_from_this();
+    auto views_to_build = std::move(views) | std::views::transform([this] (const table_id& view_id) {
+        return view_ptr(_db.find_schema(view_id));
+    }) | std::ranges::to<std::vector>();
+
+    return seastar::async([this, base_cf = std::move(base_cf), range, views_to_build = std::move(views_to_build)] {
+        when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams()).get();
+        flush_base(base_cf, _as).get();
+        _as.check();
+
+        vbw_logger.info("Starting to process range {} for base table {}.{}. Views to build: {}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), views_to_build | std::views::transform([] (const view_ptr& view) {
+            return view->cf_name();
+        }));
+
+        reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
+        auto slice = make_partition_slice(*base_cf->schema());
+
+        bool has_work = true;
+        auto range_to_process = range;
+        std::exception_ptr eptr;
+        while (has_work && !eptr) {
+            gc_clock::time_point now = gc_clock::now();
+            auto prange = dht::to_partition_range(range_to_process);
+
+            auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
+                    base_cf->schema(), 
+                    permit,
+                    prange,
+                    slice,
+                    nullptr,
+                    streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::no);
+            auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+                    *reader.schema(),
+                    now,
+                    slice,
+                    db::view::view_builder::batch_size,
+                    query::max_partitions);
+            auto consumer = compact_for_query_v2<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
+                    std::move(views_to_build),
+                    std::move(base_cf),
+                    reader,
+                    permit,
+                    _vug.shared_from_this(),
+                    now,
+                    _as));
+            
+            try {
+                utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, _as).get();
+                auto end_token = reader.consume_in_thread(std::move(consumer));
+                vbw_logger.info("Build range {} for base table: {}.{}", dht::token_range(range_to_process.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
+
+                if (reader.is_end_of_stream()) {
+                    has_work = false;
+                } else {
+                    range_to_process = dht::token_range(end_token, range_to_process.end());
+                }
+            } catch (seastar::abort_requested_exception&) {
+                eptr = std::current_exception();
+                vbw_logger.info("Building range {} for base table {}.{} and views {} was aborted.", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), views_to_build | std::views::transform([] (const view_ptr& view) {
+                    return view->cf_name();
+                }));
+            } catch (...) {
+                eptr = std::current_exception();
+                vbw_logger.warn("Error during processing range {} for base table {}.{} and views {}: ", range_to_process, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), views_to_build | std::views::transform([] (const view_ptr& view) {
+                    return view->cf_name();
+                }), eptr);
+            }
+            reader.close().get();
+        }
+
+        if (eptr) {
+            // rethrow the exception, so the rpc call will fail and view building coordinator will notice it
+            std::rethrow_exception(eptr);
+        }
+    });
+}
+
+void view_building_worker::init_messaging_service() {
+    ser::view_rpc_verbs::register_build_views_range(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views) -> future<> {
+        return container().invoke_on(shard, [base_id, range = std::move(range), views = std::move(views)] (auto& vbr) {
+            return vbr.build_views_range(std::move(base_id), std::move(range), std::move(views));
+        });
+    });
+    ser::view_rpc_verbs::register_abort_view_building_work(&_messaging.local(), [this] (unsigned shard) -> future<rpc::no_wait_type> {
+        co_await container().invoke_on(shard, [] (auto& vbw) {
+            vbw._as.request_abort();
+        });
+        co_return rpc::no_wait_type{};
+    });
+}
+
+future<> view_building_worker::uninit_messaging_service() {
+    return ser::view_rpc_verbs::unregister(&_messaging.local());
+}
+
 } // namespace view
 } // namespace db

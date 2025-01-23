@@ -181,7 +181,7 @@ future<std::vector<canonical_mutation>> view_building_coordinator::add_view(cons
 
         for (auto& replica: tablet_info.replicas) {
             auto mut = co_await _sys_ks.make_vbc_task_mutation(guard.write_timestamp(), view_name, replica.host, replica.shard, range);
-            muts.emplace_back(std::move((mut)));
+            muts.emplace_back(std::move(mut));
         }
     }
     co_return muts;
