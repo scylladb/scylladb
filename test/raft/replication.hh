@@ -11,6 +11,7 @@
 #include <memory>
 #include <random>
 #include <bit>
+#include <fmt/std.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sleep.hh>
