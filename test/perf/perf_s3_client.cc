@@ -101,6 +101,18 @@ public:
         } while (now() < until);
     }
 
+    future<> run_upload() {
+        plog.info("Uploading");
+        auto file_name = fs::path(_object_name);
+        auto sz = co_await seastar::file_size(file_name.native());
+        _object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), file_name.filename().native());
+        _remove_file = true;
+        auto start = now();
+        co_await _client->upload_file(file_name, _object_name);
+        auto time = std::chrono::duration_cast<std::chrono::duration<double>>(now() - start);
+        plog.info("Uploaded {}MB in {}s, speed {}MB/s", sz >> 20, time.count(), (sz >> 20) / time.count());
+    }
+
     future<> stop() {
         if (_remove_file) {
             plog.debug("Removing {}", _object_name);
@@ -126,6 +138,7 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
+        ("upload", "test file upload")
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
         ("object_name", bpo::value<sstring>()->default_value(""), "use given object/file name")
@@ -137,6 +150,7 @@ int main(int argc, char** argv) {
         auto sks = app.configuration()["sockets"].as<unsigned>();
         auto oname = app.configuration()["object_name"].as<sstring>();
         auto osz = app.configuration()["object_size"].as<size_t>();
+        auto upload = app.configuration().contains("upload");
         sharded<tester> test;
         plog.info("Creating");
         co_await test.start(dur, sks, oname, osz);
@@ -144,7 +158,11 @@ int main(int argc, char** argv) {
         co_await test.invoke_on_all(&tester::start);
         try {
             plog.info("Running");
-            co_await test.invoke_on_all(&tester::run_download);
+            if (upload) {
+                co_await test.invoke_on_all(&tester::run_upload);
+            } else {
+                co_await test.invoke_on_all(&tester::run_download);
+            }
         } catch (...) {
             plog.error("Error running: {}", std::current_exception());
         }
