@@ -1074,19 +1074,71 @@ public:
         std::unordered_map<table_id, table_sizing> tables;
     };
 
+    size_t tablet_count_from_min_per_shard_tablet_count(const schema& s,
+            const std::unordered_map<sstring, unsigned>& shards_per_dc,
+            const tablet_aware_replication_strategy& rs,
+            double min_per_shard_tablet_count)
+    {
+        // Try to use as many tablets so that all shards in the current topology
+        // are covered with at least `min_per_shard_tablet_count` tablets on average.
+
+        size_t tablet_count = 0;
+        min_per_shard_tablet_count = std::max(1.0, min_per_shard_tablet_count);
+        for (auto&& [dc, shards_in_dc] : shards_per_dc) {
+            auto rf_in_dc = rs.get_replication_factor(dc);
+            if (!rf_in_dc) {
+                continue;
+            }
+            size_t tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
+            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in dc {}", tablets_in_dc,
+                    min_per_shard_tablet_count, s.ks_name(), s.cf_name(), dc);
+            tablet_count = std::max(tablet_count, tablets_in_dc);
+        }
+        lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{}", tablet_count,
+                min_per_shard_tablet_count, s.ks_name(), s.cf_name());
+        return tablet_count;
+    }
+
     future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
         std::unordered_map<table_id, const tablet_aware_replication_strategy*> rs_by_table;
         sizing_plan plan;
 
-        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) -> future<> {
+        std::unordered_map<sstring, unsigned> shards_per_dc;
+        _tm->for_each_token_owner([&] (const node& n) {
+            if (n.is_normal()) {
+                shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
+            }
+        });
+
+        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
             rs_by_table[table] = rs;
 
             size_t target_tablet_count = 1;
 
-            auto min_tablet_count = co_await rs->calculate_min_tablet_count(s, _tm, _target_tablet_size, _initial_scale);
-            target_tablet_count = std::max<size_t>(target_tablet_count, min_tablet_count);
+            target_tablet_count = std::max<size_t>(target_tablet_count, rs->get_initial_tablets());
+
+            const auto& tablet_options = s->tablet_options();
+            if (tablet_options.min_tablet_count) {
+                target_tablet_count = std::max<size_t>(target_tablet_count, tablet_options.min_tablet_count.value());
+            }
+
+            if (tablet_options.expected_data_size_in_gb) {
+                target_tablet_count = std::max<size_t>(target_tablet_count,
+                        (tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size);
+            }
+
+            auto min_per_shard_tablet_count = tablet_options.min_per_shard_tablet_count.value_or(
+                    // If min_tablet_count is set, initial_scale should not be effective for
+                    // compatibility with the deprecated "initial" tablet count.
+                    (rs->get_initial_tablets() || tablet_options.min_tablet_count) ? 0 : _initial_scale);
+            if (min_per_shard_tablet_count) {
+                target_tablet_count = std::max<size_t>(target_tablet_count,
+                        tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
+            }
+
+            // The block below establishes table_plan.target_tablet_count
 
             const auto* table_stats = load_stats_for_table(table);
             if (table_stats) {
@@ -1124,11 +1176,12 @@ public:
 
         for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
             auto [s, rs] = get_schema_and_rs(table);
-            co_await process_table(table, s, rs, tmap->tablet_count());
+            process_table(table, s, rs, tmap->tablet_count());
+            co_await coroutine::maybe_yield();
         }
 
         if (new_table) {
-            co_await process_table(new_table->id(), new_table, new_rs, 0);
+            process_table(new_table->id(), new_table, new_rs, 0);
         }
 
         // Below section ensures we respect the _tablets_per_shard_goal.
@@ -1155,13 +1208,6 @@ public:
         // oscillations of decisions.
 
         std::unordered_map<table_id, double> table_scaling;
-
-        std::unordered_map<sstring, unsigned> shards_per_dc;
-        _tm->for_each_token_owner([&] (const node& n) {
-            if (n.is_normal()) {
-                shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
-            }
-        });
 
         for (auto&& [dc, shard_count] : shards_per_dc) {
             double cur_avg_tablets_per_shard = 0;

@@ -29,16 +29,13 @@ private:
 protected:
     void validate_tablet_options(const abstract_replication_strategy&, const gms::feature_service&, const replication_strategy_config_options&) const;
     void process_tablet_options(abstract_replication_strategy&, replication_strategy_config_options&, replication_strategy_params);
-    size_t get_initial_tablets() const { return _initial_tablets; }
     effective_replication_map_ptr do_make_replication_map(table_id,
                                                           replication_strategy_ptr,
                                                           token_metadata_ptr,
                                                           size_t replication_factor) const;
 
 public:
-    /// Calculate the minimum tablet_count for a table, given the target_tablet_size, the per-table hints,
-    /// the network topology, and the configured replication factors.
-    virtual future<size_t> calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const = 0;
+    size_t get_initial_tablets() const { return _initial_tablets; }
 
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
