@@ -26,6 +26,7 @@ class tester {
     shared_ptr<s3::client> _client;
     utils::estimated_histogram _latencies;
     unsigned _errors = 0;
+    unsigned _part_size_mb;
     bool _remove_file;
 
     static s3::endpoint_config_ptr make_config(unsigned sockets) {
@@ -43,12 +44,13 @@ class tester {
     std::chrono::steady_clock::time_point now() const { return std::chrono::steady_clock::now(); }
 
 public:
-    tester(std::chrono::seconds dur, unsigned sockets, sstring object_name, size_t obj_size)
+    tester(std::chrono::seconds dur, unsigned sockets, unsigned part_size, sstring object_name, size_t obj_size)
             : _duration(dur)
             , _object_name(std::move(object_name))
             , _object_size(obj_size)
             , _mem(memory::stats().total_memory())
             , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(sockets), _mem))
+            , _part_size_mb(part_size)
             , _remove_file(false)
     {}
 
@@ -108,7 +110,7 @@ public:
         _object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), file_name.filename().native());
         _remove_file = true;
         auto start = now();
-        co_await _client->upload_file(file_name, _object_name);
+        co_await _client->upload_file(file_name, _object_name, {}, _part_size_mb << 20);
         auto time = std::chrono::duration_cast<std::chrono::duration<double>>(now() - start);
         plog.info("Uploaded {}MB in {}s, speed {}MB/s", sz >> 20, time.count(), (sz >> 20) / time.count());
     }
@@ -141,6 +143,7 @@ int main(int argc, char** argv) {
         ("upload", "test file upload")
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
+        ("part_size_mb", bpo::value<unsigned>()->default_value(5), "part size")
         ("object_name", bpo::value<sstring>()->default_value(""), "use given object/file name")
         ("object_size", bpo::value<size_t>()->default_value(1 << 20), "size of test object")
     ;
@@ -148,12 +151,13 @@ int main(int argc, char** argv) {
     return app.run(argc, argv, [&app] () -> future<> {
         auto dur = std::chrono::seconds(app.configuration()["duration"].as<unsigned>());
         auto sks = app.configuration()["sockets"].as<unsigned>();
+        auto part_size = app.configuration()["part_size_mb"].as<unsigned>();
         auto oname = app.configuration()["object_name"].as<sstring>();
         auto osz = app.configuration()["object_size"].as<size_t>();
         auto upload = app.configuration().contains("upload");
         sharded<tester> test;
         plog.info("Creating");
-        co_await test.start(dur, sks, oname, osz);
+        co_await test.start(dur, sks, part_size, oname, osz);
         plog.info("Starting");
         co_await test.invoke_on_all(&tester::start);
         try {
