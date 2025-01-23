@@ -8,7 +8,7 @@ ScyllaDB Requirements
    :hidden:
   
    system-requirements
-   os-support
+   OS Support <os-support>
    Cloud Instance Recommendations <cloud-instance-recommendations>
    scylla-in-a-shared-environment
    
