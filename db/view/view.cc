@@ -10,9 +10,12 @@
 
 #include <chrono>
 #include <deque>
+#include <exception>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
@@ -23,6 +26,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/view_building_worker.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -49,7 +54,11 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
+#include "seastar/core/abort_source.hh"
+#include "seastar/core/semaphore.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/assert.hh"
@@ -69,6 +78,7 @@
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
+#include "idl/view.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -3585,5 +3595,336 @@ std::chrono::microseconds calculate_view_update_throttling_delay(db::view::updat
         return std::chrono::duration_cast<std::chrono::microseconds>(budget);
     }
 }
+
+static logging::logger vbw_logger("view_building_worker");
+
+// Called in the context of a seastar::thread.
+class view_building_worker::consumer : public view_consumer {
+    replica::database& _db;
+    vb_parameters& _params;
+    lw_shared_ptr<replica::table> _base;
+    dht::decorated_key _current_key;
+
+    mutation_reader& _reader;
+    reader_permit _permit;
+    abort_source& _as;
+
+protected:
+    virtual void load_views_to_build() override {
+        _views_to_build = _params.view_ptrs | std::views::filter([this] (const view_ptr& view) {
+            return partition_key_matches(_db.as_data_dictionary(), *_reader.schema(), *view->view_info(), _current_key);
+        }) | std::ranges::to<std::vector>();
+    }
+    virtual void check_for_built_views() override {}
+
+
+    virtual void check_abort_source() override {
+        _as.check();
+    }
+    virtual bool stop_consuming() override {
+        return _as.abort_requested();
+    }
+    virtual bool stop_consuming_end_of_partition() override {
+        return false;
+    }
+
+    virtual dht::decorated_key& get_current_key() override {
+        return _current_key;
+    }
+    virtual void set_current_key(dht::decorated_key key) override {
+        _current_key = std::move(key);
+    }
+
+    virtual lw_shared_ptr<replica::table> base() override {
+        return _base;
+    }
+    virtual mutation_reader& reader() override {
+        return _reader;
+    }
+    virtual reader_permit& permit() override {
+        return _permit;
+    }
+
+public:
+    consumer(replica::database& db, vb_parameters& vb_parameters, lw_shared_ptr<replica::table> base, mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, abort_source& as) 
+            : view_consumer(std::move(gen), now)
+            , _db(db)
+            , _params(vb_parameters)
+            , _base(base)
+            , _current_key(dht::minimum_token(), partition_key::make_empty())
+            , _reader(reader)
+            , _permit(std::move(permit))
+            , _as(as) {
+        load_views_to_build();
+    }
+
+    dht::token consume_end_of_stream() {
+        return _current_key.token();
+    }
+};
+
+view_building_worker::view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::raft_group0_client& group0_client, view_update_generator& vug, sharded<netw::messaging_service>& messaging) 
+    : _db(db)
+    , _sys_ks(sys_ks)
+    , _group0_client(group0_client)
+    , _vug(vug)
+    , _messaging(messaging)
+{
+    _db.get_notifier().register_listener(this);
+    init_messaging_service();
+}
+
+void view_building_worker::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) {
+    (void)with_semaphore(_op_sem, 1, [this, ks_name, view_name] {
+        if (_building_op) {
+            auto view = view_ptr(_db.find_schema(ks_name, view_name));
+            
+            auto ptr_it = std::ranges::find_if(_building_op->params.view_ptrs, [view] (const view_ptr& v_ptr) {
+                return view->id() == v_ptr->id();
+            });
+            if (ptr_it != _building_op->params.view_ptrs.end()) {
+                *ptr_it = std::move(view);
+            }
+        }
+    }).handle_exception_type([] (replica::no_such_column_family&) {});
+}
+
+void view_building_worker::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    (void)with_semaphore(_op_sem, 1, [this, ks_name, view_name] {
+        if (_building_op) {
+            for (auto it = _building_op->params.view_ptrs.begin(); it != _building_op->params.view_ptrs.end(); ++it) {
+                if ((*it)->ks_name() == ks_name && (*it)->cf_name() == view_name) {
+                    _building_op->params.views.erase((*it)->id());
+                    _building_op->params.view_ptrs.erase(it);
+                    return;
+                }
+            }
+        }
+    });
+}
+
+future<> view_building_worker::sync_state() {
+    return container().invoke_on(0, [this] (view_building_worker& vbw) -> future<> {
+        auto guard = vbw._group0_client.start_operation(vbw._as);
+        auto current_base_id = co_await vbw._sys_ks.get_vbc_processing_base();
+        
+        if (this->_base_id != current_base_id) {
+            vbw_logger.debug("Changing processing base table from {} to {}", this->_base_id, current_base_id);
+            co_await this->clear_current_operation();
+            this->_base_id = std::move(current_base_id);
+        }
+    });
+}
+
+future<> view_building_worker::clear_current_operation() {
+    if (_building_op) {
+        vbw_logger.warn("Currently processing base table was changed but there was ongoing task for old base table. Requesting abort...");
+        _building_op->as.request_abort();
+
+        try {
+            co_await _building_op->task.get_future();
+        } catch (...) {
+            // Ignore any exception here
+        }
+    }
+
+    _base_id.reset();
+    _per_range_built_views_history.clear();
+}
+
+future<std::vector<table_id>> view_building_worker::do_build_operation(table_id base_id, dht::token_range range, std::vector<table_id> views, raft::term_t term) {
+    auto units = co_await get_units(_op_sem, 1);
+    co_await sync_state();
+    if (!_base_id || *_base_id != base_id) {
+        throw std::runtime_error(fmt::format("Base table id ({}) doesn't match id of currenty processing base table ({})", base_id, _base_id));
+    }
+    _as.check();
+    
+    auto views_set = views | std::ranges::to<std::set>();
+
+    // Check whether the range was alread built for requested views.
+    // If this is the case, return already built views (this may be a subset of requested `views`),
+    // so the coordinator can mark them as finished.
+    if (_per_range_built_views_history.contains(range)) {
+        std::vector<table_id> built_views;
+        std::ranges::set_intersection(_per_range_built_views_history[range], views_set, std::back_inserter(built_views));
+        if (!built_views.empty()) {
+            co_return built_views;
+        }
+    }
+
+    // Try to attach to existing view building task if there is one.
+    // If `_building_op->params.views` is a subset of `views`, extra views will be ignored in this request.
+    // Case when `views` is a subset of `_building_op->params.views` shouldn't happen. When a view is dropped during building, 
+    // view_building_worker should react and adjust `_building_op->params.views` accordingly.
+    if (_building_op) {
+        vbw_logger.debug("Trying to join existing task {{views: {}, range: {}, term: {}}}", _building_op->params.views, _building_op->params.range, _building_op->term);
+        if (term < _building_op->term) {
+            throw std::runtime_error(fmt::format("Received building request with lower term ({}) than term of existing task ({})", term, _building_op->term));
+        }
+
+        auto& op_params = _building_op->params;
+        auto& op_views = _building_op->params.views;
+        auto any_view_not_in_request = std::any_of(op_views.begin(), op_views.end(), [&views_set] (auto& vid) { return views_set.contains(vid); });
+        if (any_view_not_in_request) {
+            // TO CONSIDER: should this be an error?
+            throw std::runtime_error(fmt::format("Building request was trying to attach to running operation, which has more views than the request. Views requested to build: {} | Currently building views: {}", views_set, op_views));
+        }
+
+        units.return_all();
+        auto result = co_await _building_op->task.get_future();
+        co_return result;
+    }
+    
+    // Process request and build views.
+    promise<std::vector<table_id>> p;
+    auto view_ptrs = views_set | std::views::transform([this] (const table_id& view_id) {
+            return view_ptr(_db.find_schema(view_id));
+    }) | std::ranges::to<std::vector>();
+    vb_parameters params{std::move(views_set), std::move(view_ptrs), std::move(range)};
+    _building_op.emplace(std::move(params), term, abort_source{}, p.get_future());
+    auto erase_op = seastar::defer([&] {
+        _building_op.reset();
+    });
+    units.return_all();
+
+    std::vector<table_id> result;
+    std::exception_ptr eptr;
+    try {
+        result = co_await build_views_range(_building_op->params, _building_op->as);
+        p.set_value(result);
+        co_return result;
+    } catch (...) {
+        eptr = std::current_exception();
+        p.set_exception(eptr);
+        throw;
+    }
+
+    units = co_await get_units(_op_sem, 1);
+    if (eptr) {
+        _building_op.reset();
+        throw eptr;
+    }
+    for (auto& vid: result) {
+        _per_range_built_views_history[_building_op->params.range].insert(vid);
+    }
+}
+
+future<std::vector<table_id>> view_building_worker::build_views_range(vb_parameters& params, abort_source& as) {
+    SCYLLA_ASSERT(_base_id);
+
+    auto base_cf = _db.find_column_family(*_base_id).shared_from_this();
+    return seastar::async([this, &params, base_cf = std::move(base_cf), &as] {
+        when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams()).get();
+        flush_base(base_cf, as).get();
+        as.check();
+
+        vbw_logger.info("Starting to process range {} for base table {}.{}. Views to build: {}", params.range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), params.views);
+
+        reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
+        auto slice = make_partition_slice(*base_cf->schema());
+
+        bool has_work = true;
+        auto range_to_process = params.range;
+        std::exception_ptr eptr;
+        while (has_work && !eptr) {
+            as.check();
+            gc_clock::time_point now = gc_clock::now();
+            auto prange = dht::to_partition_range(range_to_process);
+
+            auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
+                    base_cf->schema(), 
+                    permit,
+                    prange,
+                    slice,
+                    nullptr,
+                    streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::no);
+            auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+                    *reader.schema(),
+                    now,
+                    slice,
+                    db::view::view_builder::batch_size,
+                    query::max_partitions);
+            auto consumer = compact_for_query_v2<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
+                    _db,
+                    params,
+                    std::move(base_cf),
+                    reader,
+                    permit,
+                    _vug.shared_from_this(),
+                    now,
+                    as));
+            
+            try {
+                utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, as).get();
+                auto end_token = reader.consume_in_thread(std::move(consumer));
+                vbw_logger.info("Build range {} for base table: {}.{}", dht::token_range(range_to_process.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
+
+                if (reader.is_end_of_stream()) {
+                    has_work = false;
+                } else {
+                    range_to_process = dht::token_range(end_token, range_to_process.end());
+                }
+            } catch (seastar::abort_requested_exception&) {
+                eptr = std::current_exception();
+                vbw_logger.info("Building range {} for base table {}.{} and views {} was aborted.", params.range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), params.views);
+            } catch (...) {
+                eptr = std::current_exception();
+                vbw_logger.warn("Error during processing range {} for base table {}.{} and views {}: ", range_to_process, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), params.views, eptr);
+            }
+            reader.close().get();
+        }
+
+        if (eptr) {
+            // rethrow the exception, so the rpc call will fail and view building coordinator will notice it
+            std::rethrow_exception(eptr);
+        }
+        return params.views | std::ranges::to<std::vector>();
+    });
+}
+
+future<> view_building_worker::maybe_abort_current_operation(raft::term_t term) {
+    auto units = co_await get_units(_op_sem, 1);
+    if (_building_op && _building_op->term <= term) {
+        vbw_logger.info("Aborting current building task {{views: {}, range: {}, term: {}}}", _building_op->params.views, _building_op->params.range, _building_op->term);
+        _building_op->as.request_abort();
+        units.return_all();
+        try {
+            co_await _building_op->task.get_future();
+        } catch (seastar::abort_requested_exception&) {
+        } catch (...) {
+            vbw_logger.warn("Error while aborting building task: {}", std::current_exception());
+        }
+    }
+}
+
+void view_building_worker::init_messaging_service() {
+    ser::view_rpc_verbs::register_build_views_range(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views, raft::term_t term) -> future<std::vector<table_id>> {
+        return container().invoke_on(shard, [base_id, range = std::move(range), views = std::move(views), term] (auto& vbw) -> future<std::vector<table_id>> {
+            return vbw.do_build_operation(base_id, std::move(range), std::move(views), term);
+        });
+    });
+    ser::view_rpc_verbs::register_abort_view_building_work(&_messaging.local(), [this] (unsigned shard, raft::term_t term) -> future<> {
+        return container().invoke_on(shard, [term] (auto& vbw) {
+            return vbw.maybe_abort_current_operation(term);
+        });
+    });
+}
+
+future<> view_building_worker::uninit_messaging_service() {
+    return ser::view_rpc_verbs::unregister(&_messaging.local());
+}
+
+future<> view_building_worker::stop() {
+    _as.request_abort();
+    co_await _op_sem.wait();
+    _op_sem.broken();
+    co_await clear_current_operation();
+
+    co_await uninit_messaging_service();
+    co_await _db.get_notifier().unregister_listener(this);
+}
+
 } // namespace view
 } // namespace db
