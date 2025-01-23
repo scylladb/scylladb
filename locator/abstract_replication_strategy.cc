@@ -657,6 +657,8 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
         // all under the lock.
         auto lk = co_await db.get_shared_token_metadata().get_lock();
         auto erm = db.find_keyspace(keyspace_name).get_vnode_effective_replication_map();
+        utils::get_local_injector().inject("get_keyspace_erms_throw_no_such_keyspace",
+                [&keyspace_name] { throw data_dictionary::no_such_keyspace{keyspace_name}; });
         auto ring_version = erm->get_token_metadata().get_ring_version();
         _erms[0] = make_foreign(std::move(erm));
         co_await coroutine::parallel_for_each(std::views::iota(1u, smp::count), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
