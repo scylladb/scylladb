@@ -7327,6 +7327,11 @@ void storage_service::init_messaging_service() {
                 mutations.emplace_back(*view_builder_version_mut);
             }
 
+            auto vbc_processing_base_mut = co_await ss._sys_ks.local().get_vbc_processing_base_mutation();
+            if (vbc_processing_base_mut) {
+                mutations.emplace_back(*vbc_processing_base_mut);
+            }
+
             if (ss._feature_service.view_building_coordinator) {
                 auto built_views_muts = co_await ss._sys_ks.local().get_built_views_mutations();
                 for (auto&& mut: built_views_muts) {

@@ -60,8 +60,11 @@ future<> view_building_coordinator::await_event() {
 
 future<view_building_coordinator::vbc_state> view_building_coordinator::load_coordinator_state() {
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
+    auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
+
     co_return vbc_state {
-        .tasks = std::move(tasks)
+        .tasks = std::move(tasks),
+        .currently_processed_base_table = std::move(currently_processed_base_table),
     };
 }
 
@@ -131,6 +134,30 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
         for (auto& view_id: built_to_remove) {
             auto mut = co_await remove_built_view(guard, view_id);
             cmuts.emplace_back(std::move(mut));
+        }
+    }
+
+    // Since vbc_state is immutable, update currently processing base table only when there are no other changes to the state.
+    if (cmuts.empty()) {
+        if (state.currently_processed_base_table) {
+            // Check if the base table should continue to be built. Maybe we should stop building
+            // the base table if all views were dropped.
+            auto base_id = *state.currently_processed_base_table;
+
+            if (state.tasks.contains(base_id) && state.tasks.at(base_id).empty()) {
+                vbc_logger.info("Base table {} no longer has any views to build.", base_id);
+                auto mut = co_await _sys_ks.make_vbc_delete_processing_base_mutation(guard.write_timestamp());
+                cmuts.emplace_back(std::move(mut));
+            }
+        } else {
+            // Select next base table to build if there is any.
+            if (!state.tasks.empty()) {
+                auto& base_id = state.tasks.cbegin()->first;
+                vbc_logger.info("Start building views for base table: {}", base_id);
+
+                auto mut = co_await _sys_ks.make_vbc_processing_base_mutation(guard.write_timestamp(), base_id);
+                cmuts.emplace_back(std::move(mut));
+            }
         }
     }
 

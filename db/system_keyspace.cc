@@ -10,6 +10,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <fmt/core.h>
 #include <fmt/ranges.h>
 
 #include <seastar/core/coroutine.hh>
@@ -27,6 +28,7 @@
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
+#include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
@@ -2762,6 +2764,38 @@ future<mutation> system_keyspace::make_vbc_task_mutation(api::timestamp_type ts,
 future<mutation> system_keyspace::make_vbc_task_done_mutation(api::timestamp_type ts, table_id view_id, const service::view_building_target& target, const dht::token_range& range) {
     static sstring stmt = format("DELETE FROM {}.{} WHERE view_id = ? AND host_id = ? AND shard = ? AND start_token = ? AND end_token = ?", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS);
     return make_mutation_for_vbc_stmt(_qp, stmt, ts, view_id, target, range);
+}
+static constexpr auto VBC_PROCESSING_BASE_KEY = "vbc_processing_base";
+
+future<mutation> system_keyspace::make_vbc_processing_base_mutation(api::timestamp_type ts, table_id base_id) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VBC_PROCESSING_BASE_KEY, base_id.to_sstring()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::optional<mutation>> system_keyspace::get_vbc_processing_base_mutation() {
+    return get_scylla_local_mutation(_db, VBC_PROCESSING_BASE_KEY);
+}
+
+future<std::optional<table_id>> system_keyspace::get_vbc_processing_base() {
+    auto value = co_await get_scylla_local_param(VBC_PROCESSING_BASE_KEY);
+    co_return value.transform([] (sstring uuid) {
+        return table_id(utils::UUID(uuid));
+    });
+}
+
+future<mutation> system_keyspace::make_vbc_delete_processing_base_mutation(api::timestamp_type ts) {
+    static sstring query = format("DELETE FROM {}.{} WHERE key = ?", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VBC_PROCESSING_BASE_KEY});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
 }
 
 future<std::vector<mutation>> system_keyspace::make_vbc_remove_view_tasks_mutations(api::timestamp_type ts, table_id view_id) {
