@@ -23,7 +23,6 @@
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
-#include <boost/range/adaptor/indexed.hpp>
 
 logging::logger slogger("mc_writer");
 
@@ -253,10 +252,10 @@ public:
 
         if (_mode ==  encoding_mode::small) {
             // Set bit for every missing column
-            for (const auto& element: _columns | boost::adaptors::indexed()) {
-                auto cell = _row.find_cell(element.value().get().id);
+            for (const auto& [index, column]: _columns | std::views::enumerate) {
+                auto cell = _row.find_cell(column.get().id);
                 if (!cell) {
-                    _current_value |= (uint64_t(1) << element.index());
+                    _current_value |= (uint64_t(1) << index);
                 }
             }
             _current_index = total_size;
