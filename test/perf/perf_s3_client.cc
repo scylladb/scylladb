@@ -27,11 +27,12 @@ class tester {
     utils::estimated_histogram _reads_hist;
     unsigned _errors = 0;
 
-    static s3::endpoint_config_ptr make_config() {
+    static s3::endpoint_config_ptr make_config(unsigned sockets) {
         s3::endpoint_config cfg;
         cfg.port = 443;
         cfg.use_https = true;
         cfg.region = tests::getenv_safe("AWS_DEFAULT_REGION");
+        cfg.max_connections = sockets;
 
         return make_lw_shared<s3::endpoint_config>(std::move(cfg));
     }
@@ -41,12 +42,12 @@ class tester {
     std::chrono::steady_clock::time_point now() const { return std::chrono::steady_clock::now(); }
 
 public:
-    tester(std::chrono::seconds dur, size_t obj_size)
+    tester(std::chrono::seconds dur, unsigned sockets, size_t obj_size)
             : _duration(dur)
             , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
             , _object_size(obj_size)
             , _mem(memory::stats().total_memory())
-            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(), _mem))
+            , _client(s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_config(sockets), _mem))
     {}
 
     future<> start() {
@@ -113,15 +114,17 @@ int main(int argc, char** argv) {
     app_template app;
     app.add_options()
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
+        ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
         ("object_size", bpo::value<size_t>()->default_value(1 << 20), "size of test object")
     ;
 
     return app.run(argc, argv, [&app] () -> future<> {
         auto dur = std::chrono::seconds(app.configuration()["duration"].as<unsigned>());
+        auto sks = app.configuration()["sockets"].as<unsigned>();
         auto osz = app.configuration()["object_size"].as<size_t>();
         sharded<tester> test;
         plog.info("Creating");
-        co_await test.start(dur, osz);
+        co_await test.start(dur, sks, osz);
         plog.info("Starting");
         co_await test.invoke_on_all(&tester::start);
         try {
