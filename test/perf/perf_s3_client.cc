@@ -20,7 +20,6 @@ seastar::logger plog("perf");
 
 class tester {
     std::chrono::seconds _duration;
-    unsigned _parallel;
     std::string _object_name;
     size_t _object_size;
     semaphore _mem;
@@ -42,9 +41,8 @@ class tester {
     std::chrono::steady_clock::time_point now() const { return std::chrono::steady_clock::now(); }
 
 public:
-    tester(std::chrono::seconds dur, unsigned prl, size_t obj_size)
+    tester(std::chrono::seconds dur, size_t obj_size)
             : _duration(dur)
-            , _parallel(prl)
             , _object_name(fmt::format("/{}/perfobject-{}-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid(), this_shard_id()))
             , _object_size(obj_size)
             , _mem(memory::stats().total_memory())
@@ -74,9 +72,9 @@ public:
         }
     }
 
-private:
+public:
 
-    future<> do_run() {
+    future<> run() {
         auto until = now() + _duration;
         uint64_t off = 0;
         do {
@@ -89,15 +87,6 @@ private:
                 _errors++;
             }
         } while (now() < until);
-    }
-
-public:
-    future<> run() {
-        co_await coroutine::parallel_for_each(std::views::iota(0u, _parallel), [this] (auto fnr) -> future<> {
-            plog.debug("Running {} fiber", fnr);
-            co_await seastar::sleep(std::chrono::milliseconds(fnr)); // make some discrepancy
-            co_await do_run();
-        });
     }
 
     future<> stop() {
@@ -124,17 +113,15 @@ int main(int argc, char** argv) {
     app_template app;
     app.add_options()
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
-        ("parallel", bpo::value<unsigned>()->default_value(1), "number of parallel fibers")
         ("object_size", bpo::value<size_t>()->default_value(1 << 20), "size of test object")
     ;
 
     return app.run(argc, argv, [&app] () -> future<> {
         auto dur = std::chrono::seconds(app.configuration()["duration"].as<unsigned>());
-        auto prl = app.configuration()["parallel"].as<unsigned>();
         auto osz = app.configuration()["object_size"].as<size_t>();
         sharded<tester> test;
         plog.info("Creating");
-        co_await test.start(dur, prl, osz);
+        co_await test.start(dur, osz);
         plog.info("Starting");
         co_await test.invoke_on_all(&tester::start);
         try {
