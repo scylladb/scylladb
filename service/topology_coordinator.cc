@@ -7,6 +7,7 @@
  */
 
 #include <chrono>
+#include <exception>
 #include <fmt/ranges.h>
 
 #include <seastar/core/abort_source.hh>
@@ -40,6 +41,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "db/view/view_builder.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/join_node.hh"
@@ -48,6 +50,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -117,6 +120,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
+    vbc::view_building_coordinator* _vb_coordinator_ptr = nullptr;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -2812,6 +2816,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<> maybe_start_view_building_coordinator() {
+        if (!_feature_service.view_building_coordinator) {
+            co_return;
+        }
+
+        auto vb_coordinator = std::make_unique<vbc::view_building_coordinator>(_as, _db, _group0, _sys_ks, _messaging, _topo_sm);
+        _db.get_notifier().register_listener(vb_coordinator.get());
+        _vb_coordinator_ptr = vb_coordinator.get();
+
+        try {
+            co_await vb_coordinator->run();
+        } catch (...) {
+            on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {}", std::current_exception()));
+        }
+
+        co_await _db.get_notifier().unregister_listener(vb_coordinator.get());
+        _vb_coordinator_ptr = nullptr;
+        co_await vb_coordinator->stop();
+    }
+
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
     future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
@@ -3384,6 +3408,7 @@ future<> topology_coordinator::run() {
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
+    auto view_building_coordinator = maybe_start_view_building_coordinator();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3424,6 +3449,7 @@ future<> topology_coordinator::run() {
     co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
     co_await std::move(gossiper_orphan_remover);
+    co_await std::move(view_building_coordinator);
 }
 
 future<> topology_coordinator::stop() {
