@@ -237,7 +237,7 @@ client::group_client& client::find_or_create_client() {
         // Limit the maximum number of connections this group's http client
         // may have proportional to its shares. Shares are typically in the
         // range of 100...1000, thus resulting in 1..10 connections
-        auto max_connections = std::max((unsigned)(sg.get_shares() / 100), 1u);
+        unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
             std::forward_as_tuple(std::move(factory), max_connections)
