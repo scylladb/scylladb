@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <iostream>
+#include <fmt/format.h>
 #include "utils/bptree.hh"
 
 namespace bplus {
