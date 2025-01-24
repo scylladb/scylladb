@@ -2075,14 +2075,14 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
     // Waited on during stop()
-    (void)([] (storage_service& me, sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) -> future<> {
+    (void)([] (storage_service& me, sharded<service::storage_proxy>& proxy) -> future<> {
         try {
-            co_await me.track_upgrade_progress_to_topology_coordinator(sys_dist_ks, proxy);
+            co_await me.track_upgrade_progress_to_topology_coordinator(proxy);
         } catch (const abort_requested_exception&) {
             // Ignore
         }
         // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
-    })(*this, _sys_dist_ks, proxy);
+    })(*this, proxy);
 
     std::unordered_set<locator::host_id> ids;
     _gossiper.for_each_endpoint_state([this, &ids] (const inet_address& addr, const gms::endpoint_state& ep) {
@@ -2094,7 +2094,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     co_await _gossiper.notify_nodes_on_up(std::move(ids));
 }
 
-future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy) {
+future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded<service::storage_proxy>& proxy) {
     SCYLLA_ASSERT(_group0);
 
     while (true) {
