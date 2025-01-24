@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "service/raft/join_node.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/group0_fwd.hh"
@@ -177,7 +178,8 @@ public:
     //
     // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
     future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-                          std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled);
+                          std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
+                          const join_node_request_params& params);
 
     // Call during the startup procedure before networking is enabled.
     //
@@ -363,7 +365,8 @@ private:
     // Preconditions: Raft local feature enabled
     // and we haven't initialized group 0 yet after last Scylla start (`joined_group0()` is false).
     // Postcondition: `joined_group0()` is true.
-    future<> join_group0(std::vector<gms::inet_address> seeds, shared_ptr<group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks, bool topology_change_enabled);
+    future<> join_group0(std::vector<gms::inet_address> seeds, shared_ptr<group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, db::system_keyspace& sys_ks, bool topology_change_enabled,
+            const join_node_request_params& params);
 
     // Start an existing Raft server for the cluster-wide group 0.
     // Assumes the server was already added to the group earlier so we don't attempt to join it again.

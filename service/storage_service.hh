@@ -48,6 +48,7 @@
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
+#include "timestamp.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
 
@@ -843,6 +844,8 @@ public:
     bool topology_global_queue_empty() const {
         return !_topology_state_machine._topology.global_request.has_value();
     }
+    future<> raft_initialize_discovery_leader(const join_node_request_params& params);
+    future<> initialize_done_topology_upgrade_state();
 private:
      // State machine that is responsible for topology change
     topology_state_machine& _topology_state_machine;
@@ -871,7 +874,6 @@ private:
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
-    future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);
@@ -980,7 +982,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
 
-    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard);
+    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp);
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);

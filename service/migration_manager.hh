@@ -95,6 +95,7 @@ public:
     const migration_notifier& get_notifier() const { return _notifier; }
     service::storage_proxy& get_storage_proxy() { return _storage_proxy; }
     const service::storage_proxy& get_storage_proxy() const { return _storage_proxy; }
+    const service::raft_group0_client& get_group0_client() const { return _group0_client; }
     abort_source& get_abort_source() noexcept { return _as; }
     const abort_source& get_abort_source() const noexcept { return _as; }
     serialized_action& get_group0_barrier() noexcept { return _group0_barrier; }

@@ -856,7 +856,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
         migration_muts.push_back(std::move(muts[0]));
     }
 
-    auto status_mut = co_await sys_ks.make_service_levels_version_mutation(2, guard);
+    auto status_mut = co_await sys_ks.make_service_levels_version_mutation(2, guard.write_timestamp());
     migration_muts.push_back(std::move(status_mut));
 
     service::write_mutations change {

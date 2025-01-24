@@ -120,6 +120,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <stdexcept>
 #include <unistd.h>
+#include <variant>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -689,9 +690,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
     _topology_state_machine.reload_count++;
 
-    if (_manage_topology_change_kind_from_group0) {
-        set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
-    }
+    set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
     if (_topology_state_machine._topology.upgrade_state != topology::upgrade_state_type::done) {
         co_return;
@@ -1196,8 +1195,8 @@ std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_par
     return ignored_nodes;
 }
 
-std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, service::group0_guard& guard) {
-    topology_mutation_builder builder(guard.write_timestamp());
+std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp) {
+    topology_mutation_builder builder(write_timestamp);
     auto ignored_nodes = ignored_nodes_from_join_params(params);
 
     if (!ignored_nodes.empty()) {
@@ -1232,7 +1231,7 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
     }
     node_builder.set("request_id", params.request_id);
     topology_request_tracking_mutation_builder rtbuilder(params.request_id, _db.local().features().topology_requests_type_column);
-    rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
+    rtbuilder.set("initiating_host", params.host_id.uuid())
              .set("done", false);
     rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
 
@@ -1295,20 +1294,6 @@ public:
 };
 
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
-    // No other server can become a member of the cluster until
-    // we finish adding ourselves. This is ensured by
-    // waiting in join_node_request_handler for
-    // _topology_state_machine._topology.normal_nodes to be not empty.
-    // We cannot mark ourselves as dead during this process.
-    // This means there is no valid way we can lose quorum here,
-    // but some subsystems may just become unreasonably slow for various reasons,
-    // so we nonetheless use raft_timeout{} here.
-
-    if (_topology_state_machine._topology.is_empty()) {
-        co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
-    }
-
-    while (_topology_state_machine._topology.is_empty()) {
         if (params.replaced_id.has_value()) {
             throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
         }
@@ -1317,40 +1302,48 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
             throw std::runtime_error("Cannot start the first node in the cluster as zero-token");
         }
 
-        rtlogger.info("adding myself as the first node to the topology");
-        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+        const auto new_group0_state_id = raft_group0_client::generate_group0_state_id(utils::UUID{});
+        auto write_timestamp = utils::UUID_gen::micros_timestamp(new_group0_state_id);
 
-        auto insert_join_request_mutations = build_mutation_from_join_params(params, guard);
+        rtlogger.info("adding myself as the first node to the topology");
+
+        auto insert_join_request_mutations = build_mutation_from_join_params(params, write_timestamp);
 
         // We are the first node and we define the cluster.
         // Set the enabled_features field to our features.
-        topology_mutation_builder builder(guard.write_timestamp());
+        topology_mutation_builder builder(write_timestamp);
         builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
                 .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
         auto enable_features_mutation = builder.build();
-
         insert_join_request_mutations.push_back(std::move(enable_features_mutation));
 
-        auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, guard);
+        auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, write_timestamp);
         insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
-        
-        insert_join_request_mutations.emplace_back(
-                co_await _sys_ks.local().make_auth_version_mutation(guard.write_timestamp(), db::system_keyspace::auth_version_t::v2));
+
+        insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
 
         if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
             insert_join_request_mutations.emplace_back(
-                    co_await _sys_ks.local().make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2));
+                    co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
         }
 
         topology_change change{std::move(insert_join_request_mutations)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-                "bootstrap: adding myself as the first node to the topology");
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
-        } catch (group0_concurrent_modification&) {
-            rtlogger.info("bootstrap: concurrent operation is detected, retrying.");
-        }
-    }
+        
+        auto history_append = db::system_keyspace::make_group0_history_state_id_mutation(new_group0_state_id,
+                _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
+        auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
+
+        co_await write_mutations_to_database(_qp.proxy(), mutation_creator_addr, std::move(change.mutations));
+        co_await _qp.proxy().mutate_locally({history_append}, nullptr);
+}
+
+future<> storage_service::initialize_done_topology_upgrade_state() {
+    const sstring insert_query = format("UPDATE {}.{} SET upgrade_state='done' WHERE key='topology'",
+        db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+    co_await _qp.execute_internal(
+            insert_query,
+            {},
+            cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
@@ -1787,7 +1780,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(can_vote::no);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
-            raft_replace_info, *this, _qp, _migration_manager.local(), raft_topology_change_enabled());
+            raft_replace_info, *this, _qp, _migration_manager.local(), raft_topology_change_enabled(), join_params);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!raft_topology_change_enabled()) {
@@ -1834,12 +1827,6 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             _group0_as.request_abort();
             _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
         });
-
-        // Nodes that are not discovery leaders have their join request inserted
-        // on their behalf by an existing node in the cluster during the handshake.
-        // Discovery leaders on the other need to insert the join request themselves,
-        // we do that here.
-        co_await raft_initialize_discovery_leader(join_params);
 
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate(), sys_dist_ks);
@@ -6951,7 +6938,7 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
             }
         }
 
-        auto mutation = build_mutation_from_join_params(params, guard);
+        auto mutation = build_mutation_from_join_params(params, guard.write_timestamp());
 
         topology_change change{{std::move(mutation)}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
