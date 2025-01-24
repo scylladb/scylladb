@@ -15,7 +15,7 @@ SSTable Version Support
      - ScyllaDB Enterprise Version
      - ScyllaDB Open Source Version
    * - 3.x ('me')
-     - 2022.2
+     - 2022.2 and above
      - 5.1 and above
    * - 3.x ('md')
      - 2021.1
