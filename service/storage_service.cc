@@ -1490,8 +1490,7 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
-future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<service::storage_proxy>& proxy,
+future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -1819,14 +1818,14 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         co_await raft_initialize_discovery_leader(join_params);
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate(), sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate(), _sys_dist_ks);
         // start cleanup fiber
         _sstable_cleanup_fiber = sstable_cleanup_fiber(*raft_server, _group0->hold_group0_gate(), proxy);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
         supervisor::notify("starting system distributed keyspace");
-        co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
 
         if (_sys_ks.local().bootstrap_complete()) {
             if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
@@ -1952,13 +1951,13 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
-        co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
-        co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
         bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
@@ -1998,14 +1997,14 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
     // pass an accessor to the service level controller so it can interact with it
     // but only if the conditions are right (the cluster supports or have supported
     // workload prioritization before):
-    if (!sys_dist_ks.local().workload_prioritization_tables_exists()) {
+    if (!_sys_dist_ks.local().workload_prioritization_tables_exists()) {
         // if we got here, it means that the workload priotization didn't exist before and
         // also that the cluster currently doesn't support workload prioritization.
         // we delay the creation of the tables and accessing them until it does.
         //
         // the callback might be run immediately and it uses async methods, so the thread is needed
         co_await seastar::async([&] {
-            _workload_prioritization_registration = _feature_service.workload_prioritization.when_enabled([&sys_dist_ks] () {
+            _workload_prioritization_registration = _feature_service.workload_prioritization.when_enabled([&sys_dist_ks = _sys_dist_ks] () {
                 // since we are creating tables here and we wouldn't want to have a race condition
                 // we will first wait for a random period of time and only then start the routine
                 // the race condition can happen because the feature flag will "light up" in about
@@ -2083,7 +2082,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             // Ignore
         }
         // Other errors are handled internally by track_upgrade_progress_to_topology_coordinator
-    })(*this, sys_dist_ks, proxy);
+    })(*this, _sys_dist_ks, proxy);
 
     std::unordered_set<locator::host_id> ids;
     _gossiper.for_each_endpoint_state([this, &ids] (const inet_address& addr, const gms::endpoint_state& ep) {
@@ -3063,7 +3062,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
-    co_return co_await join_topology(_sys_dist_ks, proxy, std::move(initial_contact_nodes),
+    co_return co_await join_topology(proxy, std::move(initial_contact_nodes),
             std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
