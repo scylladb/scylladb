@@ -1981,3 +1981,65 @@ def test_index_in_API(cql, test_keyspace):
         wait_for_index(cql, test_keyspace, index_name)
         res = rest_api.get_request(cql, f"column_family/built_indexes/{table.replace('.',':')}")
         assert index_name in res
+
+
+# Test that a LIMIT works correctly across multiple partitions.
+# The test creates an index on a partition key column and checks if the LIMIT
+# is correctly enforced, i.e., the last partition in the query result is
+# truncated. Truncation is required when the last partition participating in the
+# query result contains more than one rows, and causes the LIMIT to be exceeded.
+#
+# Reproduces #22158 - The test fails when LIMIT is 3 because the query result
+# contains 4 rows instead of 3. The coordinator applies the LIMIT on the number
+# of primary keys it fetches from the index view, and then re-applies the LIMIT
+# on each partition it fetches from the base table, but does not truncate the
+# last partition if necessary (this would require counting the rows across all
+# partitions). If the query result contains more than one partitions, it may
+# exceed the LIMIT. The LIMIT is supposed to control the number of rows of the
+# whole query result.
+#
+# As a side effect, the excessive rows in the result also cause the Has_more_pages
+# flag to be set, although the result has been exhausted. This happens because
+# the last primary key in the query result does not match the last primary key
+# from the index view (where the LIMIT is correctly applied). A mismatch is
+# always interpreted as more pages being available, which in this case is incorrect.
+# See `generate_view_paging_state_from_base_query_results()` for more details.
+@pytest.mark.xfail(reason="issue #22158")
+def test_limit_partition(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(pk2)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk1, pk2, ck) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 1, 2])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 1, 2])
+        # Test LIMIT within a single partition - succeeds.
+        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 1')
+        assert sorted(list(rs)) == [(2,1)]
+        assert rs.has_more_pages == False
+        # Test LIMIT across partitions - reproduces #22158.
+        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3')
+        assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+        assert rs.has_more_pages == False
+
+
+# Same as test_limit_partition above, except that it uses partition slices
+# instead of whole partitions. This is achieved by indexing the first clustering
+# key column.
+@pytest.mark.xfail(reason="issue #22158")
+def test_limit_partition_slice(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 1, 2])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 1, 2])
+        # Test LIMIT within a single partition slice - succeeds.
+        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 1')
+        assert sorted(list(rs)) == [(1,1)]
+        assert rs.has_more_pages == False
+        # Test LIMIT across partition slices - reproduces #22158.
+        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3')
+        assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+        assert rs.has_more_pages == False
