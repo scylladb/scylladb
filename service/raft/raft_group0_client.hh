@@ -203,12 +203,14 @@ public:
 
     bool in_recovery() const;
 
+    gc_clock::duration get_history_gc_duration() const;
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
 
     query_result_guard create_result_guard(utils::UUID query_id);
     void set_query_result(utils::UUID query_id, service::broadcast_tables::query_result qr);
+    static utils::UUID generate_group0_state_id(utils::UUID prev_state_id);
 };
 
 using mutations_generator = coroutine::experimental::generator<mutation>;
