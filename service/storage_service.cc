@@ -1098,7 +1098,7 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
     }
 }
 
-future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::holder group0_holder, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::holder group0_holder) {
     std::optional<abort_source> as;
 
     try {
@@ -1122,7 +1122,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
             as.emplace();
             // start topology change coordinator in the background
             _topology_change_coordinator = run_topology_coordinator(
-                    sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
+                    _sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
@@ -1818,7 +1818,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         co_await raft_initialize_discovery_leader(join_params);
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate(), _sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate());
         // start cleanup fiber
         _sstable_cleanup_fiber = sstable_cleanup_fiber(*raft_server, _group0->hold_group0_gate(), proxy);
 
@@ -2126,7 +2126,7 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
     // Start the topology coordinator monitor fiber. If we are the leader, this will start
     // the topology coordinator which is responsible for driving the upgrade process.
     try {
-        _raft_state_monitor = raft_state_monitor_fiber(_group0->group0_server(), _group0->hold_group0_gate(), sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(_group0->group0_server(), _group0->hold_group0_gate());
     } catch (...) {
         // The calls above can theoretically fail due to coroutine frame allocation failure.
         // Abort in this case as the node should be in a pretty bad shape anyway.

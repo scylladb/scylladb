@@ -836,7 +836,7 @@ private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
-    future<> raft_state_monitor_fiber(raft::server&, gate::holder, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> raft_state_monitor_fiber(raft::server&, gate::holder);
 
 public:
     bool topology_global_queue_empty() const {
