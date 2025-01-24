@@ -1595,6 +1595,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Task manager's messaging handlers need to be set like this because of dependency chain:
             // messaging -(needs)-> sys_ks -> db -> cm -> task_manager.
             task_manager.invoke_on_all([&] (auto& tm) {
+                tm.set_host_id(host_id);
                 tm.init_ms_handlers(messaging.local());
             }).get();
             auto uninit_tm_ms_handlers = defer([&task_manager] () {

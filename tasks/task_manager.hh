@@ -19,6 +19,7 @@
 #include "db_clock.hh"
 #include "utils/log.hh"
 #include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"
@@ -84,6 +85,7 @@ private:
     tasks_collection _tasks;
     modules _modules;
     config _cfg;
+    locator::host_id _host_id = locator::host_id::create_null_id();
     seastar::abort_source _as;
     optimized_optional<seastar::abort_source::subscription> _abort_subscription;
     utils::updateable_value<uint32_t> _task_ttl;
@@ -381,6 +383,9 @@ public:
     task_manager() noexcept;
 
     gms::inet_address get_broadcast_address() const noexcept;
+    // Returns empty host_id if local info isn't resolved yet.
+    locator::host_id get_host_id() const noexcept;
+    void set_host_id(locator::host_id host_id) noexcept;
     modules& get_modules() noexcept;
     const modules& get_modules() const noexcept;
     task_map& get_local_tasks() noexcept;

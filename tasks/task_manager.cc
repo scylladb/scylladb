@@ -658,6 +658,14 @@ gms::inet_address task_manager::get_broadcast_address() const noexcept {
     return _cfg.broadcast_address;
 }
 
+locator::host_id task_manager::get_host_id() const noexcept {
+    return _host_id;
+}
+
+void task_manager::set_host_id(locator::host_id host_id) noexcept {
+    _host_id = host_id;
+}
+
 task_manager::modules& task_manager::get_modules() noexcept {
     return _modules;
 }
