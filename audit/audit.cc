@@ -43,20 +43,6 @@ sstring audit_info::category_string() const {
     return category_to_string(_category);
 }
 
-audit::audit(locator::shared_token_metadata& token_metadata,
-             sstring&& storage_helper_name,
-             std::set<sstring>&& audited_keyspaces,
-             std::map<sstring, std::set<sstring>>&& audited_tables,
-             category_set&& audited_categories)
-    : _token_metadata(token_metadata)
-    , _audited_keyspaces(std::move(audited_keyspaces))
-    , _audited_tables(std::move(audited_tables))
-    , _audited_categories(std::move(audited_categories))
-    , _storage_helper_class_name(std::move(storage_helper_name))
-{ }
-
-audit::~audit() = default;
-
 static category_set parse_audit_categories(const sstring& data) {
     category_set result;
     if (!data.empty()) {
@@ -115,6 +101,20 @@ static std::set<sstring> parse_audit_keyspaces(const sstring& data) {
     }
     return result;
 }
+
+audit::audit(locator::shared_token_metadata& token_metadata,
+             sstring&& storage_helper_name,
+             std::set<sstring>&& audited_keyspaces,
+             std::map<sstring, std::set<sstring>>&& audited_tables,
+             category_set&& audited_categories)
+    : _token_metadata(token_metadata)
+    , _audited_keyspaces(std::move(audited_keyspaces))
+    , _audited_tables(std::move(audited_tables))
+    , _audited_categories(std::move(audited_categories))
+    , _storage_helper_class_name(std::move(storage_helper_name))
+{ }
+
+audit::~audit() = default;
 
 future<> audit::create_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm) {
     sstring storage_helper_name;
