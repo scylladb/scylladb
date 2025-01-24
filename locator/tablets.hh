@@ -354,6 +354,8 @@ struct resize_decision {
     seq_number_t next_sequence_number() const;
 };
 
+using resize_decision_way = resize_decision::way_type;
+
 struct table_load_stats {
     uint64_t size_in_bytes = 0;
     // Stores the minimum seq number among all replicas, as coordinator wants to know if
@@ -667,6 +669,11 @@ struct tablet_metadata_change_hint {
 };
 
 }
+
+template <>
+struct fmt::formatter<locator::resize_decision_way> : fmt::formatter<string_view> {
+    auto format(const locator::resize_decision_way&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 template <>
 struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<string_view> {

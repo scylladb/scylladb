@@ -633,13 +633,7 @@ resize_decision::resize_decision(sstring decision, uint64_t seq_number)
 }
 
 sstring resize_decision::type_name() const {
-    static const std::array<sstring, 3> index_to_string = {
-        "none",
-        "split",
-        "merge",
-    };
-    static_assert(std::variant_size_v<decltype(way)> == index_to_string.size());
-    return index_to_string[way.index()];
+    return fmt::format("{}", way);
 }
 
 resize_decision::seq_number_t resize_decision::next_sequence_number() const {
@@ -1029,6 +1023,17 @@ void tablet_metadata_guard::subscribe() {
     });
 }
 
+}
+
+auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_decision_way& way, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    static const std::array<sstring, 3> index_to_string = {
+        "none",
+        "split",
+        "merge",
+    };
+    static_assert(std::variant_size_v<locator::resize_decision_way> == index_to_string.size());
+    return fmt::format_to(ctx.out(), "{}", index_to_string[way.index()]);
 }
 
 auto fmt::formatter<locator::global_tablet_id>::format(const locator::global_tablet_id& id, fmt::format_context& ctx) const
