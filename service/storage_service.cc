@@ -2931,7 +2931,7 @@ bool storage_service::is_topology_coordinator_enabled() const {
     return raft_topology_change_enabled();
 }
 
-future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
+future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         start_hint_manager start_hm, gms::generation_type new_generation) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -3063,7 +3063,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         slogger.info("peer={}, supported_features={}", x.first, x.second);
     }
 
-    co_return co_await join_topology(sys_dist_ks, proxy, std::move(initial_contact_nodes),
+    co_return co_await join_topology(_sys_dist_ks, proxy, std::move(initial_contact_nodes),
             std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 

@@ -1013,7 +1013,7 @@ private:
             const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 
             try {
-                _ss.local().join_cluster(_sys_dist_ks, _proxy, service::start_hint_manager::no, generation_number).get();
+                _ss.local().join_cluster(_proxy, service::start_hint_manager::no, generation_number).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error

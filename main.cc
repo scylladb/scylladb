@@ -2151,7 +2151,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);
+                return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
 
             dictionary_service dict_service(
