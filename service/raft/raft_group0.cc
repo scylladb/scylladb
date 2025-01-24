@@ -91,6 +91,44 @@ namespace service {
 static logging::logger group0_log("raft_group0");
 static logging::logger upgrade_log("raft_group0_upgrade");
 
+namespace {
+
+constexpr std::chrono::milliseconds default_retry_period{10};   // 10 milliseconds
+constexpr std::chrono::seconds default_max_retry_period{1};     // 1 second
+constexpr std::chrono::seconds default_max_total_timeout{300};  // 5 minutes
+
+enum class operation_result : uint8_t { success, failure };
+
+future<> run_op_with_retry(abort_source& as, auto&& op, const sstring op_name,
+        const std::optional<std::chrono::seconds> max_total_timeout = default_max_total_timeout, std::chrono::milliseconds retry_period = default_retry_period,
+        const std::chrono::seconds max_retry_period = default_max_retry_period) {
+    const auto start = lowres_clock::now();
+    while (true) {
+        as.check();
+        const operation_result result = co_await op();
+        if (result == operation_result::success) {
+            co_return;
+        }
+
+        if (max_total_timeout) {
+            const auto elapsed = lowres_clock::now() - start;
+            if (elapsed > *max_total_timeout) {
+                on_internal_error(group0_log,
+                        format("{} timed out after retrying for {} seconds", op_name, std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()));
+            }
+        }
+
+        retry_period *= 2;
+        if (retry_period > max_retry_period) {
+            retry_period = max_retry_period;
+        }
+        co_await sleep_abortable(retry_period, as);
+    }
+    std::unreachable();
+}
+
+} // namespace
+
 // TODO: change the links from master to stable/5.2 after 5.2 is released
 const char* const raft_upgrade_doc = "https://docs.scylladb.com/master/architecture/raft.html#verifying-that-the-internal-raft-upgrade-procedure-finished-successfully";
 static const auto raft_manual_recovery_doc = "https://docs.scylladb.com/master/architecture/raft.html#raft-manual-recovery-procedure";
@@ -772,7 +810,15 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             // Just bootstrapped and joined as non-voter. Become a voter.
             auto pause_shutdown = _shutdown_gate.hold();
             raft::server_address my_addr{my_id, {}};
-            co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
+            co_await run_op_with_retry(_abort_source, [this, my_addr]() -> future<operation_result> {
+                try {
+                    co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
+                } catch (const raft::commit_status_unknown& e) {
+                    group0_log.info("finish_setup_after_join({}): modify_config returned \"{}\", retrying", my_addr, e);
+                    co_return operation_result::failure;
+                }
+                co_return operation_result::success;
+            }, "finish_setup_after_join->modify_config", {});
             group0_log.info("finish_setup_after_join: became a group 0 voter.");
 
             // No need to run `upgrade_to_group0()` since we must have bootstrapped with Raft
@@ -937,13 +983,8 @@ future<bool> raft_group0::wait_for_raft() {
 
 future<> raft_group0::make_raft_config_nonvoter(const std::unordered_set<raft::server_id>& ids, abort_source& as,
         std::optional<raft_timeout> timeout)
-{
-    static constexpr auto max_retry_period = std::chrono::seconds{1};
-    auto retry_period = std::chrono::milliseconds{10};
-
-    while (true) {
-        as.check();
-
+ {
+    co_await run_op_with_retry(as, [this, &ids, timeout, &as]() -> future<operation_result> {
         std::vector<raft::config_member> add;
         add.reserve(ids.size());
         std::transform(ids.begin(), ids.end(), std::back_inserter(add),
@@ -951,36 +992,26 @@ future<> raft_group0::make_raft_config_nonvoter(const std::unordered_set<raft::s
 
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config(std::move(add), {}, &as, timeout);
-            co_return;
         } catch (const raft::commit_status_unknown& e) {
             group0_log.info("make_raft_config_nonvoter({}): modify_config returned \"{}\", retrying", ids, e);
+            co_return operation_result::failure;
         }
-        retry_period *= 2;
-        if (retry_period > max_retry_period) {
-            retry_period = max_retry_period;
-        }
-        co_await sleep_abortable(retry_period, as);
-    }
+        co_return operation_result::success;
+    }, "make_raft_config_nonvoter->modify_config");
+    co_return;
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
-    static constexpr auto max_retry_period = std::chrono::seconds{1};
-    auto retry_period = std::chrono::milliseconds{10};
-
-    // TODO: add a timeout mechanism? This could get stuck (and _abort_source is only called on shutdown).
-    while (true) {
+    co_await run_op_with_retry(_abort_source, [this, id]() -> future<operation_result> {
         try {
-            co_await _raft_gr.group0().modify_config({}, {id}, &_abort_source);
-            break;
+            co_await _raft_gr.group0_with_timeouts().modify_config({}, {id}, &_abort_source, raft_timeout{});
         } catch (const raft::commit_status_unknown& e) {
             group0_log.info("remove_from_raft_config({}): modify_config returned \"{}\", retrying", id, e);
+            co_return operation_result::failure;
         }
-        retry_period *= 2;
-        if (retry_period > max_retry_period) {
-            retry_period = max_retry_period;
-        }
-        co_await sleep_abortable(retry_period, _abort_source);
-    }
+        co_return operation_result::success;
+    }, "remove_from_raft_config->modify_config");
+    co_return;
 }
 
 bool raft_group0::joined_group0() const {
