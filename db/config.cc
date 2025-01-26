@@ -20,6 +20,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/sstring.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/log-cli.hh>
@@ -113,6 +114,12 @@ config_from_string(std::string_view value) {
     } else {
         throw boost::bad_lexical_cast(typeid(std::string_view), typeid(bool));
     }
+}
+
+template <>
+sstring
+config_from_string(std::string_view value) {
+    return sstring(value);
 }
 
 template <>
