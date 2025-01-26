@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/memory.hh>
 #include <seastar/core/future-util.hh>

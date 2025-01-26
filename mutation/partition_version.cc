@@ -9,8 +9,8 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
 #include "partition_version.hh"
-#include "row_cache.hh"
-#include "partition_snapshot_row_cursor.hh"
+#include "db/row_cache.hh"
+#include "db/partition_snapshot_row_cursor.hh"
 #include "utils/assert.hh"
 #include "utils/coroutine.hh"
 #include "real_dirty_memory_accounter.hh"

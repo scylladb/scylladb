@@ -37,7 +37,8 @@ target_sources(db
     snapshot-ctl.cc
     snapshot/backup_task.cc
     rate_limiter.cc
-    per_partition_rate_limit_options.cc)
+    per_partition_rate_limit_options.cc
+    row_cache.cc)
 target_include_directories(db
   PUBLIC
     ${CMAKE_SOURCE_DIR})

@@ -19,7 +19,7 @@
 #include "mutation/partition_version.hh"
 #include "mutation/mutation.hh"
 #include "replica/memtable.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/mutation_reader_assertions.hh"

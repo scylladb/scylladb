@@ -22,7 +22,7 @@
 
 #include "schema/schema_builder.hh"
 #include "test/lib/simple_schema.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
 #include "partition_slice_builder.hh"

@@ -19,7 +19,7 @@
 #include "mutation_query.hh"
 #include "mutation_compactor.hh"
 #include "counters.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "timestamp.hh"
 #include "view_info.hh"
 #include "mutation_cleaner.hh"

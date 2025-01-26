@@ -15,7 +15,7 @@
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
 #include "utils/UUID_gen.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 #include "replica/memtable.hh"

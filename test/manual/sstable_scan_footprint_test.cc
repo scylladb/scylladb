@@ -11,7 +11,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"

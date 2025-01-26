@@ -14,7 +14,7 @@
 
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
