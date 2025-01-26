@@ -95,6 +95,13 @@ SEASTAR_THREAD_TEST_CASE(test_system_config_table_update) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_system_config_table_set_empty) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql(format("UPDATE system.config SET value = '' WHERE name = 'allowed_repair_based_node_ops';")).get();
+        BOOST_REQUIRE_EQUAL(env.local_db().get_config().allowed_repair_based_node_ops(), sstring());
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_system_config_table_no_live_update) {
     do_with_cql_env_thread([] (cql_test_env& env) {
         BOOST_REQUIRE_THROW(
