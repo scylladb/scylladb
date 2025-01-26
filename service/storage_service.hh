@@ -387,7 +387,7 @@ public:
     future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
-    future<> join_cluster(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy,
+    future<> join_cluster(sharded<service::storage_proxy>& proxy,
             start_hint_manager start_hm, gms::generation_type new_generation);
 
     void set_group0(service::raft_group0&);
@@ -407,8 +407,7 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
-    future<> join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<service::storage_proxy>& proxy,
+    future<> join_topology(sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -837,7 +836,7 @@ private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
-    future<> raft_state_monitor_fiber(raft::server&, gate::holder, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> raft_state_monitor_fiber(raft::server&, gate::holder);
 
 public:
     bool topology_global_queue_empty() const {
@@ -927,7 +926,7 @@ public:
 private:
     // Tracks progress of the upgrade to topology coordinator.
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
-    future<> track_upgrade_progress_to_topology_coordinator(sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy);
+    future<> track_upgrade_progress_to_topology_coordinator(sharded<service::storage_proxy>& proxy);
 
     future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<service::group0_guard> get_guard_for_tablet_update();
