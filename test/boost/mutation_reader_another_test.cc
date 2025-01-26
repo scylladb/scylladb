@@ -22,7 +22,7 @@
 #include "readers/delegating_v2.hh"
 #include "readers/multi_range.hh"
 #include "replica/memtable.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"

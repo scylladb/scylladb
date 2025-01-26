@@ -16,7 +16,7 @@
 #include "partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/tmpdir.hh"
 #include "sstables/sstables.hh"

@@ -15,7 +15,7 @@
 #include "sstables/sstables.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/sstable_utils.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "test/lib/simple_schema.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/mutation_reader_assertions.hh"

@@ -14,7 +14,7 @@
 #include <seastar/util/defer.hh>
 
 #include "mutation/partition_version.hh"
-#include "partition_snapshot_row_cursor.hh"
+#include "db/partition_snapshot_row_cursor.hh"
 #include "partition_snapshot_reader.hh"
 #include "clustering_interval_set.hh"
 

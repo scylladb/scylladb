@@ -14,7 +14,7 @@
 #include "readers/range_tombstone_change_merger.hh"
 #include "clustering_key_filter.hh"
 #include "query-request.hh"
-#include "partition_snapshot_row_cursor.hh"
+#include "db/partition_snapshot_row_cursor.hh"
 #include <any>
 
 extern seastar::logger mplog;

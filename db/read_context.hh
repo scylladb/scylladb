@@ -14,7 +14,7 @@
 #include "mutation/mutation_fragment.hh"
 #include "mutation/partition_version.hh"
 #include "tracing/tracing.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 
 namespace cache {
 

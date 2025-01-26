@@ -15,7 +15,7 @@
 #include "partition_builder.hh"
 #include "query-result-writer.hh"
 #include "counters.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include <seastar/core/execution_stage.hh>
 #include "compaction/compaction_garbage_collector.hh"
 #include "mutation_partition_view.hh"

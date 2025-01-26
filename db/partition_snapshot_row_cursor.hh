@@ -9,7 +9,7 @@
 #pragma once
 
 #include "mutation/partition_version.hh"
-#include "row_cache.hh"
+#include "db/row_cache.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include <fmt/core.h>
