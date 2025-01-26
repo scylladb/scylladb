@@ -20,6 +20,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/print.hh>
+#include <seastar/core/sstring.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/log-cli.hh>
 #include <seastar/net/tls.hh>
@@ -115,7 +116,25 @@ config_from_string(std::string_view value) {
 }
 
 template <>
+<<<<<<< HEAD
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
+||||||| parent of d1c222d9bd (config: specialize config_from_string() for sstring)
+const config_type& config_type_for<bool>() {
+    static config_type ct("bool", value_to_json<bool>);
+    return ct;
+}
+=======
+sstring
+config_from_string(std::string_view value) {
+    return sstring(value);
+}
+
+template <>
+const config_type& config_type_for<bool>() {
+    static config_type ct("bool", value_to_json<bool>);
+    return ct;
+}
+>>>>>>> d1c222d9bd (config: specialize config_from_string() for sstring)
 
 template <>
 const config_type config_type_for<uint16_t> = config_type("integer", value_to_json<uint16_t>);
