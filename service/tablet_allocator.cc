@@ -497,6 +497,7 @@ class load_balancer {
         locator::resize_decision new_resize_decision;
         size_t tablet_count;
         size_t shard_count;
+        sstring reason; // reason for target_tablet_count
     };
 
     struct cluster_resize_load {
@@ -1346,6 +1347,7 @@ public:
                 .new_resize_decision = new_resize_decision,
                 .tablet_count = table_plan.current_tablet_count,
                 .shard_count = shard_count,
+                .reason = table_plan.target_tablet_count_reason,
             };
 
             resize_load.update(table, std::move(size_desc));
@@ -1385,8 +1387,8 @@ public:
             }
 
             auto resize_decision = cluster_resize_load::to_resize_decision(size_desc);
-            lblogger.info("Emitting resize decision of type {} for table {} due to avg tablet size of {}",
-                          resize_decision.type_name(), table, size_desc.avg_tablet_size);
+            lblogger.info("Emitting resize decision of type {} for table {}, avg_tablet_size={} reason={}",
+                          resize_decision.type_name(), table, size_desc.avg_tablet_size, size_desc.reason);
             resize_plan.resize[table] = std::move(resize_decision);
             _stats.for_cluster().resizes_emitted++;
 
@@ -1403,7 +1405,8 @@ public:
             if (resize_load.table_needs_resize_cancellation(size_desc)) {
                 resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
                 _stats.for_cluster().resizes_revoked++;
-                lblogger.info("Revoking resize decision for table {} due to avg tablet size of {}", table, size_desc.avg_tablet_size);
+                lblogger.info("Revoking resize decision for table {}, avg_tablet_size={} reason={}",
+                              table, size_desc.avg_tablet_size, size_desc.reason);
                 continue;
             }
 
