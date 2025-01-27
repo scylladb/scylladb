@@ -419,8 +419,8 @@ async def test_tablet_resize_task(manager: ManagerClient):
         await prepare_merge(manager, servers[0], keyspace, table1, keys[:-1])
         await manager.api.keyspace_compaction(servers[0].ip_addr, keyspace)
 
-        injection = "tablet_split_finalization_postpone"
-        await enable_injection(manager, servers, injection)
+        await enable_injection(manager, servers, "tablet_split_finalization_postpone")
+        await enable_injection(manager, servers, "tablet_split_finalization_within_tablet_migration_postpone")
         await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
         async def wait_and_check_status(server, type, keyspace, table):
