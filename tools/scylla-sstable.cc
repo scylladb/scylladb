@@ -7,7 +7,6 @@
  */
 
 #include <boost/algorithm/string.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <filesystem>
 #include <set>
 #include <fmt/chrono.h>

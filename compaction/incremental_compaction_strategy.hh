@@ -7,7 +7,6 @@
 #pragma once
 
 #include "compaction_strategy_impl.hh"
-#include <boost/range/algorithm.hpp>
 
 class incremental_backlog_tracker;
 

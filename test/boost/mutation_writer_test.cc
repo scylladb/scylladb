@@ -31,7 +31,6 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 
-#include <boost/range/adaptor/map.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/empty_v2.hh"
 #include "readers/generating_v2.hh"

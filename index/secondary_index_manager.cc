@@ -20,8 +20,6 @@
 #include "concrete_types.hh"
 #include "db/tags/extension.hh"
 
-#include <boost/range/adaptor/map.hpp>
-
 namespace secondary_index {
 
 index::index(const sstring& target_column, const index_metadata& im)

@@ -7,7 +7,6 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <fmt/ranges.h>
 
 #include "replica/database.hh"

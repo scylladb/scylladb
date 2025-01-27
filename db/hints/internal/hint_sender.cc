@@ -20,9 +20,6 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/seastar.hh>
 
-// Boost features.
-#include <boost/range/algorithm/find.hpp>
-
 // Scylla includes.
 #include "db/hints/internal/common.hh"
 #include "db/hints/internal/hint_logger.hh"

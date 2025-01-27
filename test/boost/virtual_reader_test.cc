@@ -8,8 +8,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/range/irange.hpp>
-#include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
 

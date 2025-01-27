@@ -24,9 +24,6 @@
 #include "compaction/compaction_manager.hh"
 #include "unimplemented.hh"
 
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/numeric.hpp>
-
 extern logging::logger apilog;
 
 namespace api {

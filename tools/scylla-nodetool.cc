@@ -20,7 +20,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/make_shared.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <seastar/core/sleep.hh>

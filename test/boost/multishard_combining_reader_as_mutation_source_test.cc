@@ -7,9 +7,6 @@
  */
 
 
-#include <boost/range/irange.hpp>
-#include <boost/range/adaptor/uniqued.hpp>
-
 #include <seastar/core/thread.hh>
 
 #undef SEASTAR_TESTING_MAIN

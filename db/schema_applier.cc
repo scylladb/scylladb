@@ -18,11 +18,6 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
 
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm/transform.hpp>
-#include <boost/range/adaptor/indirected.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
 #include <fmt/ranges.h>

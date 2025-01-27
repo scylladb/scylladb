@@ -6,7 +6,6 @@
 
 #include "incremental_backlog_tracker.hh"
 #include "sstables/sstables.hh"
-#include <boost/range/adaptor/map.hpp>
 
 using namespace sstables;
 

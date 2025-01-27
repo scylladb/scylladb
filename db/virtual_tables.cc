@@ -8,7 +8,6 @@
 
 #include <algorithm>
 
-#include <boost/range/algorithm.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>

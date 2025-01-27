@@ -10,8 +10,6 @@
 #include "utils/murmur_hash.hh"
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
-#include <boost/lexical_cast.hpp>
-#include <boost/range/irange.hpp>
 
 namespace dht {
 

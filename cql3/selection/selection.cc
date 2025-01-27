@@ -8,9 +8,6 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
-#include <boost/range/algorithm/equal.hpp>
-#include <boost/range/algorithm/transform.hpp>
-
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/result_set.hh"

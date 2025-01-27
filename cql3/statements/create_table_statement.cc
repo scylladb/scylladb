@@ -13,7 +13,6 @@
 #include <inttypes.h>
 #include <boost/regex.hpp>
 
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/adjacent_find.hpp>
 #include <seastar/core/coroutine.hh>
 

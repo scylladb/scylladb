@@ -11,8 +11,6 @@
 #include <unordered_map>
 #include <optional>
 #include "reader_concurrency_semaphore.hh"
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/numeric.hpp>
 
 // The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory,
 // the memory is dynamically divided between them according to a relative slice of shares each semaphore

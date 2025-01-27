@@ -15,8 +15,6 @@
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 
-#include <boost/range/adaptor/map.hpp>
-
 namespace query {
 
 logging::logger qlogger("querier_cache");

@@ -12,8 +12,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/functions/functions.hh"
 
-#include "boost/range/adaptor/map.hpp"
-
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"

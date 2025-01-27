@@ -12,7 +12,6 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <string>
-#include <boost/range/adaptor/map.hpp>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 

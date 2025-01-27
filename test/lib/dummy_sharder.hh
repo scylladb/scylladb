@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <boost/range/adaptor/map.hpp>
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
 

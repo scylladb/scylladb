@@ -11,9 +11,6 @@
 
 #include <random>
 
-#include <boost/range/irange.hpp>
-#include <boost/range/algorithm/generate.hpp>
-
 #include "test/lib/random_utils.hh"
 #include "utils/disk-error-handler.hh"
 #include "mutation/atomic_cell.hh"
