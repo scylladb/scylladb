@@ -1558,6 +1558,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
 
+        bool has_pending_resize_finalization = false;
         bool has_nodes_to_drain = false;
         if (!preempt) {
             auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
@@ -1565,6 +1566,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
             }
+            has_pending_resize_finalization = !plan.resize_plan().finalize_resize.empty();
         }
 
         // The updates have to be executed under the same guard which was used to read tablet metadata
@@ -1609,6 +1611,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_return;
         }
 
+        // generate updates for pending resize finalizations
+        if (has_pending_resize_finalization && !utils::get_local_injector().enter("tablet_split_finalization_within_tablet_migration_postpone")) {
+            updates.clear();
+            guard = co_await maybe_generate_resize_finalization_updates(updates, std::move(guard));
+
+            // `maybe_generate_resize_finalization_updates` will generate finalization updates iff there are no active transitions.
+            // So, if updates are not empty, we can continue or else, we need to return to handle the active transitions.
+            if (updates.empty()) {
+                // transitions were started when `maybe_generate_resize_finalization_updates` attempted
+                // to take global barrier - cannot continue with resize finalizations.
+                co_return;
+            }
+        }
+
         if (drain) {
             if (has_nodes_to_drain) {
                 // Prevent jumping to write_both_read_old with un-drained tablets.
@@ -1637,6 +1653,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<group0_guard> maybe_generate_resize_finalization_updates(std::vector<canonical_mutation>& updates, group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
+        co_await utils::get_local_injector().inject("maybe_generate_resize_finalization_updates", utils::wait_for_message(2min));
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
 
         // This method can be called either from the handling of the tablet_resize_finalization topology
@@ -2962,7 +2979,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
 
     // We only want to consider transitioning into tablet resize finalization path, if there's no other work
     // to be done (e.g. start migration or/and emit split decision).
-    if (updates.empty()) {
+    if (updates.empty() && !utils::get_local_injector().enter("force_transition_into_tablet_migration")) {
         co_return co_await maybe_start_tablet_resize_finalization(std::move(guard), plan.resize_plan());
     }
 
