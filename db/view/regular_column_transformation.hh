@@ -44,6 +44,10 @@ class row_marker;
 class regular_column_transformation : public column_computation {
 public:
     struct result {
+        // We can use "bytes" instead of "managed_bytes" here because we know
+        // that a column_computation is only used for generating a key value,
+        // and that is limited to 64K. This limitation is enforced below -
+        // we never linearize a cell's value if its size is more than 64K.
         std::optional<bytes> _value;
 
         // _ttl and _expiry are only defined if _value is set.
@@ -92,6 +96,18 @@ public:
         result(atomic_cell_view cell, Func f = {}) {
             _ts = cell.timestamp();
             if (cell.is_live()) {
+                // If the cell is larger than what a key can hold (64KB),
+                // return a missing value. This lets us skip this item during
+                // view building and avoid hanging the view build as described
+                // in #8627. But it doesn't prevent later inserting such a item
+                // to the base table, nor does it implement front-end specific
+                // limits (such as Alternator's 1K or 2K limits - see #10347).
+                // Those stricter limits should be validated in the base-table
+                // write code, not here - deep inside the view update code.
+                // Note also we assume that f() doesn't grow the value further.
+                if (cell.value().size() >= 65536) {
+                    return;
+                }
                 _value = f(to_bytes(cell.value()));
                 if (_value) {
                     if (cell.is_live_and_has_ttl()) {
