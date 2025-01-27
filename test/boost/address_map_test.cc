@@ -33,6 +33,7 @@ future<> ping_shards() {
         co_return co_await seastar::yield();
     }
 
+    abort();
     // Submit an empty message to other shards 100 times to account for task reordering in debug mode.
     for (int i = 0; i < 100; ++i) {
         co_await parallel_for_each(std::views::iota(0u, smp::count), [] (shard_id s) {
