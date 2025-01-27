@@ -1455,9 +1455,32 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             co_return;
                         }
                         auto sched_time = tinfo.repair_task_info.sched_time;
-                        auto primary = tmap.get_primary_replica(gid.tablet);
-                        auto dst = primary.host;
                         auto tablet = gid;
+                        auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
+                        auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
+                        const auto& topo = _db.get_token_metadata().get_topology();
+                        std::optional<locator::host_id> dst_opt;
+                        if (hosts_filter.empty() && dcs_filter.empty()) {
+                            auto primary = tmap.get_primary_replica(gid.tablet);
+                            dst_opt = primary.host;
+                        } else {
+                           for (auto& replica : tinfo.replicas) {
+                                if (!hosts_filter.empty() && !hosts_filter.contains(replica.host)) {
+                                    continue;
+                                }
+                                auto dc = topo.get_datacenter(replica.host);
+                                if (!dcs_filter.empty() && !dcs_filter.contains(dc)) {
+                                    continue;
+                                }
+                                dst_opt = replica.host;
+                                break;
+                           }
+                        }
+                        if (!dst_opt) {
+                            throw std::runtime_error(fmt::format("Could not find host to perform repair tablet={} replica={} hosts_filter={} dcs_filter={}",
+                                    tablet, tinfo.replicas, hosts_filter, dcs_filter));
+                        }
+                        auto dst = dst_opt.value();
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
                                 dst, _as, raft::server_id(dst.uuid()), gid);
@@ -1469,12 +1492,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     })) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
+                        auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
+                        auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
+                        bool is_filter_off = hosts_filter.empty() && dcs_filter.empty();
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::end_repair);
                         auto update = get_mutation_builder()
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
                                         .del_repair_task_info(last_token)
                                         .del_session(last_token);
-                        if (valid) {
+                        // Skip update repair time in case hosts filter or dcs filter is set.
+                        if (valid && is_filter_off) {
                             auto sched_time = tinfo.repair_task_info.sched_time;
                             auto time = tablet_state.repair_time;
                             rtlogger.debug("Set tablet repair time sched_time={} return_time={} set_time={}",
