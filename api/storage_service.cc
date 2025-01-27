@@ -22,7 +22,6 @@
 #include <functional>
 #include <iterator>
 #include <chrono>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/functional/hash.hpp>

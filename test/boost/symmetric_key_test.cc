@@ -4,9 +4,6 @@
 
 
 
-#include <boost/range/irange.hpp>
-#include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/lexical_cast.hpp>
 #include <stdint.h>

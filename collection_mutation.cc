@@ -16,8 +16,6 @@
 
 #include "collection_mutation.hh"
 
-#include <boost/range/numeric.hpp>
-
 bytes_view collection_mutation_input_stream::read_linearized(size_t n) {
     managed_bytes_view mbv = ::read_simple_bytes(_src, n);
     if (mbv.is_linearized()) {

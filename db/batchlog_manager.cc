@@ -16,8 +16,6 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/adaptor/sliced.hpp>
 
 #include "batchlog_manager.hh"
 #include "mutation/canonical_mutation.hh"

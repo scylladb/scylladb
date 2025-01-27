@@ -19,9 +19,6 @@
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 
-// Boost features.
-#include <boost/range/adaptor/map.hpp>
-
 // Scylla includes.
 #include "db/hints/internal/hint_logger.hh"
 #include <seastar/core/future.hh>

@@ -25,7 +25,6 @@
 #include "interval.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
-#include <boost/range/irange.hpp>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>
 #include <fmt/ranges.h>

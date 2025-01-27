@@ -11,7 +11,6 @@
 #include <bitset>
 #include <ranges>
 #include <boost/test/unit_test.hpp>
-#include <boost/range/irange.hpp>
 #include <seastar/core/loop.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/seastar.hh>

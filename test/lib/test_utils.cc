@@ -9,7 +9,6 @@
 #include "test/lib/test_utils.hh"
 
 #include <seastar/util/file.hh>
-#include <boost/range/adaptor/map.hpp>
 #include <seastar/core/format.hh>
 #include <seastar/util/backtrace.hh>
 #include "test/lib/log.hh"

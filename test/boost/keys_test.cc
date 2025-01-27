@@ -9,7 +9,6 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include "keys.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"

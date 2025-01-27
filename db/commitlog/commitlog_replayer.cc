@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <unordered_map>
 #include <ranges>
-#include <boost/range/adaptor/map.hpp>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>

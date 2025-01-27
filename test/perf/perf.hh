@@ -23,7 +23,6 @@
 
 #include <chrono>
 #include <iosfwd>
-#include <boost/range/irange.hpp>
 #include <vector>
 
 template <typename Func>

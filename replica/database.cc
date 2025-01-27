@@ -33,7 +33,6 @@
 #include <seastar/core/metrics.hh>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include <boost/range/adaptor/map.hpp>
 #include <boost/container/static_vector.hpp>
 #include "mutation/frozen_mutation.hh"
 #include "mutation/async_utils.hh"

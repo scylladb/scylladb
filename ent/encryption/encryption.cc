@@ -22,9 +22,6 @@
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
 
-#include <boost/range/adaptor/map.hpp>
-#include <boost/filesystem.hpp>
-
 #include <seastar/core/seastar.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>

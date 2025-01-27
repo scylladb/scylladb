@@ -7,7 +7,6 @@
  */
 
 #include <optional>
-#include <boost/range/adaptor/map.hpp>
 #include "exceptions/exceptions.hh"
 #include "serializer.hh"
 #include "schema/schema.hh"

@@ -10,7 +10,6 @@
 #include "api/api-doc/collectd.json.hh"
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/scollectd_api.hh>
-#include <boost/range/irange.hpp>
 #include <ranges>
 #include <regex>
 #include "api/api_init.hh"

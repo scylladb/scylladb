@@ -8,12 +8,6 @@
 
 #include "server.hh"
 
-#include <boost/bimap/unordered_set_of.hpp>
-#include <boost/range/irange.hpp>
-#include <boost/bimap.hpp>
-#include <boost/assign.hpp>
-#include <boost/range/adaptor/sliced.hpp>
-
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "seastar/core/scheduling.hh"

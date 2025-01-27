@@ -12,7 +12,6 @@
 #include "manager.hh"
 #include "utils/log.hh"
 #include <boost/range/algorithm/for_each.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/numeric.hpp>
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"

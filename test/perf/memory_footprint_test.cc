@@ -7,7 +7,6 @@
  */
 
 #include "utils/assert.hh"
-#include <boost/range/irange.hpp>
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/app-template.hh>

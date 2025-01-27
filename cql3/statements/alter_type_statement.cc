@@ -18,7 +18,6 @@
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include "boost/range/adaptor/map.hpp"
 #include "data_dictionary/user_types_metadata.hh"
 
 namespace cql3 {

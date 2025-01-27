@@ -11,8 +11,6 @@
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
 
-#include <boost/range/adaptor/map.hpp>
-
 namespace service {
 
 logging::logger tsmlogger("topology_state_machine");

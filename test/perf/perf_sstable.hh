@@ -25,7 +25,6 @@
 #include <boost/accumulators/framework/features.hpp>
 #include <boost/accumulators/statistics/mean.hpp>
 #include <boost/accumulators/statistics/error_of_mean.hpp>
-#include <boost/range/irange.hpp>
 
 using namespace sstables;
 
