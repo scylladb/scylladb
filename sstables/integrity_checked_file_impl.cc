@@ -9,7 +9,6 @@
 #include "integrity_checked_file_impl.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/format.hh>
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include "bytes.hh"
 
 namespace sstables {
@@ -34,7 +33,7 @@ static sstring report_zeroed_4k_aligned_blocks(const temporary_buffer<int8_t>& b
 
         auto begin = buf.get() + off;
         auto end = begin + len;
-        if (boost::algorithm::all_of_equal(begin, end, 0)) {
+        if (std::ranges::all_of(begin, end, [](auto byte) { return byte == 0; })) {
             report += format("{:d}, ", off);
         }
     }
