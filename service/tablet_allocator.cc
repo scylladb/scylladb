@@ -1064,6 +1064,7 @@ public:
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
+        sstring target_tablet_count_reason; // Winning rule for target_tablet_count value.
         std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
 
         size_t target_tablet_count_aligned; // target_tablet_count aligned to power of 2.
@@ -1074,7 +1075,12 @@ public:
         std::unordered_map<table_id, table_sizing> tables;
     };
 
-    size_t tablet_count_from_min_per_shard_tablet_count(const schema& s,
+    struct tablet_count_and_reason {
+        size_t tablet_count = 0;
+        sstring reason;
+    };
+
+    tablet_count_and_reason tablet_count_from_min_per_shard_tablet_count(const schema& s,
             const std::unordered_map<sstring, unsigned>& shards_per_dc,
             const tablet_aware_replication_strategy& rs,
             double min_per_shard_tablet_count)
@@ -1083,6 +1089,8 @@ public:
         // are covered with at least `min_per_shard_tablet_count` tablets on average.
 
         size_t tablet_count = 0;
+        const sstring* winning_dc = nullptr;
+
         min_per_shard_tablet_count = std::max(1.0, min_per_shard_tablet_count);
         for (auto&& [dc, shards_in_dc] : shards_per_dc) {
             auto rf_in_dc = rs.get_replication_factor(dc);
@@ -1090,13 +1098,19 @@ public:
                 continue;
             }
             size_t tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
-            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in dc {}", tablets_in_dc,
+            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in DC {}", tablets_in_dc,
                     min_per_shard_tablet_count, s.ks_name(), s.cf_name(), dc);
-            tablet_count = std::max(tablet_count, tablets_in_dc);
+            if (tablets_in_dc > tablet_count) {
+                tablet_count = tablets_in_dc;
+                winning_dc = &dc;
+            }
         }
-        lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{}", tablet_count,
-                min_per_shard_tablet_count, s.ks_name(), s.cf_name());
-        return tablet_count;
+
+        if (!winning_dc) {
+            return {};
+        }
+
+        return {tablet_count, format("min_per_shard_tablet_count={:.3f} in DC {}", min_per_shard_tablet_count, *winning_dc)};
     }
 
     future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
@@ -1115,18 +1129,25 @@ public:
             table_plan.current_tablet_count = tablet_count;
             rs_by_table[table] = rs;
 
-            size_t target_tablet_count = 1;
+            tablet_count_and_reason target_tablet_count = {1, ""};
+            auto maybe_apply = [&] (tablet_count_and_reason candidate) {
+                lblogger.debug("Table {} ({}.{}) wants {} tablets due to {}", table, s->ks_name(), s->cf_name(),
+                        candidate.tablet_count, candidate.reason);
+                if (candidate.tablet_count > target_tablet_count.tablet_count) {
+                    target_tablet_count = candidate;
+                }
+            };
 
-            target_tablet_count = std::max<size_t>(target_tablet_count, rs->get_initial_tablets());
+            maybe_apply({rs->get_initial_tablets(), "initial"});
 
             const auto& tablet_options = s->tablet_options();
             if (tablet_options.min_tablet_count) {
-                target_tablet_count = std::max<size_t>(target_tablet_count, tablet_options.min_tablet_count.value());
+                maybe_apply({tablet_options.min_tablet_count.value(), "min_tablet_count"});
             }
 
             if (tablet_options.expected_data_size_in_gb) {
-                target_tablet_count = std::max<size_t>(target_tablet_count,
-                        (tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size);
+                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size,
+                        format("expected_data_size_in_gb={}", tablet_options.expected_data_size_in_gb.value())});
             }
 
             auto min_per_shard_tablet_count = tablet_options.min_per_shard_tablet_count.value_or(
@@ -1134,11 +1155,8 @@ public:
                     // compatibility with the deprecated "initial" tablet count.
                     (rs->get_initial_tablets() || tablet_options.min_tablet_count) ? 0 : _initial_scale);
             if (min_per_shard_tablet_count) {
-                target_tablet_count = std::max<size_t>(target_tablet_count,
-                        tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
+                maybe_apply(tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
             }
-
-            // The block below establishes table_plan.target_tablet_count
 
             const auto* table_stats = load_stats_for_table(table);
             if (table_stats) {
@@ -1162,16 +1180,20 @@ public:
                 }
 
                 table_plan.avg_tablet_size = avg_tablet_size;
-                target_tablet_count = std::max(target_tablet_count, tablet_count_from_size);
+                maybe_apply({tablet_count_from_size, format("avg_tablet_size={}", avg_tablet_size)});
             } else {
                 // When we don't have tablet size info, allow tablet count to increase but not to decrease.
                 // Increasing will always bring us closer to the true target count, since tablet_count_from_size
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
-                target_tablet_count = std::max(target_tablet_count, table_plan.current_tablet_count);
+                maybe_apply({table_plan.current_tablet_count, "current count"});
             }
 
-            table_plan.target_tablet_count = target_tablet_count;
+            table_plan.target_tablet_count = target_tablet_count.tablet_count;
+            table_plan.target_tablet_count_reason = target_tablet_count.reason;
+
+            lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({})", table, s->ks_name(), s->cf_name(),
+                    table_plan.target_tablet_count, table_plan.target_tablet_count_reason);
         };
 
         for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
@@ -1263,6 +1285,7 @@ public:
             auto new_count = std::max<size_t>(1, table_plan.target_tablet_count * scale);
             lblogger.debug("Scaling down table {} by a factor of {:.3f}: {} => {}", table, scale, table_plan.target_tablet_count, new_count);
             table_plan.target_tablet_count = new_count;
+            table_plan.target_tablet_count_reason = format("{} scaled by {:.3f}", table_plan.target_tablet_count_reason, scale);
         }
 
         // Generate:
@@ -1278,10 +1301,11 @@ public:
                 table_plan.resize_decision = locator::resize_decision::merge();
             }
 
-            lblogger.debug("Table {}, {} => {} ({}), resize: {}", table,
+            lblogger.debug("Table {}, {} => {} ({}: {}), resize: {}", table,
                            table_plan.current_tablet_count,
                            table_plan.target_tablet_count_aligned,
                            table_plan.target_tablet_count,
+                           table_plan.target_tablet_count_reason,
                            table_plan.resize_decision);
         }
 
