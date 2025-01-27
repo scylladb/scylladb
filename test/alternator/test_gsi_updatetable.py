@@ -603,3 +603,127 @@ def test_updatetable_delete_missing_gsi(dynamodb, table1):
         dynamodb.meta.client.update_table(TableName=table1.name,
             GlobalSecondaryIndexUpdates=[{  'Delete':
                 { 'IndexName': 'nonexistent' } }])
+
+# Whereas DynamoDB allows attribute values to reach a generous length (they
+# are only limited by the item's size limit, 400 KB), an attribute which is
+# a *key* has much stricter limits - 2048 bytes for a partition key, 1024
+# bytes for a sort key. This means that if a table has a GSI or LSI and
+# one of the attributes serves as a key in that GSI and LSI, DynamoDB
+# limits its length. In the tests test_gsi.py::test_gsi_limit_* we verified
+# that attempts to write an oversized value to an attribute which is a
+# GSI key are rejected. Here we test what happens when adding a GSI to
+# a table with pre-existing data, which already includes items with oversized
+# values for the key attribute. These items can't be "rejected" - they
+# are already in the base table - but should be skipped while filling the
+# GSI. What we don't want to happen is to see the view building hang,
+# as described in issue #8627 and #10347.
+# The first test here, test_gsi_backfill_oversized_key(), doesn't check the
+# specific limits of 2048 and 1024 bytes, it only checks that an item with
+# a 65 KB attribute (above Scylla's internal limitations for keys) are
+# cleanly skipped and don't cause view build hangs. The following test
+# test_gsi_backfill_key_limits will check the specific limits.
+def test_gsi_backfill_oversized_key(dynamodb):
+    # First create, and fill, a table without GSI:
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                   { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+        p1 = random_string()
+        p2 = random_string()
+        c = random_string()
+        # Create two items, one has a small "x" attribute, the other has
+        # a 65 KB "x" attribute.
+        table.put_item(Item={'p': p1, 'c': c, 'x': 'hello'})
+        table.put_item(Item={'p': p2, 'c': c, 'x': 'a'*66500})
+        # Now use UpdateTable to create two GSIs. In one of them "x" will be
+        # the partition key, and in the other "x" will be a sort key.
+        # DynamoDB limits the number of indexes that can be added in one
+        # UpdateTable command to just one, so we need to do it in two separate
+        # commands and wait for each to complete.
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index2',
+                              'KeySchema': [{ 'AttributeName': 'c', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index2')
+        # Verify that the items with the oversized x are missing from both
+        # GSIs, so only the one item with x = hello should appear in both.
+        # Note that we don't need to retry the reads here (i.e., use the
+        # assert_index_scan() or assert_index_query() functions) because after
+        # we waited for backfilling to complete, we know all the pre-existing
+        # data is already in the index.
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')
+
+# The previous test, test_gsi_backfill_oversized_key(), checked that a
+# grossly oversized GSI key attribute (over Scylla's internal key limit
+# of 64 KB) doesn't hang the view building process. This test verifies
+# more specifically that DynamoDB's documented limits - 2048 bytes for
+# a GSI partition key and 1024 for a GSI sort key - are implemented. An
+# item that has an attribute longer than that should simply be skipped
+# during view building.
+# Reproduces issue #10347.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_backfill_key_limits(dynamodb):
+    # First create, and fill, a table without GSI:
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                   { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+        # Create four items, with 'x' attribute sizes of 1024, 1025, 2048
+        # and 2049. Only one item (1024) has x suitable for a sort key,
+        # and three (1024, 1025 and 2048) have length suitable for a partition
+        # key. The unsuitable items will be missing from the indexes.
+        lengths = [1024, 1025, 2048, 2049]
+        p = [random_string() for length in lengths]
+        x = ['a'*length for length in lengths]
+        c = random_string()
+        for i in range(len(lengths)):
+            table.put_item(Item={'p': p[i], 'c': c, 'x': x[i]})
+        # Now use UpdateTable to create two GSIs. In one of them "x" will be
+        # the partition key, and in the other "x" will be a sort key.
+        # DynamoDB limits the number of indexes that can be added in one
+        # UpdateTable command to just one, so we need to do it in two separate
+        # commands and wait for each to complete.
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index2',
+                              'KeySchema': [{ 'AttributeName': 'c', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index2')
+        # Verify that the items with the oversized x are missing from both
+        # GSIs. For index1 (x is a partition key, limited to 2048 bytes)
+        # items 0,1,2 should appear, for index2 (x is a sort key, limited
+        # to 1024 bytes), only item 0 should appear.
+        assert multiset([{'p': p[i], 'c': c, 'x': x[i]} for i in range(3)]) == multiset(full_scan(table, ConsistentRead=False, IndexName='index1'))
+        assert [{'p': p[0], 'c': c, 'x': x[0]}] == full_scan(table, ConsistentRead=False, IndexName='index2')
