@@ -1236,7 +1236,7 @@ future<> raft_cluster<Clock>::check_rpc_config(::check_rpc_config cc) {
     for (auto& node: cc.nodes) {
         BOOST_CHECK(node.id < _servers.size());
         co_await seastar::async([&] {
-            CHECK_EVENTUALLY_EQUAL(_servers[node.id].rpc->known_peers(), as);
+            BOOST_CHECK(eventually_true([&] { return _servers[node.id].rpc->known_peers() == as; }));
         });
     }
 }
