@@ -22,6 +22,8 @@
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
+#include <algorithm>
+#include <ranges>
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
 #include "frozen_schema.hh"
@@ -57,10 +59,6 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm/transform.hpp>
-#include <boost/range/adaptor/indirected.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
 #include "compaction/compaction_strategy.hh"
@@ -1034,8 +1032,8 @@ future<std::vector<user_type>> create_types(replica::database& db, const std::ve
             return r->get_nonnull<sstring>("keyspace_name") != keyspace;
         });
         auto ks = db.find_keyspace(keyspace).metadata();
-        auto v = co_await create_types(*ks, boost::make_iterator_range(i, next) | boost::adaptors::indirected);
-        ret.insert(ret.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
+        auto v = co_await create_types(*ks, std::ranges::subrange(i, next) | std::views::transform([] (auto&& r) -> auto& { return *r; }));
+        std::ranges::move(v, std::back_inserter(ret));
         i = next;
     }
     co_return ret;
