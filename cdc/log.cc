@@ -10,7 +10,6 @@
 #include <algorithm>
 
 #include <boost/range/irange.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
 
@@ -420,7 +419,7 @@ static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "delet
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
 
 bool is_log_name(const std::string_view& table_name) {
-    return boost::ends_with(table_name, cdc_log_suffix);
+    return table_name.ends_with(cdc_log_suffix);
 }
 
 bool is_cdc_metacolumn_name(const sstring& name) {
