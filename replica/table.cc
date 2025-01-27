@@ -1029,8 +1029,10 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    auto split_ready = std::ranges::all_of(_storage_groups | std::views::values,
-        std::mem_fn(&storage_group::set_split_mode));
+    bool split_ready = true;
+    for (const storage_group_ptr& sg : _storage_groups | std::views::values) {
+        split_ready &= sg->set_split_mode();
+    }
 
     // The table replica will say to coordinator that its split status is ready by
     // mirroring the sequence number from tablet metadata into its local state,
@@ -1057,6 +1059,12 @@ sstables::compaction_type_options::split tablet_storage_group_manager::split_com
 
 future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
     sstables::compaction_type_options::split opt = split_compaction_options();
+
+    co_await utils::get_local_injector().inject("split_storage_groups_wait", [] (auto& handler) -> future<> {
+        dblog.info("split_storage_groups_wait: waiting");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dblog.info("split_storage_groups_wait: done");
+    }, false);
 
     co_await for_each_storage_group_gently([opt, tablet_split_task_info] (storage_group& storage_group) {
         return storage_group.split(opt, tablet_split_task_info);
