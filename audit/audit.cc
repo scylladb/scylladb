@@ -106,12 +106,17 @@ audit::audit(locator::shared_token_metadata& token_metadata,
              sstring&& storage_helper_name,
              std::set<sstring>&& audited_keyspaces,
              std::map<sstring, std::set<sstring>>&& audited_tables,
-             category_set&& audited_categories)
+             category_set&& audited_categories,
+             const db::config& cfg)
     : _token_metadata(token_metadata)
     , _audited_keyspaces(std::move(audited_keyspaces))
     , _audited_tables(std::move(audited_tables))
     , _audited_categories(std::move(audited_categories))
     , _storage_helper_class_name(std::move(storage_helper_name))
+    , _cfg(cfg)
+    , _cfg_keyspaces_observer(cfg.audit_keyspaces.observe([this] (sstring const& new_value){ update_config<std::set<sstring>>(new_value, parse_audit_keyspaces, _audited_keyspaces); }))
+    , _cfg_tables_observer(cfg.audit_tables.observe([this] (sstring const& new_value){ update_config<std::map<sstring, std::set<sstring>>>(new_value, parse_audit_tables, _audited_tables); }))
+    , _cfg_categories_observer(cfg.audit_categories.observe([this] (sstring const& new_value){ update_config<category_set>(new_value, parse_audit_categories, _audited_categories); }))
 { }
 
 audit::~audit() = default;
@@ -141,7 +146,8 @@ future<> audit::create_audit(const db::config& cfg, sharded<locator::shared_toke
                                   std::move(storage_helper_name),
                                   std::move(audited_keyspaces),
                                   std::move(audited_tables),
-                                  std::move(audited_categories));
+                                  std::move(audited_categories),
+                                  std::cref(cfg));
 }
 
 future<> audit::start_audit(const db::config& cfg, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
@@ -254,6 +260,35 @@ bool audit::should_log(const audit_info* audit_info) const {
                          || audit_info->category() == statement_category::AUTH
                          || audit_info->category() == statement_category::ADMIN
                          || audit_info->category() == statement_category::DCL);
+}
+
+template<class T>
+void audit::update_config(const sstring & new_value, std::function<T(const sstring&)> parse_func, T& cfg_parameter)
+{
+    try {
+        cfg_parameter = parse_func(new_value);
+    } catch (...) {
+        logger.error("Audit configuration update failed because cannot parse value=\"{}\".", new_value);
+        return;
+    }
+
+    // If update_config is called with an invalid new_value, this line is not reached.
+    // But logging the invalid value must be avoided later, when a different configuration parameter is changed to a correct value.
+    // That's why values from _audited_{categories, keyspaces, tables} are logged instead of _cfg.audit_{categories, keyspaces, tables}
+
+    // Each table as "keyspace.table_name" like in the configuration file
+    auto table_entries = _audited_tables | std::views::transform([](const auto& pair) {
+        return pair.second | std::views::transform([&](const std::string& table_name) {
+            return fmt::format("{}.{}", pair.first, table_name);
+        });
+    }) | std::views::join;
+
+    logger.info(
+        "Audit configuration is updated. Auditing to: \"{}\", with the following categories: \"{}\", keyspaces: \"{}\", and tables: \"{}\".",
+        _cfg.audit(),
+        fmt::join(std::views::transform(_audited_categories, category_to_string), ","),
+        fmt::join(_audited_keyspaces, ","),
+        fmt::join(table_entries, ","));
 }
 
 }
