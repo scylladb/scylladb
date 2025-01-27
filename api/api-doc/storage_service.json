@@ -2872,6 +2872,22 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"hosts_filter",
+                     "description":"Repair replicas listed in the comma-separated host_id list.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dcs_filter",
+                     "description":"Repair replicas listed in the comma-separated DC list",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }
