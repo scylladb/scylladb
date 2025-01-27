@@ -6277,13 +6277,15 @@ future<bool> storage_service::exec_tablet_update(service::group0_guard guard, st
 
 // Repair the tablets contain the tokens and wait for the repair to finish
 // This is used to run a manual repair requested by user from the restful API.
-future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant) {
+future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table,
+        std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant,
+        sstring hosts_filter, sstring dcs_filter) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.add_repair_tablet_request(table, std::move(tokens_variant));
+            return ss.add_repair_tablet_request(table, std::move(tokens_variant), hosts_filter, dcs_filter);
         });
     }
 
@@ -6297,11 +6299,12 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
-    auto repair_task_info = locator::tablet_task_info::make_user_repair_request();
+    auto repair_task_info = locator::tablet_task_info::make_user_repair_request(hosts_filter, dcs_filter);
     auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
 
     auto start = std::chrono::steady_clock::now();
-    slogger.info("Starting tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={}", table, tokens, all_tokens, repair_task_info.tablet_task_id);
+    slogger.info("Starting tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} hosts_filter={} dcs_filter={}",
+            table, tokens, all_tokens, repair_task_info.tablet_task_id, hosts_filter, dcs_filter);
 
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();

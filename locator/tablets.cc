@@ -26,6 +26,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <type_traits>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 
 namespace locator {
 
@@ -1145,16 +1147,32 @@ bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request() {
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(sstring hosts_filter, sstring dcs_filter) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_repair_request() {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(sstring hosts_filter, sstring dcs_filter) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+}
+
+std::unordered_set<locator::host_id> locator::tablet_task_info::get_repair_hosts_filter() const {
+    std::unordered_set<locator::host_id> ret;
+    std::unordered_set<sstring> hosts;
+    boost::split(hosts, repair_hosts_filter, boost::algorithm::is_any_of(","));
+    for (auto& h : hosts) {
+        ret.emplace(locator::host_id(utils::UUID(h)));
+    }
+    return ret;
+}
+
+std::unordered_set<sstring> locator::tablet_task_info::get_repair_dcs_filter() const {
+    std::unordered_set<sstring> ret;
+    boost::split(ret, repair_dcs_filter, boost::algorithm::is_any_of(","));
+    return ret;
 }
 
 locator::tablet_task_info locator::tablet_task_info::make_migration_request() {

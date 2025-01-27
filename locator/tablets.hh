@@ -167,12 +167,14 @@ struct tablet_task_info {
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
-    static tablet_task_info make_user_repair_request();
-    static tablet_task_info make_auto_repair_request();
+    static tablet_task_info make_user_repair_request(sstring hosts_filter = {}, sstring dcs_filter = {});
+    static tablet_task_info make_auto_repair_request(sstring hosts_filter = {}, sstring dcs_filter = {});
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
     static tablet_task_info make_split_request();
     static tablet_task_info make_merge_request();
+    std::unordered_set<locator::host_id> get_repair_hosts_filter() const;
+    std::unordered_set<sstring> get_repair_dcs_filter() const;
 };
 
 /// Stores information about a single tablet.
