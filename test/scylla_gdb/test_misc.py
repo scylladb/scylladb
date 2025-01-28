@@ -166,10 +166,24 @@ def test_fiber(gdb, task):
 # Similar to task(), but looks for a coroutine frame.
 @pytest.fixture(scope="module")
 def coro_task(gdb, scylla_gdb):
+    target = 'service::topology_coordinator::run() [clone .resume]'
     for obj_addr, vtable_addr in scylla_gdb.find_vptrs():
         name = scylla_gdb.resolve(vtable_addr)
-        if name and name.strip() == 'service::topology_coordinator::run() [clone .resume]':
+        if name and name.strip() == target:
             return obj_addr.cast(gdb.lookup_type('uintptr_t'))
+    # Something is wrong. We should have found the target.
+    # Check if scylla_find agrees with find_vptrs, for debugging.
+    target_addr = int(gdb.parse_and_eval(f"&'{target}'"))
+    find_command = f"scylla find -a 0x{target_addr:x}"
+    gdb.write(f"Didn't find {target} (0x{target_addr:x}). Running '{find_command}'\n")
+    mem_range = scylla_gdb.get_seastar_memory_start_and_size()
+    gdb.execute(find_command)
+    gdb.write(f"Memory range: 0x{mem_range[0]:x} 0x{mem_range[1]:x}\n")
+    gdb.write(f"Found coroutines:\n")
+    for obj_addr, vtable_addr in scylla_gdb.find_vptrs():
+        name = scylla_gdb.resolve(vtable_addr)
+        if name and '.resume' in name.strip():
+            gdb.write(f'{name}\n')
     raise gdb.error("No coroutine frames found with expected name")
 
 def test_coro_frame(gdb, coro_task):
