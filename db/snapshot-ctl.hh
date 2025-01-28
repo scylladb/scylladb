@@ -105,7 +105,7 @@ public:
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
-    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name);
+    future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name, bool move_files);
 
     future<std::unordered_map<sstring, db_snapshot_details>> get_snapshot_details();
 
@@ -121,8 +121,7 @@ private:
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
-    template <typename Func>
-    std::invoke_result_t<Func> run_snapshot_modify_operation(Func&&);
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
 
     template <typename Func>
     std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {

@@ -24,9 +24,11 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
+    bool _remove_on_uploaded;
     s3::upload_progress _progress = {};
 
     future<> do_backup();
+    future<> upload_component(sstring name);
 
 protected:
     virtual future<> run() override;
@@ -38,7 +40,8 @@ public:
                      sstring bucket,
                      sstring prefix,
                      sstring ks,
-                     std::filesystem::path snapshot_dir) noexcept;
+                     std::filesystem::path snapshot_dir,
+                     bool move_files) noexcept;
 
     virtual std::string type() const override;
     virtual tasks::is_internal is_internal() const noexcept override;
