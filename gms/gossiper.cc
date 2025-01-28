@@ -1981,17 +1981,6 @@ void gossiper::send_all(gossip_digest& g_digest,
 void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
     utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
     std::map<inet_address, endpoint_state>& delta_ep_state_map) const {
-    if (g_digest_list.size() == 0) {
-        /* we've been sent a *completely* empty syn, which should normally
-             * never happen since an endpoint will at least send a syn with
-             * itself.  If this is happening then the node is attempting shadow
-             * gossip, and we should reply with everything we know.
-             */
-        logger.debug("Shadow request received, adding all states");
-        for (auto& entry : _endpoint_state_map) {
-            g_digest_list.emplace_back(entry.first);
-        }
-    }
     for (gossip_digest& g_digest : g_digest_list) {
         auto remote_generation = g_digest.get_generation();
         auto max_remote_version = g_digest.get_max_version();
