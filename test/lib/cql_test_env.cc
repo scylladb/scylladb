@@ -451,6 +451,19 @@ public:
     }
 
 private:
+    static auto defer_verbose_shutdown(const char* what, std::function<void()> func) {
+        return defer([what, func = std::move(func)] {
+            testlog.info("Shutting down {}", what);
+            try {
+                func();
+                testlog.info("Shutting down {} was successful", what);
+            } catch (...) {
+                testlog.error("Unexpected error shutting down {}: {}", what, std::current_exception());
+                throw;
+            }
+        });
+    }
+
     void run_in_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
             using namespace std::filesystem;
 
@@ -523,11 +536,11 @@ private:
                 : configurable::notify_set{}
                 ;
 
-            auto stop_configurables = defer([&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
+            auto stop_configurables = defer_verbose_shutdown("configurables", [&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
             _feature_service.start(fcfg).get();
-            auto stop_feature_service = defer([this] { _feature_service.stop().get(); });
+            auto stop_feature_service = defer_verbose_shutdown("feature service", [this] { _feature_service.stop().get(); });
 
             auto my_address = cfg_in.broadcast_address;
 
@@ -535,7 +548,7 @@ private:
             snitch_config.listen_address = my_address;
             snitch_config.broadcast_address = my_address;
             _snitch.start(snitch_config).get();
-            auto stop_snitch = defer([this] { _snitch.stop().get(); });
+            auto stop_snitch = defer_verbose_shutdown("snitch", [this] { _snitch.stop().get(); });
             _snitch.invoke_on_all(&locator::snitch_ptr::start).get();
 
             locator::token_metadata::config tm_cfg;
@@ -543,16 +556,16 @@ private:
             tm_cfg.topo_cfg.this_cql_address = my_address;
             tm_cfg.topo_cfg.local_dc_rack = { _snitch.local()->get_datacenter(), _snitch.local()->get_rack() };
             _token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
-            auto stop_token_metadata = defer([this] { _token_metadata.stop().get(); });
+            auto stop_token_metadata = defer_verbose_shutdown("token metadata", [this] { _token_metadata.stop().get(); });
 
             _erm_factory.start().get();
             auto stop_erm_factory = deferred_stop(_erm_factory);
 
             _mnotifier.start().get();
-            auto stop_mm_notify = defer([this] { _mnotifier.stop().get(); });
+            auto stop_mm_notify = defer_verbose_shutdown("migration manager notifier", [this] { _mnotifier.stop().get(); });
 
             _sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
-            auto stop_sst_dir_sem = defer([this] {
+            auto stop_sst_dir_sem = defer_verbose_shutdown("sst dir semaphore", [this] {
                 _sst_dir_semaphore.stop().get();
             });
 
@@ -578,7 +591,7 @@ private:
                 };
             });
             _task_manager.start(std::move(get_tm_cfg), std::ref(abort_sources)).get();
-            auto stop_task_manager = defer([this] {
+            auto stop_task_manager = defer_verbose_shutdown("task manager", [this] {
                 _task_manager.stop().get();
             });
 
@@ -590,7 +603,7 @@ private:
             };
             _disk_space_monitor_shard0.emplace(abort_sources.local(), data_dir_path, dsm_cfg);
             _disk_space_monitor_shard0->start().get();
-            auto stop_dsm = defer([this] { _disk_space_monitor_shard0->stop().get(); });
+            auto stop_dsm = defer_verbose_shutdown("disk space monitor", [this] { _disk_space_monitor_shard0->stop().get(); });
 
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
@@ -611,7 +624,7 @@ private:
             auto stop_sstm = deferred_stop(_sstm);
 
             _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}, scheduling_groups.statement_scheduling_group).get();
-            auto stop_sl_controller = defer([this] { _sl_controller.stop().get(); });
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [this] { _sl_controller.stop().get(); });
             _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
             lang::manager::config lang_config;
@@ -630,12 +643,12 @@ private:
             }
 
             _lang_manager.start(lang_config).get();
-            auto stop_lang_manager = defer([this] { _lang_manager.stop().get(); });
+            auto stop_lang_manager = defer_verbose_shutdown("lang manager", [this] { _lang_manager.stop().get(); });
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
 
             _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(abort_sources), utils::cross_shard_barrier()).get();
-            auto stop_db = defer([this] {
+            auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
             });
 
@@ -653,10 +666,10 @@ private:
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
-            auto stop_proxy = defer([this] { _proxy.stop().get(); });
+            auto stop_proxy = defer_verbose_shutdown("storage proxy", [this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
-            auto stop_cql_config = defer([this] { _cql_config.stop().get(); });
+            auto stop_cql_config = defer_verbose_shutdown("cql config", [this] { _cql_config.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg;
             if (cfg_in.qp_mcfg) {
@@ -673,16 +686,16 @@ private:
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_lang_manager)).get();
-            auto stop_qp = defer([this] { _qp.stop().get(); });
+            auto stop_qp = defer_verbose_shutdown("query processor", [this] { _qp.stop().get(); });
 
             _elc_notif.start().get();
-            auto stop_elc_notif = defer([this] { _elc_notif.stop().get(); });
+            auto stop_elc_notif = defer_verbose_shutdown("lifecycle notifier", [this] { _elc_notif.stop().get(); });
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
 
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
-            auto stop_sys_kd = defer([this] {
+            auto stop_sys_kd = defer_verbose_shutdown("system keyspace", [this] {
                 _sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
                 _sys_ks.stop().get();
             });
@@ -713,7 +726,7 @@ private:
             }).get();
 
             _gossip_address_map.start().get();
-            auto stop_gossip_address_map = defer([this] {
+            auto stop_gossip_address_map = defer_verbose_shutdown("gossip address map", [this] {
                 _gossip_address_map.stop().get();
             });
 
@@ -724,7 +737,7 @@ private:
                 };
             };
             _compressor_tracker.start(arct_cfg).get();
-            auto stop_compressor_tracker = defer([this] { _compressor_tracker.stop().get(); });
+            auto stop_compressor_tracker = defer_verbose_shutdown("compressor tracker", [this] { _compressor_tracker.stop().get(); });
 
             uint16_t port = 7000;
             seastar::server_socket tmp;
@@ -736,7 +749,7 @@ private:
 
             auto stop_ms_func = [this] { _ms.stop().get(); };
             using stop_type = decltype(stop_ms_func);
-            std::optional<decltype(defer(stop_type(stop_ms_func)))> stop_ms;
+            std::optional<decltype(defer_verbose_shutdown("", stop_type(stop_ms_func)))> stop_ms;
 
             do {
                 stop_ms = std::nullopt;
@@ -749,7 +762,7 @@ private:
                     _ms.start(host_id, listen, std::move(port), std::ref(_feature_service),
                               std::ref(_gossip_address_map), std::ref(_compressor_tracker),
                               std::ref(_sl_controller)).get();
-                    stop_ms = defer(stop_type(stop_ms_func));
+                    stop_ms = defer_verbose_shutdown("messaging service", stop_type(stop_ms_func));
 
                     if (cfg_in.ms_listen) {
                         // FIXME: should not need to do this - it makes this whole thing unsafe. But
@@ -772,11 +785,11 @@ private:
             // Normally the auth server is already stopped in here,
             // but if there is an initialization failure we have to
             // make sure to stop it now or ~sharded will SCYLLA_ASSERT.
-            auto stop_auth_server = defer([this] {
+            auto stop_auth_server = defer_verbose_shutdown("auth service", [this] {
                 _auth_service.stop().get();
             });
 
-            auto stop_sys_dist_ks = defer([this] { _sys_dist_ks.stop().get(); });
+            auto stop_sys_dist_ks = defer_verbose_shutdown("system distributed keyspace", [this] { _sys_dist_ks.stop().get(); });
 
             // Init gossiper
             std::set<gms::inet_address> seeds;
@@ -800,13 +813,13 @@ private:
             gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
             _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
-            auto stop_ms_fd_gossiper = defer([this] {
+            auto stop_ms_fd_gossiper = defer_verbose_shutdown("gossiper", [this] {
                 _gossiper.stop().get();
             });
             _gossiper.invoke_on_all(&gms::gossiper::start).get();
 
             _fd_pinger.start(std::ref(_ms)).get();
-            auto stop_fd_pinger = defer([this] { _fd_pinger.stop().get(); });
+            auto stop_fd_pinger = defer_verbose_shutdown("fd pinger", [this] { _fd_pinger.stop().get(); });
 
             service::direct_fd_clock fd_clock;
             _fd.start(
@@ -814,7 +827,7 @@ private:
                 service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count(),
                 service::direct_fd_clock::base::duration{std::chrono::milliseconds{600}}.count()).get();
 
-            auto stop_fd = defer([this] {
+            auto stop_fd = defer_verbose_shutdown("direct failure detector", [this] {
                 _fd.stop().get();
             });
 
@@ -824,28 +837,28 @@ private:
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
             _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
-            auto stop_streaming = defer([this] { _stream_manager.stop().get(); });
+            auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _feature_service.invoke_on_all([] (auto& fs) {
                 return fs.enable(fs.supported_feature_set());
             }).get();
 
             _mapreduce_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata), std::ref(abort_sources)).get();
-            auto stop_mapreduce_service =  defer([this] { _mapreduce_service.stop().get(); });
+            auto stop_mapreduce_service =  defer_verbose_shutdown("mapreduce service", [this] { _mapreduce_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
             service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local(), _token_metadata.local(), maintenance_mode_enabled::no);
 
             _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
-            auto stop_mm = defer([this] { _mm.stop().get(); });
+            auto stop_mm = defer_verbose_shutdown("migration manager", [this] { _mm.stop().get(); });
 
             _tablet_allocator.start(service::tablet_allocator::config{}, std::ref(_mnotifier), std::ref(_db)).get();
-            auto stop_tablet_allocator = defer([this] {
+            auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [this] {
                 _tablet_allocator.stop().get();
             });
 
             _topology_state_machine.start().get();
-            auto stop_topology_state_machine = defer([this] {
+            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
                 _topology_state_machine.stop().get();
             });
 
@@ -876,10 +889,10 @@ private:
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback
             ).get();
-            auto stop_storage_service = defer([this] { _ss.stop().get(); });
+            auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
             _mnotifier.local().register_listener(&_ss.local());
-            auto stop_mm_listener = defer([this] {
+            auto stop_mm_listener = defer_verbose_shutdown("storage service notifications", [this] {
                 _mnotifier.local().unregister_listener(&_ss.local()).get();
             });
 
@@ -890,7 +903,7 @@ private:
             _qp.invoke_on_all([this, &group0_client] (cql3::query_processor& qp) {
                 qp.start_remote(_mm.local(), _mapreduce_service.local(), _ss.local(), group0_client);
             }).get();
-            auto stop_qp_remote = defer([this] {
+            auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [this] {
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
@@ -931,34 +944,34 @@ private:
 
             group0_client.init().get();
 
-            auto shutdown_db = defer([this] {
+            auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });
             // XXX: drain_on_shutdown raft before stopping the database and
             // query processor. Group registry stop raft groups
             // when stopped, and until then the groups may use
             // the database and the query processor.
-            auto drain_raft = defer([this] {
+            auto drain_raft = defer_verbose_shutdown("raft group registry servers", [this] {
                 _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
             _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer([this] {
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
                 _view_update_generator.stop().get();
             });
 
             _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
 
             _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
-            auto stop_view_builder = defer([this] {
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
                 _view_builder.stop().get();
             });
 
             if (cfg_in.need_remote_proxy) {
                 _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine)).get();
             }
-            auto stop_proxy_remote = defer([this, need = cfg_in.need_remote_proxy] {
+            auto stop_proxy_remote = defer_verbose_shutdown("storage proxy RPC verbs", [this, need = cfg_in.need_remote_proxy] {
                 if (need) {
                     _proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
                 }
@@ -981,18 +994,18 @@ private:
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
             _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db), [&] { return !cfg->force_gossip_topology_changes(); }).get();
-            auto stop_cdc_generation_service = defer([this] {
+            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC generation service", [this] {
                 _cdc_generation_service.stop().get();
             });
 
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
             _cdc.start(std::ref(_proxy), sharded_parameter(get_cdc_metadata, std::ref(_cdc_generation_service)), std::ref(_mnotifier)).get();
-            auto stop_cdc_service = defer([this] {
+            auto stop_cdc_service = defer_verbose_shutdown("CDC log service", [this] {
                 _cdc.stop().get();
             });
 
             group0_service.start().get();
-            auto stop_group0_service = defer([&group0_service] {
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 group0_service.abort().get();
             });
 
@@ -1000,11 +1013,11 @@ private:
 
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
             _ss.local().init_address_map(_gossip_address_map.local()).get();
-            auto cancel_address_map_subscription = defer([this] {
+            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service address map subscription", [this] {
                 _ss.local().uninit_address_map().get();
             });
 
-            auto stop_group0_usage_in_storage_service = defer([this] {
+            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in storage service", [this] {
                 _ss.local().wait_for_group0_stop().get();
             });
 
@@ -1040,7 +1053,7 @@ private:
                 return auth.start(_mm.local(), _sys_ks.local());
             }).get();
 
-            auto deinit_storage_service_server = defer([this] {
+            auto deinit_storage_service_server = defer_verbose_shutdown("auth service", [this] {
                 // #21159 don't shutdown gossip here - we don't in main.cc, and we should
                 // strive to keep the two paths aligned. Doing a gossip::shutdown here
                 // can, if we've provoked a storage_manager::isolate, cause parallel 
@@ -1054,14 +1067,14 @@ private:
             bmcfg.write_request_timeout = 2s;
             bmcfg.delay = 0ms;
             _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
-            auto stop_bm = defer([this] {
+            auto stop_bm = defer_verbose_shutdown("batchlog manager", [this] {
                 _batchlog_manager.stop().get();
             });
 
             _view_builder.invoke_on_all([this] (db::view::view_builder& vb) {
                 return vb.start(_mm.local());
             }).get();
-            auto drain_view_builder = defer([this] {
+            auto drain_view_builder = defer_verbose_shutdown("view builder operations", [this] {
                 _view_builder.invoke_on_all(&db::view::view_builder::drain).get();
             });
 
@@ -1090,7 +1103,7 @@ private:
             _group0_client = &group0_client;
 
             _core_local.start(std::ref(_auth_service), std::ref(_sl_controller), cfg_in.query_timeout.value_or(infinite_timeout_config)).get();
-            auto stop_core_local = defer([this] { _core_local.stop().get(); });
+            auto stop_core_local = defer_verbose_shutdown("local client state", [this] { _core_local.stop().get(); });
 
             if (!local_db().has_keyspace(ks_name)) {
                 create_keyspace(cfg_in, ks_name).get();
