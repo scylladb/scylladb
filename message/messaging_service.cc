@@ -288,17 +288,23 @@ rpc_resource_limits(size_t memory_limit) {
 
 future<> messaging_service::start() {
     if (_credentials_builder && !_credentials) {
-        return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                mlogger.warn("Exception loading {}: {}", files, ep);
-            } else {
-                mlogger.info("Reloaded {}", files);
-            }
-        }).then([this](shared_ptr<seastar::tls::server_credentials> creds) {
-            _credentials = std::move(creds);
-        });
+        if (this_shard_id() == 0) {
+            _credentials = co_await _credentials_builder->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                if (ep) {
+                    mlogger.warn("Exception loading {}: {}", files, ep);
+                } else {
+                    co_await container().invoke_on_others([&b](messaging_service& ms) {
+                        if (ms._credentials) {
+                            b.rebuild(*ms._credentials);
+                        }
+                    });
+                    mlogger.info("Reloaded {}", files);
+                }
+            });
+        } else {
+            _credentials = _credentials_builder->build_server_credentials();
+        }
     }
-    return make_ready_future<>();
 }
 
 future<> messaging_service::start_listen(locator::shared_token_metadata& stm, std::function<locator::host_id(gms::inet_address)> address_to_host_id_mapper) {

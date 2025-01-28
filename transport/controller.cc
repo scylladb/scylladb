@@ -73,7 +73,7 @@ future<> controller::start_server() {
 
 static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions) {
     co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions);
+        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, [&c = server.container()]() -> auto& { return c.local(); });
     });
 }
 
