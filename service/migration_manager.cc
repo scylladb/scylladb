@@ -286,12 +286,6 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
     auto& proxy = _storage_proxy;
     auto& db = proxy.get_db().local();
 
-    auto ip = _gossiper.get_address_map().find(endpoint);
-    if (!ip) {
-        mlogger.debug("No ip address for {}, not submitting migration task", endpoint);
-        return make_ready_future<>();
-    }
-
     if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
         mlogger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
@@ -303,12 +297,12 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
         return submit_migration_task(endpoint);
     }
 
-    return with_gate(_background_tasks, [this, &db, endpoint, ip = *ip] {
+    return with_gate(_background_tasks, [this, &db, endpoint] {
         // Include a delay to make sure we have a chance to apply any changes being
         // pushed out simultaneously. See CASSANDRA-5025
-        return sleep_abortable(migration_delay, _as).then([this, &db, endpoint, ip] {
+        return sleep_abortable(migration_delay, _as).then([this, &db, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
-            auto ep_state = _gossiper.get_endpoint_state_ptr(ip);
+            auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
             if (!ep_state) {
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
