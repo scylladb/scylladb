@@ -102,7 +102,7 @@ If you are a developer working on Scylla, please read the [developer guidelines]
 
 ## Contact
 
-* The [community forum] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
+* The [community forum] and [Slack channel] are for users to discuss configuration, management, and operations of ScyllaDB.
 * The [developers mailing list] is for developers and people interested in following the development of ScyllaDB to discuss technical topics.
 
 [Community forum]: https://forum.scylladb.com/
