@@ -1634,10 +1634,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
-    future<group0_guard> generate_resize_finalization_updates(std::vector<canonical_mutation>& updates, group0_guard g) {
+    future<group0_guard> maybe_generate_resize_finalization_updates(std::vector<canonical_mutation>& updates, group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
+
+        // This method can be called either from the handling of the tablet_resize_finalization topology
+        // state or the tablet_migration topology state. The tablet_resize_finalization topology state
+        // will not allow any concurrent transactions to start new transitions. But the tablet_migration
+        // topology state will allow concurrent transactions, like the move_tablet() API, to start new
+        // transitions, when the global barrier is executed. So check for active tablet transitions after
+        // executing the global metadata barrier.
+        if (has_tablet_transitions()) {
+            // Do not continue if there are active tablet transitions as these updates cannot be
+            // committed while transitions are in progress.
+            rtlogger.debug("Cannot finalize tablet resize as there are active transitions");
+            co_return std::move(guard);
+        }
 
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
@@ -1665,7 +1678,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     future<> handle_tablet_resize_finalization(group0_guard g) {
         std::vector<canonical_mutation> updates;
-        auto guard = co_await generate_resize_finalization_updates(updates, std::move(g));
+        auto guard = co_await maybe_generate_resize_finalization_updates(updates, std::move(g));
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
                 .del_transition_state()
