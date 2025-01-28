@@ -472,9 +472,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
                 auto old_ip = it->second;
                 sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(old_ip));
 
-                if (const auto ep = _gossiper.get_endpoint_state_ptr(old_ip); ep && ep->get_host_id() == id) {
-                    co_await _gossiper.force_remove_endpoint(old_ip, gms::null_permit_id);
-                }
+                co_await _gossiper.force_remove_endpoint(old_ip, id, gms::null_permit_id);
             }
         }
         break;
@@ -515,8 +513,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         if (ip) {
             sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
 
-            if (const auto ep = _gossiper.get_endpoint_state_ptr(*ip); ep && ep->get_host_id() == host_id) {
-                co_await _gossiper.force_remove_endpoint(*ip, gms::null_permit_id);
+            if (co_await _gossiper.force_remove_endpoint(*ip, host_id, gms::null_permit_id)) {
                 nodes_to_notify.left.push_back({*ip, host_id});
             }
         }
@@ -937,7 +934,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
             // in gossiper messages and allows for clearer
             // expectations of the gossiper state in tests.
 
-            co_await _ss._gossiper.force_remove_endpoint(endpoint, permit_id);
+            co_await _ss._gossiper.force_remove_endpoint(endpoint, id, permit_id);
             co_return;
         }
 

@@ -65,7 +65,7 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
 
     httpd::gossiper_json::force_remove_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
         gms::inet_address ep(req->get_path_param("addr"));
-        return g.force_remove_endpoint(ep, gms::null_permit_id).then([] {
+        return g.force_remove_endpoint(ep, g.get_host_id(ep), gms::null_permit_id).then([] (bool) {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
