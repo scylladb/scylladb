@@ -420,8 +420,6 @@ private:
 
     future<> do_status_check();
 
-    const std::unordered_map<inet_address, endpoint_state_ptr>& get_endpoint_states() const noexcept;
-
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
 
