@@ -531,7 +531,7 @@ private:
     friend class s3_storage;
     friend class tiered_storage;
 
-    size_t sstable_buffer_size;
+    const size_t sstable_buffer_size;
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
