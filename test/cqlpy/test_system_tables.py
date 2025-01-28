@@ -11,6 +11,7 @@
 from .util import new_test_table
 import pytest
 from . import nodetool
+from cassandra.protocol import Unauthorized
 
 #############################################################################
 # system.size_estimates.partitions_count
@@ -133,3 +134,15 @@ def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace):
         print(count)
         # Count should be close to 0, not to N
         assert count < N/1.25
+
+# See issue #21223
+# Test possibility to set 'memtable_flush_period_in_ms' option for system tables
+# and this option only: it is impossible to modify it with any other options together
+def test_alter_system_table_properties(cql, test_keyspace):
+    with pytest.raises(Unauthorized):
+        cql.execute("ALTER TABLE system.compaction_history WITH comment = ''")
+
+    with pytest.raises(Unauthorized):
+        cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000 AND comment = ''")
+
+    cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000")

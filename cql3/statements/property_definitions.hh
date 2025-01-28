@@ -70,6 +70,10 @@ public:
     static int32_t to_int(sstring key, std::optional<sstring> value, int32_t default_value);
 
     static long to_long(sstring key, std::optional<sstring> value, long default_value);
+
+    size_t count() const {
+        return _properties.size();
+    }
 };
 
 }
