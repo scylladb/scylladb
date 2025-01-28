@@ -904,9 +904,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the receiving socket buffer size in bytes for inter-node calls.")
     , internode_compression(this, "internode_compression", value_status::Used, "none",
         "Controls whether traffic between nodes is compressed. The valid values are:\n"
-        "\tall: All traffic is compressed.\n"
-        "\tdc : Traffic between data centers is compressed.\n"
-        "\tnone : No compression.")
+        "* all: All traffic is compressed.\n"
+        "* dc : Traffic between data centers is compressed.\n"
+        "* none : No compression.")
     , internode_compression_zstd_max_cpu_fraction(this, "internode_compression_zstd_max_cpu_fraction", liveness::LiveUpdate, value_status::Used, 0.000,
         "ZSTD compression of RPC will consume at most this fraction of each internode_compression_zstd_quota_refresh_period_ms time slice.\n"
         "If you wish to try out zstd for RPC compression, 0.05 is a reasonable starting point.")
