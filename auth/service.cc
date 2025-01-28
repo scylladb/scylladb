@@ -676,7 +676,8 @@ future<permission_set> get_permissions(const service& ser, const authenticated_u
 }
 
 bool is_protected(const service& ser, command_desc cmd) noexcept {
-    if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS) {
+    if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS ||
+        cmd.type_ == command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS) {
         return false; // Table attributes are OK to modify; see #7057.
     }
     return ser.underlying_role_manager().protected_resources().contains(cmd.resource)

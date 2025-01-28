@@ -125,7 +125,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         // prevent system keyspace modification
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-        if (is_system_keyspace(name)) {
+        if (is_system_keyspace(name) && cmd.type_ != auth::command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS) {
             return make_exception_future<>(exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable."));
         }
 
