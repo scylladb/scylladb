@@ -292,7 +292,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
         return make_ready_future<>();
     }
 
-    if (db.get_version() == their_version || !should_pull_schema_from(*ip)) {
+    if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
         mlogger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
     }
@@ -413,12 +413,12 @@ future<> migration_manager::reload_schema() {
     return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
 }
 
-bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
+bool migration_manager::has_compatible_schema_tables_version(const locator::host_id& endpoint) {
     auto* version = _gossiper.get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
     return version && version->value() == db::schema_tables::version;
 }
 
-bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
+bool migration_manager::should_pull_schema_from(const locator::host_id& endpoint) {
     return has_compatible_schema_tables_version(endpoint)
             && !_gossiper.is_gossip_only_member(endpoint);
 }

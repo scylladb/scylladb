@@ -759,7 +759,7 @@ future<> gossiper::do_status_check() {
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(endpoint)
+        if (is_gossip_only_member(ep_state.get_host_id())
             && !_just_removed_endpoints.contains(endpoint)
             && ((now - update_timestamp) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
@@ -1470,12 +1470,11 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
     return make_ready_future<>();
 }
 
-bool gossiper::is_gossip_only_member(inet_address endpoint) const {
-    auto es = get_endpoint_state_ptr(endpoint);
+bool gossiper::is_gossip_only_member(locator::host_id host_id) const {
+    auto es = get_endpoint_state_ptr(host_id);
     if (!es) {
         return false;
     }
-    const auto host_id = get_host_id(endpoint);
     const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
     return !is_dead_state(*es) && (!node || !node->is_member());
 }
