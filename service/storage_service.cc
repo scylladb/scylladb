@@ -1134,6 +1134,12 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
             }
             // We are the leader now but that can change any time!
             as.emplace();
+            vbc::view_building_coordinator* vbc_ptr = nullptr;
+            if (_feature_service.view_building_coordinator) {
+                auto vb_coordinator = std::make_unique<vbc::view_building_coordinator>(*as, _db.local(), *_group0, _sys_ks.local(), _messaging.local(), _topology_state_machine);
+                vbc_ptr = vb_coordinator.get();
+                _view_building_coordinator = vbc::run_view_building_coordinator(std::move(vb_coordinator), _db.local(), *_group0);
+            }
             // start topology change coordinator in the background
             _topology_change_coordinator = run_topology_coordinator(
                     _sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
@@ -1142,11 +1148,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
-                    _feature_service);
-            if (_feature_service.view_building_coordinator) {
-                auto vbc_ptr = std::make_unique<vbc::view_building_coordinator>(*as, _db.local(), *_group0, _sys_ks.local(), _messaging.local(), _topology_state_machine);
-                _view_building_coordinator = vbc::run_view_building_coordinator(std::move(vbc_ptr), _db.local(), *_group0);
-            }
+                    _feature_service, vbc_ptr);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
