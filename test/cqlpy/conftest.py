@@ -263,6 +263,11 @@ def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
 
+# Recent versions of Scylla deprecated the "WITH COMPACT STORAGE" feature,
+# but it can be enabled temporarily for a test. So to keep our old compact
+# storage tests alive for a while longer (at least until this feature is
+# completely removed from Scylla), the "compact_storage" fixture can be
+# added to enable WITH COMPACT STORAGE for the duration of this test.
 @pytest.fixture(scope="function")
 def compact_storage(cql):
     try:
@@ -272,4 +277,4 @@ def compact_storage(cql):
         # enable_create_table_with_compact_storage is a scylla only feature
         # so the above may fail on cassandra.
         # This is fine since compact storage is enabled there by default.
-        pass
+        yield
