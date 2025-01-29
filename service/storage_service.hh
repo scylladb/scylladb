@@ -809,13 +809,6 @@ private:
     // After the node successfully joins, the control over the variable is yielded
     // to `topology_state_load`, so that it can control it during the upgrade from gossiper
     // based topology to raft-based topology.
-    // FIXME: This boolean flag is mostly needed because, shortly after starting
-    // a new group 0, the state of `system.topology` is empty, and updating the
-    // `_topology_change_kind_enabled` variable from group 0 state would lead
-    // to wrong results. This could be fixed by writing an initial `system.topology`
-    // state before creating the group 0 (also making sure to set the correct
-    // group 0 state id so that the timestamps of further mutations are correct).
-    bool _manage_topology_change_kind_from_group0 = false;
     topology_change_kind _topology_change_kind_enabled = topology_change_kind::unknown;
 
     // Throws an exception if the node is either starting and didn't determine which
