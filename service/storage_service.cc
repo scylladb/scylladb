@@ -1857,9 +1857,6 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             }
         }
 
-        // If we were the first node in the cluster, at this point `upgrade_state` will be
-        // initialized properly. Yield control to group 0
-        _manage_topology_change_kind_from_group0 = true;
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
         co_await update_topology_with_local_metadata(*raft_server);
@@ -1893,7 +1890,6 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         co_return;
     }
 
-    _manage_topology_change_kind_from_group0 = true;
     set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
 
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
@@ -2971,8 +2967,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         slogger.info("Raft recovery - starting in legacy topology operations mode");
         set_topology_change_kind(topology_change_kind::legacy);
     } else if (_group0->joined_group0()) {
-        // We are a part of group 0. The _topology_change_kind_enabled flag is maintained from there.
-        _manage_topology_change_kind_from_group0 = true;
+        // We are a part of group 0.
         set_topology_change_kind(upgrade_state_to_topology_op_kind(_topology_state_machine._topology.upgrade_state));
         if (_db.local().get_config().force_gossip_topology_changes() && raft_topology_change_enabled()) {
             throw std::runtime_error("Cannot force gossip topology changes - the cluster is using raft-based topology");
