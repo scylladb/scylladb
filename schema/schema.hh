@@ -502,13 +502,12 @@ struct schema_static_props {
     bool is_group0_table = false; // the table is a group 0 table
 };
 
-class schema_describe_helper {
-public:
-    virtual bool is_global_index(const table_id& base_id, const schema& view_s) const = 0;
-    virtual bool is_index(const table_id& base_id, const schema& view_s) const = 0;
-    virtual std::optional<sstring> custom_index_class(const table_id& base_id, const schema& view_s) const = 0;
-    virtual schema_ptr find_schema(const table_id& id) const = 0;
-    virtual ~schema_describe_helper() = default;
+struct schema_describe_helper {
+    enum class type { table, view, index };
+    type type;
+    bool is_global_index;
+    std::optional<sstring> custom_index_class;
+    schema_ptr base_schema; // relevant for view and index
 };
 
 /*

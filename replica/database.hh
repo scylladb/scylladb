@@ -1011,7 +1011,7 @@ private:
 
     future<snapshot_file_set> take_snapshot(sstring jsondir);
     // Writes the table schema and the manifest of all files in the snapshot directory.
-    future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
+    future<> finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
@@ -1035,7 +1035,7 @@ public:
      * CREATE INDEX command.
      * The same is true for local index and MATERIALIZED VIEW.
      */
-    future<> write_schema_as_cql(database& db, sstring dir) const;
+    future<> write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const;
 
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
@@ -1938,7 +1938,7 @@ private:
     struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
-    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state&);
+    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
 public:
     /** Truncates the given column family */
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
