@@ -385,6 +385,35 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(sstable_directory_foreign_sstable_should_not_load_locally) {
+    if (smp::count == 1) {
+        fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
+        return;
+    }
+    sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
+        auto sstables_opened_for_reading = [&env] () {
+            return env.map_reduce0([] (sstables::test_env& env) {
+                return sstables_stats::get_shard_stats().open_for_reading;
+            }, 0, [] (auto res, auto gen) {return res + gen;}).get();
+        };
+        for (shard_id i = 0; i < smp::count; ++i) {
+            env.invoke_on(i, [] (sstables::test_env& env) -> future<> {
+                co_return co_await seastar::async([&env] {
+                    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), generation_type((this_shard_id() + 1) % smp::count)));
+                });
+            }).get();
+        }
+
+        auto sstables_open_before_process = sstables_opened_for_reading();
+        with_sstable_directory(env, [](sharded<sstables::sstable_directory>& sstdir) {
+            distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+        });
+
+        // verify that all the sstables were loaded only once
+        BOOST_REQUIRE_EQUAL(sstables_opened_for_reading(), sstables_open_before_process + smp::count);
+    }).get();
+}
+
 // Test that the sstable_dir object can keep the table alive against a drop
 SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
