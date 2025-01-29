@@ -1091,27 +1091,16 @@ void gossiper::run() {
             if (g_digests.size() > 0) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
 
-                if (_endpoints_to_talk_with.empty()) {
+                if (_endpoints_to_talk_with.empty() && !_live_endpoints.empty()) {
                     auto live_endpoints = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
                     std::shuffle(live_endpoints.begin(), live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
                     // in live_endpoints at least once within nr_rounds gossip rounds.
                     // Other gossip implementation like SWIM uses similar approach.
                     // https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf
-                    size_t nr_rounds = 10;
+                    constexpr size_t nr_rounds = 10;
                     size_t nodes_per_round = (live_endpoints.size() + nr_rounds - 1) / nr_rounds;
-                    std::vector<inet_address> live_nodes;
-                    for (const auto& node : live_endpoints) {
-                        if (live_nodes.size() < nodes_per_round) {
-                            live_nodes.push_back(node);
-                        } else {
-                            _endpoints_to_talk_with.push_back(std::move(live_nodes));
-                            live_nodes = {node};
-                        }
-                    }
-                    if (!live_nodes.empty()) {
-                        _endpoints_to_talk_with.push_back(live_nodes);
-                    }
+                    _endpoints_to_talk_with = live_endpoints | std::views::chunk(nodes_per_round) | std::ranges::to<std::list<std::vector<inet_address>>>();
                     logger.debug("Set live nodes to talk: endpoint_state_map={}, all_live_nodes={}, endpoints_to_talk_with={}",
                             _endpoint_state_map.size(), live_endpoints, _endpoints_to_talk_with);
                 }
