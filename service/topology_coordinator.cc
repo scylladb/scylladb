@@ -48,6 +48,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -117,6 +118,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
+    vbc::view_building_coordinator* _vb_coordinator_ptr;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -2853,11 +2855,13 @@ public:
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
-            gms::feature_service& feature_service)
+            gms::feature_service& feature_service,
+            vbc::view_building_coordinator* vb_coordinator_ptr)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
+        , _vb_coordinator_ptr(vb_coordinator_ptr)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -3456,7 +3460,8 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service) {
+        gms::feature_service& feature_service,
+        vbc::view_building_coordinator* vb_coordinator_ptr) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
@@ -3464,7 +3469,8 @@ future<> run_topology_coordinator(
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service};
+            feature_service,
+            vb_coordinator_ptr};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);
