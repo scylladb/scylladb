@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 #############################################################################
-# Some tests for the new "tablets"-based replication, replicating the old
+# Some tests for the new "tablets"-based replication, replacing the old
 # "vnodes". Eventually, ScyllaDB will use tablets by default and all tests
 # will run using tablets, but these tests are for specific issues discovered
 # while developing tablets that didn't exist for vnodes. Note that most tests
@@ -40,7 +40,7 @@ def test_keyspace_128_tablets(cql, this_dc):
 # or DROP TABLE operations in the loop.
 # Note that this test doesn't even involve any data inside the table.
 # Reproduces #16493.
-def test_create_loop_with_tablets(cql, test_keyspace_128_tablets):
+def test_create_loop_with_tablets(cql, skip_without_tablets, test_keyspace_128_tablets):
     table = test_keyspace_128_tablets + "." + unique_name()
     for i in range(100):
         cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int)")
@@ -207,7 +207,7 @@ def test_tablets_are_dropped_when_dropping_table(cql, test_keyspace, skip_withou
 #
 # Reproduces https://github.com/scylladb/scylladb/issues/17627
 # with materialized views, which were not part of the original scope of this issue.
-def test_tablets_are_dropped_when_dropping_table_with_view(cql, test_keyspace):
+def test_tablets_are_dropped_when_dropping_table_with_view(cql, test_keyspace, skip_without_tablets):
     table_name = unique_name()
     schema = "pk int PRIMARY KEY, c int"
     # new_test_table is not used since we want to test a failure to drop the table
@@ -253,7 +253,7 @@ def test_tablets_are_dropped_when_dropping_table_with_view(cql, test_keyspace):
 #
 # Reproduces https://github.com/scylladb/scylladb/issues/17627
 @pytest.mark.parametrize("drop_index", [True, False])
-def test_tablets_are_dropped_when_dropping_index(cql, test_keyspace, drop_index):
+def test_tablets_are_dropped_when_dropping_index(cql, test_keyspace, drop_index, skip_without_tablets):
     table_name = unique_name()
     schema = "pk int PRIMARY KEY, c int"
     cql.execute(f"CREATE TABLE {test_keyspace}.{table_name} ({schema})")
@@ -299,7 +299,7 @@ def test_lwt_support_with_tablets(cql, test_keyspace, skip_without_tablets):
 # We want to ensure that we can only change the RF of any DC by at most 1 at a time
 # if we use tablets. That provides us with the guarantee that the old and the new QUORUM
 # overlap by at least one node.
-def test_alter_tablet_keyspace_rf(cql, this_dc):
+def test_alter_tablet_keyspace_rf(cql, this_dc, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} "
                                 f"AND TABLETS = {{ 'enabled': true, 'initial': 128 }}") as keyspace:
         def change_opt_rf(rf_opt, new_rf):

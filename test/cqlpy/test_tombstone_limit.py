@@ -17,6 +17,11 @@ from .conftest import driver_bug_1
 from cassandra.query import SimpleStatement
 import pytest
 
+# All tests in this file check the Scylla-only query_tombstone_page_limit
+# feature, so let's mark them all scylla_only with an autouse fixture:
+@pytest.fixture(scope="function", autouse=True)
+def all_tests_are_scylla_only(scylla_only):
+    pass
 
 # Tests that need a single partition can co-locate their data in a single table.
 @pytest.fixture(scope="module")
