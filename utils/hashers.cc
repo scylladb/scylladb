@@ -92,3 +92,13 @@ template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(con
 
 template class cryptopp_hasher<md5_hasher, 16>;
 template class cryptopp_hasher<sha256_hasher, 32>;
+
+std::array<std::byte, 32> get_sha256(std::span<const std::byte> in) {
+    sha256_hasher hasher;
+    hasher.update(reinterpret_cast<const char*>(in.data()), in.size());
+    auto b = hasher.finalize_array();
+    auto out = std::array<std::byte, 32>();
+    assert(b.size() == out.size());
+    std::memcpy(&out, b.data(), b.size());
+    return out;
+}
