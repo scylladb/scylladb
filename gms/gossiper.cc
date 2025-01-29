@@ -2303,8 +2303,8 @@ future<> gossiper::do_stop_gossiping() {
         co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
         auto live_endpoints = _live_endpoints;
         for (inet_address addr : live_endpoints) {
-            msg_addr id = get_msg_addr(addr);
-            logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
+            auto id = get_host_id(addr);
+            logger.info("Sending a GossipShutdown to {} with generation {}", id, local_generation);
             try {
                 co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, get_broadcast_address(), local_generation.value());
                 logger.trace("Got GossipShutdown Reply");
