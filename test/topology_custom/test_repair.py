@@ -198,3 +198,19 @@ async def test_repair_abort(manager):
     await manager.api.client.get_json(f"/task_manager/wait_task/{id}", host=servers[0].ip_addr)
     statuses = await manager.api.client.get_json(f"/task_manager/task_status_recursive/{id}", host=servers[0].ip_addr)
     assert all([status["state"] == "failed" for status in statuses])
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_keyspace_drop_during_data_sync_repair(manager):
+    cfg = {
+        'enable_tablets': False,
+        'error_injections_at_startup': ['get_keyspace_erms_throw_no_such_keyspace']
+    }
+    await manager.server_add(config=cfg)
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
+
+    await manager.server_add(config=cfg)
