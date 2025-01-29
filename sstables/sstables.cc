@@ -420,13 +420,13 @@ struct single_tagged_union_member_serdes_for final : single_tagged_union_member_
     using value_type = typename base::value_type;
     virtual future<> do_parse(const schema& s, sstable_version_types version, random_access_reader& in, value_type& v) const override {
         v = Member();
-        return parse(s, version, in, boost::get<Member>(v).value);
+        return parse(s, version, in, std::get<Member>(v).value);
     }
     virtual uint32_t do_size(sstable_version_types version, const value_type& v) const override {
-        return serialized_size(version, boost::get<Member>(v).value);
+        return serialized_size(version, std::get<Member>(v).value);
     }
     virtual void do_write(sstable_version_types version, file_writer& out, const value_type& v) const override {
-        write(version, out, boost::get<Member>(v).value);
+        write(version, out, std::get<Member>(v).value);
     }
 };
 
