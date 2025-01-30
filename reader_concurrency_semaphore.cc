@@ -1679,6 +1679,7 @@ void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(cons
     boost::for_each(_wait_list._admission_queue, std::ref(func));
     boost::for_each(_wait_list._memory_queue, std::ref(func));
     boost::for_each(_ready_list, std::ref(func));
+    boost::for_each(_inactive_reads, std::ref(func));
 }
 
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) const {
