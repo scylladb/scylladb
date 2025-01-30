@@ -222,7 +222,8 @@ private:
     void maybe_reclaim_components();
     // Reloads components from reclaimed SSTables if memory is available.
     future<> maybe_reload_components();
-    size_t get_memory_available_for_reclaimable_components();
+    size_t get_components_memory_reclaim_threshold() const;
+    size_t get_memory_available_for_reclaimable_components() const;
     // Reclaim memory from the SSTable and remove it from the memory tracking metrics.
     // The method is idempotent and for an sstable that is deleted, it is called both
     // during unlink and during deactivation.
