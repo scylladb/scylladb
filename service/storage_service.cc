@@ -7134,6 +7134,11 @@ void storage_service::init_messaging_service() {
     });
     ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
+            const auto gossip_scheduling_group = ss._db.local().get_gossip_scheduling_group();
+            if (current_scheduling_group() != gossip_scheduling_group) {
+                on_internal_error_noexcept(slogger, format("Raft group0 RPCs should be executed in the gossip scheduling group [{}], current group is [{}]",
+                        gossip_scheduling_group.name(), current_scheduling_group().name()));
+            }
             utils::chunked_vector<canonical_mutation> mutations;
             // FIXME: make it an rwlock, here we only need to lock for reads,
             // might be useful if multiple nodes are trying to pull concurrently.
