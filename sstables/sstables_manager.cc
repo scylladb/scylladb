@@ -154,7 +154,10 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
 
 void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst) {
     _total_reclaimable_memory += sst->total_reclaimable_memory_size();
+    maybe_reclaim_components();
+}
 
+void sstables_manager::maybe_reclaim_components() {
     size_t memory_reclaim_threshold = _available_memory * _db_config.components_memory_reclaim_threshold();
     if (_total_reclaimable_memory <= memory_reclaim_threshold) {
         // total memory used is within limit; no need to reclaim.
