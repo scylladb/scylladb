@@ -158,13 +158,10 @@ void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(ssta
 }
 
 void sstables_manager::maybe_reclaim_components() {
-    if (_total_reclaimable_memory <= get_components_memory_reclaim_threshold()) {
-        // total memory used is within limit; no need to reclaim.
-        return;
-    }
-
-    // Memory consumption has crossed threshold. Reclaim from the SSTable that
+    while(_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
+    // Memory consumption is above threshold. Reclaim from the SSTable that
     // has the most reclaimable memory to get the total consumption under limit.
+    // FIXME: Take SSTable usage into account during reclaim - see https://github.com/scylladb/scylladb/issues/21897
     auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
         return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
     });
@@ -176,6 +173,7 @@ void sstables_manager::maybe_reclaim_components() {
     // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
     smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
             memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
+    }
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
