@@ -288,8 +288,7 @@ public:
         return _gossiper;
     }
 
-    template<typename ID>
-    bool is_alive(const ID& ep) const {
+    bool is_alive(const locator::host_id& ep) const {
         return _gossiper.is_alive(ep);
     }
 
