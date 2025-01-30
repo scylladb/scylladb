@@ -2676,6 +2676,9 @@ public:
         , _start_time(start_time)
         , _is_tablet(_shard_task.db.local().find_column_family(_table_id).uses_tablets())
     {
+        if (!_shard_task.rs.get_view_builder().local_is_initialized()) {
+            throw std::runtime_error(format("Node {} is not fully initialized for repair, try again later", shard_task.rs.my_host_id()));
+        }
         repair_neighbors r_neighbors = _shard_task.get_repair_neighbors(_range);
         auto& map = r_neighbors.shard_map;
         for (auto& n : _all_live_peer_nodes) {
@@ -3291,7 +3294,6 @@ future<> repair_service::stop() {
         rlogger.debug("Unregistering gossiper helper");
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
-    co_await async_gate().close();
     _stopped = true;
     rlogger.info("Stopped repair_service");
   } catch (...) {

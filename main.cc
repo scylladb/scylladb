@@ -1722,6 +1722,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
             };
 
+            supervisor::notify("starting repair service");
+            auto max_memory_repair = memory::stats().total_memory() * 0.1;
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
+                repair.stop().get();
+            });
+            repair.invoke_on_all(&repair_service::start).get();
+            api::set_server_repair(ctx, repair, gossip_address_map).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_repair", [] { std::raise(SIGSTOP); });
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1920,24 +1934,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     return lifecycle_notifier.local().unregister_subscriber(&local_proxy);
                 }).get();
             });
-
-            // ATTN -- sharded repair reference already sits on storage_service and if
-            // it calls repair.local() before this place it'll crash (now it doesn't do
-            // both)
-            supervisor::notify("starting repair service");
-            auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
-            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
-                repair.stop().get();
-            });
-            repair.invoke_on_all(&repair_service::start).get();
-            api::set_server_repair(ctx, repair, gossip_address_map).get();
-            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
-                api::unset_server_repair(ctx).get();
-            });
-
-            utils::get_local_injector().inject("stop_after_starting_repair",
-                [] { std::raise(SIGSTOP); });
 
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.
