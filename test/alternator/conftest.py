@@ -67,30 +67,37 @@ def pytest_collection_modifyitems(config, items):
 # is that role's password's salted hash. We can read a valid role/hash
 # from the appropriate system table, but can't do it with Alternator (because
 # we don't know yet the secret key!), so we need to do it with CQL.
+# If this function can't connect to CQL, it will return an arbitrary
+# user/secret pair, and hope it would work if alternator-enforce-authorization
+# is off.
 @cache
 def get_valid_alternator_role(url, role='cassandra'):
-    from cassandra.cluster import Cluster
+    from cassandra.cluster import Cluster, NoHostAvailable
     from cassandra.auth import PlainTextAuthProvider
     auth_provider = PlainTextAuthProvider(
         username='cassandra', password='cassandra')
-    with (
-        Cluster([urlparse(url).hostname], auth_provider=auth_provider,
-            connect_timeout = 60, control_connection_timeout = 60) as cluster,
-        cluster.connect() as session
-    ):
-        # Newer Scylla places the "roles" table in the "system" keyspace, but
-        # older versions used "system_auth_v2" or "system_auth"
-        for ks in ['system', 'system_auth_v2', 'system_auth']:
-            try:
-                # We could have looked for any role/salted_hash pair, but we
-                # already know a role "cassandra" exists (we just used it to
-                # connect to CQL!), so let's just use that role.
-                salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
-                if salted_hash is None:
-                    break
-                return (role, salted_hash)
-            except:
-                pass
+    try:
+        with (
+            Cluster([urlparse(url).hostname], auth_provider=auth_provider,
+                connect_timeout = 60, control_connection_timeout = 60) as cluster,
+            cluster.connect() as session
+        ):
+            # Newer Scylla places the "roles" table in the "system" keyspace, but
+            # older versions used "system_auth_v2" or "system_auth"
+            for ks in ['system', 'system_auth_v2', 'system_auth']:
+                try:
+                    # We could have looked for any role/salted_hash pair, but we
+                    # already know a role "cassandra" exists (we just used it to
+                    # connect to CQL!), so let's just use that role.
+                    salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
+                    if salted_hash is None:
+                        break
+                    return (role, salted_hash)
+                except:
+                    pass
+    except NoHostAvailable:
+        # CQL is not available, so we can't find a valid role.
+        pass
     # If we couldn't find a valid role, let's hope that
     # alternator-enforce-authorization is not enabled so anything will work
     return ('unknown_user', 'unknown_secret')
