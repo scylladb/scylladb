@@ -149,7 +149,7 @@ public:
     // the "features_enable_test_feature" injection is enabled.
     // This feature MUST NOT be advertised in release mode!
     gms::feature test_only_feature { *this, "TEST_ONLY_FEATURE"sv };
-
+    gms::feature enforced_raft_rpc_scheduling_group { *this, "ENFORCED_RAFT_RPC_SCHEDULING_GROUP"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
