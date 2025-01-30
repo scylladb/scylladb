@@ -6,6 +6,7 @@ import requests
 import pytest
 import shutil
 import logging
+from pathlib import Path
 
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
@@ -243,3 +244,15 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     have_res = { x.name: x.value for x in res }
     assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+
+@pytest.mark.asyncio
+async def test_object_storage_config(manager: ManagerClient, tmpdir, s3_server):
+    '''Check that Scylla refuses to start with a bad object-storage config'''
+
+    obj_cfg = tmpdir / 'object_storage.yaml'
+
+    cfg = {'object_storage_config_file': str(obj_cfg)}
+
+    print('Scylla fails to start with an empty object storage config')
+    Path(obj_cfg).touch()
+    server = await manager.server_add(config=cfg, expected_error='a minimum of one endpoint is required')

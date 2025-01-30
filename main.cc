@@ -223,6 +223,11 @@ static future<> read_object_storage_config(db::config& db_cfg) {
 
     std::unordered_map<sstring, s3::endpoint_config> cfg;
     YAML::Node doc = YAML::Load(data.c_str());
+    if (doc.size() == 0) {
+        co_await coroutine::return_exception(
+            std::runtime_error("While parsing object_storage config: a minimum of one endpoint is required."));
+    }
+
     for (auto&& section : doc) {
         auto sec_name = section.first.as<std::string>();
         if (sec_name != "endpoints") {
