@@ -766,6 +766,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::left_token_ring:
                     [[fallthrough]];
+                case topology::transition_state::truncate_table:
+                    [[fallthrough]];
                 case topology::transition_state::rollback_to_normal:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
