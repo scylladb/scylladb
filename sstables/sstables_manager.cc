@@ -43,7 +43,7 @@ sstables_manager::sstables_manager(
     , _maintenance_sg(std::move(maintenance_sg))
     , _abort(abort)
 {
-    _components_reloader_status = components_reloader_fiber();
+    _components_reloader_status = components_reclaim_reload_fiber();
 }
 
 sstables_manager::~sstables_manager() {
@@ -184,7 +184,7 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() const
     return get_components_memory_reclaim_threshold() - _total_reclaimable_memory;
 }
 
-future<> sstables_manager::components_reloader_fiber() {
+future<> sstables_manager::components_reclaim_reload_fiber() {
     co_await coroutine::switch_to(_maintenance_sg);
 
     sstlog.trace("components_reloader_fiber start");

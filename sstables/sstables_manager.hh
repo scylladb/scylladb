@@ -217,7 +217,7 @@ private:
     // reclaim it from the SSTable that has the most reclaimable memory.
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
     // Fiber to reload reclaimed components back into memory when memory becomes available.
-    future<> components_reloader_fiber();
+    future<> components_reclaim_reload_fiber();
     // Reclaims components from SSTables if total memory usage exceeds the threshold.
     void maybe_reclaim_components();
     // Reloads components from reclaimed SSTables if memory is available.
