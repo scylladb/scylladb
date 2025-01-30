@@ -38,7 +38,6 @@
 #include "utils/throttle.hh"
 
 #include <fmt/ranges.h>
-#include <boost/range/algorithm/min_element.hpp>
 #include "readers/from_mutations_v2.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/empty_v2.hh"
@@ -3375,7 +3374,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         const int n_readers = 3;
         std::vector<size_t> generations(n_readers);
         auto gc_versions = [&] {
-            auto n_live = last_generation - *boost::min_element(generations) + 1;
+            auto n_live = last_generation - *std::ranges::min_element(generations) + 1;
             while (versions.size() > n_live) {
                 versions.pop_front();
             }

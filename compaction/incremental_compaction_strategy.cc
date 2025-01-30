@@ -440,8 +440,8 @@ void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t
         auto sst_first_key_less = [&schema] (const shared_sstable& sst_a, const shared_sstable& sst_b) {
             return sst_a->get_first_decorated_key().tri_compare(*schema, sst_b->get_first_decorated_key()) <= 0;
         };
-        auto& a_first = *boost::min_element(a->all(), sst_first_key_less);
-        auto& b_first = *boost::min_element(b->all(), sst_first_key_less);
+        auto& a_first = *std::ranges::min_element(a->all(), sst_first_key_less);
+        auto& b_first = *std::ranges::min_element(b->all(), sst_first_key_less);
         return a_first->get_first_decorated_key().tri_compare(*schema, b_first->get_first_decorated_key()) <= 0;
     });
 }

@@ -15,7 +15,6 @@
 
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/min_element.hpp>
 
 #include <ranges>
 
@@ -407,7 +406,7 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
     if (non_expiring_sstables.empty()) {
         return {};
     }
-    auto it = boost::min_element(non_expiring_sstables, [] (auto& i, auto& j) {
+    auto it = std::ranges::min_element(non_expiring_sstables, [] (auto& i, auto& j) {
         return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
     });
     return { *it };
