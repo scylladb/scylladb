@@ -964,11 +964,12 @@ private:
         std::vector<gms::inet_address> joined;
     };
 
+    future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     // Optional target_node can be provided to restrict the synchronization to the specified node.
     // Returns a structure that describes which notifications to trigger after token metadata is updated.
-    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::optional<locator::host_id> target_node, std::unordered_set<raft::server_id> prev_normal);
+    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal);
     // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
     // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
     future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
