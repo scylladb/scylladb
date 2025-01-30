@@ -353,29 +353,27 @@ async def test_view_build_status_migration_to_v2_barrier(request, manager: Manag
 async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
     node_count = 4
     servers = await manager.servers_add(node_count)
-    cql, _ = await manager.get_ready_cql(servers)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     await create_keyspace(cql)
     await create_table(cql)
     await create_mv(cql, "vt1")
     await create_mv(cql, "vt2")
 
-    await wait_for_view(cql, "vt1", node_count)
-    await wait_for_view(cql, "vt2", node_count)
+    async def row_count_is(cql, n, host):
+        result = await cql.run_async("SELECT * FROM system.view_build_status_v2", host=host)
+        return (len(result) == n) or None
 
-    result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
-    assert len(result) == node_count * 2
+    await wait_for(lambda: row_count_is(cql, node_count * 2, hosts[0]), time.time() + 60)
 
     await manager.server_stop_gracefully(servers[-1].server_id)
     await manager.remove_node(servers[0].server_id, servers[-1].server_id)
+    servers.pop()
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # The 2 rows belonging to the node that was removed, one for each view, should
     # be deleted from the table.
-    async def node_rows_removed():
-        result = await cql.run_async("SELECT * FROM system.view_build_status_v2")
-        return (len(result) == (node_count - 1) * 2) or None
-
-    await wait_for(node_rows_removed, time.time() + 60)
+    await wait_for(lambda: row_count_is(cql, (node_count - 1) * 2, hosts[0]), time.time() + 60)
 
 # Replace a node and verify that the view_build_status has rows for the new node and
 # no rows for the old node
