@@ -9,6 +9,7 @@
 
 #include "seastarx.hh"
 #include "utils/log.hh"
+#include "utils/observable.hh"
 #include "db/consistency_level.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/sharded.hh>
@@ -96,12 +97,21 @@ class storage_helper;
 
 class audit final : public seastar::async_sharded_service<audit> {
     locator::shared_token_metadata& _token_metadata;
-    const std::set<sstring> _audited_keyspaces;
+    std::set<sstring> _audited_keyspaces;
     // Maps keyspace name to set of table names in that keyspace
-    const std::map<sstring, std::set<sstring>> _audited_tables;
-    const category_set _audited_categories;
+    std::map<sstring, std::set<sstring>> _audited_tables;
+    category_set _audited_categories;
+
     sstring _storage_helper_class_name;
     std::unique_ptr<storage_helper> _storage_helper_ptr;
+
+    const db::config& _cfg;
+    utils::observer<sstring> _cfg_keyspaces_observer;
+    utils::observer<sstring> _cfg_tables_observer;
+    utils::observer<sstring> _cfg_categories_observer;
+
+    template<class T>
+    void update_config(const sstring & new_value, std::function<T(const sstring&)> parse_func, T& cfg_parameter);
 
     bool should_log_table(const sstring& keyspace, const sstring& name) const;
 public:
@@ -123,7 +133,8 @@ public:
     audit(locator::shared_token_metadata& stm, sstring&& storage_helper_name,
           std::set<sstring>&& audited_keyspaces,
           std::map<sstring, std::set<sstring>>&& audited_tables,
-          category_set&& audited_categories);
+          category_set&& audited_categories,
+          const db::config& cfg);
     ~audit();
     future<> start(const db::config& cfg, cql3::query_processor& qp, service::migration_manager& mm);
     future<> stop();
