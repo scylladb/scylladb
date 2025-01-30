@@ -108,8 +108,8 @@ private:
     size_t _total_memory_reclaimed{0};
     // Set of sstables from which memory has been reclaimed
     set_type _reclaimed;
-    // Condition variable that gets notified when an sstable is deleted
-    seastar::condition_variable _sstable_deleted_event;
+    // Condition variable that needs to be notified when an sstable is created or deleted
+    seastar::condition_variable _components_memory_change_event;
     future<> _components_reloader_status = make_ready_future<>();
 
     bool _closing = false;

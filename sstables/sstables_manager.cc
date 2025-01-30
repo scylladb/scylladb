@@ -189,7 +189,7 @@ future<> sstables_manager::components_reclaim_reload_fiber() {
 
     sstlog.trace("components_reloader_fiber start");
     while (true) {
-        co_await _sstable_deleted_event.when();
+        co_await _components_memory_change_event.when();
 
         if (_closing) {
             co_return;
@@ -269,7 +269,7 @@ void sstables_manager::deactivate(sstable* sst) {
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
     delete sst;
-    _sstable_deleted_event.signal();
+    _components_memory_change_event.signal();
     maybe_done();
 }
 
@@ -304,7 +304,7 @@ future<> sstables_manager::close() {
     co_await _done.get_future();
     co_await _sstable_metadata_concurrency_sem.stop();
     // stop the components reload fiber
-    _sstable_deleted_event.signal();
+    _components_memory_change_event.signal();
     co_await std::move(_components_reloader_status);
 }
 
