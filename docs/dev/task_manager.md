@@ -64,18 +64,20 @@ Briefly:
 - `/task_manager/list_module_tasks/{module}` -
         lists (by default non-internal) tasks in the module;
 - `/task_manager/task_status/{task_id}` -
-        gets the task's status, unregisters the task if it's finished;
+        gets the task's status;
 - `/task_manager/abort_task/{task_id}` -
         aborts the task if it's abortable;
 - `/task_manager/wait_task/{task_id}` -
         waits for the task and gets its status;
 - `/task_manager/task_status_recursive/{task_id}` -
         gets statuses of the task and all its descendants in BFS
-        order, unregisters the task;
+        order;
 - `/task_manager/ttl` -
         gets or sets new ttl.
 - `/task_manager/user_ttl` -
         gets or sets new user ttl.
+- `/task_manager/drain/{module}` -
+        unregisters all finished local tasks in the module.
 
 # Virtual tasks
 
