@@ -24,6 +24,7 @@
 #include "db/system_keyspace.hh"
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
+#include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
@@ -559,8 +560,9 @@ future<> gossiper::uninit_messaging_service_handler() {
     return ser::gossip_rpc_verbs::unregister(&ms);
 }
 
-future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
-    utils::chunked_vector<inet_address> __live_endpoints(epset.begin(), epset.end());
+template<typename T>
+future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
+    utils::chunked_vector<T> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
     if (size < 1) {
         return make_ready_future<>();
@@ -568,8 +570,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     /* Generate a random number from 0 -> size */
     std::uniform_int_distribution<int> dist(0, size - 1);
     int index = dist(_random_engine);
-    inet_address to = __live_endpoints[index];
-    auto id = get_msg_addr(to);
+    std::conditional_t<std::is_same_v<T, gms::inet_address>, netw::msg_addr, T> id{__live_endpoints[index]};
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
     return ser::gossip_rpc_verbs::send_gossip_digest_syn(&_messaging, id, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
@@ -721,17 +722,29 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
 
     auto state = get_endpoint_state_ptr(endpoint);
 
+    if (!state) {
+        logger.warn("There is no state for the removed IP {}", endpoint);
+        co_return;
+    }
+
+    auto host_id = state->get_host_id();
+
     bool was_alive = false;
-    co_await mutate_live_and_unreachable_endpoints([endpoint, &was_alive] (live_and_unreachable_endpoints& data) {
-        was_alive = data.live.erase(endpoint);
-        data.unreachable.erase(endpoint);
-    });
+
+    if (_address_map.find(host_id) == endpoint) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([host_id, &was_alive] (live_and_unreachable_endpoints& data) {
+            was_alive = data.live.erase(host_id);
+            data.unreachable.erase(host_id);
+        });
+    }
     _syn_handlers.erase(endpoint);
     _ack_handlers.erase(endpoint);
     quarantine_endpoint(endpoint);
     logger.info("Removed endpoint {}", endpoint);
 
-    if (was_alive && state) {
+    if (was_alive) {
         try {
             logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), endpoint, get_gossip_status(*state));
             co_await do_on_dead_notifications(endpoint, std::move(state), pid);
@@ -931,7 +944,7 @@ future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_live_members_helper();
+        co_return g.get_live_members() | std::views::transform([&g] (auto id) { return g._address_map.get(id); }) | std::ranges::to<std::set>();
     });
 }
 
@@ -939,17 +952,16 @@ future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() 
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_unreachable_members();
+        co_return g.get_unreachable_members() | std::views::transform([&g] (auto id) { return g._address_map.get(id); }) | std::ranges::to<std::set>();
     });
 }
 
-future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version) {
+future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::seconds(2);
     auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
-    auto host_id = get_host_id(node);
-
+    auto node = _address_map.get(host_id);
     while (is_enabled()) {
         bool failed = false;
         try {
@@ -1001,7 +1013,7 @@ future<> gossiper::failure_detector_loop() {
                 co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
                 continue;
             }
-            auto nodes = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
+            auto nodes = _live_endpoints | std::ranges::to<std::vector>();
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(std::views::iota(0u, nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
@@ -1092,7 +1104,7 @@ void gossiper::run() {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
 
                 if (_endpoints_to_talk_with.empty() && !_live_endpoints.empty()) {
-                    auto live_endpoints = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
+                    auto live_endpoints = _live_endpoints | std::ranges::to<std::vector>();
                     std::shuffle(live_endpoints.begin(), live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
                     // in live_endpoints at least once within nr_rounds gossip rounds.
@@ -1100,22 +1112,25 @@ void gossiper::run() {
                     // https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf
                     constexpr size_t nr_rounds = 10;
                     size_t nodes_per_round = (live_endpoints.size() + nr_rounds - 1) / nr_rounds;
-                    _endpoints_to_talk_with = live_endpoints | std::views::chunk(nodes_per_round) | std::ranges::to<std::list<std::vector<inet_address>>>();
+                    _endpoints_to_talk_with = live_endpoints | std::views::chunk(nodes_per_round) | std::ranges::to<std::list<std::vector<locator::host_id>>>();
                     logger.debug("Set live nodes to talk: endpoint_state_map={}, all_live_nodes={}, endpoints_to_talk_with={}",
                             _endpoint_state_map.size(), live_endpoints, _endpoints_to_talk_with);
                 }
-                if (_endpoints_to_talk_with.empty()) {
-                    auto nodes = std::vector<inet_address>(_seeds.begin(), _seeds.end());
-                    logger.debug("No live nodes yet: try initial contact point nodes={}", nodes);
-                    if (!nodes.empty()) {
-                        _endpoints_to_talk_with.push_back(std::move(nodes));
-                    }
-                }
+
                 if (!_endpoints_to_talk_with.empty()) {
                     auto live_nodes = std::move(_endpoints_to_talk_with.front());
                     _endpoints_to_talk_with.pop_front();
                     logger.debug("Talk to live nodes: {}", live_nodes);
                     for (auto& ep: live_nodes) {
+                        (void)with_gate(_background_msg, [this, message, ep] () mutable {
+                            return do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
+                                logger.trace("Failed to send gossip to live members: {}", ep);
+                            });
+                        });
+                    }
+                } else if (!_seeds.empty()) {
+                    logger.debug("No live nodes yet: try initial contact point nodes={}", _seeds);
+                    for (auto& ep: _seeds) {
                         (void)with_gate(_background_msg, [this, message, ep] () mutable {
                             return do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
                                 logger.trace("Failed to send gossip to live members: {}", ep);
@@ -1171,19 +1186,15 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members_helper() const {
-    std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
+std::set<locator::host_id> gossiper::get_live_members() const {
+    std::set<locator::host_id> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
     if (!is_shutdown(myip)) {
-        live_members.insert(myip);
+        live_members.insert(my_host_id());
     }
     logger.debug("live_members after={}", live_members);
     return live_members;
-}
-
-std::set<locator::host_id> gossiper::get_live_members() const {
-    return get_live_members_helper() | std::views::transform([this] (inet_address ip) { return get_host_id(ip); }) | std::ranges::to<std::set>();
 }
 
 std::set<locator::host_id> gossiper::get_live_token_owners() const {
@@ -1209,7 +1220,7 @@ std::set<locator::host_id> gossiper::get_unreachable_nodes() const {
 }
 
 // Return downtime in microseconds
-int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
+int64_t gossiper::get_endpoint_downtime(locator::host_id ep) const noexcept {
     auto it = _unreachable_endpoints.find(ep);
     if (it != _unreachable_endpoints.end()) {
         auto& downtime = it->second;
@@ -1235,19 +1246,8 @@ future<> gossiper::convict(inet_address endpoint) {
     }
 }
 
-std::set<inet_address> gossiper::get_unreachable_members() const {
-    std::set<inet_address> ret;
-    for (auto&& x : _unreachable_endpoints) {
-        ret.insert(x.first);
-    }
-    return ret;
-}
-
-std::set<locator::host_id> gossiper::get_unreachable_host_ids() const {
-    return get_unreachable_members() |
-            std::views::transform([this] (gms::inet_address ip) { return get_host_id(ip); }) |
-            std::ranges::to<std::set>();
-
+std::set<locator::host_id> gossiper::get_unreachable_members() const {
+    return _unreachable_endpoints | std::views::keys | std::ranges::to<std::set>();
 }
 
 version_type gossiper::get_max_endpoint_state_version(const endpoint_state& state) const noexcept {
@@ -1261,14 +1261,18 @@ version_type gossiper::get_max_endpoint_state_version(const endpoint_state& stat
 
 future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
     verify_permit(endpoint, pid);
-    co_await mutate_live_and_unreachable_endpoints([endpoint] (live_and_unreachable_endpoints& data) {
-        data.unreachable.erase(endpoint);
-        data.live.erase(endpoint);
-    });
+    auto hid = get_host_id(endpoint);
+    if (_address_map.find(hid) == endpoint) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([hid] (live_and_unreachable_endpoints& data) {
+            data.unreachable.erase(hid);
+            data.live.erase(hid);
+        });
+    }
 
-    co_await container().invoke_on_all([endpoint] (auto& g) {
+    co_await container().invoke_on_all([endpoint, hid] (auto& g) {
         if (this_shard_id() == 0) {
-            auto hid = g.get_endpoint_state_ptr(endpoint)->get_host_id();
             if (g._address_map.find(hid) == endpoint) {
                 // During IP address change we may have a situation where we remove old gossiper state
                 // but there is a new address for the same host id, so no need to make it expiring
@@ -1436,8 +1440,9 @@ future<version_type> gossiper::get_current_heart_beat_version(inet_address endpo
     });
 }
 
-future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet_address ep) {
-    return send_gossip(message, {ep});
+template<typename T>
+future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, T ep) {
+    return send_gossip<T>(message, {ep});
 }
 
 future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
@@ -1449,10 +1454,10 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         std::uniform_real_distribution<double> dist(0, 1);
         double rand_dbl = dist(_random_engine);
         if (rand_dbl < prob) {
-            std::set<inet_address> addrs;
+            std::set<locator::host_id> addrs;
             for (auto&& x : _unreachable_endpoints) {
                 // Ignore the node which is decommissioned
-                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
+                if (get_gossip_status(_address_map.get(x.first)) != sstring(versioned_value::STATUS_LEFT)) {
                     addrs.insert(x.first);
                 }
             }
@@ -1752,7 +1757,7 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 
     logger.debug("removing expire time for endpoint : {}", addr);
     bool was_live = false;
-    co_await mutate_live_and_unreachable_endpoints([addr, &was_live] (live_and_unreachable_endpoints& data) {
+    co_await mutate_live_and_unreachable_endpoints([addr = es->get_host_id(), &was_live] (live_and_unreachable_endpoints& data) {
         data.unreachable.erase(addr);
         auto [it_, inserted] = data.live.insert(addr);
         was_live = !inserted;
@@ -1763,9 +1768,9 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     }
 
     if (_endpoints_to_talk_with.empty()) {
-        _endpoints_to_talk_with.push_back({addr});
+        _endpoints_to_talk_with.push_back({es->get_host_id()});
     } else {
-        _endpoints_to_talk_with.front().push_back(addr);
+        _endpoints_to_talk_with.front().push_back(es->get_host_id());
     }
 
     logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
@@ -1779,10 +1784,15 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit_id pid) {
     logger.trace("marking as down {}", addr);
     verify_permit(addr, pid);
-    co_await mutate_live_and_unreachable_endpoints([addr] (live_and_unreachable_endpoints& data) {
-        data.live.erase(addr);
-        data.unreachable[addr] = now();
-    });
+
+    if (_address_map.find(state->get_host_id()) == addr) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([addr = state->get_host_id()] (live_and_unreachable_endpoints& data) {
+            data.live.erase(addr);
+            data.unreachable[addr] = now();
+        });
+    }
     logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), addr, get_gossip_status(*state));
     co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
@@ -2208,7 +2218,7 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
     }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
-    _unreachable_endpoints[ep] = now();
+    _unreachable_endpoints[host_id] = now();
     logger.trace("Adding saved endpoint {} {}", ep, generation);
 }
 
@@ -2291,8 +2301,7 @@ future<> gossiper::do_stop_gossiping() {
         logger.info("Announcing shutdown");
         co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
         auto live_endpoints = _live_endpoints;
-        for (inet_address addr : live_endpoints) {
-            auto id = get_host_id(addr);
+        for (locator::host_id id : live_endpoints) {
             logger.info("Sending a GossipShutdown to {} with generation {}", id, local_generation);
             try {
                 co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, get_broadcast_address(), local_generation.value());
@@ -2367,41 +2376,31 @@ bool gossiper::is_alive(inet_address ep) const {
     if (ep == get_broadcast_address()) {
         return true;
     }
-    bool is_alive = _live_endpoints.contains(ep);
+
+    auto sptr = get_endpoint_state_ptr(ep);
+    if (!sptr) {
+        return false;
+    }
+
+    return _live_endpoints.contains(sptr->get_host_id());
+}
+
+bool gossiper::is_alive(locator::host_id id) const {
+    if (id == my_host_id()) {
+        return true;
+    }
+
+    bool is_alive = _live_endpoints.contains(id);
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
     // Live endpoints must always have a valid endpoint_state.
     // Verify that in testing mode to reduce the overhead in production.
-    if (is_alive && !get_endpoint_state_ptr(ep)) {
-        on_internal_error(logger, fmt::format("Node {} is alive but has no endpoint state", ep));
+    if (is_alive && !get_endpoint_state_ptr(id)) {
+        on_internal_error(logger, fmt::format("Node {} is alive but has no endpoint state", id));
     }
 #endif
 
     return is_alive;
-}
-
-bool gossiper::is_alive(locator::host_id id) const {
-    auto ip_opt = _address_map.find(id);
-
-    if (!ip_opt) {
-        // if host ID is not in the gossiper state (and hence not in the address map) it is dead
-        return false;
-    }
-
-    auto ep = get_endpoint_state_ptr(*ip_opt);
-    if (!ep) {
-        // _address_map may have stale entry since we rely on gc to remove entries there
-        // FIXME: add function to address_map to remove immediately
-        return false;
-    }
-
-    if (id != ep->get_host_id()) {
-        // If IDs do not match it means that the node with provided ID was replaced
-        // with a new node with same IP address and hence it is dead
-        return false;
-    }
-
-    return is_alive(*ip_opt);
 }
 
 template<typename ID>

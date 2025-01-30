@@ -35,7 +35,7 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
         gms::inet_address ep(req->get_path_param("addr"));
         // synchronize unreachable_members on all shards
         co_await g.get_unreachable_members_synchronized();
-        co_return g.get_endpoint_downtime(ep);
+        co_return g.get_endpoint_downtime(g.get_host_id(ep));
     });
 
     httpd::gossiper_json::get_current_generation_number.set(r, [&g] (std::unique_ptr<http::request> req) {

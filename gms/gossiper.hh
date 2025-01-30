@@ -222,17 +222,17 @@ private:
      */
     atomic_vector<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
 
-    std::list<std::vector<inet_address>> _endpoints_to_talk_with;
+    std::list<std::vector<locator::host_id>> _endpoints_to_talk_with;
 
     /* live member set */
-    std::unordered_set<inet_address> _live_endpoints;
+    std::unordered_set<locator::host_id> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
 
     /* unreachable member set */
-    std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
+    std::unordered_map<locator::host_id, clk::time_point> _unreachable_endpoints;
 
     semaphore _endpoint_update_semaphore = semaphore(1);
 
@@ -255,8 +255,8 @@ private:
     future<semaphore_units<>> lock_endpoint_update_semaphore();
 
     struct live_and_unreachable_endpoints {
-        std::unordered_set<inet_address> live;
-        std::unordered_map<inet_address, clk::time_point> unreachable;
+        std::unordered_set<locator::host_id> live;
+        std::unordered_map<locator::host_id, clk::time_point> unreachable;
     };
 
     // Must be called on shard 0.
@@ -302,15 +302,14 @@ public:
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
-    std::set<inet_address> get_unreachable_members() const;
-    std::set<locator::host_id> get_unreachable_host_ids() const;
+    std::set<locator::host_id> get_unreachable_members() const;
 
     /**
      * @return a list of unreachable nodes
      */
     std::set<locator::host_id> get_unreachable_nodes() const;
 
-    int64_t get_endpoint_downtime(inet_address ep) const noexcept;
+    int64_t get_endpoint_downtime(locator::host_id ep) const noexcept;
 
     /**
      * Return either: the greatest heartbeat or application state
@@ -410,10 +409,12 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    future<> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    template<typename T>
+    future<> send_gossip(gossip_digest_syn message, std::set<T> epset);
 
     /* Sends a Gossip message to a live member */
-    future<> do_gossip_to_live_member(gossip_digest_syn message, inet_address ep);
+    template<typename T>
+    future<> do_gossip_to_live_member(gossip_digest_syn message, T ep);
 
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
@@ -521,7 +522,6 @@ public:
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
-    std::set<inet_address> get_live_members_helper() const;
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);
@@ -703,7 +703,7 @@ public:
     }
 private:
     future<> failure_detector_loop();
-    future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
+    future<> failure_detector_loop_for_node(locator::host_id node, generation_type gossip_generation, uint64_t live_endpoints_version);
 };
 
 

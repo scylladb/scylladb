@@ -461,59 +461,13 @@ bool manager::store_hint(endpoint_id host_id, schema_ptr s, lw_shared_ptr<const 
     }
 }
 
-/// Checks if there is a node corresponding to a given host ID that hasn't been down for longer
-/// than a given amount of time. The function relies on information obtained from the passed `gms::gossiper`.
-static bool endpoint_downtime_not_bigger_than(const gms::gossiper& gossiper, const locator::host_id& host_id,
-        uint64_t max_downtime_us)
-{
-    // We want to enforce small buffer optimization in the call
-    // to `gms::gossiper::for_each_endpoint_state_until()` below
-    // to avoid an unnecessary allocation.
-    // Since we need all these four pieces of information in the lambda,
-    // the function object passed to the function might be too big.
-    // That's why we create it locally on the stack and only pass a reference to it.
-    struct sbo_info {
-        locator::host_id host_id;
-        const gms::gossiper& gossiper;
-        int64_t max_hint_window_us;
-        bool small_node_downtime;
-    };
-
-    sbo_info info {
-        .host_id = host_id,
-        .gossiper = gossiper,
-        .max_hint_window_us = max_downtime_us,
-        .small_node_downtime = false
-    };
-
-    gossiper.for_each_endpoint_state_until(
-            [&info] (const gms::inet_address& ip, const gms::endpoint_state& state) {
-        const auto* app_state = state.get_application_state_ptr(gms::application_state::HOST_ID);
-        if (!app_state) {
-            manager_logger.error("Host ID application state for {} has not been found. Endpoint state: {}", ip, state);
-            return stop_iteration::no;
-        }
-        const auto host_id = locator::host_id{utils::UUID{app_state->value()}};
-        if (host_id != info.host_id) {
-            return stop_iteration::no;
-        }
-        if (info.gossiper.get_endpoint_downtime(ip) <= info.max_hint_window_us) {
-            info.small_node_downtime = true;
-            return stop_iteration::yes;
-        }
-        return stop_iteration::no;
-    });
-
-    return info.small_node_downtime;
-}
-
 bool manager::too_many_in_flight_hints_for(endpoint_id ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this
     // endpoint, then this means that its DC has already been checked and found to be ok.
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress()
             && !_proxy.local_db().get_token_metadata().get_topology().is_me(ep)
             && hints_in_progress_for(ep) > 0
-            && endpoint_downtime_not_bigger_than(local_gossiper(), ep, _max_hint_window_us);
+            && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(endpoint_id ep) const noexcept {
@@ -548,7 +502,7 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
         return false;
     }
 
-    const bool node_is_alive = endpoint_downtime_not_bigger_than(local_gossiper(), ep, _max_hint_window_us);
+    const bool node_is_alive = local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
     if (!node_is_alive) {
         manager_logger.trace("{} has been down for too long, not hinting", ep);
         return false;
