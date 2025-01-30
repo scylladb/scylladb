@@ -80,13 +80,14 @@ public:
                 mutation m(s, partition_key::from_single_value(*s, data_value(endpoint).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
-                set_cell(cr, "up", gossiper.is_alive(endpoint));
+                auto hostid = eps.get_host_id();
+
+                set_cell(cr, "up", gossiper.is_alive(hostid));
                 if (!ss.raft_topology_change_enabled() || gossiper.is_shutdown(endpoint)) {
                     set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
                 }
                 set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                auto hostid = eps.get_host_id();
                 if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
                     set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
                 }

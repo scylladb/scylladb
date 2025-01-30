@@ -238,7 +238,7 @@ bool migration_manager::have_schema_agreement() {
     bool match = false;
     static thread_local logger::rate_limit rate_limit{std::chrono::seconds{5}};
     _gossiper.for_each_endpoint_state_until([&, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
-        if (endpoint == my_address || !_gossiper.is_alive(endpoint)) {
+        if (endpoint == my_address || !_gossiper.is_alive(eps.get_host_id())) {
             return stop_iteration::no;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);

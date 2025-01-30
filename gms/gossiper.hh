@@ -514,7 +514,6 @@ private:
     template<typename ID>
     future<> wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout);
 public:
-    bool is_alive(inet_address ep) const;
     bool is_alive(locator::host_id id) const;
 
     bool is_dead_state(const endpoint_state& eps) const;

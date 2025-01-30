@@ -779,7 +779,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
                     auto generation = eps.get_heart_beat_state().get_generation().value();
                     auto host_id = eps.get_host_id();
-                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(addr)) {
+                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(host_id)) {
                         topology_mutation_builder builder(guard.write_timestamp());
                         // This topology mutation moves a node to left state and bans it. Hence, the value of below fields are not useful.
                         // The dummy_value used for few fields indicates the trivialness of this row entry, and is used to detect this special case.

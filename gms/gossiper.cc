@@ -454,7 +454,7 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_i
         co_await container().invoke_on(0, [from, from_hid, timeout, &normal] (gossiper& g) -> future<> {
             try {
                 // Wait to see the node as normal. It may node be the case if the node bootstraps
-                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, *from_hid) && g.is_alive(from))) {
+                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, *from_hid) && g.is_alive(*from_hid))) {
                     co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
                 }
             } catch(...) {
@@ -620,7 +620,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             } else {
                 logger.debug("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
             }
-            if (!is_alive(node) && !is_dead_state(get_endpoint_state(node)) && !shadow_round) { // unless of course, it was dead
+            if (!is_alive(es->get_host_id()) && !is_dead_state(get_endpoint_state(node)) && !shadow_round) { // unless of course, it was dead
                 mark_alive(node);
             }
         } else {
@@ -772,7 +772,7 @@ future<> gossiper::do_status_check() {
             continue;
         }
         auto& ep_state = *eps;
-        bool is_alive = this->is_alive(endpoint);
+        bool is_alive = this->is_alive(ep_state.get_host_id());
         auto update_timestamp = ep_state.get_update_timestamp();
 
         // check if this is a fat client. fat clients are removed automatically from
@@ -1236,7 +1236,7 @@ int64_t gossiper::get_endpoint_downtime(locator::host_id ep) const noexcept {
 future<> gossiper::convict(inet_address endpoint) {
     auto permit = co_await lock_endpoint(endpoint, null_permit_id);
     auto state = get_endpoint_state_ptr(endpoint);
-    if (!state || !is_alive(endpoint)) {
+    if (!state || !is_alive(state->get_host_id())) {
         co_return;
     }
     if (is_shutdown(endpoint)) {
@@ -2372,19 +2372,6 @@ clk::time_point gossiper::compute_expire_time() {
     return now() + A_VERY_LONG_TIME;
 }
 
-bool gossiper::is_alive(inet_address ep) const {
-    if (ep == get_broadcast_address()) {
-        return true;
-    }
-
-    auto sptr = get_endpoint_state_ptr(ep);
-    if (!sptr) {
-        return false;
-    }
-
-    return _live_endpoints.contains(sptr->get_host_id());
-}
-
 bool gossiper::is_alive(locator::host_id id) const {
     if (id == my_host_id()) {
         return true;
@@ -2410,12 +2397,15 @@ future<> gossiper::wait_alive_helper(noncopyable_function<std::vector<ID>()> get
         auto nodes = get_nodes();
         std::vector<ID> live_nodes;
         for (const auto& node: nodes) {
-            size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
-                return g.is_alive(node) ? 1 : 0;
-            }, 0, std::plus<size_t>());
-            logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
-            if (nr_alive == smp::count) {
-                live_nodes.push_back(node);
+            auto es = get_endpoint_state_ptr(node);
+            if (es) {
+                size_t nr_alive = co_await container().map_reduce0([node = es->get_host_id()] (gossiper& g) -> size_t {
+                    return g.is_alive(node) ? 1 : 0;
+                }, 0, std::plus<size_t>());
+                logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
+                if (nr_alive == smp::count) {
+                    live_nodes.push_back(node);
+                }
             }
         }
         logger.debug("Waited for marking node as up, replace_nodes={}, live_nodes={}", nodes, live_nodes);
@@ -2729,8 +2719,8 @@ int gossiper::get_down_endpoint_count() const noexcept {
 }
 
 int gossiper::get_up_endpoint_count() const noexcept {
-    return std::ranges::count_if(_endpoint_state_map | std::views::keys, [this] (const inet_address& ep) {
-        return is_alive(ep);
+    return std::ranges::count_if(_endpoint_state_map | std::views::values, [this] (const endpoint_state_ptr& es) {
+        return is_alive(es->get_host_id());
     });
 }
 

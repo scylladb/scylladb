@@ -2746,7 +2746,7 @@ future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_stat
 future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_restart: permit_id={}", endpoint, pid);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
-    if (endpoint != get_broadcast_address() && _gossiper.is_alive(endpoint)) {
+    if (endpoint != get_broadcast_address() && _gossiper.is_alive(state->get_host_id())) {
         return on_dead(endpoint, state, pid);
     }
     return make_ready_future();
@@ -4041,18 +4041,11 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
                     id));
         }
 
-        const auto& am = _address_map;
-        auto ip = am.find(host_id);
-        if (!ip) {
-            // What to do if there is no mapping? Wait and retry?
-            on_fatal_internal_error(rtlogger, ::format("Remove node cannot find a mapping from node id {} to its ip", id));
-        }
-
-        if (_gossiper.is_alive(*ip)) {
+        if (_gossiper.is_alive(host_id)) {
             const std::string message = ::format(
-                "removenode: Rejected removenode operation for node {} ip {} "
+                "removenode: Rejected removenode operation for node {}"
                 "the node being removed is alive, maybe you should use decommission instead?",
-                id, *ip);
+                id);
             rtlogger.warn("{}", message);
             throw std::runtime_error(message);
         }
@@ -7401,7 +7394,7 @@ future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint) {
 }
 
 future<> storage_service::notify_up(inet_address endpoint) {
-    if (!_gossiper.is_cql_ready(endpoint) || !_gossiper.is_alive(endpoint)) {
+    if (!_gossiper.is_cql_ready(endpoint) || !_gossiper.is_alive(_gossiper.get_host_id(endpoint))) {
         co_return;
     }
     co_await container().invoke_on_all([endpoint] (auto&& ss) {

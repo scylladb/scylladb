@@ -25,7 +25,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
             g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
                 fd::endpoint_state val;
                 val.addrs = fmt::to_string(addr);
-                val.is_alive = g.is_alive(addr);
+                val.is_alive = g.is_alive(eps.get_host_id());
                 val.generation = eps.get_heart_beat_state().get_generation().value();
                 val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
                 val.update_time = eps.get_update_timestamp().time_since_epoch().count();
@@ -65,8 +65,8 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
             std::map<sstring, sstring> nodes_status;
-            g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state&) {
-                nodes_status.emplace(fmt::to_string(node), g.is_alive(node) ? "UP" : "DOWN");
+            g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state& es) {
+                nodes_status.emplace(fmt::to_string(node), g.is_alive(es.get_host_id()) ? "UP" : "DOWN");
             });
             return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
         });
