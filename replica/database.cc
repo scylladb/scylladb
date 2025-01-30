@@ -34,7 +34,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
 #include "mutation/frozen_mutation.hh"
 #include "mutation/async_utils.hh"
@@ -182,7 +181,7 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
 
         // If we are here, min_element->first < count
         *min_element = {count, table_list({table.get()})};
-        min_element = &*boost::min_element(res, less);
+        min_element = &*std::ranges::min_element(res, less);
     });
 
     std::ranges::sort(res, less);

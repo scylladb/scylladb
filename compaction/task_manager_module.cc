@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/numeric.hpp>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -109,7 +108,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
         // Choose the stable shard owner with the smallest amount of accumulated work.
         // Note that for sstables that need cleanup via resharding, owners may contain
         // a single shard.
-        auto shard_it = boost::min_element(info.owners, [&] (const shard_id& lhs, const shard_id& rhs) {
+        auto shard_it = std::ranges::min_element(info.owners, [&] (const shard_id& lhs, const shard_id& rhs) {
             return destinations[lhs].total_size_smaller(destinations[rhs]);
         });
         auto& dest = destinations[*shard_it];
