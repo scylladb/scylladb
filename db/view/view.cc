@@ -12,6 +12,7 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <ranges>
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
@@ -45,6 +46,7 @@
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "keys.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
@@ -1723,39 +1725,94 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
 //
 // If the keyspace's replication strategy is a NetworkTopologyStrategy,
 // we pair only nodes in the same datacenter.
-// If one of the base replicas also happens to be a view replica, it is
-// paired with itself (with the other nodes paired by order in the list
+//
+// When use_legacy_self_pairing is enabled, if one of the base replicas
+// also happens to be a view replica, it is paired with itself
+// (with the other nodes paired by order in the list
 // after taking this node out).
+//
+// If the table uses tablets and the replication strategy is NetworkTopologyStrategy
+// and the replication factor in the node's datacenter is a multiple of the number
+// of racks in the datacenter, then pairing is rack-aware.  In this case,
+// all racks have the same number of replicas, and those are never migrated
+// outside their racks. Therefore, the base replicas are naturally paired with the
+// view replicas that are in the same rack, based on the ordinal position.
+// Note that typically, there is a single replica per rack and pairing is trivial.
 //
 // If the assumption that the given base token belongs to this replica
 // does not hold, we return an empty optional.
-static std::optional<locator::host_id>
+std::optional<locator::host_id>
 get_view_natural_endpoint(
+        locator::host_id me,
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
-        bool network_topology,
+        const locator::abstract_replication_strategy& replication_strategy,
         const dht::token& base_token,
         const dht::token& view_token,
         bool use_legacy_self_pairing,
+        bool use_tablets_rack_aware_view_pairing,
         replica::cf_stats& cf_stats) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
-    auto me = topology.my_host_id();
-    auto my_datacenter = topology.get_datacenter();
-    std::vector<locator::host_id> base_endpoints, view_endpoints;
+    auto& my_location = topology.get_location(me);
+    auto& my_datacenter = my_location.dc;
+    auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
+    auto rack_aware_pairing = use_tablets_rack_aware_view_pairing && network_topology;
+    bool simple_rack_aware_pairing = false;
+    using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
+    node_vector orig_base_endpoints, orig_view_endpoints;
+    node_vector base_endpoints, view_endpoints;
+
+    if (rack_aware_pairing) {
+        auto dc_rf = network_topology->get_replication_factor(my_datacenter);
+        const auto& racks = topology.get_datacenter_rack_nodes().at(my_datacenter);
+        // Simple rack-aware pairing is possible when the datacenter replication factor
+        // is a multiple of the number of racks in the datacenter.
+        if (dc_rf % racks.size() == 0) {
+            simple_rack_aware_pairing = true;
+            size_t rack_rf = dc_rf / racks.size();
+            // If any rack doesn't have enough nodes to satisfy the per-rack rf
+            // simple rack-aware pairing is disabled.
+            for (const auto& [rack, nodes] : racks) {
+                if (nodes.size() < rack_rf) {
+                    simple_rack_aware_pairing = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
+        if (auto* np = topology.find_node(ep)) {
+            return *np;
+        }
+        throw std::runtime_error(format("get_view_natural_endpoint: {} replica {} not found in topology", is_view ? "view" : "base", ep));
+    };
+    std::function<bool(const locator::node&)> is_candidate;
+    if (simple_rack_aware_pairing) {
+        is_candidate = [&] (const locator::node& node) { return node.dc_rack() == my_location; };
+    } else if (network_topology) {
+        // Also for the (rack_aware_pairing && !simple_rack_aware_pairing) case
+        is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
+    } else {
+        is_candidate = [&] (const locator::node&) { return true; };
+    }
+    auto process_candidate = [&] (node_vector& nodes, const locator::topology& topology, const locator::host_id& ep, bool is_view) {
+        auto& node = resolve(topology, ep, is_view);
+        if (is_candidate(node)) {
+            nodes.emplace_back(node);
+        }
+    };
 
     // We need to use get_replicas() for pairing to be stable in case base or view tablet
     // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
     for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
-        if (!network_topology || topology.get_datacenter(base_endpoint) == my_datacenter) {
-            base_endpoints.push_back(base_endpoint);
-        }
+        process_candidate(base_endpoints, topology, base_endpoint, false);
     }
 
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
-    for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-        if (use_legacy_self_pairing) {
-            auto it = std::find(base_endpoints.begin(), base_endpoints.end(),
-                view_endpoint);
+    if (use_legacy_self_pairing) {
+        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
+            auto it = std::ranges::find(base_endpoints, view_endpoint, std::mem_fn(&locator::node::host_id));
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
             if (view_endpoint == me && it != base_endpoints.end()) {
@@ -1766,26 +1823,103 @@ get_view_natural_endpoint(
             // otherwise.
             if (it != base_endpoints.end()) {
                 base_endpoints.erase(it);
-            } else if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
-                view_endpoints.push_back(view_endpoint);
+            } else {
+                auto& node = resolve(view_topology, view_endpoint, true);
+                if (!network_topology || node.dc() == my_datacenter) {
+                    view_endpoints.push_back(node);
+                }
             }
-        } else {
-            if (!network_topology || view_topology.get_datacenter(view_endpoint) == my_datacenter) {
-                view_endpoints.push_back(view_endpoint);
-            }
+        }
+    } else {
+        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
+            process_candidate(view_endpoints, view_topology, view_endpoint, true);
         }
     }
 
-    SCYLLA_ASSERT(base_endpoints.size() == view_endpoints.size());
-    auto base_it = std::find(base_endpoints.begin(), base_endpoints.end(), me);
+    orig_base_endpoints = base_endpoints;
+    orig_view_endpoints = view_endpoints;
+
+    // For the complex rack_aware_pairing case, nodes are already filtered by datacenter
+    // Use best-match, for the minimum number of base and view replicas in each rack,
+    // and ordinal match for the rest.
+    if (rack_aware_pairing && !simple_rack_aware_pairing) {
+        struct indexed_replica {
+            size_t idx;
+            std::reference_wrapper<const locator::node> node;
+        };
+        std::unordered_map<sstring, std::vector<indexed_replica>> base_racks, view_racks;
+
+        // First, index all replicas by rack
+        auto index_replica_set = [] (std::unordered_map<sstring, std::vector<indexed_replica>>& racks, const node_vector& replicas) {
+            size_t idx = 0;
+            for (const auto& r: replicas) {
+                racks[r.get().rack()].emplace_back(idx++, r);
+            }
+        };
+        index_replica_set(base_racks, base_endpoints);
+        index_replica_set(view_racks, view_endpoints);
+
+        // Try optimistically pairing `me` first
+        const auto& my_base_replicas = base_racks[my_location.rack];
+        auto base_it = std::ranges::find(my_base_replicas, me, [] (const indexed_replica& ir) { return ir.node.get().host_id(); });
+        if (base_it == my_base_replicas.end()) {
+            return std::nullopt;
+        }
+        const auto& my_view_replicas = view_racks[my_location.rack];
+        size_t idx = base_it - my_base_replicas.begin();
+        if (idx < my_view_replicas.size()) {
+            return my_view_replicas[idx].node.get().host_id();
+        }
+
+        // Collect all unpaired base and view replicas,
+        // where the number of replicas in the base rack is different than the respective view rack
+        std::vector<indexed_replica> unpaired_base_replicas, unpaired_view_replicas;
+        for (const auto& [rack, base_replicas] : base_racks) {
+            const auto& view_replicas = view_racks[rack];
+            for (auto i = view_replicas.size(); i < base_replicas.size(); ++i) {
+                unpaired_base_replicas.emplace_back(base_replicas[i]);
+            }
+        }
+        for (const auto& [rack, view_replicas] : view_racks) {
+            const auto& base_replicas = base_racks[rack];
+            for (auto i = base_replicas.size(); i < view_replicas.size(); ++i) {
+                unpaired_view_replicas.emplace_back(view_replicas[i]);
+            }
+        }
+
+        // Sort by the original ordinality, and copy the sorted results
+        // back into {base,view}_endpoints, for backward compatible processing below.
+        std::ranges::sort(unpaired_base_replicas, std::less(), std::mem_fn(&indexed_replica::idx));
+        base_endpoints.clear();
+        std::ranges::transform(unpaired_base_replicas, std::back_inserter(base_endpoints), std::mem_fn(&indexed_replica::node));
+
+        std::ranges::sort(unpaired_view_replicas, std::less(), std::mem_fn(&indexed_replica::idx));
+        view_endpoints.clear();
+        std::ranges::transform(unpaired_view_replicas, std::back_inserter(view_endpoints), std::mem_fn(&indexed_replica::node));
+    }
+
+    auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
     if (base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
         // would be lost.
         ++cf_stats.total_view_updates_on_wrong_node;
+        vlogger.warn("Could not find {} in base_endpoints={}", me,
+                orig_base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
         return {};
     }
-    auto replica = view_endpoints[base_it - base_endpoints.begin()];
+    size_t idx = base_it - base_endpoints.begin();
+    if (idx >= view_endpoints.size()) {
+        // There are fewer view replicas than base replicas
+        // FIXME: This might still happen when reducing replication factor with tablets,
+        // see https://github.com/scylladb/scylladb/issues/21492
+        ++cf_stats.total_view_updates_failed_pairing;
+        vlogger.warn("Could not pair {}: rack_aware={} base_endpoints={} view_endpoints={}", me,
+                rack_aware_pairing ? (simple_rack_aware_pairing ? "simple" : "complex") : "none",
+                orig_base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)),
+                orig_view_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
+        return {};
+    }
 
     // https://github.com/scylladb/scylladb/issues/19439
     // With tablets, a node being replaced might transition to "left" state
@@ -1794,8 +1928,9 @@ get_view_natural_endpoint(
     // but are still replicas. Therefore, there is no other sensible option
     // right now but to give up attempt to send the update or write a hint
     // to the paired, permanently down replica.
-    if (!view_topology.get_node(replica).left()) {
-        return replica;
+    const auto& node = view_endpoints[idx].get();
+    if (!node.left()) {
+        return node.host_id();
     } else {
         return std::nullopt;
     }
@@ -1856,22 +1991,38 @@ future<> view_update_generator::mutate_MV(
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
 {
-    auto base_ermp = base->table().get_effective_replication_map();
+    auto& ks = _db.find_keyspace(base->ks_name());
+    auto& replication = ks.get_replication_strategy();
+    // We set legacy self-pairing for old vnode-based tables (for backward
+    // compatibility), and unset it for tablets - where range movements
+    // are more frequent and backward compatibility is less important.
+    // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
+    // on a view, like we have the synchronous_updates_flag.
+    bool use_legacy_self_pairing = !ks.uses_tablets();
+    std::unordered_map<table_id, locator::effective_replication_map_ptr> erms;
+    auto get_erm = [&] (table_id id) {
+        auto it = erms.find(id);
+        if (it == erms.end()) {
+            it = erms.emplace(id, _db.find_column_family(id).get_effective_replication_map()).first;
+        }
+        return it->second;
+    };
+    auto base_ermp = get_erm(base->id());
+    for (const auto& mut : view_updates) {
+        (void)get_erm(mut.s->id());
+    }
+    // Enable rack-aware view updates pairing for tablets
+    // when the cluster feature is enabled so that all replicas agree
+    // on the pairing algorithm.
+    bool use_tablets_rack_aware_view_pairing = _db.features().tablet_rack_aware_view_pairing && ks.uses_tablets();
+    auto me = base_ermp->get_topology().my_host_id();
     static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
-    co_await max_concurrent_for_each(view_updates, max_concurrent_updates,
-            [this, base_token, &stats, &cf_stats, tr_state, &pending_view_updates, allow_hints, wait_for_all, base_ermp] (frozen_mutation_and_schema mut) mutable -> future<> {
+    co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
-        auto view_ermp = mut.s->table().get_effective_replication_map();
-        auto& ks = _proxy.local().local_db().find_keyspace(mut.s->ks_name());
-        bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
-        // We set legacy self-pairing for old vnode-based tables (for backward
-        // compatibility), and unset it for tablets - where range movements
-        // are more frequent and backward compatibility is less important.
-        // TODO: Maybe allow users to set use_legacy_self_pairing explicitly
-        // on a view, like we have the synchronous_updates_flag.
-        bool use_legacy_self_pairing = !ks.uses_tablets();
-        auto target_endpoint = get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing, cf_stats);
+        auto view_ermp = erms.at(mut.s->id());
+        auto target_endpoint = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
+                use_legacy_self_pairing, use_tablets_rack_aware_view_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
 
@@ -1898,13 +2049,18 @@ future<> view_update_generator::mutate_MV(
                 if (*target_endpoint == *remote_it) {
                     remote_endpoints.erase(remote_it);
                 } else {
-                    std::swap(*target_endpoint, *remote_it);
+                    auto target_remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);
+                    if (target_remote_it != remote_endpoints.end()) {
+                        target_endpoint = *remote_it;
+                        remote_endpoints.erase(remote_it);
+                    } else {
+                        std::swap(*target_endpoint, *remote_it);
+                    }
                 }
             }
-        }
-        // It's still possible that a target endpoint is duplicated in the remote endpoints list,
-        // so let's get rid of the duplicate if it exists
-        if (target_endpoint) {
+        } else if (target_endpoint) {
+            // It's still possible that a target endpoint is duplicated in the remote endpoints list,
+            // so let's get rid of the duplicate if it exists
             auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);
             if (remote_it != remote_endpoints.end()) {
                 remote_endpoints.erase(remote_it);

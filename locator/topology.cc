@@ -477,6 +477,17 @@ bool topology::has_node(host_id id) const noexcept {
     return bool(node);
 }
 
+const endpoint_dc_rack& topology::get_location_slow(host_id id) const {
+    // We should do the following check after lookup in nodes.
+    // In tests, there may be no config for local node, so fall back to get_location()
+    // only if no mapping is found. Otherwise, get_location() will return empty location
+    // from config or random node, neither of which is correct.
+    if (id == _cfg.this_host_id) {
+        return get_location();
+    }
+    throw std::runtime_error(format("Requested location for node {} not in topology. backtrace {}", id, lazy_backtrace()));
+}
+
 void topology::sort_by_proximity(locator::host_id address, host_id_vector_replica_set& addresses) const {
     if (can_sort_by_proximity()) {
         do_sort_by_proximity(address, addresses);
