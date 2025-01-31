@@ -4,7 +4,7 @@ import sys
 import warnings
 from datetime import date
 
-from sphinx_scylladb_theme.utils import multiversion_regex_builder
+from sphinx_scylladb_theme.utils import multiversion_regex_builder, fetch_multiversion_configuration
 from recommonmark.transform import AutoStructify
 
 sys.path.insert(0, os.path.abspath('./_ext'))
@@ -17,30 +17,27 @@ FLAG = os.getenv('FLAG', 'manual')
 PROJECT = "ScyllaDB Manual"
 # Set the base URL for the documentation site.
 BASE_URL = 'https://docs.scylladb.com/manual'
-# Build documentation for the following tags and branches.
-TAGS = []
-BRANCHES = ["master", "branch-6.2"]
-# Set the latest version. 
-LATEST_VERSION = "branch-6.2"
-# Set which versions are not released yet.
-UNSTABLE_VERSIONS = ["master"]
-# Set which versions are deprecated.
-DEPRECATED_VERSIONS = [""]
+# Multiversion configuration URL
+VERSIONS_URL = "https://raw.githubusercontent.com/scylladb/scylladb-docs-homepage/refs/heads/main/docs/_static/data/manual_doc_versions.json"
 
 if FLAG == 'opensource':
     # Set the project name
     PROJECT = "ScyllaDB Open Source"
     # Set the base URL for the documentation site.
     BASE_URL = 'https://opensource.docs.scylladb.com'
-    # Build documentation for the following tags and branches.
-    TAGS = []
-    BRANCHES = ["master", "branch-5.1", "branch-5.2", "branch-5.4", "branch-6.0", "branch-6.1", "branch-6.2"]
-    # Set the latest version. 
-    LATEST_VERSION = "branch-6.2"
-    # Set which versions are not released yet.
-    UNSTABLE_VERSIONS = ["master"]
-    # Set which versions are deprecated.
-    DEPRECATED_VERSIONS = [""]
+    # Multiversion configuration URL
+    VERSIONS_URL = "https://raw.githubusercontent.com/scylladb/scylladb-docs-homepage/refs/heads/main/docs/_static/data/opensource_doc_versions.json"
+
+# Build documentation for the following tags and branches.
+MULTIVERSION_CONFIG = fetch_multiversion_configuration(VERSIONS_URL)
+TAGS = MULTIVERSION_CONFIG.get("tags", [])
+BRANCHES = MULTIVERSION_CONFIG.get("branches", ["master"])
+# Set the latest version. 
+LATEST_VERSION = MULTIVERSION_CONFIG.get("latest", "master")
+# Set which versions are not released yet.
+UNSTABLE_VERSIONS = MULTIVERSION_CONFIG.get("unstable", [])
+# Set which versions are deprecated.
+DEPRECATED_VERSIONS = MULTIVERSION_CONFIG.get("deprecated", [])
     
 # -- General configuration
 
@@ -182,6 +179,8 @@ html_theme_options = {
     'banner_button_url': 'https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs',
     'banner_title_text': 'ScyllaDB University LIVE, FREE Virtual Training Event | March 21',
     "collapse_navigation": 'true',
+    "brand": "open-source" if FLAG == 'opensource' else "self-hosted",
+
 }
 
 # Last updated format
