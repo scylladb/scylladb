@@ -2259,4 +2259,57 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
     require_can_admit(true, "!need_cpu");
 }
 
+/// Check that permits are cleaned up properly if they step on queue overload.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_wait_queue_overload_cleanup) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(1),
+            1024,
+            test_name + " semaphore",
+            1,
+            utils::updateable_value<uint32_t>(2),
+            utils::updateable_value<uint32_t>(4),
+            utils::updateable_value<uint32_t>(1),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
+
+    auto permit2_fut = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {});
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
+
+    {
+        reader_permit_opt permit_holder;
+        auto permit3_fut = semaphore.with_permit(schema, test_name.c_str(), 1024, db::no_timeout, {}, permit_holder, [] (reader_permit) {
+            BOOST_FAIL("unexpected call to with permit lambda");
+            return make_ready_future<>();
+        });
+        BOOST_REQUIRE(permit3_fut.failed());
+        BOOST_CHECK_THROW(permit3_fut.get(), std::runtime_error);
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 1);
+    // This is the critical check in this test: we check that the permit3 was
+    // destroyed and it has not become a zombie permit due to incomplete cleanup.
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
+
+    permit1 = {};
+    permit2_fut.get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
