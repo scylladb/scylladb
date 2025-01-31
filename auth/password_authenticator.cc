@@ -162,6 +162,7 @@ future<> password_authenticator::start() {
                         return;
                     }
                 }
+                utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
                 create_default_if_missing().get();
             });
         });
