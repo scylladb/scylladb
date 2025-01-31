@@ -75,6 +75,7 @@ std::vector<column_definition> create_table_statement::get_columns() const
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     std::vector<mutation> m;
+    cql3::cql_warnings_vec warnings;
 
     try {
         m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
@@ -84,6 +85,8 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
         }
     }
 
+    _properties->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
+
     // If an IF NOT EXISTS clause was used and resource was already created
     // we shouldn't emit created event. However it interacts badly with
     // concurrent clients creating resources. The client seeing no create event
@@ -92,7 +95,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     // are not yet aware of new schema or client's metadata may be outdated.
     // To force synchronization always emit the event (see
     // github.com/scylladb/scylladb/issues/16909).
-    co_return std::make_tuple(created_event(), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
 /**
@@ -124,7 +127,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
 
-    _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace());
+    _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace(), cf_prop_defs::is_create_statement::yes);
 }
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const

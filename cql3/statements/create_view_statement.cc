@@ -357,7 +357,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
+    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), cf_prop_defs::is_create_statement::yes);
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(
@@ -383,6 +383,8 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, const query
             co_return coroutine::exception(std::current_exception());
         }
     }
+
+    _properties.properties()->maybe_add_warning_for_deprecated_crc_check_chance_in_compression(warnings);
 
     // If an IF NOT EXISTS clause was used and resource was already created
     // we shouldn't emit created event. However it interacts badly with
