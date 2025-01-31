@@ -148,9 +148,6 @@ public:
         promise<> pr;
         std::optional<shared_future<>> fut;
         reader_concurrency_semaphore::read_func func;
-        // Self reference to keep the permit alive while queued for execution.
-        // Must be cleared on all code-paths, otherwise it will keep the permit alive in perpetuity.
-        reader_permit_opt permit_keepalive;
         std::optional<reader_concurrency_semaphore::inactive_read> ir;
     };
 
@@ -226,8 +223,6 @@ private:
     }
 
     void on_timeout() {
-        auto keepalive = std::exchange(_aux_data.permit_keepalive, std::nullopt);
-
         auto ex = named_semaphore_timed_out(_semaphore._name);
         _ex = std::make_exception_ptr(ex);
 
@@ -1628,10 +1623,10 @@ reader_permit reader_concurrency_semaphore::make_tracking_only_permit(schema_ptr
 }
 
 future<> reader_concurrency_semaphore::with_permit(schema_ptr schema, const char* const op_name, size_t memory,
-        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, read_func func) {
-    auto permit = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func) {
+    permit_holder = reader_permit(*this, std::move(schema), std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
+    auto permit = *permit_holder;
     permit->aux_data().func = std::move(func);
-    permit->aux_data().permit_keepalive = permit;
     return do_wait_admission(*permit);
 }
 
