@@ -460,7 +460,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, read_func func);
+    future<> with_permit(schema_ptr schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout,
+            tracing::trace_state_ptr trace_ptr, reader_permit_opt& permit_holder, read_func func);
 
     /// Run the function through the semaphore's execution stage with a pre-admitted permit
     ///
