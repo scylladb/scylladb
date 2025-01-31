@@ -1133,6 +1133,8 @@ auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_tas
         {"request_time", fmt::to_string(db_clock::to_time_t(info.request_time))},
         {"sched_nr", fmt::to_string(info.sched_nr)},
         {"sched_time", fmt::to_string(db_clock::to_time_t(info.sched_time))},
+        {"repair_hosts_filter", info.repair_hosts_filter},
+        {"repair_dcs_filter", info.repair_dcs_filter},
     };
     return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
 };
