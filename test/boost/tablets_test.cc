@@ -132,7 +132,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h3, 1},
                     },
                     db_clock::now(),
-                    locator::tablet_task_info::make_auto_repair_request(),
+                    locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request()
                 });
                 tm.set_tablet_map(table1, std::move(tmap));
