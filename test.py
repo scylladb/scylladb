@@ -2507,26 +2507,6 @@ async def process_coverage(options):
     logger.info(stats_str)
     logger.info("".join(summary))
 
-async def workaround_python26789() -> int:
-    """Workaround for https://bugs.python.org/issue26789.
-    We'd like to print traceback if there is an internal error
-    in test.py. However, traceback module calls asyncio
-    default_exception_handler which in turns calls logging
-    module after it has been shut down. This leads to a nested
-    exception. Until 3.10 is in widespread use, reset the
-    asyncio exception handler before printing traceback."""
-    try:
-        code = await main()
-    except (Exception, KeyboardInterrupt):
-        def noop(x, y):
-            return None
-        asyncio.get_running_loop().set_exception_handler(noop)
-        traceback.print_exc()
-        # Clear the custom handler
-        asyncio.get_running_loop().set_exception_handler(None)
-        return -1
-    return code
-
 
 if __name__ == "__main__":
     colorama.init()
@@ -2537,7 +2517,7 @@ if __name__ == "__main__":
     if "SCYLLA_HOME" in os.environ:
         del os.environ["SCYLLA_HOME"]
 
-    if sys.version_info < (3, 7):
-        print("Python 3.7 or newer is required to run this program")
+    if sys.version_info < (3, 10):
+        print("Python 3.10 or newer is required to run this program")
         sys.exit(-1)
-    sys.exit(asyncio.run(workaround_python26789()))
+    sys.exit(asyncio.run(main()))
