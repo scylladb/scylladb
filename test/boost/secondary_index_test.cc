@@ -2006,4 +2006,41 @@ SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
     });
 }
 
+// Reproducer for #18536.
+//
+// Paged index queries have been reported to cause reactor stalls on the
+// coordinator side, due to large contiguous allocations for partition range
+// vectors. The more the partitions, the more likely the problem to manifest.
+//
+// This test reproduces the problem with a query on an index with many
+// single-row partitions, and checks the memory stats for any large contiguous
+// allocations.
+//
+// The test is disabled in "sanitize" mode (ASAN interferes with memory allocations).
+#ifndef SEASTAR_ASAN_ENABLED
+SEASTAR_TEST_CASE(test_large_allocations) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        co_await e.execute_cql("CREATE TABLE t (p int, c int, PRIMARY KEY (p, c));");
+        co_await e.execute_cql("CREATE INDEX ON t (c);");
+        int allocation_threshold = current_allocator().preferred_max_contiguous_allocation();
+        int partitions = allocation_threshold / sizeof(dht::partition_range) + 1; // lowest number that reproduces #18536
+        auto prepared_id = co_await e.prepare("INSERT INTO t (p, c) VALUES (?, 1);");
+        for (int pk : std::views::iota(0, partitions)) {
+            co_await e.execute_prepared(prepared_id,
+                    {cql3::raw_value::make_value(int32_type->decompose(pk))}
+                    );
+        }
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{partitions, nullptr, {}, api::new_timestamp()});
+        const auto stats_before = memory::stats();
+        const memory::scoped_large_allocation_warning_threshold _{allocation_threshold + 1};
+        shared_ptr<cql_transport::messages::result_message> msg = co_await e.execute_cql("SELECT * FROM t WHERE c = 1;", std::move(qo));
+        const auto stats_after = memory::stats();
+
+        assert_that(msg).is_rows().is_not_empty();
+        BOOST_REQUIRE_LT(stats_before.large_allocations(), stats_after.large_allocations());
+    });
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()
