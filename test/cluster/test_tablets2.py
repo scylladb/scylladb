@@ -1835,3 +1835,39 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
         await s0_log.wait_for('Cleanup failed for tablet', from_mark=s0_mark)
 
         await manager.api.take_snapshot(servers[0].ip_addr, ks, "test_snapshot")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_truncate_during_topology_change(manager: ManagerClient):
+    """Test truncate operation during topology change."""
+
+    # Start 3 node cluster
+    cfg = {'enable_tablets': True}
+    servers = await manager.servers_add(3, config=cfg)
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.test (k int PRIMARY KEY, v int)")
+
+    logger.info("Populating table")
+    keys = range(10000)
+    stmt = cql.prepare("INSERT INTO ks.test (k, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.QUORUM
+    await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "ks", "test")
+
+    async def truncate_table():
+        await asyncio.sleep(10)
+        logger.info("Executing truncate during bootstrap")
+        await cql.run_async("TRUNCATE ks.test USING TIMEOUT 1m")
+
+    truncate_task = asyncio.create_task(truncate_table())
+    logger.info("Adding fourth node")
+    new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True})
+    await truncate_task
+
+    # Wait for bootstrap completion
+    await wait_for_cql_and_get_hosts(cql, servers + [new_server], time.time() + 60)
+
+    logger.info("Verifying table is empty")
+    rows = await cql.run_async("SELECT COUNT(*) FROM ks.test")
+    assert rows[0].count == 0, "Table should be empty after truncation"
