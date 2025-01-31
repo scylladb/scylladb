@@ -260,9 +260,11 @@ future<> view_building_coordinator::send_task(view_building_target target, table
     std::vector<table_id> views_ids = views | std::views::transform(name_to_id) | std::ranges::to<std::vector>();
 
     try {
+        _per_host_processing_range[target] = range;
         co_await ser::view_rpc_verbs::send_build_views_range(&_messaging, target.host, _as, base_id, target.shard, range, std::move(views_ids));
     } catch (...) {
         vbc_logger.warn("Building views for base: {}, range: {} on node: {}, shard: {} failed: {}", base_id, range, target.host, target.shard, std::current_exception());
+        _per_host_processing_range.erase(target);
         _cond.broadcast();
         co_return;
     }
@@ -284,6 +286,7 @@ future<> view_building_coordinator::send_task(view_building_target target, table
         }
         co_await coroutine::maybe_yield();
     }
+    _per_host_processing_range.erase(target);
     _cond.broadcast();
 }
 
@@ -384,6 +387,35 @@ future<std::vector<canonical_mutation>> view_building_coordinator::remove_view(c
     
     auto muts = co_await _sys_ks.make_vbc_remove_view_tasks_mutations(guard.write_timestamp(), view_name);
     co_return std::vector<canonical_mutation>{muts.begin(), muts.end()};
+}
+
+static bool contains_range(const dht::token_range_vector& ranges, const dht::token_range& range) {
+    return std::find(ranges.cbegin(), ranges.cend(), range) != ranges.cend();
+}
+
+future<std::vector<mutation>> view_building_coordinator::get_migrate_tasks_mutations(const group0_guard& guard, table_id table_id, locator::tablet_replica abandoning_replica, locator::tablet_replica pending_replica, dht::token_range range) {
+    auto state = co_await load_coordinator_state();
+    if (!state.tasks.contains(table_id)) {
+        co_return std::vector<mutation>();
+    }
+
+    std::vector<mutation> updates;
+    for (auto& [view, tasks]: state.tasks[table_id]) {
+        view_building_target target {abandoning_replica.host, abandoning_replica.shard};
+        if (tasks.contains(target) && contains_range(tasks[target], range)) {
+            if (_per_host_processing_range.contains(target) && _per_host_processing_range[target] == range) {
+                co_await abort_work(target.host, target.shard);
+            }
+
+            auto del_mut = co_await _sys_ks.make_vbc_task_done_mutation(guard.write_timestamp(), view, target.host, target.shard, range);
+            auto add_mut = co_await _sys_ks.make_vbc_task_mutation(guard.write_timestamp(), view, pending_replica.host, pending_replica.shard, range);
+            updates.push_back(std::move(del_mut));
+            updates.push_back(std::move(add_mut));
+
+            vbc_logger.info("Migrated task for view {}.{} with range {} from (host: {}, shard: {}) to (host: {}, shard: {})", view.first, view.second, range, target.host, target.shard, pending_replica.host, pending_replica.shard);
+        }
+    }
+    co_return updates;
 }
 
 future<> view_building_coordinator::stop() {
