@@ -1209,8 +1209,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // If progress cannot be made, e.g. because all transitions are streaming, we block
         // and wait for notification.
 
+        struct vbc_update {
+            table_id table_id;
+            std::optional<locator::tablet_replica> abandoning_replica;
+            std::optional<locator::tablet_replica> pending_replica;
+            dht::token_range range;
+        };
+
         rtlogger.debug("handle_tablet_migration()");
         std::vector<canonical_mutation> updates;
+        std::vector<vbc_update> vbc_updates;
         bool needs_barrier = false;
         bool has_transitions = false;
 
@@ -1270,6 +1278,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                     return false;
+            };
+
+            auto add_vb_coordinator_update = [&] () {
+                auto tinfo = tmap.get_tablet_info(gid.tablet);
+                auto old_replicas = locator::substract_sets(tinfo.replicas, trinfo.next);
+                auto abandoning_replica = locator::get_leaving_replica(tinfo, trinfo);
+                auto range = tmap.get_token_range(gid.tablet);
+                vbc_updates.push_back(vbc_update {
+                    gid.table, abandoning_replica, trinfo.pending_replica, range
+                });
             };
 
             switch (trinfo.stage) {
@@ -1440,6 +1458,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _db.features())
                                 .build());
+                        if (_vb_coordinator_ptr) {
+                            add_vb_coordinator_update();
+                        }
                     }
                 }
                     break;
@@ -1549,13 +1570,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         // to ensure that we don't reinsert tablet rows which were concurrently deleted by schema change
         // which happens outside the topology coordinator.
         bool has_updates = !updates.empty();
+        bool notify_vb_coordinator = false;
         if (has_updates) {
             co_await utils::get_local_injector().inject("tablet_transition_updates", utils::wait_for_message(2min));
+            for (auto& vu: vbc_updates) {
+                auto muts = co_await _vb_coordinator_ptr->get_migrate_tasks_mutations(guard, vu.table_id, vu.abandoning_replica, vu.pending_replica, vu.range);
+                for (auto&& mut: muts) {
+                    notify_vb_coordinator = true;
+                    updates.emplace_back(std::move(mut));
+                }
+            }
             updates.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
                     .set_version(_topo_sm._topology.version + 1)
                     .build());
             co_await update_topology_state(std::move(guard), std::move(updates), format("Tablet migration"));
+            if (notify_vb_coordinator) {
+                _vb_coordinator_ptr->notify();
+            }
         }
 
         if (needs_barrier) {
