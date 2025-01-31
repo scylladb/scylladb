@@ -159,6 +159,10 @@ public:
         };
         return ::make_shared<sasl_wrapper>(_authenticator->new_sasl_challenge());
     }
+
+    virtual future<> ensure_superuser_is_created() const override {
+        return _authenticator->ensure_superuser_is_created();
+    }
 };
 
 class transitional_authorizer : public authorizer {

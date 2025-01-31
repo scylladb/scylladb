@@ -56,6 +56,10 @@ public:
     const resource_set& protected_resources() const override;
 
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
+
+    virtual future<> ensure_superuser_is_created() const override {
+        return make_ready_future<>();
+    }
 private:
 };
 

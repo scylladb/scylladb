@@ -159,6 +159,8 @@ public:
     virtual const resource_set& protected_resources() const = 0;
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
+
+    virtual future<> ensure_superuser_is_created() const = 0;
 };
 
 }

@@ -83,6 +83,10 @@ public:
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
         throw std::runtime_error("Should not reach");
     }
+
+    virtual future<> ensure_superuser_is_created() const override {
+        return make_ready_future<>();
+    }
 };
 
 }
