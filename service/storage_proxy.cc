@@ -1093,7 +1093,6 @@ private:
             updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
                                     .set_global_topology_request(global_topology_request::truncate_table)
                                     .set_global_topology_request_id(global_request_id)
-                                    .set_session(session_id(global_request_id))
                                     .build());
 
             updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id)
