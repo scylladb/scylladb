@@ -383,18 +383,14 @@ void query_pager::handle_result(
     auto view = query::result_view(*results);
 
     _last_pos = position_in_partition::for_partition_start();
-    uint64_t row_count;
+    uint64_t replica_row_count, row_count;
     if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
         query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
         view.consume(_cmd->slice, v);
 
-        if (_last_pkey) {
-            update_slice(*_last_pkey);
-        }
-
         row_count = v.total_rows - v.dropped_rows;
-        _max = _max - row_count;
-        _exhausted = (v.total_rows < page_size && !results->is_short_read() && v.dropped_rows == 0) || _max == 0;
+        replica_row_count = v.total_rows;
+
         // If per partition limit is defined, we need to accumulate rows fetched for last partition key if the key matches
         if (_cmd->slice.partition_row_limit() < query::max_rows_if_set) {
             if (_last_pkey && v.last_pkey && _last_pkey->equal(*_query_schema, *v.last_pkey)) {
@@ -403,32 +399,30 @@ void query_pager::handle_result(
                 _rows_fetched_for_last_partition = v.last_partition_row_count;
             }
         }
-        const auto& last_pos = results->last_position();
-        if (last_pos && !v.dropped_rows) {
-            _last_pkey = last_pos->partition;
-            _last_pos = last_pos->position;
-        } else {
-            _last_pkey = v.last_pkey;
-            if (v.last_ckey) {
-                _last_pos = position_in_partition::for_key(*v.last_ckey);
-            }
-        }
     } else {
         row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
-        _max = _max - row_count;
-        _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
+        replica_row_count = row_count;
+    }
 
-        if (!_exhausted) {
-            if (_last_pkey) {
-                update_slice(*_last_pkey);
-            }
+    {
+        _max = _max - row_count;
+        _exhausted = (replica_row_count < page_size && !results->is_short_read()) || _max == 0;
+
+        if (_last_pkey) {
+            update_slice(*_last_pkey);
+        }
+
+        // The last page can be truly empty -- with unset last-position and no data to calculate it based on.
+        if (!replica_row_count && !results->is_short_read()) {
+            _last_pkey = {};
+        } else {
             auto last_pos = results->get_or_calculate_last_position();
             _last_pkey = std::move(last_pos.partition);
             _last_pos = std::move(last_pos.position);
         }
     }
 
-    qlogger.debug("Fetched {} rows, max_remain={} {}", row_count, _max, _exhausted ? "(exh)" : "");
+    qlogger.debug("Fetched {} rows (kept {}), max_remain={} {}", replica_row_count, row_count, _max, _exhausted ? "(exh)" : "");
 
     if (_last_pkey) {
         qlogger.debug("Last partition key: {}", *_last_pkey);
