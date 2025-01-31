@@ -14,7 +14,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
 from test.cluster.conftest import skip_mode
-from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver
+from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, wait_for
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -466,7 +466,6 @@ async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerCli
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/21564")
 async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/21564
@@ -480,6 +479,8 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'view_building_coordinator=debug',
+        '--logger-log-level', 'view_building_worker=debug',
     ]
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -496,8 +497,8 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
         servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
         s1_host_id = await manager.get_host_id(servers[1].server_id)
 
-        logger.info("Inject error to make view generator pause before processing the sstable")
-        injection_name = "view_builder_pause_add_new_view"
+        logger.info("Inject error to make view building worker pause before processing the sstable")
+        injection_name = "view_building_worker_pause_before_consume"
         await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=True)
 
         logger.info("Create view")
@@ -510,6 +511,14 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
         await manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, 0, tablet_token)
         logger.info("Migration done")
+
+        async def check_table():
+            result = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name='{ks}' AND view_name='mv1'")
+            if len(result) == 1:
+                return True
+            else:
+                return None
+        await wait_for(check_table, time.time() + 30)
 
         # Verify the table has expected number of rows
         rows = await cql.run_async(f"SELECT pk from {ks}.test")

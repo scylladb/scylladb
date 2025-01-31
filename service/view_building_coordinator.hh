@@ -17,6 +17,7 @@
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "mutation/canonical_mutation.hh"
+#include "locator/tablets.hh"
 #include "schema/schema_fwd.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
@@ -64,6 +65,7 @@ class view_building_coordinator : public migration_listener::only_view_notificat
     abort_source& _as;
     condition_variable _cond;
     std::map<view_building_target, future<>> _remote_work_map;
+    std::map<view_building_target, dht::token_range> _per_host_processing_range;
 
 public:
     view_building_coordinator(abort_source& as, replica::database& db, raft::server& raft, raft_group0& group0, db::system_keyspace& sys_ks, netw::messaging_service& messaging, const topology_state_machine& topo_sm, const raft::term_t term); 
@@ -71,6 +73,10 @@ public:
     future<> run();
     future<> stop();
 
+    future<> maybe_prepare_for_tablet_migration_start(const group0_guard& guard, table_id table_id, const locator::tablet_replica& abandoning_replica, const dht::token_range& range);
+    future<std::vector<mutation>> get_migrate_tasks_mutations(const group0_guard& guard, table_id table_id, std::optional<locator::tablet_replica> abandoning_replica, std::optional<locator::tablet_replica> pending_replica, const dht::token_range& range);
+
+    void notify() { _cond.broadcast(); }
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
