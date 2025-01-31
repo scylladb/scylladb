@@ -430,8 +430,8 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             continue;
         }
         const auto& existing = replicas_per_rack[rack];
-        auto& candidate = existing.empty() ?
-                new_racks.emplace_back(rack) : existing_racks.emplace_back(rack);
+        candidates_list& rack_list = existing.empty() ? new_racks : existing_racks;
+        auto& candidate = rack_list.emplace_back(rack);
         for (const auto& node : nodes) {
             if (!node->is_normal()) {
                 continue;
@@ -442,7 +442,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             }
         }
         if (candidate.nodes.empty()) {
-            existing_racks.pop_back();
+            rack_list.pop_back();
             tablet_logger.trace("allocate_replica {}.{}: no candidate nodes left on rack={}", s->ks_name(), s->cf_name(), rack);
             // Note that this rack can't be in new_racks since
             // those had no existing replicas and if current rack has no nodes
