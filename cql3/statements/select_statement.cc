@@ -36,6 +36,7 @@
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
@@ -1398,12 +1399,19 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    bool is_paged = options.get_page_size() >= 0;
+    constexpr size_t MAX_PARTITION_RANGES = 1000;
+    // Check that `partition_range_vector` won't cause a large allocation (see #18536).
+    // If this fails, please adjust MAX_PARTITION_RANGES accordingly.
+    static_assert(MAX_PARTITION_RANGES * sizeof(dht::partition_range_vector::value_type) <= 128 * 1024,
+            "MAX_PARTITION_RANGES too high - will cause large allocations from partition_range_vector");
+    size_t max_vector_size = is_paged ? MAX_PARTITION_RANGES : std::numeric_limits<size_t>::max();
     const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     return read_posting_list(qp, options, limit, state, now, timeout, false).then(utils::result_wrap(
-            [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+            [this, &options, max_vector_size] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
-        partition_ranges.reserve(rs.size());
+        partition_ranges.reserve(std::min(rs.size(), max_vector_size));
         // We are reading the list of primary keys as rows of a single
         // partition (in the index view), so they are sorted in
         // lexicographical order (N.B. this is NOT token order!). We need
@@ -1434,6 +1442,9 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
             last_dk = dk;
             auto range = dht::partition_range::make_singular(dk);
             partition_ranges.emplace_back(range);
+            if (partition_ranges.size() >= partition_ranges.capacity()) {
+                break;
+            }
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
         return make_ready_future<coordinator_result<value_type>>(value_type(std::move(partition_ranges), std::move(paging_state)));

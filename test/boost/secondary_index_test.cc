@@ -2038,7 +2038,7 @@ SEASTAR_TEST_CASE(test_large_allocations) {
         const auto stats_after = memory::stats();
 
         assert_that(msg).is_rows().is_not_empty();
-        BOOST_REQUIRE_LT(stats_before.large_allocations(), stats_after.large_allocations());
+        BOOST_REQUIRE_EQUAL(stats_before.large_allocations(), stats_after.large_allocations());
     });
 }
 #endif
