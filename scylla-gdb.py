@@ -2244,7 +2244,12 @@ class scylla_memory(gdb.Command):
         reactor = gdb.parse_and_eval('seastar::local_engine')
         for tq in get_local_task_queues():
             sched_group_specific = std_array(reactor['_scheduling_group_specific_data']['per_scheduling_group_data'])[int(tq['_id'])]['specific_vals']
-            stats = std_vector(sched_group_specific)[key_id].reinterpret_cast(stats_ptr_type).dereference()
+            item = std_vector(sched_group_specific)[key_id]
+            try:
+                stats_void_ptr = std_unique_ptr(item['valp']).get()
+            except:
+                stats_void_ptr = item
+            stats = stats_void_ptr.reinterpret_cast(stats_ptr_type).dereference()
             if int(stats['writes']) == 0 and int(stats['background_writes']) == 0 and int(stats['foreground_reads']) == 0 and int(stats['reads']) == 0:
                 continue
             per_sg_stats[tq] = stats
@@ -4277,7 +4282,6 @@ class std_unique_ptr:
 
     def get(self):
         try:
-            std_tuple(self.obj['_M_t']['_M_t'])[0].dereference()
             return std_tuple(self.obj['_M_t']['_M_t'])[0]
         except:
             return self.obj['_M_t']['_M_t']['_M_head_impl']
