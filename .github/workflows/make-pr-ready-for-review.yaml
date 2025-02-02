@@ -11,6 +11,8 @@ env:
 jobs:
   mark-ready:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
 
     steps:
       - name: Check if specific label was removed
