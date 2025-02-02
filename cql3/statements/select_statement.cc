@@ -1406,9 +1406,22 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     static_assert(MAX_PARTITION_RANGES * sizeof(dht::partition_range_vector::value_type) <= 128 * 1024,
             "MAX_PARTITION_RANGES too high - will cause large allocations from partition_range_vector");
     size_t max_vector_size = is_paged ? MAX_PARTITION_RANGES : std::numeric_limits<size_t>::max();
+    std::unique_ptr<query_options> paging_adjusted_options = [&] () {
+        if (is_paged && _schema->clustering_key_size() == 0 && static_cast<size_t>(options.get_page_size()) > max_vector_size) {
+            // Result is guaranteed to contain one partition key per row.
+            // Limit the page size a priori.
+            auto internal_options = std::make_unique<cql3::query_options>(cql3::query_options(options));
+            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), max_vector_size));
+            return internal_options;
+        }
+        return std::unique_ptr<cql3::query_options>(nullptr);
+    }();
+    return do_with(std::move(paging_adjusted_options), [&, max_vector_size](auto& paging_adjusted_options) {
+    // FIXME: Indent.
+    const query_options& _options = paging_adjusted_options ? *paging_adjusted_options : options;
     const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
-    return read_posting_list(qp, options, limit, state, now, timeout, false).then(utils::result_wrap(
-            [this, &options, max_vector_size] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+    return read_posting_list(qp, _options, limit, state, now, timeout, false).then(utils::result_wrap(
+            [this, &_options, max_vector_size] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
         partition_ranges.reserve(std::min(rs.size(), max_vector_size));
@@ -1418,8 +1431,8 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
-        if (options.get_paging_state()) {
-            auto paging_state = options.get_paging_state();
+        if (_options.get_paging_state()) {
+            auto paging_state = _options.get_paging_state();
             auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
                 paging_state->get_clustering_key(), *_schema, *_view_schema);
             last_dk = dht::decorate_key(*_schema, base_pk);
@@ -1449,6 +1462,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
         auto paging_state = rows->rs().get_metadata().paging_state();
         return make_ready_future<coordinator_result<value_type>>(value_type(std::move(partition_ranges), std::move(paging_state)));
     }));
+    });
 }
 
 // Note: the partitions keys returned by this function are sorted
