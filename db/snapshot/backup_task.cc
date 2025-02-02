@@ -56,9 +56,11 @@ tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
 }
 
 future<tasks::task_manager::task::progress> backup_task_impl::get_progress() const {
-    co_return tasks::task_manager::task::progress {
-        .completed = _progress.uploaded,
-        .total = _progress.total,
+    auto p =
+        co_await _snap_ctl.container().map_reduce0([this](const auto&) { return _progress_per_shard[this_shard_id()]; }, s3::upload_progress(), std::plus<s3::upload_progress>());
+    co_return tasks::task_manager::task::progress{
+        .completed = p.uploaded,
+        .total = p.total,
     };
 }
 
@@ -66,7 +68,7 @@ tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
     return tasks::is_user_task::yes;
 }
 
-future<> backup_task_impl::upload_component(shared_ptr<s3::client>& client, sstring name) {
+future<> backup_task_impl::upload_component(shared_ptr<s3::client> client, abort_source& as, s3::upload_progress& progress, sstring name) {
     auto component_name = _snapshot_dir / name;
     auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, name);
     snap_log.trace("Upload {} to {}", component_name.native(), destination);
@@ -77,7 +79,7 @@ future<> backup_task_impl::upload_component(shared_ptr<s3::client>& client, sstr
     //  - s3::client::claim_memory semaphore
     //  - http::client::max_connections limitation
     try {
-        co_await client->upload_file(component_name, destination, _progress, &_as);
+        co_await client->upload_file(component_name, destination, progress, &as);
     } catch (const abort_requested_exception&) {
         snap_log.info("Upload aborted per requested: {}", component_name.native());
         throw;
@@ -103,52 +105,89 @@ future<> backup_task_impl::upload_component(shared_ptr<s3::client>& client, sstr
     }
 }
 
+namespace {
+
+future<std::vector<std::tuple<size_t, sstring>>> get_backup_files(const std::filesystem::path& snapshot_dir) {
+    std::exception_ptr ex;
+    auto snapshot_dir_lister = directory_lister(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    std::vector<std::tuple<size_t, sstring>> backup_files;
+    std::optional<directory_entry> component_ent;
+
+    do {
+        try {
+            component_ent = co_await snapshot_dir_lister.get();
+            if (component_ent) {
+                auto component_name = snapshot_dir / component_ent->name;
+                auto size = co_await file_size(component_name.native());
+                backup_files.emplace_back(size, std::move(component_ent->name));
+            }
+        } catch (...) {
+            ex = std::current_exception();
+            break;
+        }
+    } while (component_ent);
+    co_await snapshot_dir_lister.close();
+    if (ex)
+        co_await coroutine::return_exception_ptr(std::move(ex));
+
+    std::ranges::sort(backup_files, std::greater());
+    co_return backup_files;
+}
+} // namespace
+
 future<> backup_task_impl::do_backup() {
     if (!co_await file_exists(_snapshot_dir.native())) {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));
     }
 
-    std::exception_ptr ex;
-    gate uploads;
-    auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
-    auto cln = _snap_ctl.storage_manager().container().local().get_endpoint_client(_endpoint);
+    auto backup_files = co_await get_backup_files(_snapshot_dir);
+    std::atomic_size_t counter = 0;
 
-    for (;;) {
-        std::optional<directory_entry> component_ent;
+    sharded<abort_source> as;
+    co_await as.start();
+    gate as_gate;
+    auto s = _as.subscribe([&]() noexcept {
+        auto h = as_gate.hold();
+        std::ignore = smp::invoke_on_all([&as, ex = _as.abort_requested_exception_ptr()] {
+            as.local().request_abort_ex(ex);
+        }).finally([h = std::move(h)] {});
+    });
+
+    co_await smp::invoke_on_all([this, &backup_files, &counter, &as] -> future<> {
+        auto shard_id = this_shard_id();
+        gate uploads;
+
         try {
-            component_ent = co_await snapshot_dir_lister.get();
+            auto cln = _snap_ctl.storage_manager().container().local().get_endpoint_client(_endpoint);
+
+            size_t name_idx = counter++;
+            while (name_idx < backup_files.size()) {
+                auto gh = uploads.hold();
+                // Pre-upload break point. For testing abort in actual s3 client usage.
+                co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
+
+                // It is safe to ignore this `future` here since the `cln` is a shared pointer and the file name are both passed by value, and the abort source
+                // has a scope of the current function. Also, the gate keeps the fiber being executed before the `as` is destroyed by the scope.
+                std::ignore = upload_component(cln, as.local(), _progress_per_shard[shard_id], std::get<1>(backup_files[name_idx])).handle_exception([this](std::exception_ptr e) {
+                    _as.request_abort_ex(std::move(e));
+                }).finally([gh = std::move(gh)] {});
+
+                co_await coroutine::maybe_yield();
+                co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
+                if (as.local().abort_requested()) {
+                    break;
+                }
+                name_idx = counter++;
+            }
         } catch (...) {
-            if (!ex) {
-                ex = std::current_exception();
-                break;
-            }
+            _as.request_abort_ex(std::current_exception());
         }
-        if (!component_ent.has_value()) {
-            break;
-        }
-        auto gh = uploads.hold();
-
-        // Pre-upload break point. For testing abort in actual s3 client usage.
-        co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
-
-        std::ignore = upload_component(cln, component_ent->name).handle_exception([&ex] (std::exception_ptr e) {
-            // keep the first exception
-            if (!ex) {
-                ex = std::move(e);
-            }
-        }).finally([gh = std::move(gh)] {});
-        co_await coroutine::maybe_yield();
-        co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
-        if (impl::_as.abort_requested()) {
-            ex = impl::_as.abort_requested_exception_ptr();
-            break;
-        }
-    }
-
-    co_await snapshot_dir_lister.close();
-    co_await uploads.close();
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
+        co_await uploads.close();
+    });
+    co_await as_gate.close();
+    co_await as.stop();
+    if (_as.abort_requested()) {
+        co_await coroutine::return_exception_ptr(_as.abort_requested_exception_ptr());
     }
 }
 
