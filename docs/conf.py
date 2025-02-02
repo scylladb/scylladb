@@ -196,7 +196,7 @@ htmlhelp_basename = "ScyllaDocumentationdoc"
 html_baseurl = BASE_URL
 
 # Dictionary of values to pass into the template engine’s context for all pages
-html_context = {"html_baseurl": html_baseurl}
+html_context = {"html_baseurl": html_baseurl, "flag": FLAG}
 
 def setup(app):
     if 'opensource' in app.tags:
