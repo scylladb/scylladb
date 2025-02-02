@@ -2642,6 +2642,8 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
         save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
     }
 
+    // Lower "initial" tablets option, allowing for merge decision.
+    e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
 
     auto tablet_count = [&] {
         return stm.get()->tablets().get_tablet_map(table1).tablet_count();
@@ -2832,6 +2834,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
+
+        // Drop initial tablet count to 1 so merge can happen.
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
 
         // avg size hits split threshold, and balancer emits split request
         {
