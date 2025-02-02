@@ -24,11 +24,11 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
+    std::vector<s3::upload_progress> _progress_per_shard{smp::count};
     bool _remove_on_uploaded;
-    s3::upload_progress _progress = {};
 
     future<> do_backup();
-    future<> upload_component(shared_ptr<s3::client> client, sstring name);
+    future<> upload_component(shared_ptr<s3::client> client, abort_source& as, s3::upload_progress& progress, sstring name);
 
 protected:
     virtual future<> run() override;
