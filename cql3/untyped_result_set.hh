@@ -154,7 +154,7 @@ class result_set;
 class untyped_result_set {
 public:
     using row = untyped_result_set_row;
-    using rows_type = std::vector<row>;
+    using rows_type = utils::chunked_vector<row>;
     using const_iterator = rows_type::const_iterator;
     using iterator = rows_type::const_iterator;
 
