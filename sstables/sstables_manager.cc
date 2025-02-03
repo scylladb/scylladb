@@ -152,7 +152,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     return cfg;
 }
 
-void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst) {
+void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
     _total_reclaimable_memory += sst->total_reclaimable_memory_size();
     _components_memory_change_event.signal();
 }
