@@ -81,7 +81,7 @@ tm::task_stats make_stats(tasks::task_stats stats) {
     return res;
 }
 
-void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg) {
+void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg, sharded<gms::gossiper>& gossiper) {
     tm::get_modules.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = tm.local().get_modules() | std::views::keys | std::ranges::to<std::vector>();
         co_return v;
