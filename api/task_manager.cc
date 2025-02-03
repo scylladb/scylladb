@@ -218,6 +218,32 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         uint32_t ttl = cfg.task_ttl_seconds();
         co_return json::json_return_type(ttl);
     });
+
+    tm::drain_tasks.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        co_await tm.invoke_on_all([&req] (tasks::task_manager& tm) -> future<> {
+            tasks::task_manager::module_ptr module;
+            try {
+                module = tm.find_module(req->get_path_param("module"));
+            } catch (...) {
+                throw bad_param_exception(fmt::format("{}", std::current_exception()));
+            }
+
+            const auto& local_tasks = module->get_local_tasks();
+            std::vector<tasks::task_id> ids;
+            ids.reserve(local_tasks.size());
+            std::transform(begin(local_tasks), end(local_tasks), std::back_inserter(ids), [] (const auto& task) {
+                return task.second->is_complete() ? task.first : tasks::task_id::create_null_id();
+            });
+
+            for (auto&& id : ids) {
+                if (id) {
+                    module->unregister_task(id);
+                }
+                co_await maybe_yield();
+            }
+        });
+        co_return json_void();
+    });
 }
 
 void unset_task_manager(http_context& ctx, routes& r) {
@@ -229,6 +255,7 @@ void unset_task_manager(http_context& ctx, routes& r) {
     tm::get_task_status_recursively.unset(r);
     tm::get_and_update_ttl.unset(r);
     tm::get_ttl.unset(r);
+    tm::drain_tasks.unset(r);
 }
 
 }
