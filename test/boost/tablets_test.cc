@@ -2670,6 +2670,8 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
         check_tablet_invariants(stm.get()->tablets());
         BOOST_REQUIRE_LT(tablet_count(), old_tablet_count);
     }
+
+    e.execute_cql(fmt::format("drop keyspace {}", ks_name)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) {
